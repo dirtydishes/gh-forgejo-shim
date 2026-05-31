@@ -8,7 +8,7 @@ from typing import Mapping
 from .auth import discover_fj_token
 from .config import Config, load_config
 from .external import find_program
-from .shim import default_bin_dir, shim_path
+from .shim import default_bin_dir, is_managed_shim, shim_path
 
 
 @dataclass(frozen=True)
@@ -57,18 +57,20 @@ def run_checks(
         ),
     ]
 
-    path_entries = values.get("PATH", "").split(os.pathsep)
-    bin_dir_string = str(target_bin_dir)
-    if wrapper.exists():
-        if path_entries and path_entries[0] == bin_dir_string:
-            detail = f"{bin_dir_string} is first in PATH"
+    if wrapper.exists() and is_managed_shim(wrapper):
+        first_gh = _first_program("gh", values.get("PATH", ""))
+        if first_gh and _same_file(first_gh, wrapper):
+            detail = f"{wrapper} is the first gh in PATH"
             ok = True
-        elif bin_dir_string in path_entries:
-            detail = f"{bin_dir_string} is in PATH but not first"
+        elif first_gh:
+            detail = f"gh resolves to {first_gh} before {wrapper}"
             ok = False
         else:
-            detail = f"{bin_dir_string} is not in PATH"
+            detail = f"{wrapper} exists but no gh executable was found in PATH"
             ok = False
+    elif wrapper.exists():
+        detail = f"{wrapper} exists but is not managed by gh-forgejo-shim"
+        ok = False
     else:
         detail = f"{wrapper} is not installed"
         ok = False
@@ -83,3 +85,20 @@ def format_checks(checks: list[Check]) -> str:
         mark = "ok" if check.ok else "warn"
         lines.append(f"[{mark}] {check.name}: {check.detail}")
     return "\n".join(lines)
+
+
+def _first_program(name: str, path_value: str) -> Path | None:
+    for directory in path_value.split(os.pathsep):
+        if not directory:
+            continue
+        candidate = Path(directory).expanduser() / name
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return left.samefile(right)
+    except OSError:
+        return left.resolve() == right.resolve()
