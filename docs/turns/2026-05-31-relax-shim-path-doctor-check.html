@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relax Shim PATH Doctor Check</title>
+  <style>
+    :root {
+      --bg: oklch(0.982 0.006 245);
+      --ink: oklch(0.2 0.035 255);
+      --muted: oklch(0.43 0.026 255);
+      --line: oklch(0.88 0.014 255);
+      --surface: oklch(1 0 0);
+      --surface-2: oklch(0.955 0.01 248);
+      --accent: oklch(0.48 0.18 252);
+      --ok: oklch(0.56 0.15 160);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 44px 24px 72px;
+    }
+
+    header {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.13;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 820px;
+      font-size: clamp(2rem, 5vw, 4rem);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin-top: 38px;
+      font-size: clamp(1.35rem, 3vw, 1.9rem);
+    }
+
+    h3 {
+      margin-top: 0;
+      font-size: 1.05rem;
+    }
+
+    p,
+    li {
+      max-width: 74ch;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
+      padding: 0.08rem 0.28rem;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      border-radius: 12px;
+      background: oklch(0.18 0.035 255);
+      color: oklch(0.95 0.01 248);
+      padding: 16px;
+      line-height: 1.45;
+    }
+
+    a {
+      color: var(--accent);
+      text-underline-offset: 0.18em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+
+    .card,
+    .diff-panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .diff-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .diff-panel h3 {
+      padding: 16px 18px 0;
+    }
+
+    .diff-mount {
+      min-height: 220px;
+      padding: 12px;
+    }
+
+    .fallback {
+      margin: 12px;
+    }
+
+    @media (max-width: 680px) {
+      main {
+        padding: 28px 16px 52px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="meta">
+        <span class="pill">2026-05-31</span>
+        <span class="pill">Repository implementation</span>
+        <span class="pill">Issue gh-forgejo-shim-bjt</span>
+      </div>
+      <h1>Relaxed the shim PATH doctor check</h1>
+      <p>
+        The doctor command now checks whether the managed shim is the first executable named <code>gh</code>,
+        instead of requiring <code>~/.local/bin</code> to be the first directory in <code>PATH</code>.
+      </p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>
+        Fixed a false warning in <code>gh-forgejo-shim doctor</code>. The user had <code>~/.local/bin</code>
+        before the real Homebrew <code>gh</code>, but other harmless directories appeared earlier in <code>PATH</code>.
+        That should be valid because none of those earlier directories provided <code>gh</code>.
+      </p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Doctor behavior</h3>
+          <p>
+            Replaced the directory-first check with executable resolution. The shim path passes when
+            <code>~/.local/bin/gh</code> is the first runnable <code>gh</code> found in <code>PATH</code>.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Safety checks</h3>
+          <p>
+            The doctor now warns when the file at the shim location exists but is not managed by this project,
+            or when another <code>gh</code> executable resolves before the managed shim.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Tests</h3>
+          <p>
+            Updated doctor tests to cover harmless earlier PATH directories, a competing earlier <code>gh</code>,
+            and an unmanaged file at the shim path.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>
+        The user's shell has Codex, npm, and bun paths before <code>~/.local/bin</code>. That is common and does
+        not matter unless one of those directories contains a <code>gh</code> executable. The old doctor logic
+        treated that layout as suspicious even when <code>which -a gh</code> showed the shim winning correctly.
+      </p>
+      <p>No changes were made to <code>/Users/kell/.zshrc</code>.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li><code>run_checks</code> still verifies the wrapper exists and is marked as managed by <code>gh-forgejo-shim</code>.</li>
+        <li>The first executable named <code>gh</code> is found by scanning <code>PATH</code> in shell order.</li>
+        <li><code>Path.samefile</code> is used when possible so equivalent paths compare correctly.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>
+        The snippet below is rendered with the Diffs <code>FileDiff</code> component when available, with a static
+        fallback for offline viewing. Reference: <a href="https://diffs.com/docs">Diffs documentation</a>.
+      </p>
+      <div class="diff-panel">
+        <h3>Doctor shim path check</h3>
+        <div id="diff-doctor" class="diff-mount"></div>
+        <pre class="fallback"><code>if wrapper.exists() and is_managed_shim(wrapper):
+    first_gh = _first_program("gh", values.get("PATH", ""))
+    if first_gh and _same_file(first_gh, wrapper):
+        detail = f"{wrapper} is the first gh in PATH"
+        ok = True
+    elif first_gh:
+        detail = f"gh resolves to {first_gh} before {wrapper}"
+        ok = False</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>
+        Users no longer need <code>~/.local/bin</code> to be literally first in <code>PATH</code>. The setup is
+        considered healthy as long as the managed shim is the first <code>gh</code> command the shell would run.
+      </p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><code>python3 -m unittest</code>: passed, 34 tests.</li>
+        <li><code>python3 -m compileall -q src tests</code>: passed.</li>
+        <li>Source-version doctor smoke test against the user's current PATH shape reported <code>[ok] shim path: /Users/kell/.local/bin/gh is the first gh in PATH</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The installed <code>pipx</code> copy must be refreshed before the user's normal <code>gh-forgejo-shim doctor</code> command sees this fix.</li>
+        <li>The local smoke test did not use the user's auth token because the agent shell did not inherit it; auth behavior was not changed in this task.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <p>No new follow-up Beads issues were needed for this targeted bug fix.</p>
+    </section>
+  </main>
+
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    const container = document.getElementById("diff-doctor");
+    if (container) {
+      const diff = new FileDiff({ theme: "pierre-dark" });
+      diff.render({
+        oldFile: {
+          name: "src/gh_forgejo_shim/doctor.py",
+          contents: `if wrapper.exists():
+    if path_entries and path_entries[0] == bin_dir_string:
+        detail = f"{bin_dir_string} is first in PATH"
+        ok = True
+    elif bin_dir_string in path_entries:
+        detail = f"{bin_dir_string} is in PATH but not first"
+        ok = False`
+        },
+        newFile: {
+          name: "src/gh_forgejo_shim/doctor.py",
+          contents: `if wrapper.exists() and is_managed_shim(wrapper):
+    first_gh = _first_program("gh", values.get("PATH", ""))
+    if first_gh and _same_file(first_gh, wrapper):
+        detail = f"{wrapper} is the first gh in PATH"
+        ok = True
+    elif first_gh:
+        detail = f"gh resolves to {first_gh} before {wrapper}"
+        ok = False`
+        },
+        containerWrapper: container
+      });
+      const fallback = container.parentElement?.querySelector(".fallback");
+      if (fallback) fallback.setAttribute("hidden", "hidden");
+    }
+  </script>
+</body>
+</html>

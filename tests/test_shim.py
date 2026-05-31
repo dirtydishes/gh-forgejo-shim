@@ -5,10 +5,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gh_forgejo_shim.shim import install_shim, is_managed_shim, uninstall_shim
+from gh_forgejo_shim.shim import install_shim, is_managed_shim, shim_script, uninstall_shim
 
 
 class ShimLifecycleTests(unittest.TestCase):
+    def test_generated_shim_uses_absolute_python_module_invocation(self) -> None:
+        script = shim_script("/tmp/pipx-venv/bin/python")
+        self.assertIn("exec /tmp/pipx-venv/bin/python -m gh_forgejo_shim gh", script)
+        self.assertNotIn("exec gh-forgejo-shim gh", script)
+
+    def test_old_managed_shim_marker_still_counts_as_managed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "gh"
+            target.write_text(
+                "#!/bin/sh\n# managed by gh-forgejo-shim\nexec gh-forgejo-shim gh \"$@\"\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(is_managed_shim(target))
+
     def test_install_refuses_unrelated_file_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = Path(tmp)

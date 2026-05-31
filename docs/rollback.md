@@ -58,6 +58,22 @@ gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
 ```
 
+## Remove The macOS GUI PATH LaunchAgent
+
+If you used the macOS GUI PATH helper, remove it with:
+
+```sh
+gh-forgejo-shim uninstall-gui-path
+```
+
+This deletes:
+
+```text
+~/Library/LaunchAgents/com.gh-forgejo-shim.user-gui-path.plist
+```
+
+Restart the login session to return newly launched GUI apps to the default launchd PATH. Existing apps keep the environment they already inherited until they restart.
+
 ## Disable Forgejo Routing Temporarily
 
 Run with an empty host override:

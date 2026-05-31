@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discover fj macOS Auth Config</title>
+  <style>
+    :root {
+      --bg: oklch(0.982 0.006 245);
+      --ink: oklch(0.2 0.035 255);
+      --muted: oklch(0.43 0.026 255);
+      --line: oklch(0.88 0.014 255);
+      --surface: oklch(1 0 0);
+      --surface-2: oklch(0.955 0.01 248);
+      --accent: oklch(0.48 0.18 252);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 44px 24px 72px;
+    }
+
+    header {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.13;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 840px;
+      font-size: clamp(2rem, 5vw, 4rem);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin-top: 38px;
+      font-size: clamp(1.35rem, 3vw, 1.9rem);
+    }
+
+    h3 {
+      margin-top: 0;
+      font-size: 1.05rem;
+    }
+
+    p,
+    li {
+      max-width: 74ch;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
+      padding: 0.08rem 0.28rem;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      border-radius: 12px;
+      background: oklch(0.18 0.035 255);
+      color: oklch(0.95 0.01 248);
+      padding: 16px;
+      line-height: 1.45;
+    }
+
+    a {
+      color: var(--accent);
+      text-underline-offset: 0.18em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+
+    .card,
+    .diff-panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .diff-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .diff-panel h3 {
+      padding: 16px 18px 0;
+    }
+
+    .diff-mount {
+      min-height: 220px;
+      padding: 12px;
+    }
+
+    .fallback {
+      margin: 12px;
+    }
+
+    @media (max-width: 680px) {
+      main {
+        padding: 28px 16px 52px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="meta">
+        <span class="pill">2026-05-31</span>
+        <span class="pill">Repository implementation</span>
+        <span class="pill">Issue gh-forgejo-shim-1e9</span>
+      </div>
+      <h1>Added macOS fj auth discovery for Codex.app</h1>
+      <p>
+        The shim now reads the current <code>fj</code> CLI macOS auth file, so GUI apps can find Forgejo tokens
+        without inheriting shell-only environment variables.
+      </p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>
+        Fixed Codex.app token visibility by adding <code>~/Library/Application Support/Cyborus.forgejo-cli/keys.json</code>
+        to the auth discovery path. This lets <code>gh-forgejo-shim doctor</code> report auth as found inside Codex
+        even when <code>FJ_SHIM_TOKEN</code>, <code>FORGEJO_TOKEN</code>, <code>GITEA_TOKEN</code>, and <code>FJ_TOKEN</code>
+        are absent from the process environment.
+      </p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Auth discovery</h3>
+          <p>
+            Added the macOS <code>fj</code> keys file to the candidate list before Linux-style config locations.
+            Existing env token precedence is unchanged.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Documentation</h3>
+          <p>
+            Updated configuration docs to explain the macOS <code>fj</code> path and why it matters for GUI apps.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Tests</h3>
+          <p>
+            Added auth tests covering env token precedence, macOS keys JSON discovery, and env-over-file behavior.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>
+        The user's normal terminal saw a Forgejo token, but this Codex process did not. Relaunching Codex only helps
+        if the token is set in the environment inherited by macOS GUI apps. The better product behavior is to read
+        the token from <code>fj</code>'s own persisted auth store.
+      </p>
+      <p>
+        The inspected local file shape was redacted during analysis. No token value was printed or copied into source,
+        tests, or documentation.
+      </p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li>Env tokens still win in this order: <code>FJ_SHIM_TOKEN</code>, <code>FORGEJO_TOKEN</code>, <code>GITEA_TOKEN</code>, <code>FJ_TOKEN</code>.</li>
+        <li>The macOS <code>fj</code> config is JSON and stores per-host entries under <code>hosts</code>.</li>
+        <li>The existing recursive token finder handles that JSON shape without a new parser.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>
+        The snippet below uses the Diffs <code>FileDiff</code> component when available, with a static fallback.
+        Reference: <a href="https://diffs.com/docs">Diffs documentation</a>.
+      </p>
+      <div class="diff-panel">
+        <h3>macOS fj config candidate</h3>
+        <div id="diff-auth" class="diff-mount"></div>
+        <pre class="fallback"><code>candidates = [
+    base / "Library" / "Application Support" / "Cyborus.forgejo-cli" / "keys.json",
+    base / ".config" / "fj" / "config.json",
+    base / ".config" / "fj" / "config.yml",
+]</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>
+        Users who already logged in with <code>fj auth login</code> or <code>fj auth add-key</code> on macOS should
+        not need to expose a token through GUI app environment variables. Codex.app can run the shim and discover
+        Forgejo auth through the same persisted <code>fj</code> config.
+      </p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><code>python3 -m unittest</code>: passed, 37 tests.</li>
+        <li><code>python3 -m compileall -q src tests</code>: passed.</li>
+        <li>Source-version doctor smoke test with all token env vars removed: <code>[ok] auth token: found</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The installed <code>pipx</code> copy needs to be refreshed before the normal command sees this fix.</li>
+        <li>This does not implement native shim login, which remains intentionally out of V1 scope.</li>
+        <li>If future <code>fj</code> versions move their macOS auth file, the candidate list may need another path.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <p>No new follow-up Beads issues were needed for this focused auth-discovery fix.</p>
+    </section>
+  </main>
+
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    const container = document.getElementById("diff-auth");
+    if (container) {
+      const diff = new FileDiff({ theme: "pierre-dark" });
+      diff.render({
+        oldFile: {
+          name: "src/gh_forgejo_shim/auth.py",
+          contents: `candidates = [
+    base / ".config" / "fj" / "config.json",
+    base / ".config" / "fj" / "config.yml",
+    base / ".config" / "fj" / "config.yaml",
+]`
+        },
+        newFile: {
+          name: "src/gh_forgejo_shim/auth.py",
+          contents: `candidates = [
+    base / "Library" / "Application Support" / "Cyborus.forgejo-cli" / "keys.json",
+    base / ".config" / "fj" / "config.json",
+    base / ".config" / "fj" / "config.yml",
+    base / ".config" / "fj" / "config.yaml",
+]`
+        },
+        containerWrapper: container
+      });
+      const fallback = container.parentElement?.querySelector(".fallback");
+      if (fallback) fallback.setAttribute("hidden", "hidden");
+    }
+  </script>
+</body>
+</html>

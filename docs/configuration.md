@@ -57,6 +57,49 @@ FJ_SHIM_REAL_GH=/opt/homebrew/bin/gh
 FJ_SHIM_REAL_FJ=/opt/homebrew/bin/fj
 ```
 
+When no explicit path is configured, the shim searches the inherited `PATH` first and then checks common user and package-manager directories such as:
+
+```text
+~/.local/bin
+/opt/homebrew/bin
+/usr/local/bin
+/opt/local/bin
+```
+
+This helps GUI-launched tools that inherit a minimal macOS PATH but still execute the shim successfully.
+
+## macOS GUI PATH
+
+Some GUI apps, including Codex.app when launched from Finder, Dock, or Spotlight, can start with only the system PATH:
+
+```text
+/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
+```
+
+That PATH may miss both the generated shim at `~/.local/bin/gh` and the real Homebrew GitHub CLI at `/opt/homebrew/bin/gh`.
+
+Persist a GUI-friendly user launchd PATH with:
+
+```sh
+gh-forgejo-shim install-gui-path
+```
+
+The command writes:
+
+```text
+~/Library/LaunchAgents/com.gh-forgejo-shim.user-gui-path.plist
+```
+
+It also runs `launchctl setenv PATH ...` for the current login session. Existing GUI apps need to be restarted before they inherit the new PATH.
+
+To provide an exact value instead of the default:
+
+```sh
+gh-forgejo-shim install-gui-path --path "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+```
+
+`gh-forgejo-shim doctor` reports a `macOS gui PATH` check on macOS so shell and GUI PATH problems are easier to tell apart.
+
 ## Auth
 
 The shim checks token environment variables in this order:
@@ -69,6 +112,14 @@ FJ_TOKEN
 ```
 
 If none are set, it tries a best-effort read from common `fj`, `tea`, and `gitea` config files. V1 does not implement a native login command.
+
+On macOS, the current `fj` CLI stores auth in:
+
+```text
+~/Library/Application Support/Cyborus.forgejo-cli/keys.json
+```
+
+The shim reads this file when present, which helps GUI apps such as Codex.app find Forgejo auth without inheriting shell-only environment variables.
 
 ## Repository Detection
 

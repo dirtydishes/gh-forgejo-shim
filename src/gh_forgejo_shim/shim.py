@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shlex
+import sys
 from pathlib import Path
 
 MARKER = "managed by gh-forgejo-shim"
@@ -14,12 +16,13 @@ def shim_path(bin_dir: Path | None = None) -> Path:
     return (bin_dir or default_bin_dir()) / "gh"
 
 
-def shim_script() -> str:
+def shim_script(python_executable: str | None = None) -> str:
+    executable = python_executable or sys.executable
     return "\n".join(
         [
             "#!/bin/sh",
             f"# {MARKER}",
-            'exec gh-forgejo-shim gh "$@"',
+            f'exec {shlex.quote(executable)} -m gh_forgejo_shim gh "$@"',
             "",
         ]
     )
@@ -30,7 +33,9 @@ def is_managed_shim(path: Path) -> bool:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    return MARKER in text and "gh-forgejo-shim gh" in text
+    return MARKER in text and (
+        "gh-forgejo-shim gh" in text or "-m gh_forgejo_shim gh" in text
+    )
 
 
 def install_shim(*, bin_dir: Path | None = None, force: bool = False) -> Path:

@@ -3,9 +3,22 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from .shim import is_managed_shim
+
+DEFAULT_FALLBACK_DIRS = (
+    "~/.local/bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/opt/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+)
 
 
 def find_program(
@@ -13,6 +26,7 @@ def find_program(
     *,
     configured: str | None = None,
     env: Mapping[str, str] | None = None,
+    fallback_dirs: Sequence[str] = DEFAULT_FALLBACK_DIRS,
 ) -> str | None:
     if configured:
         path = Path(configured).expanduser()
@@ -21,9 +35,7 @@ def find_program(
         return None
 
     values = env if env is not None else os.environ
-    for directory in values.get("PATH", "").split(os.pathsep):
-        if not directory:
-            continue
+    for directory in _candidate_dirs(values, fallback_dirs):
         candidate = Path(directory).expanduser() / name
         if not candidate.exists() or not os.access(candidate, os.X_OK):
             continue
@@ -31,6 +43,23 @@ def find_program(
             continue
         return str(candidate)
     return None
+
+
+def _candidate_dirs(values: Mapping[str, str], fallback_dirs: Sequence[str]) -> list[str]:
+    home = values.get("HOME")
+    seen: set[str] = set()
+    result: list[str] = []
+    for directory in [*values.get("PATH", "").split(os.pathsep), *fallback_dirs]:
+        if not directory:
+            continue
+        if directory.startswith("~/") and home:
+            directory = str(Path(home) / directory[2:])
+        normalized = str(Path(directory).expanduser())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
 
 
 def run_program(path: str, argv: list[str]) -> int:
