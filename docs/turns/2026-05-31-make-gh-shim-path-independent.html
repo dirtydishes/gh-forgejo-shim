@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Make gh Shim PATH Independent</title>
+  <style>
+    :root {
+      --bg: oklch(0.982 0.006 245);
+      --ink: oklch(0.2 0.035 255);
+      --muted: oklch(0.43 0.026 255);
+      --line: oklch(0.88 0.014 255);
+      --surface: oklch(1 0 0);
+      --surface-2: oklch(0.955 0.01 248);
+      --accent: oklch(0.48 0.18 252);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 44px 24px 72px;
+    }
+
+    header {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.13;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 820px;
+      font-size: clamp(2rem, 5vw, 4rem);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin-top: 38px;
+      font-size: clamp(1.35rem, 3vw, 1.9rem);
+    }
+
+    h3 {
+      margin-top: 0;
+      font-size: 1.05rem;
+    }
+
+    p,
+    li {
+      max-width: 74ch;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
+      padding: 0.08rem 0.28rem;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      border-radius: 12px;
+      background: oklch(0.18 0.035 255);
+      color: oklch(0.95 0.01 248);
+      padding: 16px;
+      line-height: 1.45;
+    }
+
+    a {
+      color: var(--accent);
+      text-underline-offset: 0.18em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+
+    .card,
+    .diff-panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .diff-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .diff-panel h3 {
+      padding: 16px 18px 0;
+    }
+
+    .diff-mount {
+      min-height: 220px;
+      padding: 12px;
+    }
+
+    .fallback {
+      margin: 12px;
+    }
+
+    @media (max-width: 680px) {
+      main {
+        padding: 28px 16px 52px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="meta">
+        <span class="pill">2026-05-31</span>
+        <span class="pill">Repository implementation</span>
+        <span class="pill">Issue gh-forgejo-shim-2je</span>
+      </div>
+      <h1>Made the generated gh shim independent of PATH</h1>
+      <p>
+        The wrapper now invokes the installed package through the pipx venv Python executable, so GUI apps do not
+        need <code>gh-forgejo-shim</code> itself to be discoverable through <code>PATH</code>.
+      </p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>
+        Fixed the failure mode behind Codex.app reporting <code>GitHub CLI unavailable</code>. The generated
+        <code>~/.local/bin/gh</code> wrapper previously ran <code>exec gh-forgejo-shim gh "$@"</code>, which fails
+        in stripped GUI environments where <code>gh-forgejo-shim</code> is not on <code>PATH</code>. It now executes
+        <code>python -m gh_forgejo_shim gh "$@"</code> through an absolute interpreter path captured at install time.
+      </p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Shim generation</h3>
+          <p>
+            Updated <code>shim_script</code> to emit an absolute Python module invocation using the interpreter
+            running <code>gh-forgejo-shim install-shim</code>.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Compatibility</h3>
+          <p>
+            Kept old generated wrappers recognizable as managed so uninstall and overwrite behavior remain safe.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Tests</h3>
+          <p>
+            Added tests for absolute module invocation and for recognizing the older managed shell wrapper.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>
+        Running the current wrapper with a stripped PATH reproduced the GUI app failure:
+        <code>exec: gh-forgejo-shim: not found</code>. Codex.app can find <code>gh</code>, but once the wrapper
+        starts, it must be able to run the package without depending on another PATH lookup.
+      </p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li><code>shlex.quote</code> is used when embedding the Python executable path into the shell wrapper.</li>
+        <li>The wrapper still uses <code>/bin/sh</code>, but no longer needs <code>gh-forgejo-shim</code> on PATH.</li>
+        <li>Managed-wrapper detection accepts both the old <code>gh-forgejo-shim gh</code> form and the new module form.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>
+        The snippet below uses the Diffs <code>FileDiff</code> component when available, with a static fallback.
+        Reference: <a href="https://diffs.com/docs">Diffs documentation</a>.
+      </p>
+      <div class="diff-panel">
+        <h3>Generated wrapper command</h3>
+        <div id="diff-shim" class="diff-mount"></div>
+        <pre class="fallback"><code>def shim_script(python_executable: str | None = None) -> str:
+    executable = python_executable or sys.executable
+    return "\n".join(
+        [
+            "#!/bin/sh",
+            f"# {MARKER}",
+            f'exec {shlex.quote(executable)} -m gh_forgejo_shim gh "$@"',
+            "",
+        ]
+    )</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>
+        Codex.app and other GUI tools can run the shim even when their subprocess environment does not expose the
+        pipx app directory in <code>PATH</code>. Normal terminal use is unchanged.
+      </p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><code>python3 -m unittest</code>: passed, 39 tests.</li>
+        <li><code>python3 -m compileall -q src tests</code>: passed.</li>
+        <li>Pre-fix reproduction with stripped PATH failed with <code>exec: gh-forgejo-shim: not found</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The installed package and generated <code>~/.local/bin/gh</code> file must be refreshed for the fix to affect Codex.app.</li>
+        <li>If the pipx venv is deleted or moved, reinstalling the shim will regenerate the wrapper with the new interpreter path.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <p>No new follow-up Beads issues were needed for this focused compatibility fix.</p>
+    </section>
+  </main>
+
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    const container = document.getElementById("diff-shim");
+    if (container) {
+      const diff = new FileDiff({ theme: "pierre-dark" });
+      diff.render({
+        oldFile: {
+          name: "src/gh_forgejo_shim/shim.py",
+          contents: `def shim_script() -> str:
+    return "\\n".join(
+        [
+            "#!/bin/sh",
+            f"# {MARKER}",
+            'exec gh-forgejo-shim gh "$@"',
+            "",
+        ]
+    )`
+        },
+        newFile: {
+          name: "src/gh_forgejo_shim/shim.py",
+          contents: `def shim_script(python_executable: str | None = None) -> str:
+    executable = python_executable or sys.executable
+    return "\\n".join(
+        [
+            "#!/bin/sh",
+            f"# {MARKER}",
+            f'exec {shlex.quote(executable)} -m gh_forgejo_shim gh "$@"',
+            "",
+        ]
+    )`
+        },
+        containerWrapper: container
+      });
+      const fallback = container.parentElement?.querySelector(".fallback");
+      if (fallback) fallback.setAttribute("hidden", "hidden");
+    }
+  </script>
+</body>
+</html>
