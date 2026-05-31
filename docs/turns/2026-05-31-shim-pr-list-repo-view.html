@@ -169,14 +169,14 @@
         <li>Added repository normalization for fields such as <code>nameWithOwner</code>, <code>url</code>, <code>sshUrl</code>, <code>defaultBranchRef</code>, and <code>owner</code>.</li>
         <li>Added PR list parsing for common flags including <code>--json</code>, <code>--jq</code>, <code>--state</code>, <code>--limit</code>, <code>--head</code>, <code>--base</code>, and <code>--repo</code>.</li>
         <li>Updated tests and README support documentation.</li>
-        <li>Tightened <code>AGENTS.md</code> so future turn documents must use <code>@pierre/diffs/ssr</code> for offline diff rendering.</li>
+        <li>Tightened the global Codex instructions so future turn documents must use <code>@pierre/diffs/ssr</code> for offline diff rendering.</li>
       </ul>
     </section>
 
     <section>
       <h2>Context</h2>
       <p>Codex.app showed “GitHub CLI unavailable” even though the installed wrapper was healthy and <code>gh pr create</code>, <code>gh pr view</code>, and <code>gh pr status</code> worked. The missing piece was that <code>gh pr list</code> and <code>gh repo view</code> were outside the supported routing table, so they fell through to the real GitHub CLI, which cannot understand a Forgejo-only remote.</p>
-      <p>During documentation, the first draft used client-side Diffs rendering with a plain fallback. That was corrected to static <code>@pierre/diffs/ssr</code> output, and the project instructions were clarified to make SSR mandatory for future diff snippets.</p>
+      <p>During documentation, the first draft used client-side Diffs rendering with a plain fallback. That was corrected to static <code>@pierre/diffs/ssr</code> output, and the global Codex instructions were clarified to make SSR mandatory for future diff snippets.</p>
     </section>
 
     <section>

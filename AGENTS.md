@@ -47,22 +47,6 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
-## Turn Document Diff Rendering
-
-When a repository implementation turn document includes the required
-**Relevant Diff Snippets** section, render those snippets with Diffs server-side
-rendering. This is mandatory.
-
-Use `@pierre/diffs/ssr`, preferably `preloadPatchDiff` or `preloadPatchFile`,
-to generate static HTML before writing the turn document. The saved HTML must
-contain the rendered diff markup itself so the document is readable offline
-without loading JavaScript, a CDN, or any remote module.
-
-Do not satisfy this requirement with client-side `FileDiff` rendering,
-`<script type="module">` imports from a CDN, screenshots, or a plain `<pre>`
-fallback as the primary diff rendering. A plain-text fallback may be included
-only in addition to the SSR-rendered Diffs output.
-
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
 ## Beads Issue Tracker
 
