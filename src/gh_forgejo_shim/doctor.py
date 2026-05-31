@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from .auth import discover_fj_token
 from .config import Config, load_config
 from .external import find_program
+from .gui_path import current_launchd_path, path_contains_dir
 from .shim import default_bin_dir, is_managed_shim, shim_path
 
 
@@ -24,14 +26,21 @@ def run_checks(
     env: Mapping[str, str] | None = None,
     bin_dir: Path | None = None,
     home: Path | None = None,
+    fallback_dirs: Sequence[str] | None = None,
+    launchd_path: str | None = None,
+    check_gui_path: bool | None = None,
 ) -> list[Check]:
     values = env if env is not None else os.environ
     cfg = config or load_config(env=values)
     target_bin_dir = bin_dir or default_bin_dir()
     wrapper = shim_path(target_bin_dir)
 
-    real_gh = find_program("gh", configured=cfg.paths.gh, env=values)
-    real_fj = find_program("fj", configured=cfg.paths.fj, env=values)
+    if fallback_dirs is None:
+        real_gh = find_program("gh", configured=cfg.paths.gh, env=values)
+        real_fj = find_program("fj", configured=cfg.paths.fj, env=values)
+    else:
+        real_gh = find_program("gh", configured=cfg.paths.gh, env=values, fallback_dirs=fallback_dirs)
+        real_fj = find_program("fj", configured=cfg.paths.fj, env=values, fallback_dirs=fallback_dirs)
     token = discover_fj_token(next(iter(cfg.hosts), None), env=values, home=home)
 
     checks = [
@@ -75,6 +84,27 @@ def run_checks(
         detail = f"{wrapper} is not installed"
         ok = False
     checks.append(Check("shim path", ok, detail))
+
+    if check_gui_path if check_gui_path is not None else sys.platform == "darwin":
+        gui_path = launchd_path if launchd_path is not None else current_launchd_path()
+        if gui_path and path_contains_dir(gui_path, target_bin_dir):
+            checks.append(Check("macOS gui PATH", True, f"{target_bin_dir} is visible to new GUI apps"))
+        elif gui_path:
+            checks.append(
+                Check(
+                    "macOS gui PATH",
+                    False,
+                    f"{target_bin_dir} is not in launchd PATH; run gh-forgejo-shim install-gui-path",
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "macOS gui PATH",
+                    False,
+                    "launchd PATH is unset; run gh-forgejo-shim install-gui-path if GUI apps cannot find gh",
+                )
+            )
 
     return checks
 

@@ -26,18 +26,27 @@ gh-forgejo-shim install-shim
 
 The wrapper is written to `~/.local/bin/gh` by default. Make sure `~/.local/bin` appears before the real `gh` location in `PATH`.
 
+On macOS, GUI apps launched from Finder or Dock can inherit a very small `PATH` such as `/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`. If Codex.app says `GitHub CLI (gh) is not installed` even though `gh --version` works in your shell, persist a GUI-friendly PATH and then restart Codex.app:
+
+```sh
+gh-forgejo-shim install-gui-path
+```
+
+This writes a LaunchAgent that places `~/.local/bin`, Homebrew, MacPorts, and system executable directories in the user launchd environment. It also applies the PATH to the current login session for newly opened GUI apps.
+
 ## Quickstart For Codex.app
 
 1. Install the package with `pipx`.
 2. Add each Forgejo host explicitly.
 3. Install the shim.
-4. Confirm the setup:
+4. On macOS, run `gh-forgejo-shim install-gui-path` if Codex.app was launched from Finder, Dock, Spotlight, or another GUI launcher.
+5. Confirm the setup:
 
 ```sh
 gh-forgejo-shim doctor
 ```
 
-5. Open a Forgejo repository in Codex.app and use the normal PR workflow.
+6. Restart Codex.app, open a Forgejo repository, and use the normal PR workflow.
 
 ## Supported Wrapper Commands
 
@@ -145,6 +154,12 @@ Remove the generated wrapper:
 
 ```sh
 gh-forgejo-shim uninstall-shim
+```
+
+Remove the macOS GUI PATH LaunchAgent:
+
+```sh
+gh-forgejo-shim uninstall-gui-path
 ```
 
 See [docs/rollback.md](docs/rollback.md) for PATH troubleshooting and recovery steps.
