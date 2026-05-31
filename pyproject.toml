@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gh-forgejo-shim"
+version = "0.1.0"
+description = "Opt-in gh wrapper for Forgejo repositories, tuned for Codex.app workflows."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "dirtydishes" }
+]
+keywords = ["forgejo", "gitea", "github-cli", "codex", "gh"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Version Control :: Git",
+]
+
+[project.urls]
+Homepage = "https://github.com/dirtydishes/gh-forgejo-shim"
+Issues = "https://github.com/dirtydishes/gh-forgejo-shim/issues"
+
+[project.scripts]
+gh-forgejo-shim = "gh_forgejo_shim.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

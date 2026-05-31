@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Build gh-forgejo-shim V1 Package</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.985 0.006 245);
+      --ink: oklch(0.205 0.035 255);
+      --muted: oklch(0.44 0.025 255);
+      --line: oklch(0.885 0.014 255);
+      --surface: oklch(1 0 0);
+      --surface-2: oklch(0.955 0.01 248);
+      --accent: oklch(0.48 0.18 252);
+      --accent-2: oklch(0.62 0.16 175);
+      --warn: oklch(0.62 0.16 65);
+      --radius: 12px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 48px 24px 72px;
+    }
+
+    header {
+      display: grid;
+      gap: 18px;
+      padding: 20px 0 32px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 900px;
+      font-size: clamp(2.2rem, 6vw, 4.5rem);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin-top: 42px;
+      font-size: clamp(1.45rem, 3vw, 2.05rem);
+    }
+
+    h3 {
+      margin-top: 24px;
+      font-size: 1.05rem;
+    }
+
+    p,
+    li {
+      max-width: 74ch;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 0.09em;
+      text-underline-offset: 0.18em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: var(--surface);
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 26px;
+    }
+
+    .summary div,
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 16px;
+    }
+
+    .summary strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+      font-size: 0.92rem;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.08rem 0.28rem;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: oklch(0.18 0.035 255);
+      color: oklch(0.95 0.01 248);
+      padding: 16px;
+      line-height: 1.45;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .diff-panel {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .diff-panel h3 {
+      padding: 16px 18px 0;
+    }
+
+    .diff-mount {
+      min-height: 220px;
+      padding: 12px;
+    }
+
+    .fallback {
+      margin: 12px;
+    }
+
+    .fine {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 680px) {
+      main {
+        padding: 28px 16px 52px;
+      }
+
+      .summary,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="meta">
+        <span class="pill">2026-05-31</span>
+        <span class="pill">Repository implementation</span>
+        <span class="pill">Issue gh-forgejo-shim-uku</span>
+      </div>
+      <h1>Built the initial gh-forgejo-shim V1 package</h1>
+      <p>
+        This turn converted the repository from a Beads-initialized shell into a stdlib-only Python CLI package
+        with an opt-in <code>gh</code> wrapper for Codex.app workflows in Forgejo repositories.
+      </p>
+      <div class="summary">
+        <div><strong>Package</strong><span>pipx-ready Python project with the <code>gh-forgejo-shim</code> command.</span></div>
+        <div><strong>Routing</strong><span>Supported Forgejo PR commands route locally, other commands delegate to real <code>gh</code>.</span></div>
+        <div><strong>Validation</strong><span>32 unit tests, compile check, CLI smoke test, and venv package install passed.</span></div>
+      </div>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>
+        Implemented V1 of <code>gh-forgejo-shim</code>: a Python 3.11+ package with no runtime dependencies,
+        a durable management CLI, a reversible generated <code>gh</code> wrapper, opt-in Forgejo host routing,
+        PR create/view/status behavior, GitHub-shaped JSON normalization, docs, and tests.
+      </p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Packaging and CLI</h3>
+          <p>
+            Added <code>pyproject.toml</code>, package metadata, console script registration, version output,
+            and a management command surface for shim install, uninstall, doctor, config, and version.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Config and routing</h3>
+          <p>
+            Added TOML config loading, env override merging, explicit host allowlisting, repository detection
+            from <code>-R</code>, <code>GH_REPO</code>, <code>GH_HOST</code>, and git remotes, plus delegation
+            to the real GitHub CLI when a command or host is out of scope.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Forgejo PR behavior</h3>
+          <p>
+            Added PR create flag parsing, unsupported metadata flag errors, REST client calls, current branch
+            view/status lookup, no-current-branch empty success behavior, and normalized JSON fields.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Docs and tests</h3>
+          <p>
+            Added README, configuration docs, rollback docs, contributing notes, Python ignore rules, and a
+            focused stdlib <code>unittest</code> suite.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>
+        Codex.app expects GitHub-like PR commands in repositories. Forgejo repositories do not speak the full
+        GitHub CLI contract, so this project narrows the surface area to commands Codex is likely to call and
+        leaves everything else with the real <code>gh</code>. This keeps GitHub behavior intact while making
+        Forgejo repos less brittle under automation.
+      </p>
+      <p>
+        The repository uses Beads. The implementation issue is <code>gh-forgejo-shim-uku</code>. Two follow-up
+        Beads tasks were opened for work that should remain outside this V1 pass.
+      </p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li><code>src/gh_forgejo_shim/routing.py</code> decides whether to delegate or route to Forgejo.</li>
+        <li><code>src/gh_forgejo_shim/repo.py</code> parses HTTPS, SSH, scp-style SSH, host-prefixed, and plain owner/repo specs.</li>
+        <li><code>src/gh_forgejo_shim/create.py</code> translates supported <code>gh pr create</code> flags and rejects GitHub-only metadata flags.</li>
+        <li><code>src/gh_forgejo_shim/forgejo.py</code> implements the minimal REST client using <code>urllib</code>.</li>
+        <li><code>src/gh_forgejo_shim/shim.py</code> writes a marked wrapper and refuses unrelated files unless <code>--force</code> is passed.</li>
+        <li><code>src/gh_forgejo_shim/doctor.py</code> checks executable discovery, PATH ordering, hosts, and auth.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>
+        The snippets below use the Diffs <code>FileDiff</code> component, following the documented model of
+        rendering two versions of a file into a container. If the external renderer is unavailable, the static
+        fallback code blocks remain visible. Reference: <a href="https://diffs.com/docs">Diffs documentation</a>.
+      </p>
+
+      <div class="diff-panel">
+        <h3>Package entry point</h3>
+        <div id="diff-pyproject" class="diff-mount"></div>
+        <pre class="fallback"><code>[project.scripts]
+gh-forgejo-shim = "gh_forgejo_shim.cli:main"</code></pre>
+      </div>
+
+      <div class="diff-panel">
+        <h3>Forgejo routing decision</h3>
+        <div id="diff-routing" class="diff-mount"></div>
+        <pre class="fallback"><code>if len(argv) &lt; 2 or argv[0] != "pr" or argv[1] not in SUPPORTED_PR_COMMANDS:
+    return RouteDecision("delegate", "unsupported command")
+
+detection = detect_repo(argv, env=env, cwd=cwd)
+if detection.repo is None:
+    return RouteDecision("delegate", "no repository detected")
+if not config.is_forgejo_host(detection.repo.host):
+    return RouteDecision("delegate", f"host {detection.repo.host} is not allowlisted", detection.repo)
+return RouteDecision("forgejo", detection.source, detection.repo)</code></pre>
+      </div>
+
+      <div class="diff-panel">
+        <h3>No-current-branch PR compatibility</h3>
+        <div id="diff-empty" class="diff-mount"></div>
+        <pre class="fallback"><code>if pull is None:
+    if parsed.json_fields:
+        print("{}", file=stdout)
+    return 0</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>
+        Users can install the package with <code>pipx</code>, explicitly allowlist Forgejo hosts, and install
+        the reversible <code>gh</code> wrapper. Codex.app can then run common PR create/status/view commands
+        in Forgejo repositories without breaking normal GitHub repositories on the same machine.
+      </p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><code>python3 -m unittest</code>: passed, 32 tests.</li>
+        <li><code>python3 -m compileall -q src tests</code>: passed.</li>
+        <li><code>PYTHONPATH=src python3 -m gh_forgejo_shim version</code>: printed <code>0.1.0</code>.</li>
+        <li><code>PYTHONPATH=src python3 -m gh_forgejo_shim --help</code>: printed the expected command list.</li>
+        <li>Disposable venv package install with <code>python3 -m pip install .</code>: built and installed <code>gh-forgejo-shim-0.1.0</code>, then printed <code>0.1.0</code>.</li>
+        <li>Direct system <code>python3 -m pip install -e . --dry-run</code>: blocked by PEP 668 externally managed environment protection, so the venv validation was used instead.</li>
+        <li><code>bd dolt push</code>: exited successfully; Beads reported that no Dolt remote is configured, so remote issue sync was skipped.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>V1 intentionally supports only <code>gh pr create/new/status/view</code> for Forgejo hosts; every other command delegates to real <code>gh</code>.</li>
+        <li>No native login command exists. Auth checks env tokens first, then best-effort local <code>fj</code>/<code>tea</code>/<code>gitea</code> config discovery.</li>
+        <li>Forgejo REST behavior is unit-tested with fakes, not yet exercised against a live Forgejo fixture.</li>
+        <li><code>--jq</code> and broader GitHub CLI JSON behavior are not implemented in this V1 surface.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li><code>gh-forgejo-shim-mte</code>: Add live Forgejo integration coverage.</li>
+        <li><code>gh-forgejo-shim-xq1</code>: Add package release automation.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    const snippets = [
+      {
+        id: "diff-pyproject",
+        name: "pyproject.toml",
+        before: "",
+        after: `[project]
+name = "gh-forgejo-shim"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.scripts]
+gh-forgejo-shim = "gh_forgejo_shim.cli:main"`
+      },
+      {
+        id: "diff-routing",
+        name: "src/gh_forgejo_shim/routing.py",
+        before: "",
+        after: `if len(argv) < 2 or argv[0] != "pr" or argv[1] not in SUPPORTED_PR_COMMANDS:
+    return RouteDecision("delegate", "unsupported command")
+
+detection = detect_repo(argv, env=env, cwd=cwd)
+if detection.repo is None:
+    return RouteDecision("delegate", "no repository detected")
+if not config.is_forgejo_host(detection.repo.host):
+    return RouteDecision("delegate", f"host {detection.repo.host} is not allowlisted", detection.repo)
+return RouteDecision("forgejo", detection.source, detection.repo)`
+      },
+      {
+        id: "diff-empty",
+        name: "src/gh_forgejo_shim/routing.py",
+        before: "",
+        after: `if pull is None:
+    if parsed.json_fields:
+        print("{}", file=stdout)
+    return 0`
+      }
+    ];
+
+    for (const snippet of snippets) {
+      const container = document.getElementById(snippet.id);
+      if (!container) continue;
+      const diff = new FileDiff({ theme: "pierre-dark" });
+      diff.render({
+        oldFile: { name: snippet.name, contents: snippet.before },
+        newFile: { name: snippet.name, contents: snippet.after },
+        containerWrapper: container
+      });
+      const fallback = container.parentElement?.querySelector(".fallback");
+      if (fallback) fallback.setAttribute("hidden", "hidden");
+    }
+  </script>
+</body>
+</html>
