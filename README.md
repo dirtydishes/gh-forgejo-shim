@@ -45,9 +45,11 @@ Only these commands are routed for allowlisted Forgejo repositories:
 
 ```sh
 gh pr create
+gh pr list
 gh pr new
 gh pr status
 gh pr view
+gh repo view
 ```
 
 Everything else delegates to the real GitHub CLI.
@@ -80,6 +82,13 @@ For `--json`, the shim emits a GitHub-shaped subset when Forgejo data is availab
 number, title, state, isDraft, url, headRefName, baseRefName,
 author, createdAt, updatedAt, mergeable, mergeStateStatus,
 statusCheckRollup
+```
+
+`gh repo view --json ...` supports a small repository metadata subset:
+
+```text
+description, defaultBranchRef, isPrivate, name, nameWithOwner,
+owner, sshUrl, url
 ```
 
 `gh pr status --json ...` follows the GitHub CLI status envelope:

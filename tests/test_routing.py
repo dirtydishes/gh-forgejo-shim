@@ -8,7 +8,7 @@ from pathlib import Path
 
 from gh_forgejo_shim.config import Config
 from gh_forgejo_shim.forgejo import ForgejoClient, RepoRef
-from gh_forgejo_shim.routing import decide_route, run_forgejo_pr
+from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr
 
 
 class FakeClient(ForgejoClient):
@@ -16,6 +16,15 @@ class FakeClient(ForgejoClient):
         super().__init__(None)
         self.pulls = pulls or []
         self.created: dict | None = None
+        self.repo_view = {
+            "name": "repo",
+            "full_name": "owner/repo",
+            "html_url": "https://git.example.com/owner/repo",
+            "ssh_url": "git@git.example.com:owner/repo.git",
+            "default_branch": "main",
+            "private": False,
+            "owner": {"login": "owner"},
+        }
 
     def create_pull(self, repo: RepoRef, **kwargs):  # type: ignore[no-untyped-def]
         self.created = {"repo": repo, **kwargs}
@@ -44,6 +53,9 @@ class FakeClient(ForgejoClient):
                 return pull
         raise ValueError("not found")
 
+    def get_repo(self, repo: RepoRef):  # type: ignore[no-untyped-def]
+        return self.repo_view
+
 
 class RoutingTests(unittest.TestCase):
     def test_delegates_non_pr_command(self) -> None:
@@ -54,13 +66,21 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(decision.kind, "delegate")
 
-    def test_delegates_unsupported_pr_command(self) -> None:
+    def test_routes_pr_list_for_allowlisted_host(self) -> None:
         decision = decide_route(
             ["pr", "list", "-R", "git.example.com/owner/repo"],
             config=Config(hosts=("git.example.com",)),
             env={},
         )
-        self.assertEqual(decision.kind, "delegate")
+        self.assertEqual(decision.kind, "forgejo")
+
+    def test_routes_repo_view_for_allowlisted_host(self) -> None:
+        decision = decide_route(
+            ["repo", "view", "-R", "git.example.com/owner/repo"],
+            config=Config(hosts=("git.example.com",)),
+            env={},
+        )
+        self.assertEqual(decision.kind, "forgejo")
 
     def test_delegates_non_allowlisted_host(self) -> None:
         decision = decide_route(
@@ -110,6 +130,87 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(client.created["title"], "Ship it")
         self.assertTrue(client.created["draft"])
         self.assertEqual(json.loads(out.getvalue()), {"number": 7, "title": "Ship it", "url": "https://git.example.com/owner/repo/pulls/7"})
+
+    def test_pr_list_outputs_json_array(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            [
+                "pr",
+                "list",
+                "-R",
+                "git.example.com/owner/repo",
+                "--json",
+                "number,title,url,headRefName",
+                "--head",
+                "feature",
+                "--limit",
+                "1",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                [
+                    {
+                        "number": 8,
+                        "title": "Make Codex happy",
+                        "state": "open",
+                        "html_url": "https://git.example.com/owner/repo/pulls/8",
+                        "head": {"ref": "feature"},
+                        "base": {"ref": "main"},
+                        "user": {"login": "alice"},
+                    },
+                    {
+                        "number": 9,
+                        "title": "Other branch",
+                        "state": "open",
+                        "html_url": "https://git.example.com/owner/repo/pulls/9",
+                        "head": {"ref": "other"},
+                        "base": {"ref": "main"},
+                        "user": {"login": "alice"},
+                    },
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            [
+                {
+                    "headRefName": "feature",
+                    "number": 8,
+                    "title": "Make Codex happy",
+                    "url": "https://git.example.com/owner/repo/pulls/8",
+                }
+            ],
+        )
+
+    def test_repo_view_outputs_github_shaped_json(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo(
+            [
+                "repo",
+                "view",
+                "-R",
+                "git.example.com/owner/repo",
+                "--json",
+                "nameWithOwner,url,defaultBranchRef,sshUrl",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            {
+                "defaultBranchRef": {"name": "main"},
+                "nameWithOwner": "owner/repo",
+                "sshUrl": "git@git.example.com:owner/repo.git",
+                "url": "https://git.example.com/owner/repo",
+            },
+        )
 
     def test_no_current_branch_view_returns_empty_json_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

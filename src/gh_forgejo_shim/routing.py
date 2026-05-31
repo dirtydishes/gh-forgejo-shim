@@ -12,7 +12,13 @@ from .config import Config, load_config
 from .create import CreateParseError, parse_create_args
 from .external import find_program, run_program
 from .forgejo import ForgejoClient, ForgejoError, RepoRef
-from .normalize import filter_fields, normalize_pull, status_for_current_branch
+from .normalize import (
+    filter_fields,
+    filter_repo_fields,
+    normalize_pull,
+    normalize_repo,
+    status_for_current_branch,
+)
 from .repo import (
     current_branch,
     default_base_branch,
@@ -22,7 +28,8 @@ from .repo import (
     parse_repo_spec,
 )
 
-SUPPORTED_PR_COMMANDS = {"create", "new", "status", "view"}
+SUPPORTED_PR_COMMANDS = {"create", "list", "new", "status", "view"}
+SUPPORTED_REPO_COMMANDS = {"view"}
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,16 @@ class RouteDecision:
 ClientFactory = Callable[[str | None], ForgejoClient]
 
 
+def _is_supported_command(argv: list[str]) -> bool:
+    if len(argv) < 2:
+        return False
+    if argv[0] == "pr":
+        return argv[1] in SUPPORTED_PR_COMMANDS
+    if argv[0] == "repo":
+        return argv[1] in SUPPORTED_REPO_COMMANDS
+    return False
+
+
 def decide_route(
     argv: list[str],
     *,
@@ -42,7 +59,7 @@ def decide_route(
     env: Mapping[str, str] | None = None,
     cwd: str | None = None,
 ) -> RouteDecision:
-    if len(argv) < 2 or argv[0] != "pr" or argv[1] not in SUPPORTED_PR_COMMANDS:
+    if len(argv) < 2 or not _is_supported_command(argv):
         return RouteDecision("delegate", "unsupported command")
 
     detection = detect_repo(argv, env=env, cwd=cwd)
@@ -83,7 +100,7 @@ def run_gh(
     token = discover_fj_token(decision.repo.host, env=values)
     client = client_factory(token) if client_factory else ForgejoClient(token)
     try:
-        return run_forgejo_pr(
+        return run_forgejo(
             argv,
             decision.repo,
             client,
@@ -95,6 +112,21 @@ def run_gh(
     except (CreateParseError, ForgejoError, ValueError) as exc:
         print(f"gh-forgejo-shim: {exc}", file=err)
         return 1
+
+
+def run_forgejo(
+    argv: list[str],
+    repo: RepoRef,
+    client: ForgejoClient,
+    *,
+    cwd: str | None = None,
+    stdout: TextIO,
+    stderr: TextIO,
+    stdin: TextIO | None = None,
+) -> int:
+    if argv[0] == "repo":
+        return run_forgejo_repo(argv, repo, client, stdout=stdout, stderr=stderr)
+    return run_forgejo_pr(argv, repo, client, cwd=cwd, stdout=stdout, stderr=stderr, stdin=stdin)
 
 
 def run_forgejo_pr(
@@ -111,11 +143,29 @@ def run_forgejo_pr(
     rest = argv[2:]
     if command in {"create", "new"}:
         return _run_create(rest, repo, client, cwd=cwd, stdout=stdout, stdin=stdin)
+    if command == "list":
+        return _run_list(rest, repo, client, stdout=stdout)
     if command == "view":
         return _run_view(rest, repo, client, cwd=cwd, stdout=stdout)
     if command == "status":
         return _run_status(rest, repo, client, cwd=cwd, stdout=stdout)
     print(f"gh-forgejo-shim: unsupported Forgejo PR command: {command}", file=stderr)
+    return 1
+
+
+def run_forgejo_repo(
+    argv: list[str],
+    repo: RepoRef,
+    client: ForgejoClient,
+    *,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    command = argv[1]
+    rest = argv[2:]
+    if command == "view":
+        return _run_repo_view(rest, repo, client, stdout=stdout)
+    print(f"gh-forgejo-shim: unsupported Forgejo repo command: {command}", file=stderr)
     return 1
 
 
@@ -172,6 +222,36 @@ def _run_create(
     return 0
 
 
+def _run_list(
+    argv: list[str],
+    repo: RepoRef,
+    client: ForgejoClient,
+    *,
+    stdout: TextIO,
+) -> int:
+    parsed = _parse_list_args(argv)
+    target_repo = parse_repo_spec(parsed.repo, default_host=repo.host) if parsed.repo else repo
+    if target_repo is None:
+        raise ValueError("could not parse --repo value")
+    pulls = client.list_pulls(target_repo, state=parsed.state, head=parsed.head)
+    if parsed.base:
+        pulls = [
+            pull
+            for pull in pulls
+            if isinstance(pull.get("base"), dict) and pull["base"].get("ref") == parsed.base
+        ]
+    if parsed.limit is not None:
+        pulls = pulls[: parsed.limit]
+
+    normalized = [filter_fields(normalize_pull(pull), parsed.json_fields) for pull in pulls]
+    if parsed.json_fields:
+        _print_json_or_jq_list(normalized, parsed.jq, stdout)
+    else:
+        for pull in normalized:
+            print(_format_pull_list_item(pull), file=stdout)
+    return 0
+
+
 def _run_view(
     argv: list[str],
     repo: RepoRef,
@@ -206,6 +286,31 @@ def _run_view(
         _print_json_or_jq(filter_fields(normalized, parsed.json_fields), parsed.jq, stdout)
     else:
         print(_format_pull_text(normalized), file=stdout)
+    return 0
+
+
+def _run_repo_view(
+    argv: list[str],
+    repo: RepoRef,
+    client: ForgejoClient,
+    *,
+    stdout: TextIO,
+) -> int:
+    parsed = _parse_repo_view_args(argv)
+    target_repo = parse_repo_spec(parsed.repo, default_host=repo.host) if parsed.repo else repo
+    if target_repo is None:
+        raise ValueError("could not parse --repo value")
+    data = normalize_repo(client.get_repo(target_repo), target_repo)
+    if parsed.web:
+        url = str(data.get("url") or "")
+        if url:
+            webbrowser.open(url)
+            print(url, file=stdout)
+        return 0
+    if parsed.json_fields:
+        _print_json_or_jq(filter_repo_fields(data, parsed.json_fields), parsed.jq, stdout)
+    else:
+        print(data.get("url") or target_repo.web_base_url, file=stdout)
     return 0
 
 
@@ -248,6 +353,125 @@ class ViewStatusArgs:
     branch: str | None = None
 
 
+@dataclass(frozen=True)
+class ListArgs:
+    json_fields: tuple[str, ...] = ()
+    repo: str | None = None
+    jq: str | None = None
+    template: str | None = None
+    state: str = "open"
+    limit: int | None = None
+    head: str | None = None
+    base: str | None = None
+
+
+@dataclass(frozen=True)
+class RepoViewArgs:
+    json_fields: tuple[str, ...] = ()
+    repo: str | None = None
+    web: bool = False
+    jq: str | None = None
+    template: str | None = None
+
+
+def _parse_list_args(argv: list[str]) -> ListArgs:
+    json_fields: tuple[str, ...] = ()
+    repo = None
+    jq = None
+    template = None
+    state = "open"
+    limit = None
+    head = None
+    base = None
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"--json"}:
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --json")
+            json_fields = _split_fields(argv[index + 1])
+            index += 2
+        elif arg.startswith("--json="):
+            json_fields = _split_fields(arg.split("=", 1)[1])
+            index += 1
+        elif arg in {"-R", "--repo"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            repo = argv[index + 1]
+            index += 2
+        elif arg.startswith("--repo="):
+            repo = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--template", "-t"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            template = argv[index + 1]
+            index += 2
+        elif arg.startswith("--template=") or arg.startswith("-t="):
+            template = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--state", "-s"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            state = _normalize_state(argv[index + 1])
+            index += 2
+        elif arg.startswith("--state=") or arg.startswith("-s="):
+            state = _normalize_state(arg.split("=", 1)[1])
+            index += 1
+        elif arg in {"--limit", "-L"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            limit = _parse_limit(argv[index + 1])
+            index += 2
+        elif arg.startswith("--limit=") or arg.startswith("-L="):
+            limit = _parse_limit(arg.split("=", 1)[1])
+            index += 1
+        elif arg in {"--head", "-H"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            head = argv[index + 1]
+            index += 2
+        elif arg.startswith("--head=") or arg.startswith("-H="):
+            head = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--base", "-B"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            base = argv[index + 1]
+            index += 2
+        elif arg.startswith("--base=") or arg.startswith("-B="):
+            base = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--author", "--app", "--assignee", "--label", "--search"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            index += 2
+        elif arg.startswith(("--author=", "--app=", "--assignee=", "--label=", "--search=")):
+            index += 1
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported Forgejo PR list flag: {arg}")
+        else:
+            index += 1
+    return ListArgs(
+        json_fields=json_fields,
+        repo=repo,
+        jq=jq,
+        template=template,
+        state=state,
+        limit=limit,
+        head=head,
+        base=base,
+    )
+
+
 def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
     json_fields: tuple[str, ...] = ()
     repo = None
@@ -262,10 +486,10 @@ def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
         if arg in {"--json"}:
             if index + 1 >= len(argv):
                 raise ValueError("missing value for --json")
-            json_fields = tuple(item.strip() for item in argv[index + 1].split(",") if item.strip())
+            json_fields = _split_fields(argv[index + 1])
             index += 2
         elif arg.startswith("--json="):
-            json_fields = tuple(item.strip() for item in arg.split("=", 1)[1].split(",") if item.strip())
+            json_fields = _split_fields(arg.split("=", 1)[1])
             index += 1
         elif arg in {"-R", "--repo"}:
             if index + 1 >= len(argv):
@@ -313,6 +537,58 @@ def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
     )
 
 
+def _parse_repo_view_args(argv: list[str]) -> RepoViewArgs:
+    json_fields: tuple[str, ...] = ()
+    repo = None
+    web = False
+    jq = None
+    template = None
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"--json"}:
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --json")
+            json_fields = _split_fields(argv[index + 1])
+            index += 2
+        elif arg.startswith("--json="):
+            json_fields = _split_fields(arg.split("=", 1)[1])
+            index += 1
+        elif arg in {"-R", "--repo"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            repo = argv[index + 1]
+            index += 2
+        elif arg.startswith("--repo="):
+            repo = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--web", "-w"}:
+            web = True
+            index += 1
+        elif arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--template", "-t"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            template = argv[index + 1]
+            index += 2
+        elif arg.startswith("--template=") or arg.startswith("-t="):
+            template = arg.split("=", 1)[1]
+            index += 1
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported Forgejo repo view flag: {arg}")
+        else:
+            repo = arg
+            index += 1
+    return RepoViewArgs(json_fields=json_fields, repo=repo, web=web, jq=jq, template=template)
+
+
 def _format_pull_text(data: dict[str, object]) -> str:
     number = data.get("number")
     title = data.get("title") or ""
@@ -321,7 +597,27 @@ def _format_pull_text(data: dict[str, object]) -> str:
     return f"#{number} {title}\nstate: {state}\nurl: {url}".rstrip()
 
 
+def _format_pull_list_item(data: dict[str, object]) -> str:
+    number = data.get("number")
+    title = data.get("title") or ""
+    branch = data.get("headRefName") or ""
+    return f"{number}\t{title}\t{branch}".rstrip()
+
+
 def _print_json_or_jq(data: dict[str, object], jq: str | None, stdout: TextIO) -> None:
+    if jq:
+        value = _apply_simple_jq(data, jq)
+        if value is None:
+            return
+        if isinstance(value, str):
+            print(value, file=stdout)
+        else:
+            print(json.dumps(value, sort_keys=True), file=stdout)
+        return
+    print(json.dumps(data, sort_keys=True), file=stdout)
+
+
+def _print_json_or_jq_list(data: list[dict[str, object]], jq: str | None, stdout: TextIO) -> None:
     if jq:
         value = _apply_simple_jq(data, jq)
         if value is None:
@@ -347,8 +643,32 @@ def _apply_simple_jq(data: object, expression: str) -> object:
     for part in query[1:].split("."):
         if not part:
             continue
-        if isinstance(value, dict):
+        if isinstance(value, list) and part.endswith("[]"):
+            key = part[:-2]
+            value = [item.get(key) for item in value if isinstance(item, dict)]
+        elif isinstance(value, dict):
             value = value.get(part)
         else:
             return None
     return value
+
+
+def _split_fields(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _parse_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid --limit value: {value}") from exc
+    if limit < 0:
+        raise ValueError("--limit must be non-negative")
+    return limit
+
+
+def _normalize_state(value: str) -> str:
+    normalized = value.lower()
+    if normalized not in {"open", "closed", "all"}:
+        raise ValueError("--state must be one of: open, closed, all")
+    return normalized

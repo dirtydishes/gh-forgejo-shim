@@ -54,6 +54,9 @@ class ForgejoClient:
     def get_pull(self, repo: RepoRef, number: int) -> dict[str, Any]:
         return self._request_json("GET", f"{repo.api_base_url}/pulls/{number}", None)
 
+    def get_repo(self, repo: RepoRef) -> dict[str, Any]:
+        return self._request_json("GET", repo.api_base_url, None)
+
     def list_pulls(
         self,
         repo: RepoRef,

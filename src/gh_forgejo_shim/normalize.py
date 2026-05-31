@@ -21,6 +21,17 @@ SUPPORTED_JSON_FIELDS = (
     "statusCheckRollup",
 )
 
+SUPPORTED_REPO_JSON_FIELDS = (
+    "description",
+    "defaultBranchRef",
+    "isPrivate",
+    "name",
+    "nameWithOwner",
+    "owner",
+    "sshUrl",
+    "url",
+)
+
 
 def normalize_pull(pull: dict[str, Any]) -> dict[str, Any]:
     user = pull.get("user") if isinstance(pull.get("user"), dict) else {}
@@ -54,6 +65,32 @@ def filter_fields(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, An
     if not fields:
         return data
     return {field: data.get(field) for field in fields if field in SUPPORTED_JSON_FIELDS}
+
+
+def normalize_repo(repo: dict[str, Any], fallback: Any) -> dict[str, Any]:
+    owner = repo.get("owner") if isinstance(repo.get("owner"), dict) else {}
+    owner_login = owner.get("login") or owner.get("username") or getattr(fallback, "owner")
+    name = repo.get("name") or getattr(fallback, "repo")
+    default_branch = repo.get("default_branch")
+    return {
+        "description": repo.get("description"),
+        "defaultBranchRef": {"name": default_branch} if default_branch else None,
+        "isPrivate": bool(repo.get("private", False)),
+        "name": name,
+        "nameWithOwner": repo.get("full_name") or f"{owner_login}/{name}",
+        "owner": {
+            "login": owner_login,
+            "type": owner.get("type"),
+        },
+        "sshUrl": repo.get("ssh_url"),
+        "url": repo.get("html_url") or getattr(fallback, "web_base_url"),
+    }
+
+
+def filter_repo_fields(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    if not fields:
+        return data
+    return {field: data.get(field) for field in fields if field in SUPPORTED_REPO_JSON_FIELDS}
 
 
 def status_for_current_branch(
