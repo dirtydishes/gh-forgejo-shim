@@ -32,6 +32,7 @@ Issues = "https://github.com/dirtydishes/gh-forgejo-shim/issues"
 
 [project.scripts]
 gh-forgejo-shim = "gh_forgejo_shim.cli:main"
+gfj = "gh_forgejo_shim.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

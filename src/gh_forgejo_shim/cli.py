@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .bootstrap import format_bootstrap, run_bootstrap
 from .config import add_host, load_config, remove_host
 from .doctor import format_checks, run_checks
 from .gui_path import install_gui_path, uninstall_gui_path
@@ -48,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
         checks = run_checks()
         print(format_checks(checks))
         return 0 if all(check.ok for check in checks) else 1
+
+    if command == "bootstrap":
+        try:
+            result = run_bootstrap(
+                bin_dir=Path(namespace.bin_dir).expanduser() if namespace.bin_dir else None,
+                force=namespace.force,
+            )
+        except OSError as exc:
+            print(f"gh-forgejo-shim: {exc}", file=sys.stderr)
+            return 1
+        print(format_bootstrap(result))
+        return 0 if result.ok else 1
 
     if command == "install-gui-path":
         if sys.platform != "darwin":
@@ -110,6 +123,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("uninstall-gui-path", help="remove the macOS GUI PATH LaunchAgent")
 
     subparsers.add_parser("doctor", help="check shim configuration")
+
+    bootstrap = subparsers.add_parser(
+        "bootstrap",
+        help="detect the current repo, install the shim, and print exact setup repair commands",
+    )
+    bootstrap.add_argument("--bin-dir")
+    bootstrap.add_argument("--force", action="store_true", help="overwrite an unrelated gh at the shim path")
+
     subparsers.add_parser("version", help="print version")
 
     config = subparsers.add_parser("config", help="manage persistent configuration")

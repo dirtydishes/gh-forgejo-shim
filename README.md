@@ -2,7 +2,7 @@
 
 `gh-forgejo-shim` is a small, stdlib-only Python CLI for Codex.app, T3 Code, and other GitHub-oriented tools used with Forgejo repositories.
 
-It installs a durable management command named `gh-forgejo-shim`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still go to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository and pull request commands through Forgejo-friendly behavior.
+It installs a durable management command named `gh-forgejo-shim`, plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still go to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository and pull request commands through Forgejo-friendly behavior.
 
 V1 is not full `gh` emulation. It exists to keep GitHub-style development tools from treating Forgejo repositories like broken GitHub repositories.
 
@@ -12,7 +12,21 @@ V1 is not full `gh` emulation. It exists to keep GitHub-style development tools 
 pipx install gh-forgejo-shim
 ```
 
-Then add at least one Forgejo host:
+From inside a Forgejo checkout, run the bootstrap command:
+
+```sh
+gfj bootstrap
+```
+
+`bootstrap` detects the current repository, adds its host to the allowlist, installs the user-local `gh` shim, checks whether PATH resolves to the shim, verifies that Forgejo auth can be discovered, checks `origin` and `origin/HEAD`, and prints exact repair commands for anything it cannot fix automatically.
+
+The long command name works the same way:
+
+```sh
+gh-forgejo-shim bootstrap
+```
+
+If you prefer to do the setup manually, add at least one Forgejo host:
 
 ```sh
 gh-forgejo-shim config add-host git.example.com
@@ -37,17 +51,19 @@ This writes a LaunchAgent that places `~/.local/bin`, Homebrew, MacPorts, and sy
 ## Quickstart For GitHub-Style Tools
 
 1. Install the package with `pipx`.
-2. Add each Forgejo host explicitly.
-3. Install the shim.
-4. On macOS, run `gh-forgejo-shim install-gui-path` if the tool was launched from Finder, Dock, Spotlight, or another GUI launcher.
-5. Make sure the Forgejo repository has an `origin` remote, fetched `origin/*` refs, an `origin/HEAD` default branch pointer, and branch upstream tracking. Codex.app, T3 Code, and other GitHub-style tools often probe conventional Git metadata before they ask `gh` for repository or pull request details.
+2. Open a terminal inside your Forgejo repository.
+3. Run `gfj bootstrap`.
+4. Copy and run any repair commands it prints.
+5. On macOS, run `gfj install-gui-path` if the tool was launched from Finder, Dock, Spotlight, or another GUI launcher.
 6. Confirm the setup:
 
 ```sh
-gh-forgejo-shim doctor
+gfj doctor
 ```
 
 7. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, and pull request workflows.
+
+For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
 ## What This Setup Covers
 
@@ -102,6 +118,8 @@ git status --short --branch
 gh repo view --json nameWithOwner,url,defaultBranchRef,sshUrl
 gh pr status --json number,title,url,headRefName,state
 ```
+
+`gfj bootstrap` checks these same basics and prints the matching commands when something is missing.
 
 If your tool is connected to a remote SSH workspace, apply the same remote setup inside that remote checkout too. Fixing the local Mac checkout does not change a separate remote clone.
 
@@ -210,13 +228,13 @@ See [docs/configuration.md](docs/configuration.md) for details.
 Remove the generated wrapper:
 
 ```sh
-gh-forgejo-shim uninstall-shim
+gfj uninstall-shim
 ```
 
 Remove the macOS GUI PATH LaunchAgent:
 
 ```sh
-gh-forgejo-shim uninstall-gui-path
+gfj uninstall-gui-path
 ```
 
 See [docs/rollback.md](docs/rollback.md) for PATH troubleshooting and recovery steps.
