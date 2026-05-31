@@ -82,7 +82,21 @@ author, createdAt, updatedAt, mergeable, mergeStateStatus,
 statusCheckRollup
 ```
 
-When no current-branch PR exists, `gh pr view --json ...` returns `{}` with exit code `0`, and `gh pr status --json ...` returns an empty status object. This keeps automation from failing just because a Forgejo branch has no PR yet.
+`gh pr status --json ...` follows the GitHub CLI status envelope:
+
+```json
+{
+  "currentBranch": {
+    "number": 7,
+    "title": "Add Forgejo support",
+    "url": "https://git.example.com/owner/repo/pulls/7"
+  },
+  "createdBy": [],
+  "needsReview": []
+}
+```
+
+When no current-branch PR exists, `gh pr view --json ...` returns `{}` with exit code `0`, and `gh pr status --json ...` returns the same status envelope with `"currentBranch": null`. This keeps automation from failing just because a Forgejo branch has no PR yet.
 
 ## Configuration
 

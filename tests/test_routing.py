@@ -145,6 +145,83 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue()), {"createdBy": [], "currentBranch": None, "needsReview": []})
 
+    def test_current_branch_status_returns_github_status_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            self._git(cwd, "init")
+            self._git(cwd, "checkout", "-b", "feature")
+            out = io.StringIO()
+            code = run_forgejo_pr(
+                ["pr", "status", "--json", "number,title,url,headRefName"],
+                RepoRef("git.example.com", "owner", "repo"),
+                FakeClient(
+                    [
+                        {
+                            "number": 12,
+                            "title": "Ship it",
+                            "state": "open",
+                            "html_url": "https://git.example.com/owner/repo/pulls/12",
+                            "head": {"ref": "feature"},
+                            "base": {"ref": "main"},
+                            "user": {"login": "alice"},
+                        }
+                    ]
+                ),
+                cwd=str(cwd),
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            {
+                "createdBy": [],
+                "currentBranch": {
+                    "headRefName": "feature",
+                    "number": 12,
+                    "title": "Ship it",
+                    "url": "https://git.example.com/owner/repo/pulls/12",
+                },
+                "needsReview": [],
+            },
+        )
+
+    def test_status_supports_simple_jq_field_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            self._git(cwd, "init")
+            self._git(cwd, "checkout", "-b", "feature")
+            out = io.StringIO()
+            code = run_forgejo_pr(
+                [
+                    "pr",
+                    "status",
+                    "--json",
+                    "number,title,url",
+                    "--jq",
+                    ".currentBranch.url",
+                ],
+                RepoRef("git.example.com", "owner", "repo"),
+                FakeClient(
+                    [
+                        {
+                            "number": 12,
+                            "title": "Ship it",
+                            "state": "open",
+                            "html_url": "https://git.example.com/owner/repo/pulls/12",
+                            "head": {"ref": "feature"},
+                            "base": {"ref": "main"},
+                            "user": {"login": "alice"},
+                        }
+                    ]
+                ),
+                cwd=str(cwd),
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().strip(), "https://git.example.com/owner/repo/pulls/12")
+
     def _git(self, cwd: Path, *args: str) -> None:
         import subprocess
 

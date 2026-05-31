@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from gh_forgejo_shim.normalize import filter_fields, normalize_pull
+from gh_forgejo_shim.normalize import filter_fields, normalize_pull, status_for_current_branch
 
 
 class NormalizeTests(unittest.TestCase):
@@ -34,6 +34,30 @@ class NormalizeTests(unittest.TestCase):
     def test_filters_supported_json_fields(self) -> None:
         data = {"number": 1, "title": "T", "unknown": "x"}
         self.assertEqual(filter_fields(data, ("number", "unknown")), {"number": 1})
+
+    def test_status_for_current_branch_wraps_pull_like_gh_status(self) -> None:
+        status = status_for_current_branch(
+            {
+                "number": 12,
+                "title": "Add shim",
+                "state": "open",
+                "html_url": "https://git.example.com/o/r/pulls/12",
+                "head": {"ref": "feature"},
+            },
+            ("number", "title", "url"),
+        )
+        self.assertEqual(
+            status,
+            {
+                "currentBranch": {
+                    "number": 12,
+                    "title": "Add shim",
+                    "url": "https://git.example.com/o/r/pulls/12",
+                },
+                "createdBy": [],
+                "needsReview": [],
+            },
+        )
 
 
 if __name__ == "__main__":

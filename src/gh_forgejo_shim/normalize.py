@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 SUPPORTED_JSON_FIELDS = (
+    "additions",
     "number",
     "title",
     "state",
@@ -15,6 +16,8 @@ SUPPORTED_JSON_FIELDS = (
     "updatedAt",
     "mergeable",
     "mergeStateStatus",
+    "reviewDecision",
+    "reviewRequests",
     "statusCheckRollup",
 )
 
@@ -41,6 +44,8 @@ def normalize_pull(pull: dict[str, Any]) -> dict[str, Any]:
         "updatedAt": pull.get("updated_at"),
         "mergeable": pull.get("mergeable"),
         "mergeStateStatus": pull.get("merge_state_status") or "UNKNOWN",
+        "reviewDecision": pull.get("reviewDecision"),
+        "reviewRequests": pull.get("reviewRequests") or [],
         "statusCheckRollup": pull.get("statusCheckRollup") or [],
     }
 
@@ -51,9 +56,13 @@ def filter_fields(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, An
     return {field: data.get(field) for field in fields if field in SUPPORTED_JSON_FIELDS}
 
 
-def empty_status() -> dict[str, Any]:
+def status_for_current_branch(
+    pull: dict[str, Any] | None,
+    fields: tuple[str, ...],
+) -> dict[str, Any]:
+    normalized = None if pull is None else filter_fields(normalize_pull(pull), fields)
     return {
-        "currentBranch": None,
+        "currentBranch": normalized,
         "createdBy": [],
         "needsReview": [],
     }

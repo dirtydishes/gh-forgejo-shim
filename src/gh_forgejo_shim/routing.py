@@ -12,7 +12,7 @@ from .config import Config, load_config
 from .create import CreateParseError, parse_create_args
 from .external import find_program, run_program
 from .forgejo import ForgejoClient, ForgejoError, RepoRef
-from .normalize import empty_status, filter_fields, normalize_pull
+from .normalize import filter_fields, normalize_pull, status_for_current_branch
 from .repo import (
     current_branch,
     default_base_branch,
@@ -192,7 +192,7 @@ def _run_view(
 
     if pull is None:
         if parsed.json_fields:
-            print("{}", file=stdout)
+            _print_json_or_jq({}, parsed.jq, stdout)
         return 0
 
     normalized = normalize_pull(pull)
@@ -203,7 +203,7 @@ def _run_view(
             print(url, file=stdout)
         return 0
     if parsed.json_fields:
-        print(json.dumps(filter_fields(normalized, parsed.json_fields), sort_keys=True), file=stdout)
+        _print_json_or_jq(filter_fields(normalized, parsed.json_fields), parsed.jq, stdout)
     else:
         print(_format_pull_text(normalized), file=stdout)
     return 0
@@ -226,13 +226,13 @@ def _run_status(
 
     if pull is None:
         if parsed.json_fields:
-            print(json.dumps(empty_status(), sort_keys=True), file=stdout)
+            _print_json_or_jq(status_for_current_branch(None, parsed.json_fields), parsed.jq, stdout)
         return 0
 
-    normalized = normalize_pull(pull)
     if parsed.json_fields:
-        print(json.dumps(filter_fields(normalized, parsed.json_fields), sort_keys=True), file=stdout)
+        _print_json_or_jq(status_for_current_branch(pull, parsed.json_fields), parsed.jq, stdout)
     else:
+        normalized = normalize_pull(pull)
         print(_format_pull_text(normalized), file=stdout)
     return 0
 
@@ -242,6 +242,8 @@ class ViewStatusArgs:
     json_fields: tuple[str, ...] = ()
     repo: str | None = None
     web: bool = False
+    jq: str | None = None
+    template: str | None = None
     number: int | None = None
     branch: str | None = None
 
@@ -250,6 +252,8 @@ def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
     json_fields: tuple[str, ...] = ()
     repo = None
     web = False
+    jq = None
+    template = None
     number = None
     branch = None
     index = 0
@@ -274,6 +278,22 @@ def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
         elif arg in {"--web", "-w"}:
             web = True
             index += 1
+        elif arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--template", "-t"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            template = argv[index + 1]
+            index += 2
+        elif arg.startswith("--template=") or arg.startswith("-t="):
+            template = arg.split("=", 1)[1]
+            index += 1
         elif arg.startswith("-"):
             raise ValueError(f"unsupported Forgejo PR flag: {arg}")
         else:
@@ -282,7 +302,15 @@ def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
             else:
                 branch = arg
             index += 1
-    return ViewStatusArgs(json_fields=json_fields, repo=repo, web=web, number=number, branch=branch)
+    return ViewStatusArgs(
+        json_fields=json_fields,
+        repo=repo,
+        web=web,
+        jq=jq,
+        template=template,
+        number=number,
+        branch=branch,
+    )
 
 
 def _format_pull_text(data: dict[str, object]) -> str:
@@ -291,3 +319,36 @@ def _format_pull_text(data: dict[str, object]) -> str:
     state = data.get("state") or "UNKNOWN"
     url = data.get("url") or ""
     return f"#{number} {title}\nstate: {state}\nurl: {url}".rstrip()
+
+
+def _print_json_or_jq(data: dict[str, object], jq: str | None, stdout: TextIO) -> None:
+    if jq:
+        value = _apply_simple_jq(data, jq)
+        if value is None:
+            return
+        if isinstance(value, str):
+            print(value, file=stdout)
+        else:
+            print(json.dumps(value, sort_keys=True), file=stdout)
+        return
+    print(json.dumps(data, sort_keys=True), file=stdout)
+
+
+def _apply_simple_jq(data: object, expression: str) -> object:
+    query = expression.strip()
+    if query in {".", ""}:
+        return data
+    if query.endswith("// empty"):
+        query = query[: -len("// empty")].strip()
+    if not query.startswith("."):
+        return data
+
+    value = data
+    for part in query[1:].split("."):
+        if not part:
+            continue
+        if isinstance(value, dict):
+            value = value.get(part)
+        else:
+            return None
+    return value

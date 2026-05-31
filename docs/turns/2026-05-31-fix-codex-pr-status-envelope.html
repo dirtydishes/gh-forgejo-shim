@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fix Codex PR Status Envelope</title>
+  <style>
+    :root {
+      --bg: oklch(0.982 0.006 245);
+      --ink: oklch(0.2 0.035 255);
+      --muted: oklch(0.43 0.026 255);
+      --line: oklch(0.88 0.014 255);
+      --surface: oklch(1 0 0);
+      --surface-2: oklch(0.955 0.01 248);
+      --accent: oklch(0.48 0.18 252);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 44px 24px 72px;
+    }
+
+    header {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.13;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 820px;
+      font-size: clamp(2rem, 5vw, 4rem);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin-top: 38px;
+      font-size: clamp(1.35rem, 3vw, 1.9rem);
+    }
+
+    h3 {
+      margin-top: 0;
+      font-size: 1.05rem;
+    }
+
+    p,
+    li {
+      max-width: 74ch;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
+      padding: 0.08rem 0.28rem;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      border-radius: 12px;
+      background: oklch(0.18 0.035 255);
+      color: oklch(0.95 0.01 248);
+      padding: 16px;
+      line-height: 1.45;
+    }
+
+    a {
+      color: var(--accent);
+      text-underline-offset: 0.18em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+
+    .card,
+    .diff-panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .diff-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .diff-panel h3 {
+      padding: 16px 18px 0;
+    }
+
+    .diff-mount {
+      min-height: 220px;
+      padding: 12px;
+    }
+
+    .fallback {
+      margin: 12px;
+    }
+
+    @media (max-width: 680px) {
+      main {
+        padding: 28px 16px 52px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="meta">
+        <span class="pill">2026-05-31</span>
+        <span class="pill">Repository implementation</span>
+        <span class="pill">Issue gh-forgejo-shim-5ab</span>
+      </div>
+      <h1>Fixed the PR status JSON shape Codex.app expects</h1>
+      <p>
+        <code>gh pr status --json ...</code> now returns the GitHub CLI-style status envelope instead of a bare
+        pull request object, which gives Codex.app the <code>currentBranch</code> data it probes for.
+      </p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>
+        Codex.app moved from <code>GitHub CLI unavailable</code> to <code>Checking PR status</code>, then ended at
+        <code>Pull request status unavailable</code>. The likely cause was a compatibility mismatch: the shim routed
+        <code>gh pr status</code>, but returned the wrong JSON shape. This change makes status output match the
+        GitHub CLI envelope used by PR-status integrations.
+      </p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Status envelope</h3>
+          <p>
+            Added <code>status_for_current_branch</code> so <code>pr status --json</code> returns
+            <code>currentBranch</code>, <code>createdBy</code>, and <code>needsReview</code>.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Formatting tolerance</h3>
+          <p>
+            Added simple <code>--jq</code> support for dotted field lookups such as
+            <code>.currentBranch.url</code>, plus parser support for <code>--template</code> flags.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Regression coverage</h3>
+          <p>
+            Added tests for present and missing current-branch PRs, the status envelope, and simple jq field
+            selection.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>
+        The T3 Code.app screenshot showed plain Git availability, not GitHub CLI or PR availability. That suggests
+        T3 may only expose version-control basics, while Codex.app appears to run a separate <code>gh pr status</code>
+        probe. The shim fix targets the Codex.app path and does not assume T3 will display PR metadata.
+      </p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li><code>gh pr view --json ...</code> still returns a single pull request object or <code>{}</code>.</li>
+        <li><code>gh pr status --json ...</code> now returns a status object with <code>currentBranch</code>.</li>
+        <li>The jq support is intentionally small: it handles simple dotted selectors and <code>// empty</code>.</li>
+        <li>The shim continues to avoid full GitHub CLI emulation; unsupported deep formatting remains outside V1 scope.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>
+        The snippets below use the Diffs <code>FileDiff</code> component when available, with static fallbacks.
+        Reference: <a href="https://diffs.com/docs">Diffs documentation</a>.
+      </p>
+      <div class="diff-panel">
+        <h3>Status envelope helper</h3>
+        <div id="diff-normalize" class="diff-mount"></div>
+        <pre class="fallback"><code>def status_for_current_branch(
+    pull: dict[str, Any] | None,
+    fields: tuple[str, ...],
+) -> dict[str, Any]:
+    normalized = None if pull is None else filter_fields(normalize_pull(pull), fields)
+    return {
+        "currentBranch": normalized,
+        "createdBy": [],
+        "needsReview": [],
+    }</code></pre>
+      </div>
+      <div class="diff-panel" style="margin-top: 16px;">
+        <h3>Status route output</h3>
+        <div id="diff-routing" class="diff-mount"></div>
+        <pre class="fallback"><code>if pull is None:
+    if parsed.json_fields:
+        _print_json_or_jq(status_for_current_branch(None, parsed.json_fields), parsed.jq, stdout)
+    return 0
+
+if parsed.json_fields:
+    _print_json_or_jq(status_for_current_branch(pull, parsed.json_fields), parsed.jq, stdout)</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>
+        Codex.app should have a better chance of resolving pull request status for allowlisted Forgejo repositories
+        because the shim now returns the bucketed JSON structure it expects from <code>gh pr status</code>. Terminal
+        behavior for <code>gh pr view</code> and <code>gh pr create</code> is unchanged.
+      </p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><code>python3 -m unittest</code>: passed, 42 tests.</li>
+        <li><code>git diff --check</code>: passed.</li>
+        <li><code>PYTHONPATH=src python3 -m gh_forgejo_shim gh pr status --json number,title,url --jq .currentBranch.url</code>: exited 0 in source-tree smoke testing.</li>
+        <li><code>python3 -m gh_forgejo_shim ...</code> without <code>PYTHONPATH=src</code> failed because the package was not installed into that interpreter; this was a source-tree invocation issue, not a shim behavior failure.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The change does not prove T3 Code.app will show PR state, because its UI only reported plain Git availability.</li>
+        <li><code>--jq</code> support is intentionally limited to simple selectors. Complex jq programs should still use the real GitHub CLI path.</li>
+        <li><code>--template</code> is parsed so integrations do not fail on the flag, but full Go-template rendering is not implemented.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <p>
+        No additional Beads issue was filed. If Codex.app still reports unavailable status after reinstalling this
+        shim, the next useful step is to capture the exact <code>gh</code> command and stdout/stderr that Codex.app
+        runs during its PR-status probe.
+      </p>
+    </section>
+  </main>
+
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    function renderDiff(id, name, oldFile, newFile) {
+      const container = document.getElementById(id);
+      if (!container) return;
+      const diff = new FileDiff({ theme: "pierre-light" });
+      diff.render({
+        oldFile: { name, contents: oldFile },
+        newFile: { name, contents: newFile },
+        containerWrapper: container
+      });
+      const fallback = container.parentElement?.querySelector(".fallback");
+      if (fallback) fallback.setAttribute("hidden", "hidden");
+    }
+
+    renderDiff(
+      "diff-normalize",
+      "src/gh_forgejo_shim/normalize.py",
+      `def empty_status() -> dict[str, Any]:
+    return {
+        "currentBranch": None,
+        "createdBy": [],
+        "needsReview": [],
+    }`,
+      `def status_for_current_branch(
+    pull: dict[str, Any] | None,
+    fields: tuple[str, ...],
+) -> dict[str, Any]:
+    normalized = None if pull is None else filter_fields(normalize_pull(pull), fields)
+    return {
+        "currentBranch": normalized,
+        "createdBy": [],
+        "needsReview": [],
+    }`
+    );
+
+    renderDiff(
+      "diff-routing",
+      "src/gh_forgejo_shim/routing.py",
+      `if pull is None:
+    if parsed.json_fields:
+        print(json.dumps(empty_status(), sort_keys=True), file=stdout)
+    return 0
+
+normalized = normalize_pull(pull)
+if parsed.json_fields:
+    print(json.dumps(filter_fields(normalized, parsed.json_fields), sort_keys=True), file=stdout)`,
+      `if pull is None:
+    if parsed.json_fields:
+        _print_json_or_jq(status_for_current_branch(None, parsed.json_fields), parsed.jq, stdout)
+    return 0
+
+if parsed.json_fields:
+    _print_json_or_jq(status_for_current_branch(pull, parsed.json_fields), parsed.jq, stdout)`
+    );
+  </script>
+</body>
+</html>
