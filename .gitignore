@@ -1,0 +1,13 @@
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/

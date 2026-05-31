@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from gh_forgejo_shim.config import Config, PathsConfig
+from gh_forgejo_shim.doctor import run_checks
+from gh_forgejo_shim.shim import install_shim
+
+
+class DoctorTests(unittest.TestCase):
+    def test_reports_missing_gh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": ""},
+                home=Path(tmp),
+            )
+        self.assertFalse(self._check(checks, "real gh").ok)
+
+    def test_reports_missing_fj(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = self._fake_executable(Path(tmp), "gh")
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",), paths=PathsConfig(gh=str(gh))),
+                env={"PATH": ""},
+                home=Path(tmp),
+            )
+        self.assertFalse(self._check(checks, "fj").ok)
+
+    def test_reports_missing_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checks = run_checks(config=Config(hosts=()), env={"PATH": ""}, home=Path(tmp))
+        self.assertFalse(self._check(checks, "forgejo hosts").ok)
+
+    def test_reports_missing_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": ""},
+                home=Path(tmp),
+            )
+        self.assertFalse(self._check(checks, "auth token").ok)
+
+    def test_accepts_token_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": "", "FJ_SHIM_TOKEN": "secret"},
+                home=Path(tmp),
+            )
+        self.assertTrue(self._check(checks, "auth token").ok)
+
+    def test_path_ordering_requires_shim_bin_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            other = root / "other"
+            other.mkdir()
+            install_shim(bin_dir=bin_dir)
+
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": os.pathsep.join([str(other), str(bin_dir)])},
+                bin_dir=bin_dir,
+                home=root,
+            )
+            self.assertFalse(self._check(checks, "shim path").ok)
+
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": os.pathsep.join([str(bin_dir), str(other)])},
+                bin_dir=bin_dir,
+                home=root,
+            )
+            self.assertTrue(self._check(checks, "shim path").ok)
+
+    def _fake_executable(self, root: Path, name: str) -> Path:
+        path = root / name
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def _check(self, checks, name):  # type: ignore[no-untyped-def]
+        for check in checks:
+            if check.name == name:
+                return check
+        raise AssertionError(name)
+
+
+if __name__ == "__main__":
+    unittest.main()

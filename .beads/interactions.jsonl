@@ -1,0 +1,1 @@
+{"id":"int-3af4a725","kind":"field_change","created_at":"2026-05-31T06:53:29.925287Z","actor":"dirtydishes","issue_id":"gh-forgejo-shim-uku","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Implemented the V1 package, CLI wrapper lifecycle, Forgejo PR routing, docs, tests, and turn documentation."}}

@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "gh_forgejo_shim",
+  "project_id": "038c66ac-ad9e-47cb-aab6-beb800a0f177"
+}
