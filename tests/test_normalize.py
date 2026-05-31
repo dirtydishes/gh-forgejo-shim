@@ -28,8 +28,23 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(normalized["headRefName"], "feature")
         self.assertEqual(normalized["baseRefName"], "main")
         self.assertEqual(normalized["author"]["login"], "alice")
+        self.assertEqual(normalized["additions"], 0)
+        self.assertEqual(normalized["deletions"], 0)
+        self.assertEqual(normalized["mergeable"], "MERGEABLE")
         self.assertEqual(normalized["mergeStateStatus"], "CLEAN")
         self.assertEqual(normalized["statusCheckRollup"], [])
+
+    def test_normalizes_merged_and_unknown_mergeable_values(self) -> None:
+        normalized = normalize_pull(
+            {
+                "number": 12,
+                "state": "closed",
+                "merged_at": "2026-05-31T02:00:00Z",
+                "mergeable": False,
+            }
+        )
+        self.assertEqual(normalized["state"], "MERGED")
+        self.assertEqual(normalized["mergeable"], "UNKNOWN")
 
     def test_filters_supported_json_fields(self) -> None:
         data = {"number": 1, "title": "T", "unknown": "x"}

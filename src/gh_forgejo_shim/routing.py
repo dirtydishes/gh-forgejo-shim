@@ -28,7 +28,7 @@ from .repo import (
     parse_repo_spec,
 )
 
-SUPPORTED_PR_COMMANDS = {"create", "list", "new", "status", "view"}
+SUPPORTED_PR_COMMANDS = {"checks", "create", "list", "new", "status", "view"}
 SUPPORTED_REPO_COMMANDS = {"view"}
 
 
@@ -143,6 +143,8 @@ def run_forgejo_pr(
     rest = argv[2:]
     if command in {"create", "new"}:
         return _run_create(rest, repo, client, cwd=cwd, stdout=stdout, stdin=stdin)
+    if command == "checks":
+        return _run_checks(rest, stdout=stdout)
     if command == "list":
         return _run_list(rest, repo, client, stdout=stdout)
     if command == "view":
@@ -233,7 +235,10 @@ def _run_list(
     target_repo = parse_repo_spec(parsed.repo, default_host=repo.host) if parsed.repo else repo
     if target_repo is None:
         raise ValueError("could not parse --repo value")
-    pulls = client.list_pulls(target_repo, state=parsed.state, head=parsed.head)
+    api_state = "closed" if parsed.state == "merged" else parsed.state
+    pulls = client.list_pulls(target_repo, state=api_state, head=parsed.head)
+    if parsed.state == "merged":
+        pulls = [pull for pull in pulls if normalize_pull(pull).get("state") == "MERGED"]
     if parsed.base:
         pulls = [
             pull
@@ -249,6 +254,15 @@ def _run_list(
     else:
         for pull in normalized:
             print(_format_pull_list_item(pull), file=stdout)
+    return 0
+
+
+def _run_checks(argv: list[str], *, stdout: TextIO) -> int:
+    parsed = _parse_checks_args(argv)
+    if parsed.json_fields:
+        _print_json_or_jq_list([], parsed.jq, stdout)
+    else:
+        print("no checks reported", file=stdout)
     return 0
 
 
@@ -374,6 +388,14 @@ class RepoViewArgs:
     template: str | None = None
 
 
+@dataclass(frozen=True)
+class ChecksArgs:
+    json_fields: tuple[str, ...] = ()
+    repo: str | None = None
+    jq: str | None = None
+    number: int | None = None
+
+
 def _parse_list_args(argv: list[str]) -> ListArgs:
     json_fields: tuple[str, ...] = ()
     repo = None
@@ -470,6 +492,49 @@ def _parse_list_args(argv: list[str]) -> ListArgs:
         head=head,
         base=base,
     )
+
+
+def _parse_checks_args(argv: list[str]) -> ChecksArgs:
+    json_fields: tuple[str, ...] = ()
+    repo = None
+    jq = None
+    number = None
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"--json"}:
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --json")
+            json_fields = _split_fields(argv[index + 1])
+            index += 2
+        elif arg.startswith("--json="):
+            json_fields = _split_fields(arg.split("=", 1)[1])
+            index += 1
+        elif arg in {"-R", "--repo"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            repo = argv[index + 1]
+            index += 2
+        elif arg.startswith("--repo="):
+            repo = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--watch", "--fail-fast", "--required"}:
+            index += 1
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported Forgejo PR checks flag: {arg}")
+        else:
+            if arg.isdigit():
+                number = int(arg)
+            index += 1
+    return ChecksArgs(json_fields=json_fields, repo=repo, jq=jq, number=number)
 
 
 def _parse_view_status_args(argv: list[str]) -> ViewStatusArgs:
@@ -669,6 +734,6 @@ def _parse_limit(value: str) -> int:
 
 def _normalize_state(value: str) -> str:
     normalized = value.lower()
-    if normalized not in {"open", "closed", "all"}:
-        raise ValueError("--state must be one of: open, closed, all")
+    if normalized not in {"open", "closed", "merged", "all"}:
+        raise ValueError("--state must be one of: open, closed, merged, all")
     return normalized

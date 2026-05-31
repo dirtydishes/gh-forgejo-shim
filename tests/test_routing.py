@@ -185,6 +185,112 @@ class RoutingTests(unittest.TestCase):
             ],
         )
 
+    def test_pr_list_outputs_codex_board_fields(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            [
+                "pr",
+                "list",
+                "-R",
+                "git.example.com/owner/repo",
+                "--state",
+                "open",
+                "--limit",
+                "10",
+                "--json",
+                "additions,baseRefName,createdAt,deletions,headRefName,isDraft,number,state,title,updatedAt,url,mergeStateStatus,mergeable,statusCheckRollup",
+                "--author",
+                "@me",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                [
+                    {
+                        "number": 8,
+                        "title": "Make Codex happy",
+                        "state": "open",
+                        "html_url": "https://git.example.com/owner/repo/pulls/8",
+                        "head": {"ref": "feature"},
+                        "base": {"ref": "main"},
+                        "user": {"login": "alice"},
+                        "created_at": "2026-05-31T00:00:00Z",
+                        "updated_at": "2026-05-31T01:00:00Z",
+                        "mergeable": False,
+                    }
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            [
+                {
+                    "additions": 0,
+                    "baseRefName": "main",
+                    "createdAt": "2026-05-31T00:00:00Z",
+                    "deletions": 0,
+                    "headRefName": "feature",
+                    "isDraft": False,
+                    "mergeStateStatus": "UNKNOWN",
+                    "mergeable": "UNKNOWN",
+                    "number": 8,
+                    "state": "OPEN",
+                    "statusCheckRollup": [],
+                    "title": "Make Codex happy",
+                    "updatedAt": "2026-05-31T01:00:00Z",
+                    "url": "https://git.example.com/owner/repo/pulls/8",
+                }
+            ],
+        )
+
+    def test_pr_list_accepts_merged_state(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            [
+                "pr",
+                "list",
+                "-R",
+                "git.example.com/owner/repo",
+                "--state",
+                "merged",
+                "--json",
+                "number,state",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                [
+                    {"number": 8, "state": "closed", "merged_at": "2026-05-31T01:00:00Z"},
+                    {"number": 9, "state": "closed"},
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue()), [{"number": 8, "state": "MERGED"}])
+
+    def test_pr_checks_returns_empty_json_array_for_forgejo(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            [
+                "pr",
+                "checks",
+                "8",
+                "-R",
+                "git.example.com/owner/repo",
+                "--json",
+                "bucket,description,link,name,workflow",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue()), [])
+
     def test_repo_view_outputs_github_shaped_json(self) -> None:
         out = io.StringIO()
         code = run_forgejo(
