@@ -30,6 +30,7 @@ def discover_fj_token(
 
     base = home or Path.home()
     candidates = [
+        base / "Library" / "Application Support" / "Cyborus.forgejo-cli" / "keys.json",
         base / ".config" / "fj" / "config.json",
         base / ".config" / "fj" / "config.yml",
         base / ".config" / "fj" / "config.yaml",

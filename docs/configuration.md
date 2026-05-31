@@ -70,6 +70,14 @@ FJ_TOKEN
 
 If none are set, it tries a best-effort read from common `fj`, `tea`, and `gitea` config files. V1 does not implement a native login command.
 
+On macOS, the current `fj` CLI stores auth in:
+
+```text
+~/Library/Application Support/Cyborus.forgejo-cli/keys.json
+```
+
+The shim reads this file when present, which helps GUI apps such as Codex.app find Forgejo auth without inheriting shell-only environment variables.
+
 ## Repository Detection
 
 Forgejo repository detection checks:
