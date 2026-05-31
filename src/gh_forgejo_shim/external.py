@@ -85,3 +85,19 @@ def git_output(args: list[str], *, cwd: str | None = None) -> str | None:
         return None
     value = completed.stdout.strip()
     return value or None
+
+
+def git_run(args: list[str], *, cwd: str | None = None) -> tuple[int, str]:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
+        return 127, str(exc)
+    message = completed.stderr.strip() or completed.stdout.strip()
+    return completed.returncode, message

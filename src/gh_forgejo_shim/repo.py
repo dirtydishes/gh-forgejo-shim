@@ -26,6 +26,8 @@ def parse_repo_spec(spec: str, *, default_host: str | None = None) -> RepoRef | 
     if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.netloc:
         host = parsed.hostname or parsed.netloc.split("@")[-1]
         parts = _path_parts(parsed.path)
+        if len(parts) >= 4 and parts[2] in {"issue", "issues", "pull", "pulls"}:
+            return RepoRef(normalize_host(host), parts[0], _strip_git(parts[1]))
         if len(parts) >= 2:
             return RepoRef(normalize_host(host), parts[-2], _strip_git(parts[-1]))
         return None
@@ -58,6 +60,12 @@ def detect_repo(
         repo = parse_repo_spec(repo_arg, default_host=values.get("GH_HOST"))
         if repo:
             return Detection(repo, "-R/--repo")
+
+    url_repo = extract_repo_url_arg(argv)
+    if url_repo:
+        repo = parse_repo_spec(url_repo, default_host=values.get("GH_HOST"))
+        if repo:
+            return Detection(repo, "command URL")
 
     gh_repo = values.get("GH_REPO")
     if gh_repo:
@@ -105,6 +113,13 @@ def extract_repo_arg(argv: list[str]) -> str | None:
         if arg.startswith("--repo="):
             return arg.split("=", 1)[1]
         index += 1
+    return None
+
+
+def extract_repo_url_arg(argv: list[str]) -> str | None:
+    for arg in argv:
+        if urllib.parse.urlparse(arg).scheme in {"http", "https", "ssh", "git"}:
+            return arg
     return None
 
 

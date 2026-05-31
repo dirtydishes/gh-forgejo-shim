@@ -54,8 +54,86 @@ class ForgejoClient:
     def get_pull(self, repo: RepoRef, number: int) -> dict[str, Any]:
         return self._request_json("GET", f"{repo.api_base_url}/pulls/{number}", None)
 
+    def get_pull_diff(self, repo: RepoRef, number: int, *, patch: bool = False) -> str:
+        diff_type = "patch" if patch else "diff"
+        return self._request_text("GET", f"{repo.api_base_url}/pulls/{number}.{diff_type}", None)
+
+    def list_pull_files(self, repo: RepoRef, number: int) -> list[dict[str, Any]]:
+        files = self._request_json("GET", f"{repo.api_base_url}/pulls/{number}/files", None)
+        if not isinstance(files, list):
+            return []
+        return [item for item in files if isinstance(item, dict)]
+
     def get_repo(self, repo: RepoRef) -> dict[str, Any]:
         return self._request_json("GET", repo.api_base_url, None)
+
+    def list_issues(
+        self,
+        repo: RepoRef,
+        *,
+        state: str = "open",
+        labels: tuple[str, ...] = (),
+        query: str | None = None,
+        milestone: str | None = None,
+        author: str | None = None,
+        assignee: str | None = None,
+        mentioned: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, object] = {"state": state, "type": "issues"}
+        if labels:
+            params["labels"] = ",".join(labels)
+        if query:
+            params["q"] = query
+        if milestone:
+            params["milestones"] = milestone
+        if author and author != "@me":
+            params["created_by"] = author
+        if assignee and assignee != "@me":
+            params["assigned_by"] = assignee
+        if mentioned and mentioned != "@me":
+            params["mentioned_by"] = mentioned
+        if limit is not None:
+            params["limit"] = limit
+        query_string = urllib.parse.urlencode(params)
+        issues = self._request_json("GET", f"{repo.api_base_url}/issues?{query_string}", None)
+        if not isinstance(issues, list):
+            return []
+        return [item for item in issues if isinstance(item, dict)]
+
+    def get_issue(self, repo: RepoRef, number: int) -> dict[str, Any]:
+        return self._request_json("GET", f"{repo.api_base_url}/issues/{number}", None)
+
+    def list_labels(self, repo: RepoRef) -> list[dict[str, Any]]:
+        labels = self._request_json("GET", f"{repo.api_base_url}/labels", None)
+        if not isinstance(labels, list):
+            return []
+        return [item for item in labels if isinstance(item, dict)]
+
+    def create_issue(
+        self,
+        repo: RepoRef,
+        *,
+        title: str,
+        body: str = "",
+        assignees: tuple[str, ...] = (),
+        labels: tuple[int, ...] = (),
+        milestone: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "title": title,
+            "body": body,
+        }
+        if assignees:
+            payload["assignees"] = list(assignees)
+        if labels:
+            payload["labels"] = list(labels)
+        if milestone is not None:
+            payload["milestone"] = milestone
+        return self._request_json("POST", f"{repo.api_base_url}/issues", payload)
+
+    def create_issue_comment(self, repo: RepoRef, number: int, *, body: str) -> dict[str, Any]:
+        return self._request_json("POST", f"{repo.api_base_url}/issues/{number}/comments", {"body": body})
 
     def list_pulls(
         self,
@@ -82,9 +160,33 @@ class ForgejoClient:
         url: str,
         payload: dict[str, Any] | None,
     ) -> Any:
+        response_data = self._request(method, url, payload, accept="application/json")
+        if not response_data:
+            return {}
+        try:
+            return json.loads(response_data.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ForgejoError("Forgejo API returned invalid JSON") from exc
+
+    def _request_text(
+        self,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+    ) -> str:
+        return self._request(method, url, payload, accept="text/plain").decode("utf-8", errors="replace")
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        *,
+        accept: str,
+    ) -> bytes:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {
-            "Accept": "application/json",
+            "Accept": accept,
             "User-Agent": "gh-forgejo-shim",
         }
         if data is not None:
@@ -101,12 +203,7 @@ class ForgejoClient:
         except urllib.error.URLError as exc:
             raise ForgejoError(f"Forgejo API request failed: {exc.reason}") from exc
 
-        if not response_data:
-            return {}
-        try:
-            return json.loads(response_data.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ForgejoError("Forgejo API returned invalid JSON") from exc
+        return response_data
 
 
 def _quote(value: str) -> str:

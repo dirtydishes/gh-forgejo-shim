@@ -74,8 +74,9 @@ The setup is intended to cover:
 - Repository discovery from local Git remotes.
 - Default branch discovery through `origin/HEAD`.
 - Current branch and upstream tracking for branch status, ahead/behind counts, and commit or push UI.
-- Repository metadata through `gh repo view`.
-- Pull request creation, listing, viewing, and current-branch status through `gh pr ...`.
+- Repository metadata through `gh repo view`, including a broad set of GitHub-shaped JSON fields.
+- Pull request creation, listing, viewing, current-branch status, diffs, comments, checks, and checkout through `gh pr ...`.
+- Basic issue listing, viewing, and creation through `gh issue ...`.
 - GUI-launched macOS tools that need a usable PATH to find the shim and the real `gh`.
 - Forgejo auth discovery from environment variables or common `fj`, `tea`, and `gitea` config files.
 
@@ -117,6 +118,7 @@ git rev-parse --abbrev-ref --symbolic-full-name @{u}
 git status --short --branch
 gh repo view --json nameWithOwner,url,defaultBranchRef,sshUrl
 gh pr status --json number,title,url,headRefName,state
+gh issue list --json number,title,state,url
 ```
 
 `gfj bootstrap` checks these same basics and prints the matching commands when something is missing.
@@ -128,11 +130,19 @@ If your tool is connected to a remote SSH workspace, apply the same remote setup
 Only these commands are routed for allowlisted Forgejo repositories:
 
 ```sh
+gh pr checks
+gh pr checkout
+gh pr comment
 gh pr create
+gh pr diff
 gh pr list
 gh pr new
 gh pr status
 gh pr view
+gh issue create
+gh issue list
+gh issue new
+gh issue view
 gh repo view
 ```
 
@@ -168,11 +178,34 @@ author, createdAt, updatedAt, mergeable, mergeStateStatus,
 statusCheckRollup
 ```
 
-`gh repo view --json ...` supports a small repository metadata subset:
+`gh issue list --json ...` and `gh issue view --json ...` support the common GitHub CLI issue fields:
 
 ```text
-description, defaultBranchRef, isPrivate, name, nameWithOwner,
-owner, sshUrl, url
+assignees, author, body, closed, closedAt,
+closedByPullRequestsReferences, comments, createdAt, id, isPinned,
+labels, milestone, number, projectCards, projectItems, reactionGroups,
+state, stateReason, title, updatedAt, url
+```
+
+`gh repo view --json ...` supports the fields GitHub-oriented tools commonly probe:
+
+```text
+archivedAt, assignableUsers, codeOfConduct, contactLinks, createdAt,
+defaultBranchRef, deleteBranchOnMerge, description, diskUsage, forkCount,
+fundingLinks, hasDiscussionsEnabled, hasIssuesEnabled, hasProjectsEnabled,
+hasWikiEnabled, homepageUrl, id, isArchived, isBlankIssuesEnabled,
+isEmpty, isFork, isInOrganization, isMirror, isPrivate,
+isSecurityPolicyEnabled, isTemplate, isUserConfigurationRepository,
+issueTemplates, issues, labels, languages, latestRelease, licenseInfo,
+mentionableUsers, mergeCommitAllowed, milestones, mirrorUrl, name,
+nameWithOwner, openGraphImageUrl, owner, parent, primaryLanguage,
+projects, projectsV2, pullRequestTemplates, pullRequests, pushedAt,
+rebaseMergeAllowed, repositoryTopics, securityPolicyUrl,
+squashMergeAllowed, sshUrl, stargazerCount, templateRepository,
+updatedAt, url, usesCustomOpenGraphImage, viewerCanAdminister,
+viewerDefaultCommitEmail, viewerDefaultMergeMethod, viewerHasStarred,
+viewerPermission, viewerPossibleCommitEmails, viewerSubscription,
+visibility, watchers
 ```
 
 `gh pr status --json ...` follows the GitHub CLI status envelope:
