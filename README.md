@@ -178,6 +178,15 @@ author, createdAt, updatedAt, mergeable, mergeStateStatus,
 statusCheckRollup
 ```
 
+When `statusCheckRollup` is requested, the shim fetches Forgejo commit statuses for the pull request head SHA and maps them into GitHub-style status context objects. The same status data powers `gh pr checks --json ...`, including common fields such as:
+
+```text
+bucket, completedAt, conclusion, description, detailsUrl, link,
+name, startedAt, state, workflow
+```
+
+Forgejo commit states are bucketed as `pass`, `fail`, or `pending`, with the latest status per context shown when Forgejo returns repeated updates.
+
 `gh issue list --json ...` and `gh issue view --json ...` support the common GitHub CLI issue fields:
 
 ```text

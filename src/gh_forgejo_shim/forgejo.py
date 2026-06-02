@@ -64,6 +64,14 @@ class ForgejoClient:
             return []
         return [item for item in files if isinstance(item, dict)]
 
+    def list_commit_statuses(self, repo: RepoRef, sha: str) -> list[dict[str, Any]]:
+        statuses = self._request_json("GET", f"{repo.api_base_url}/statuses/{_quote(sha)}", None)
+        if isinstance(statuses, dict) and isinstance(statuses.get("statuses"), list):
+            statuses = statuses["statuses"]
+        if not isinstance(statuses, list):
+            return []
+        return [item for item in statuses if isinstance(item, dict)]
+
     def get_repo(self, repo: RepoRef) -> dict[str, Any]:
         return self._request_json("GET", repo.api_base_url, None)
 

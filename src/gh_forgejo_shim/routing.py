@@ -15,13 +15,16 @@ from .create import CreateParseError, body_from_file, parse_create_args
 from .external import find_program, git_run, run_program
 from .forgejo import ForgejoClient, ForgejoError, RepoRef
 from .normalize import (
+    filter_check_fields,
     filter_issue_fields,
     filter_fields,
     filter_repo_fields,
+    normalize_pr_checks,
     normalize_issue,
     normalize_pull,
     normalize_repo,
     status_for_current_branch,
+    with_status_check_rollup,
 )
 from .repo import (
     current_branch,
@@ -153,7 +156,7 @@ def run_forgejo_pr(
     if command in {"create", "new"}:
         return _run_create(rest, repo, client, cwd=cwd, stdout=stdout, stdin=stdin)
     if command == "checks":
-        return _run_checks(rest, stdout=stdout)
+        return _run_checks(rest, repo, client, cwd=cwd, stdout=stdout)
     if command in {"checkout", "co"}:
         return _run_checkout(rest, repo, client, cwd=cwd, stdout=stdout, stderr=stderr)
     if command == "comment":
@@ -284,7 +287,10 @@ def _run_list(
     if parsed.limit is not None:
         pulls = pulls[: parsed.limit]
 
-    normalized = [filter_fields(normalize_pull(pull), parsed.json_fields) for pull in pulls]
+    normalized = [
+        filter_fields(normalize_pull(_enrich_pull_statuses(target_repo, client, pull, parsed.json_fields)), parsed.json_fields)
+        for pull in pulls
+    ]
     if parsed.json_fields:
         _print_json_or_jq_list(normalized, parsed.jq, stdout)
     else:
@@ -293,12 +299,29 @@ def _run_list(
     return 0
 
 
-def _run_checks(argv: list[str], *, stdout: TextIO) -> int:
+def _run_checks(
+    argv: list[str],
+    repo: RepoRef,
+    client: ForgejoClient,
+    *,
+    cwd: str | None,
+    stdout: TextIO,
+) -> int:
     parsed = _parse_checks_args(argv)
+    target_repo = parse_repo_spec(parsed.repo, default_host=repo.host) if parsed.repo else repo
+    if target_repo is None:
+        raise ValueError("could not parse --repo value")
+
+    pull = _resolve_pull(target_repo, client, number=parsed.number, branch=None, cwd=cwd)
+    statuses = [] if pull is None else _pull_statuses(target_repo, client, pull)
+    checks = [filter_check_fields(check, parsed.json_fields) for check in normalize_pr_checks(statuses)]
     if parsed.json_fields:
-        _print_json_or_jq_list([], parsed.jq, stdout)
+        _print_json_or_jq_list(checks, parsed.jq, stdout)
     else:
-        print("no checks reported", file=stdout)
+        if not checks:
+            print("no checks reported", file=stdout)
+        for check in checks:
+            print(_format_check_item(check), file=stdout)
     return 0
 
 
@@ -466,7 +489,7 @@ def _run_view(
             _print_json_or_jq({}, parsed.jq, stdout)
         return 0
 
-    normalized = normalize_pull(pull)
+    normalized = normalize_pull(_enrich_pull_statuses(repo, client, pull, parsed.json_fields))
     if parsed.web:
         url = str(normalized.get("url") or "")
         if url:
@@ -526,7 +549,8 @@ def _run_status(
         return 0
 
     if parsed.json_fields:
-        _print_json_or_jq(status_for_current_branch(pull, parsed.json_fields), parsed.jq, stdout)
+        enriched = _enrich_pull_statuses(repo, client, pull, parsed.json_fields)
+        _print_json_or_jq(status_for_current_branch(enriched, parsed.json_fields), parsed.jq, stdout)
     else:
         normalized = normalize_pull(pull)
         print(_format_pull_text(normalized), file=stdout)
@@ -1480,6 +1504,13 @@ def _format_issue_list_item(data: dict[str, object]) -> str:
     return f"{number}\t{title}\t{state}".rstrip()
 
 
+def _format_check_item(data: dict[str, object]) -> str:
+    bucket = data.get("bucket") or "pending"
+    name = data.get("name") or "status"
+    description = data.get("description") or ""
+    return f"{bucket}\t{name}\t{description}".rstrip()
+
+
 def _print_json_or_jq(data: dict[str, object], jq: str | None, stdout: TextIO) -> None:
     if jq:
         value = _apply_simple_jq(data, jq)
@@ -1629,6 +1660,25 @@ def _resolve_pull(
     return pulls[0] if pulls else None
 
 
+def _enrich_pull_statuses(
+    repo: RepoRef,
+    client: ForgejoClient,
+    pull: dict[str, object],
+    fields: tuple[str, ...],
+) -> dict[str, object]:
+    if "statusCheckRollup" not in fields:
+        return pull
+    statuses = _pull_statuses(repo, client, pull)
+    return with_status_check_rollup(pull, statuses)
+
+
+def _pull_statuses(repo: RepoRef, client: ForgejoClient, pull: dict[str, object]) -> list[dict[str, object]]:
+    sha = _pull_head_sha(pull)
+    if sha is None:
+        return []
+    return client.list_commit_statuses(repo, sha)
+
+
 def _pull_number(pull: dict[str, object]) -> int | None:
     raw = pull.get("number") or pull.get("id")
     if isinstance(raw, bool):
@@ -1638,6 +1688,14 @@ def _pull_number(pull: dict[str, object]) -> int | None:
     if isinstance(raw, str) and raw.isdigit():
         return int(raw)
     return None
+
+
+def _pull_head_sha(pull: dict[str, object]) -> str | None:
+    head = pull.get("head")
+    if not isinstance(head, dict):
+        return None
+    sha = head.get("sha")
+    return sha if isinstance(sha, str) and sha else None
 
 
 def _pull_head_ref(pull: dict[str, object]) -> str | None:
