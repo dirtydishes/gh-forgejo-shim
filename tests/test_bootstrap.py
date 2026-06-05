@@ -56,7 +56,8 @@ class BootstrapTests(unittest.TestCase):
             output = format_bootstrap(result)
 
         self.assertIn('export PATH="', output)
-        self.assertIn("export FJ_SHIM_TOKEN=<forgejo-access-token>", output)
+        self.assertIn("gh-forgejo-shim auth login git.example.com", output)
+        self.assertIn("gh-forgejo-shim auth import git.example.com", output)
         self.assertIn("git fetch origin", output)
         self.assertIn("git remote set-head origin -a", output)
         self.assertIn("git branch --set-upstream-to=origin/feature feature", output)

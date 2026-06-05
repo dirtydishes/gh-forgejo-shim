@@ -139,11 +139,13 @@ def _auth_check(repo: RepoRef | None, env: Mapping[str, str], *, home: Path | No
     token = discover_fj_token(repo.host if repo else None, env=env, home=home)
     if token:
         return BootstrapCheck("auth", True, "found Forgejo token")
+    login_command = f"gh-forgejo-shim auth login {repo.host}" if repo else "gh-forgejo-shim auth login HOST"
+    import_command = f"gh-forgejo-shim auth import {repo.host}" if repo else "gh-forgejo-shim auth import HOST"
     return BootstrapCheck(
         "auth",
         False,
-        "no Forgejo token found in env or common fj/tea/gitea config files",
-        ("export FJ_SHIM_TOKEN=<forgejo-access-token>", "gh-forgejo-shim doctor"),
+        "no Forgejo token found in shim storage, env, or common fj/tea/gitea config files",
+        (login_command, import_command, "gh-forgejo-shim doctor"),
     )
 
 

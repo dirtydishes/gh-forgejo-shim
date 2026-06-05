@@ -32,6 +32,9 @@ class ForgejoClient:
         self.token = token
         self.timeout = timeout
 
+    def get_current_user(self, host: str) -> dict[str, Any]:
+        return self._request_json("GET", f"https://{_host_for_url(host)}/api/v1/user", None)
+
     def create_pull(
         self,
         repo: RepoRef,
@@ -216,6 +219,13 @@ class ForgejoClient:
 
 def _quote(value: str) -> str:
     return urllib.parse.quote(value, safe="")
+
+
+def _host_for_url(host: str) -> str:
+    parsed = urllib.parse.urlparse(host)
+    if parsed.scheme and parsed.netloc:
+        return parsed.netloc
+    return host.strip().strip("/")
 
 
 def _head_matches(item: dict[str, Any], head: str) -> bool:

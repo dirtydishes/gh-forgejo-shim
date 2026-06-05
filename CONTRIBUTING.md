@@ -22,7 +22,7 @@ Runtime code must stay Python stdlib-only. Test code should also stay stdlib-onl
 - `gh-forgejo-shim` remains the stable management command.
 - The generated `gh` wrapper is reversible.
 - Unsupported GitHub-only PR metadata flags fail clearly.
-- No native login command is added in V1.
+- Native auth remains scoped to Forgejo access tokens and never prints stored secrets.
 
 ## Release Process
 
