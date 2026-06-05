@@ -12,17 +12,36 @@ from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr
 
 
 class FakeClient(ForgejoClient):
-    def __init__(self, pulls: list[dict] | None = None) -> None:
+    def __init__(self, pulls: list[dict] | None = None, issues: list[dict] | None = None) -> None:
         super().__init__(None)
         self.pulls = pulls or []
+        self.issues = issues or []
         self.created: dict | None = None
+        self.created_issue: dict | None = None
+        self.comments: list[dict] = []
+        self.diff_text = "diff --git a/README.md b/README.md\n"
+        self.pull_files = [{"filename": "README.md"}, {"filename": "generated/output.txt"}]
         self.repo_view = {
+            "id": 99,
             "name": "repo",
             "full_name": "owner/repo",
             "html_url": "https://git.example.com/owner/repo",
             "ssh_url": "git@git.example.com:owner/repo.git",
             "default_branch": "main",
             "private": False,
+            "has_issues": True,
+            "has_projects": True,
+            "has_wiki": False,
+            "allow_merge_commits": True,
+            "allow_rebase": True,
+            "allow_squash_merge": True,
+            "forks_count": 2,
+            "stars_count": 3,
+            "watchers_count": 4,
+            "open_issues_count": 5,
+            "open_pr_counter": 6,
+            "language": "Python",
+            "permissions": {"pull": True, "push": True, "admin": False},
             "owner": {"login": "owner"},
         }
 
@@ -53,18 +72,71 @@ class FakeClient(ForgejoClient):
                 return pull
         raise ValueError("not found")
 
+    def get_pull_diff(self, repo: RepoRef, number: int, *, patch: bool = False):  # type: ignore[no-untyped-def]
+        return self.diff_text
+
+    def list_pull_files(self, repo: RepoRef, number: int):  # type: ignore[no-untyped-def]
+        return self.pull_files
+
     def get_repo(self, repo: RepoRef):  # type: ignore[no-untyped-def]
         return self.repo_view
+
+    def list_issues(self, repo: RepoRef, **kwargs):  # type: ignore[no-untyped-def]
+        return self.issues
+
+    def get_issue(self, repo: RepoRef, number: int):  # type: ignore[no-untyped-def]
+        for issue in self.issues:
+            if issue.get("number") == number:
+                return issue
+        raise ValueError("not found")
+
+    def list_labels(self, repo: RepoRef):  # type: ignore[no-untyped-def]
+        return [{"id": 2, "name": "bug"}, {"id": 3, "name": "help wanted"}]
+
+    def create_issue(self, repo: RepoRef, **kwargs):  # type: ignore[no-untyped-def]
+        self.created_issue = {"repo": repo, **kwargs}
+        return {
+            "number": 14,
+            "title": kwargs["title"],
+            "body": kwargs.get("body", ""),
+            "state": "open",
+            "html_url": "https://git.example.com/owner/repo/issues/14",
+            "user": {"login": "alice"},
+        }
+
+    def create_issue_comment(self, repo: RepoRef, number: int, *, body: str):  # type: ignore[no-untyped-def]
+        comment = {"repo": repo, "number": number, "body": body}
+        self.comments.append(comment)
+        return comment
 
 
 class RoutingTests(unittest.TestCase):
     def test_delegates_non_pr_command(self) -> None:
         decision = decide_route(
-            ["issue", "list"],
+            ["api", "repos/owner/repo"],
             config=Config(hosts=("git.example.com",)),
             env={},
         )
         self.assertEqual(decision.kind, "delegate")
+
+    def test_routes_issue_list_for_allowlisted_host(self) -> None:
+        decision = decide_route(
+            ["issue", "list", "-R", "git.example.com/owner/repo"],
+            config=Config(hosts=("git.example.com",)),
+            env={},
+        )
+        self.assertEqual(decision.kind, "forgejo")
+
+    def test_routes_issue_view_url_for_allowlisted_host(self) -> None:
+        decision = decide_route(
+            ["issue", "view", "https://git.example.com/owner/repo/issues/13"],
+            config=Config(hosts=("git.example.com",)),
+            env={},
+        )
+        self.assertEqual(decision.kind, "forgejo")
+        self.assertIsNotNone(decision.repo)
+        assert decision.repo is not None
+        self.assertEqual((decision.repo.owner, decision.repo.repo), ("owner", "repo"))
 
     def test_routes_pr_list_for_allowlisted_host(self) -> None:
         decision = decide_route(
@@ -291,6 +363,93 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue()), [])
 
+    def test_pr_diff_outputs_forgejo_diff(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            ["pr", "diff", "8"],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                [
+                    {
+                        "number": 8,
+                        "title": "Make Codex happy",
+                        "state": "open",
+                        "html_url": "https://git.example.com/owner/repo/pulls/8",
+                        "head": {"ref": "feature"},
+                    }
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("diff --git", out.getvalue())
+
+    def test_pr_diff_name_only_filters_excluded_files(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            ["pr", "diff", "8", "--name-only", "--exclude", "generated/*"],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient([{"number": 8, "head": {"ref": "feature"}}]),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().splitlines(), ["README.md"])
+
+    def test_pr_comment_posts_body_to_issue_comments(self) -> None:
+        client = FakeClient([{"number": 8, "head": {"ref": "feature"}}])
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            ["pr", "comment", "8", "--body", "Looks good"],
+            RepoRef("git.example.com", "owner", "repo"),
+            client,
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(client.comments[0]["number"], 8)
+        self.assertEqual(client.comments[0]["body"], "Looks good")
+
+    def test_pr_checkout_fetches_and_checks_out_head_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "remote.git"
+            seed = root / "seed"
+            work = root / "work"
+            self._git(root, "init", "--bare", str(remote))
+
+            seed.mkdir()
+            self._git(seed, "init")
+            self._git(seed, "config", "user.email", "test@example.com")
+            self._git(seed, "config", "user.name", "Test User")
+            (seed / "README.md").write_text("main\n", encoding="utf-8")
+            self._git(seed, "add", "README.md")
+            self._git(seed, "commit", "-m", "initial")
+            self._git(seed, "branch", "-M", "main")
+            self._git(seed, "remote", "add", "origin", str(remote))
+            self._git(seed, "push", "-u", "origin", "main")
+            self._git(seed, "checkout", "-b", "feature")
+            (seed / "README.md").write_text("feature\n", encoding="utf-8")
+            self._git(seed, "commit", "-am", "feature")
+            self._git(seed, "push", "origin", "feature")
+            self._git(root, "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main")
+            self._git(root, "clone", str(remote), str(work))
+            self._git(work, "checkout", "main")
+
+            out = io.StringIO()
+            code = run_forgejo_pr(
+                ["pr", "checkout", "8"],
+                RepoRef("git.example.com", "owner", "repo"),
+                FakeClient([{"number": 8, "head": {"ref": "feature"}}]),
+                cwd=str(work),
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(self._git_output(work, "branch", "--show-current"), "feature")
+
     def test_repo_view_outputs_github_shaped_json(self) -> None:
         out = io.StringIO()
         code = run_forgejo(
@@ -317,6 +476,159 @@ class RoutingTests(unittest.TestCase):
                 "url": "https://git.example.com/owner/repo",
             },
         )
+
+    def test_repo_view_outputs_richer_github_json_fields(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo(
+            [
+                "repo",
+                "view",
+                "-R",
+                "git.example.com/owner/repo",
+                "--json",
+                "id,hasIssuesEnabled,hasProjectsEnabled,hasWikiEnabled,forkCount,stargazerCount,watchers,primaryLanguage,viewerPermission,visibility,pullRequests,issues,mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            {
+                "forkCount": 2,
+                "hasIssuesEnabled": True,
+                "hasProjectsEnabled": True,
+                "hasWikiEnabled": False,
+                "id": 99,
+                "issues": {"nodes": [], "totalCount": 5},
+                "mergeCommitAllowed": True,
+                "primaryLanguage": {"name": "Python"},
+                "pullRequests": {"nodes": [], "totalCount": 6},
+                "rebaseMergeAllowed": True,
+                "squashMergeAllowed": True,
+                "stargazerCount": 3,
+                "viewerPermission": "WRITE",
+                "visibility": "PUBLIC",
+                "watchers": {"nodes": [], "totalCount": 4},
+            },
+        )
+
+    def test_issue_list_outputs_github_shaped_json(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo(
+            [
+                "issue",
+                "list",
+                "-R",
+                "git.example.com/owner/repo",
+                "--state",
+                "all",
+                "--json",
+                "number,title,state,url,author,comments",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                issues=[
+                    {
+                        "number": 13,
+                        "title": "Fix it",
+                        "state": "open",
+                        "html_url": "https://git.example.com/owner/repo/issues/13",
+                        "user": {"login": "alice"},
+                        "comments": 2,
+                    }
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            [
+                {
+                    "author": {"login": "alice", "name": None},
+                    "comments": 2,
+                    "number": 13,
+                    "state": "OPEN",
+                    "title": "Fix it",
+                    "url": "https://git.example.com/owner/repo/issues/13",
+                }
+            ],
+        )
+
+    def test_issue_view_outputs_github_shaped_json(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo(
+            [
+                "issue",
+                "view",
+                "13",
+                "-R",
+                "git.example.com/owner/repo",
+                "--json",
+                "number,title,body,state,closed",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                issues=[
+                    {
+                        "number": 13,
+                        "title": "Fix it",
+                        "body": "Details",
+                        "state": "closed",
+                        "html_url": "https://git.example.com/owner/repo/issues/13",
+                    }
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            {
+                "body": "Details",
+                "closed": True,
+                "number": 13,
+                "state": "CLOSED",
+                "title": "Fix it",
+            },
+        )
+
+    def test_issue_create_calls_forgejo_client(self) -> None:
+        client = FakeClient()
+        out = io.StringIO()
+        code = run_forgejo(
+            [
+                "issue",
+                "create",
+                "-R",
+                "git.example.com/owner/repo",
+                "--title",
+                "Bug",
+                "--body",
+                "It broke",
+                "--assignee",
+                "alice,bob",
+                "--label",
+                "bug,3",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            client,
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(client.created_issue)
+        assert client.created_issue is not None
+        self.assertEqual(client.created_issue["title"], "Bug")
+        self.assertEqual(client.created_issue["body"], "It broke")
+        self.assertEqual(client.created_issue["assignees"], ("alice", "bob"))
+        self.assertEqual(client.created_issue["labels"], (2, 3))
+        self.assertEqual(out.getvalue().strip(), "https://git.example.com/owner/repo/issues/14")
 
     def test_no_current_branch_view_returns_empty_json_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -433,6 +745,11 @@ class RoutingTests(unittest.TestCase):
         import subprocess
 
         subprocess.run(["git", *args], cwd=cwd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _git_output(self, cwd: Path, *args: str) -> str:
+        import subprocess
+
+        return subprocess.check_output(["git", *args], cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
 
 
 if __name__ == "__main__":
