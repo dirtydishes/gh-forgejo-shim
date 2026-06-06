@@ -18,7 +18,7 @@ From inside a Forgejo checkout, run the bootstrap command:
 gfj bootstrap
 ```
 
-`bootstrap` detects the current repository, adds its host to the allowlist, installs the user-local `gh` shim, checks whether PATH resolves to the shim, verifies that Forgejo auth can be discovered, checks `origin` and `origin/HEAD`, and prints exact repair commands for anything it cannot fix automatically.
+`bootstrap` detects the current repository, adds its host to the allowlist, installs the user-local `gh` shim, checks whether PATH resolves to the shim, verifies that Forgejo auth can be discovered from native storage, env, or supported CLI config files, checks `origin` and `origin/HEAD`, and prints exact repair commands for anything it cannot fix automatically.
 
 The long command name works the same way:
 
@@ -53,15 +53,16 @@ This writes a LaunchAgent that places `~/.local/bin`, Homebrew, MacPorts, and sy
 1. Install the package with `pipx`.
 2. Open a terminal inside your Forgejo repository.
 3. Run `gfj bootstrap`.
-4. Copy and run any repair commands it prints.
-5. On macOS, run `gfj install-gui-path` if the tool was launched from Finder, Dock, Spotlight, or another GUI launcher.
-6. Confirm the setup:
+4. Run `gfj auth login HOST`, or `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
+5. Copy and run any other repair commands `bootstrap` prints.
+6. On macOS, run `gfj install-gui-path` if the tool was launched from Finder, Dock, Spotlight, or another GUI launcher.
+7. Confirm the setup:
 
 ```sh
 gfj doctor
 ```
 
-7. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, and pull request workflows.
+8. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, and pull request workflows.
 
 For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
@@ -78,7 +79,8 @@ The setup is intended to cover:
 - Pull request creation, listing, viewing, current-branch status, diffs, comments, checks, and checkout through `gh pr ...`.
 - Basic issue listing, viewing, and creation through `gh issue ...`.
 - GUI-launched macOS tools that need a usable PATH to find the shim and the real `gh`.
-- Forgejo auth discovery from environment variables or common `fj`, `tea`, and `gitea` config files.
+- Native Forgejo auth setup through `gh-forgejo-shim auth login/import/status/logout`, stored in macOS Keychain when available or a permission-restricted user config file otherwise.
+- Forgejo auth discovery from native shim storage, environment variables, or common `fj`, `tea`, and `gitea` config files.
 
 ## Repository Remote Shape For GitHub-Style Tools
 
@@ -178,6 +180,15 @@ author, createdAt, updatedAt, mergeable, mergeStateStatus,
 statusCheckRollup
 ```
 
+When `statusCheckRollup` is requested, the shim fetches Forgejo commit statuses for the pull request head SHA and maps them into GitHub-style status context objects. The same status data powers `gh pr checks --json ...`, including common fields such as:
+
+```text
+bucket, completedAt, conclusion, description, detailsUrl, link,
+name, startedAt, state, workflow
+```
+
+Forgejo commit states are bucketed as `pass`, `fail`, or `pending`, with the latest status per context shown when Forgejo returns repeated updates.
+
 `gh issue list --json ...` and `gh issue view --json ...` support the common GitHub CLI issue fields:
 
 ```text
@@ -253,6 +264,17 @@ FORGEJO_TOKEN
 GITEA_TOKEN
 FJ_TOKEN
 ```
+
+Native auth commands:
+
+```sh
+gh-forgejo-shim auth login git.example.com
+gh-forgejo-shim auth import git.example.com
+gh-forgejo-shim auth status git.example.com
+gh-forgejo-shim auth logout git.example.com
+```
+
+`auth login` validates the token with Forgejo before saving it. On macOS the shim uses Keychain when the system `security` tool accepts the write; otherwise it saves tokens in `~/.config/gh-forgejo-shim/auth.json` with owner-only permissions. `auth import` reads from env, `fj`, `tea`, or `gitea` config, validates the token, and copies it into shim-owned storage so GUI-launched apps can use it without shell env vars.
 
 See [docs/configuration.md](docs/configuration.md) for details.
 

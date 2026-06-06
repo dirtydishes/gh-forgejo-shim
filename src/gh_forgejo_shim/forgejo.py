@@ -32,6 +32,9 @@ class ForgejoClient:
         self.token = token
         self.timeout = timeout
 
+    def get_current_user(self, host: str) -> dict[str, Any]:
+        return self._request_json("GET", f"https://{_host_for_url(host)}/api/v1/user", None)
+
     def create_pull(
         self,
         repo: RepoRef,
@@ -63,6 +66,14 @@ class ForgejoClient:
         if not isinstance(files, list):
             return []
         return [item for item in files if isinstance(item, dict)]
+
+    def list_commit_statuses(self, repo: RepoRef, sha: str) -> list[dict[str, Any]]:
+        statuses = self._request_json("GET", f"{repo.api_base_url}/statuses/{_quote(sha)}", None)
+        if isinstance(statuses, dict) and isinstance(statuses.get("statuses"), list):
+            statuses = statuses["statuses"]
+        if not isinstance(statuses, list):
+            return []
+        return [item for item in statuses if isinstance(item, dict)]
 
     def get_repo(self, repo: RepoRef) -> dict[str, Any]:
         return self._request_json("GET", repo.api_base_url, None)
@@ -208,6 +219,13 @@ class ForgejoClient:
 
 def _quote(value: str) -> str:
     return urllib.parse.quote(value, safe="")
+
+
+def _host_for_url(host: str) -> str:
+    parsed = urllib.parse.urlparse(host)
+    if parsed.scheme and parsed.netloc:
+        return parsed.netloc
+    return host.strip().strip("/")
 
 
 def _head_matches(item: dict[str, Any], head: str) -> bool:

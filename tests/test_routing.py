@@ -12,10 +12,16 @@ from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr
 
 
 class FakeClient(ForgejoClient):
-    def __init__(self, pulls: list[dict] | None = None, issues: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        pulls: list[dict] | None = None,
+        issues: list[dict] | None = None,
+        statuses: list[dict] | None = None,
+    ) -> None:
         super().__init__(None)
         self.pulls = pulls or []
         self.issues = issues or []
+        self.statuses = statuses or []
         self.created: dict | None = None
         self.created_issue: dict | None = None
         self.comments: list[dict] = []
@@ -77,6 +83,9 @@ class FakeClient(ForgejoClient):
 
     def list_pull_files(self, repo: RepoRef, number: int):  # type: ignore[no-untyped-def]
         return self.pull_files
+
+    def list_commit_statuses(self, repo: RepoRef, sha: str):  # type: ignore[no-untyped-def]
+        return self.statuses
 
     def get_repo(self, repo: RepoRef):  # type: ignore[no-untyped-def]
         return self.repo_view
@@ -282,14 +291,24 @@ class RoutingTests(unittest.TestCase):
                         "title": "Make Codex happy",
                         "state": "open",
                         "html_url": "https://git.example.com/owner/repo/pulls/8",
-                        "head": {"ref": "feature"},
+                        "head": {"ref": "feature", "sha": "abc123"},
                         "base": {"ref": "main"},
                         "user": {"login": "alice"},
                         "created_at": "2026-05-31T00:00:00Z",
                         "updated_at": "2026-05-31T01:00:00Z",
                         "mergeable": False,
                     }
-                ]
+                ],
+                statuses=[
+                    {
+                        "context": "ci/test",
+                        "description": "tests passed",
+                        "state": "success",
+                        "target_url": "https://git.example.com/owner/repo/actions/runs/1",
+                        "created_at": "2026-06-01T00:00:00Z",
+                        "updated_at": "2026-06-01T00:02:00Z",
+                    }
+                ],
             ),
             stdout=out,
             stderr=io.StringIO(),
@@ -309,7 +328,21 @@ class RoutingTests(unittest.TestCase):
                     "mergeable": "UNKNOWN",
                     "number": 8,
                     "state": "OPEN",
-                    "statusCheckRollup": [],
+                    "statusCheckRollup": [
+                        {
+                            "__typename": "StatusContext",
+                            "completedAt": "2026-06-01T00:02:00Z",
+                            "conclusion": "success",
+                            "context": "ci/test",
+                            "description": "tests passed",
+                            "detailsUrl": "https://git.example.com/owner/repo/actions/runs/1",
+                            "name": "ci/test",
+                            "startedAt": "2026-06-01T00:00:00Z",
+                            "state": "SUCCESS",
+                            "targetUrl": "https://git.example.com/owner/repo/actions/runs/1",
+                            "workflowName": "ci/test",
+                        }
+                    ],
                     "title": "Make Codex happy",
                     "updatedAt": "2026-05-31T01:00:00Z",
                     "url": "https://git.example.com/owner/repo/pulls/8",
@@ -343,7 +376,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue()), [{"number": 8, "state": "MERGED"}])
 
-    def test_pr_checks_returns_empty_json_array_for_forgejo(self) -> None:
+    def test_pr_checks_maps_forgejo_statuses_to_github_shaped_json(self) -> None:
         out = io.StringIO()
         code = run_forgejo_pr(
             [
@@ -356,12 +389,53 @@ class RoutingTests(unittest.TestCase):
                 "bucket,description,link,name,workflow",
             ],
             RepoRef("git.example.com", "owner", "repo"),
-            FakeClient(),
+            FakeClient(
+                pulls=[
+                    {
+                        "number": 8,
+                        "head": {"ref": "feature", "sha": "abc123"},
+                    }
+                ],
+                statuses=[
+                    {
+                        "context": "ci/test",
+                        "description": "tests passed",
+                        "state": "success",
+                        "target_url": "https://git.example.com/owner/repo/actions/runs/1",
+                        "created_at": "2026-06-01T00:00:00Z",
+                        "updated_at": "2026-06-01T00:02:00Z",
+                    },
+                    {
+                        "context": "lint",
+                        "description": "lint is running",
+                        "state": "pending",
+                        "created_at": "2026-06-01T00:01:00Z",
+                    },
+                ],
+            ),
             stdout=out,
             stderr=io.StringIO(),
         )
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out.getvalue()), [])
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            [
+                {
+                    "bucket": "pass",
+                    "description": "tests passed",
+                    "link": "https://git.example.com/owner/repo/actions/runs/1",
+                    "name": "ci/test",
+                    "workflow": "ci/test",
+                },
+                {
+                    "bucket": "pending",
+                    "description": "lint is running",
+                    "link": None,
+                    "name": "lint",
+                    "workflow": "lint",
+                },
+            ],
+        )
 
     def test_pr_diff_outputs_forgejo_diff(self) -> None:
         out = io.StringIO()

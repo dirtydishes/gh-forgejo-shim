@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from pathlib import Path
+from typing import Callable, Mapping, TextIO
 
 from . import __version__
+from .auth import (
+    AuthStorageError,
+    delete_stored_token,
+    discover_import_token,
+    discover_token,
+    stored_auth_status,
+    write_stored_token,
+)
 from .bootstrap import format_bootstrap, run_bootstrap
-from .config import add_host, load_config, remove_host
+from .config import add_host, load_config, normalize_host, remove_host
 from .doctor import format_checks, run_checks
+from .forgejo import ForgejoClient, ForgejoError
 from .gui_path import install_gui_path, uninstall_gui_path
 from .routing import run_gh
 from .shim import install_shim, uninstall_shim
@@ -90,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "config":
         return run_config(namespace)
 
+    if command == "auth":
+        return run_auth(namespace)
+
     if command == "version":
         print(__version__)
         return 0
@@ -141,6 +155,17 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("host")
     config_subparsers.add_parser("list")
 
+    auth = subparsers.add_parser("auth", help="manage native Forgejo auth")
+    auth_subparsers = auth.add_subparsers(dest="auth_command", required=True)
+    login = auth_subparsers.add_parser("login", help="validate and store a Forgejo access token")
+    login.add_argument("host", nargs="?")
+    import_parser = auth_subparsers.add_parser("import", help="import Forgejo auth from env or fj/tea/gitea config")
+    import_parser.add_argument("host", nargs="?")
+    status = auth_subparsers.add_parser("status", help="show whether shim auth exists without printing secrets")
+    status.add_argument("host", nargs="?")
+    logout = auth_subparsers.add_parser("logout", help="remove stored shim auth for a Forgejo host")
+    logout.add_argument("host", nargs="?")
+
     return parser
 
 
@@ -171,3 +196,226 @@ def print_hosts(hosts: tuple[str, ...]) -> None:
         return
     for host in hosts:
         print(host)
+
+
+def run_auth(
+    namespace: argparse.Namespace,
+    *,
+    env: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    platform: str | None = None,
+    config_path: Path | None = None,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+    input_func: Callable[[str], str] = input,
+    token_prompt: Callable[[str], str] = getpass.getpass,
+    client_factory: Callable[[str | None], ForgejoClient] | None = None,
+) -> int:
+    out = stdout or sys.stdout
+    err = stderr or sys.stderr
+
+    try:
+        if namespace.auth_command == "login":
+            return _auth_login(
+                namespace.host,
+                env=env,
+                home=home,
+                platform=platform,
+                config_path=config_path,
+                stdout=out,
+                input_func=input_func,
+                token_prompt=token_prompt,
+                client_factory=client_factory,
+            )
+        if namespace.auth_command == "import":
+            return _auth_import(
+                namespace.host,
+                env=env,
+                home=home,
+                platform=platform,
+                config_path=config_path,
+                stdout=out,
+                input_func=input_func,
+                client_factory=client_factory,
+            )
+        if namespace.auth_command == "status":
+            return _auth_status(
+                namespace.host,
+                env=env,
+                home=home,
+                platform=platform,
+                config_path=config_path,
+                stdout=out,
+            )
+        if namespace.auth_command == "logout":
+            return _auth_logout(
+                namespace.host,
+                env=env,
+                home=home,
+                platform=platform,
+                config_path=config_path,
+                stdout=out,
+                input_func=input_func,
+            )
+    except (AuthStorageError, ForgejoError, ValueError) as exc:
+        print(f"gh-forgejo-shim: {exc}", file=err)
+        return 1
+
+    return 1
+
+
+def _auth_login(
+    host_arg: str | None,
+    *,
+    env: Mapping[str, str] | None,
+    home: Path | None,
+    platform: str | None,
+    config_path: Path | None,
+    stdout: TextIO,
+    input_func: Callable[[str], str],
+    token_prompt: Callable[[str], str],
+    client_factory: Callable[[str | None], ForgejoClient] | None,
+) -> int:
+    host = _prompt_host(host_arg, env=env, config_path=config_path, input_func=input_func)
+    token = token_prompt(f"Forgejo access token for {host}: ").strip()
+    if not token:
+        raise ValueError("Forgejo token is required")
+
+    login = _validate_token(host, token, client_factory=client_factory)
+    storage = write_stored_token(host, token, home=home, platform=platform)
+    add_host(host, config_path)
+    print(_validated_message("logged in", host, login), file=stdout)
+    print(f"saved auth in {storage}", file=stdout)
+    return 0
+
+
+def _auth_import(
+    host_arg: str | None,
+    *,
+    env: Mapping[str, str] | None,
+    home: Path | None,
+    platform: str | None,
+    config_path: Path | None,
+    stdout: TextIO,
+    input_func: Callable[[str], str],
+    client_factory: Callable[[str | None], ForgejoClient] | None,
+) -> int:
+    host = _prompt_host(host_arg, env=env, config_path=config_path, input_func=input_func)
+    discovery = discover_import_token(host, env=env, home=home)
+    if discovery is None:
+        raise ValueError(
+            "no Forgejo token found in FJ_SHIM_TOKEN, FORGEJO_TOKEN, GITEA_TOKEN, FJ_TOKEN, "
+            "or common fj/tea/gitea config files"
+        )
+
+    login = _validate_token(host, discovery.token, client_factory=client_factory)
+    storage = write_stored_token(host, discovery.token, home=home, platform=platform)
+    add_host(host, config_path)
+    print(_validated_message("imported auth", host, login), file=stdout)
+    print(f"source: {discovery.source}", file=stdout)
+    print(f"saved auth in {storage}", file=stdout)
+    return 0
+
+
+def _auth_status(
+    host_arg: str | None,
+    *,
+    env: Mapping[str, str] | None,
+    home: Path | None,
+    platform: str | None,
+    config_path: Path | None,
+    stdout: TextIO,
+) -> int:
+    hosts = _status_hosts(host_arg, env=env, config_path=config_path)
+    all_authenticated = True
+    for host in hosts:
+        status = stored_auth_status(host, home=home, platform=platform)
+        if status.exists:
+            print(f"{host}: logged in ({status.storage})", file=stdout)
+            continue
+
+        discovery = discover_token(host, env=env, home=home, platform=platform, include_stored=False)
+        if discovery:
+            print(f"{host}: token available from {discovery.source}; run gh-forgejo-shim auth import {host}", file=stdout)
+        else:
+            all_authenticated = False
+            print(f"{host}: not logged in", file=stdout)
+    return 0 if all_authenticated else 1
+
+
+def _auth_logout(
+    host_arg: str | None,
+    *,
+    env: Mapping[str, str] | None,
+    home: Path | None,
+    platform: str | None,
+    config_path: Path | None,
+    stdout: TextIO,
+    input_func: Callable[[str], str],
+) -> int:
+    host = _prompt_host(host_arg, env=env, config_path=config_path, input_func=input_func)
+    if delete_stored_token(host, home=home, platform=platform):
+        print(f"logged out of {host}", file=stdout)
+    else:
+        print(f"no stored shim auth for {host}", file=stdout)
+    return 0
+
+
+def _prompt_host(
+    host_arg: str | None,
+    *,
+    env: Mapping[str, str] | None,
+    config_path: Path | None,
+    input_func: Callable[[str], str],
+) -> str:
+    if host_arg:
+        host = normalize_host(host_arg)
+        if host:
+            return host
+        raise ValueError("Forgejo host is required")
+
+    config = load_config(config_path, env=env)
+    default = config.hosts[0] if len(config.hosts) == 1 else ""
+    prompt = f"Forgejo host [{default}]: " if default else "Forgejo host: "
+    host = normalize_host(input_func(prompt).strip() or default)
+    if not host:
+        raise ValueError("Forgejo host is required")
+    return host
+
+
+def _status_hosts(
+    host_arg: str | None,
+    *,
+    env: Mapping[str, str] | None,
+    config_path: Path | None,
+) -> tuple[str, ...]:
+    if host_arg:
+        host = normalize_host(host_arg)
+        if host:
+            return (host,)
+        raise ValueError("Forgejo host is required")
+
+    config = load_config(config_path, env=env)
+    if config.hosts:
+        return config.hosts
+    raise ValueError("pass a host or add one with gh-forgejo-shim config add-host HOST")
+
+
+def _validate_token(
+    host: str,
+    token: str,
+    *,
+    client_factory: Callable[[str | None], ForgejoClient] | None,
+) -> str | None:
+    client = client_factory(token) if client_factory else ForgejoClient(token, timeout=10)
+    user = client.get_current_user(host)
+    if not isinstance(user, dict):
+        raise ValueError("Forgejo API returned unexpected user data")
+    login = user.get("login") or user.get("username") or user.get("name")
+    return login if isinstance(login, str) and login.strip() else None
+
+
+def _validated_message(action: str, host: str, login: str | None) -> str:
+    if login:
+        return f"{action} to {host} as {login}"
+    return f"{action} to {host}"

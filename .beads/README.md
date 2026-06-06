@@ -1,81 +1,126 @@
-# Beads - AI-Native Issue Tracking
+# Beads workflow for gh-forgejo-shim
 
-Welcome to Beads! This repository uses **Beads** for issue tracking - a modern, AI-native tool designed to live directly in your codebase alongside your code.
+This repository uses Beads (`bd`) for project issue tracking. The tracker is
+part of the repo so agents and developers can inspect current work, record
+follow-up issues, and keep implementation context close to the code.
 
-## What is Beads?
+`gh-forgejo-shim` is now a stdlib-only Python CLI that gives GitHub-oriented
+tools enough GitHub CLI compatibility to work in allowlisted Forgejo
+repositories. Beads should describe that compatibility precisely: name the
+command, flag, JSON field, setup step, or fallback that changed.
 
-Beads is issue tracking that lives in your repo, making it perfect for AI coding agents and developers who want their issues close to their code. No web UI required - everything works through the CLI and integrates seamlessly with git.
+## Tracker storage and sync
 
-**Learn more:** [github.com/steveyegge/beads](https://github.com/steveyegge/beads)
-
-## Quick Start
-
-### Essential Commands
+- The source of truth is the local Dolt database under `.beads/dolt/`.
+- Cross-machine Beads sync uses the configured Dolt remote:
+  `http://dolt.deltaisland.io/gh_forgejo_shim`.
+- `.beads/issues.jsonl` is a passive export for review and recovery. Do not use
+  `bd import` during normal development.
+- Pull Beads state at the start of a session and push Beads state before
+  handoff:
 
 ```bash
-# Create new issues
-bd create "Add user authentication"
+bd prime
+bd dolt pull
+bd ready
+```
 
-# View all issues
-bd list
-
-# View issue details
-bd show <issue-id>
-
-# Update issue status
-bd update <issue-id> --claim
-bd update <issue-id> --status done
-
-# Sync with Dolt remote
+```bash
 bd dolt push
 ```
 
-### Working with Issues
-
-Issues in Beads are:
-- **Git-native**: Stored in Dolt database with version control and branching
-- **AI-friendly**: CLI-first design works perfectly with AI coding agents
-- **Branch-aware**: Issues can follow your branch workflow
-- **Always in sync**: Auto-syncs with your commits
-
-## Why Beads?
-
-✨ **AI-Native Design**
-- Built specifically for AI-assisted development workflows
-- CLI-first interface works seamlessly with AI coding agents
-- No context switching to web UIs
-
-🚀 **Developer Focused**
-- Issues live in your repo, right next to your code
-- Works offline, syncs when you push
-- Fast, lightweight, and stays out of your way
-
-🔧 **Git Integration**
-- Automatic sync with git commits
-- Branch-aware issue tracking
-- Dolt-native three-way merge resolution
-
-## Get Started with Beads
-
-Try Beads in your own projects:
+## Daily commands
 
 ```bash
-# Install Beads
-curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+# Full local workflow context and session rules
+bd prime
 
-# Initialize in your repo
-bd init
+# Find available work
+bd ready
+bd list --status=open
+bd show <issue-id>
 
-# Create your first issue
-bd create "Try out Beads"
+# Create and claim work
+bd create --title="Short concrete title" --description="Why this issue exists and what needs to be done" --type=task --priority=2
+bd update <issue-id> --claim
+
+# Close finished work
+bd close <issue-id> --reason="Completed and validated"
 ```
 
-## Learn More
+Use `bd` for task tracking. Do not create markdown TODO lists or separate
+memory files for project state.
 
-- **Documentation**: [github.com/steveyegge/beads/docs](https://github.com/steveyegge/beads/tree/main/docs)
-- **Quick Start Guide**: Run `bd quickstart`
-- **Examples**: [github.com/steveyegge/beads/examples](https://github.com/steveyegge/beads/tree/main/examples)
+## What has recently landed
 
----
+The tracker now reflects a much broader project than the original bootstrap:
 
-*Beads: Issue tracking that moves at the speed of thought* ⚡
+- `gh-forgejo-shim` v1 package scaffolding, tests, documentation, and a
+  generated user-local `gh` wrapper that delegates real GitHub repositories to
+  the real GitHub CLI.
+- `gfj` as the short daily-use command alias for the same management CLI.
+- `gfj bootstrap`, which detects the current Forgejo checkout, adds host
+  allowlisting, installs the shim, checks PATH, verifies auth discovery, checks
+  `origin` and `origin/HEAD`, and prints repair commands for anything it cannot
+  fix automatically.
+- Robust GitHub CLI discovery for GUI-launched macOS tools, including
+  `gfj install-gui-path` and `gfj doctor` checks for shell PATH versus GUI PATH.
+- Repository remote guidance for GitHub-style tools: `origin.url`,
+  `origin.pushurl`, `origin/HEAD`, and branch upstream tracking.
+- Forgejo routing for the GitHub CLI commands this project currently supports:
+  `gh repo view`, `gh issue create/list/new/view`, and the supported
+  `gh pr checks/checkout/comment/create/diff/list/new/status/view` surface.
+- GitHub-shaped JSON output for repository metadata, issues, pull requests,
+  pull request status, and pull request checks.
+- Forgejo commit status mapping into GitHub-style check rollups, including
+  pass/fail/pending buckets and latest-status-per-context behavior.
+- Empty-current-branch behavior that keeps tools from failing when a Forgejo
+  branch has no pull request yet.
+- Native Forgejo auth helpers: `auth login`, `auth import`, `auth status`, and
+  `auth logout`, with macOS Keychain storage when available and a restricted
+  config-file fallback otherwise.
+- Auth discovery from shim storage, token environment variables, and common
+  `fj`, `tea`, and `gitea` configuration files.
+
+Turn records for these changes live in `docs/turns/`.
+
+## Current open work
+
+As of this README refresh, the remaining open Beads issues are:
+
+- `gh-forgejo-shim-9r8`: implement real filters for shimmed
+  `gh pr list` search flags.
+- `gh-forgejo-shim-mte`: add live Forgejo integration coverage.
+- `gh-forgejo-shim-xq1`: add package release automation.
+
+Create new issues for discovered gaps before ending a session. Close issues only
+after the relevant code, docs, and validation are done.
+
+## Session close checklist
+
+Before handoff:
+
+1. Run relevant quality gates, such as `python -m pytest`, linters, or focused
+   tests for the files changed.
+2. Update Beads issue state with `bd close` or `bd update` notes.
+3. Pull and push Beads data:
+
+```bash
+bd dolt pull
+bd dolt push
+```
+
+4. Commit the code, docs, and Beads export changes that belong to the task.
+5. Push the git branch when the active branch has an upstream or the current
+   session instructions require publication.
+6. Confirm `git status --short --branch` is clean or explain any remaining
+   unrelated changes clearly.
+
+## Project references
+
+- `README.md`: user-facing install, setup, supported command, JSON, and auth
+  documentation.
+- `docs/configuration.md`: configuration, host allowlisting, GUI PATH, auth, and
+  repository detection details.
+- `PRODUCT.md`: product purpose, users, tone, and documentation principles.
+- `AGENTS.md`: repository-specific agent workflow, including Beads requirements.

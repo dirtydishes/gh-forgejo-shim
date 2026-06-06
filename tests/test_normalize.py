@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from gh_forgejo_shim.normalize import filter_fields, normalize_pull, status_for_current_branch
+from gh_forgejo_shim.normalize import (
+    filter_fields,
+    normalize_pr_checks,
+    normalize_pull,
+    normalize_status_check_rollup,
+    status_for_current_branch,
+)
 
 
 class NormalizeTests(unittest.TestCase):
@@ -74,6 +80,72 @@ class NormalizeTests(unittest.TestCase):
             },
         )
 
+    def test_normalizes_forgejo_commit_statuses_to_check_rows(self) -> None:
+        statuses = [
+            {
+                "context": "ci/test",
+                "description": "old result",
+                "state": "failure",
+                "created_at": "2026-06-01T00:00:00Z",
+                "updated_at": "2026-06-01T00:01:00Z",
+            },
+            {
+                "context": "ci/test",
+                "description": "new result",
+                "state": "success",
+                "target_url": "https://git.example.com/owner/repo/actions/runs/2",
+                "created_at": "2026-06-01T00:02:00Z",
+                "updated_at": "2026-06-01T00:03:00Z",
+            },
+        ]
+        checks = normalize_pr_checks(statuses)
+        self.assertEqual(
+            checks,
+            [
+                {
+                    "bucket": "pass",
+                    "completedAt": "2026-06-01T00:03:00Z",
+                    "conclusion": "success",
+                    "description": "new result",
+                    "detailsUrl": "https://git.example.com/owner/repo/actions/runs/2",
+                    "link": "https://git.example.com/owner/repo/actions/runs/2",
+                    "name": "ci/test",
+                    "startedAt": "2026-06-01T00:02:00Z",
+                    "state": "completed",
+                    "workflow": "ci/test",
+                }
+            ],
+        )
+
+    def test_normalizes_forgejo_commit_statuses_to_rollup_items(self) -> None:
+        rollup = normalize_status_check_rollup(
+            [
+                {
+                    "context": "deploy",
+                    "description": "waiting",
+                    "state": "pending",
+                    "created_at": "2026-06-01T00:00:00Z",
+                }
+            ]
+        )
+        self.assertEqual(
+            rollup,
+            [
+                {
+                    "__typename": "StatusContext",
+                    "completedAt": None,
+                    "conclusion": None,
+                    "context": "deploy",
+                    "description": "waiting",
+                    "detailsUrl": None,
+                    "name": "deploy",
+                    "startedAt": "2026-06-01T00:00:00Z",
+                    "state": "PENDING",
+                    "targetUrl": None,
+                    "workflowName": "deploy",
+                }
+            ],
+        )
 
 if __name__ == "__main__":
     unittest.main()

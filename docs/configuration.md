@@ -102,6 +102,29 @@ gh-forgejo-shim install-gui-path --path "$HOME/.local/bin:/opt/homebrew/bin:/usr
 
 ## Auth
 
+Native auth commands are:
+
+```sh
+gh-forgejo-shim auth login [host]
+gh-forgejo-shim auth import [host]
+gh-forgejo-shim auth status [host]
+gh-forgejo-shim auth logout [host]
+```
+
+`auth login` prompts for a Forgejo host when one is not supplied, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, and saves it in shim-owned auth storage. It also adds the host to the allowlist, so routed `gh pr ...`, `gh issue ...`, and `gh repo view` commands can use the saved token immediately.
+
+`auth import` finds an existing token from supported sources, validates it, and saves it to the same shim-owned storage. This is useful when Terminal already has auth through an environment variable or another Forgejo CLI, but GUI-launched apps such as Codex.app do not inherit that shell environment.
+
+`auth status` reports whether auth is available for the host without printing the token. `auth logout` removes only the shim-owned stored auth for that host.
+
+On macOS, the shim first tries to store tokens in Keychain with the system `security` tool. If Keychain storage is unavailable or fails, it falls back to:
+
+```text
+~/.config/gh-forgejo-shim/auth.json
+```
+
+The fallback file is written with owner-only permissions.
+
 The shim checks token environment variables in this order:
 
 ```text
@@ -111,7 +134,7 @@ GITEA_TOKEN
 FJ_TOKEN
 ```
 
-If none are set, it tries a best-effort read from common `fj`, `tea`, and `gitea` config files. V1 does not implement a native login command.
+Environment variables still take precedence for the current process. If none are set, the shim checks native shim storage and then tries a best-effort read from common `fj`, `tea`, and `gitea` config files.
 
 On macOS, the current `fj` CLI stores auth in:
 
@@ -119,7 +142,7 @@ On macOS, the current `fj` CLI stores auth in:
 ~/Library/Application Support/Cyborus.forgejo-cli/keys.json
 ```
 
-The shim reads this file when present, which helps GUI apps such as Codex.app find Forgejo auth without inheriting shell-only environment variables.
+The shim can import from this file when present. After import, GUI apps such as Codex.app can find Forgejo auth without inheriting shell-only environment variables.
 
 ## Repository Detection
 

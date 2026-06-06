@@ -62,7 +62,7 @@ def run_checks(
         Check(
             "auth token",
             token is not None,
-            "found" if token else "set FJ_SHIM_TOKEN, FORGEJO_TOKEN, GITEA_TOKEN, or FJ_TOKEN",
+            "found" if token else "run gh-forgejo-shim auth login HOST or set FJ_SHIM_TOKEN",
         ),
     ]
 

@@ -74,6 +74,20 @@ This deletes:
 
 Restart the login session to return newly launched GUI apps to the default launchd PATH. Existing apps keep the environment they already inherited until they restart.
 
+## Remove Stored Forgejo Auth
+
+Remove shim-owned auth for a Forgejo host with:
+
+```sh
+gh-forgejo-shim auth logout git.example.com
+```
+
+On macOS this removes the shim's Keychain item when one exists. On other platforms, or when Keychain storage was unavailable, it removes the matching entry from:
+
+```text
+~/.config/gh-forgejo-shim/auth.json
+```
+
 ## Disable Forgejo Routing Temporarily
 
 Run with an empty host override:

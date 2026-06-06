@@ -116,6 +116,19 @@ SUPPORTED_ISSUE_JSON_FIELDS = (
     "url",
 )
 
+SUPPORTED_CHECK_JSON_FIELDS = (
+    "bucket",
+    "completedAt",
+    "conclusion",
+    "description",
+    "detailsUrl",
+    "link",
+    "name",
+    "startedAt",
+    "state",
+    "workflow",
+)
+
 
 def normalize_pull(pull: dict[str, Any]) -> dict[str, Any]:
     user = pull.get("user") if isinstance(pull.get("user"), dict) else {}
@@ -143,8 +156,28 @@ def normalize_pull(pull: dict[str, Any]) -> dict[str, Any]:
         "mergeStateStatus": str(pull.get("merge_state_status") or "UNKNOWN").upper(),
         "reviewDecision": pull.get("reviewDecision"),
         "reviewRequests": pull.get("reviewRequests") or [],
-        "statusCheckRollup": pull.get("statusCheckRollup") or [],
+        "statusCheckRollup": _normalize_status_check_rollup(pull.get("statusCheckRollup")),
     }
+
+
+def with_status_check_rollup(pull: dict[str, Any], statuses: list[dict[str, Any]]) -> dict[str, Any]:
+    enriched = dict(pull)
+    enriched["statusCheckRollup"] = normalize_status_check_rollup(statuses)
+    return enriched
+
+
+def normalize_status_check_rollup(statuses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_status_to_rollup_item(status) for status in _latest_statuses(statuses)]
+
+
+def normalize_pr_checks(statuses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_status_to_check_item(status) for status in _latest_statuses(statuses)]
+
+
+def filter_check_fields(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    if not fields:
+        return data
+    return {field: data.get(field) for field in fields if field in SUPPORTED_CHECK_JSON_FIELDS}
 
 
 def _normalize_count(value: Any) -> int:
@@ -331,6 +364,119 @@ def _connection(total_count: int, nodes: list[dict[str, Any]] | None = None) -> 
         "nodes": [] if nodes is None else nodes,
         "totalCount": total_count,
     }
+
+
+def _normalize_status_check_rollup(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _latest_statuses(statuses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for status in statuses:
+        key = _status_name(status)
+        existing = latest.get(key)
+        if existing is None or _status_timestamp(status) >= _status_timestamp(existing):
+            latest[key] = status
+    return sorted(latest.values(), key=_status_name)
+
+
+def _status_to_rollup_item(status: dict[str, Any]) -> dict[str, Any]:
+    state = _status_state(status)
+    target_url = _status_url(status)
+    return {
+        "__typename": "StatusContext",
+        "completedAt": _status_completed_at(status, state),
+        "conclusion": _status_conclusion(state),
+        "context": _status_name(status),
+        "description": status.get("description"),
+        "detailsUrl": target_url,
+        "name": _status_name(status),
+        "startedAt": status.get("created_at"),
+        "state": state,
+        "targetUrl": target_url,
+        "workflowName": _status_workflow(status),
+    }
+
+
+def _status_to_check_item(status: dict[str, Any]) -> dict[str, Any]:
+    state = _status_state(status)
+    target_url = _status_url(status)
+    return {
+        "bucket": _status_bucket(state),
+        "completedAt": _status_completed_at(status, state),
+        "conclusion": _status_conclusion(state),
+        "description": status.get("description"),
+        "detailsUrl": target_url,
+        "link": target_url,
+        "name": _status_name(status),
+        "startedAt": status.get("created_at"),
+        "state": _check_state(state),
+        "workflow": _status_workflow(status),
+    }
+
+
+def _status_name(status: dict[str, Any]) -> str:
+    context = status.get("context") or status.get("name") or status.get("title")
+    return str(context) if context else "status"
+
+
+def _status_workflow(status: dict[str, Any]) -> str:
+    workflow = status.get("workflow") or status.get("workflow_name") or status.get("context")
+    return str(workflow) if workflow else _status_name(status)
+
+
+def _status_url(status: dict[str, Any]) -> str | None:
+    url = status.get("target_url") or status.get("url") or status.get("html_url")
+    return url if isinstance(url, str) and url else None
+
+
+def _status_timestamp(status: dict[str, Any]) -> str:
+    value = status.get("updated_at") or status.get("created_at")
+    return value if isinstance(value, str) else ""
+
+
+def _status_state(status: dict[str, Any]) -> str:
+    raw = str(status.get("state") or status.get("status") or "").lower()
+    if raw in {"success", "successful", "ok", "pass", "passed"}:
+        return "SUCCESS"
+    if raw in {"failure", "failed"}:
+        return "FAILURE"
+    if raw in {"error", "cancelled", "canceled", "warning"}:
+        return "ERROR"
+    return "PENDING"
+
+
+def _status_conclusion(state: str) -> str | None:
+    if state == "SUCCESS":
+        return "success"
+    if state == "FAILURE":
+        return "failure"
+    if state == "ERROR":
+        return "failure"
+    return None
+
+
+def _status_bucket(state: str) -> str:
+    if state == "SUCCESS":
+        return "pass"
+    if state in {"FAILURE", "ERROR"}:
+        return "fail"
+    return "pending"
+
+
+def _check_state(state: str) -> str:
+    if state in {"SUCCESS", "FAILURE", "ERROR"}:
+        return "completed"
+    return "pending"
+
+
+def _status_completed_at(status: dict[str, Any], state: str) -> str | None:
+    if state not in {"SUCCESS", "FAILURE", "ERROR"}:
+        return None
+    value = status.get("updated_at") or status.get("created_at")
+    return value if isinstance(value, str) else None
 
 
 def _is_organization(owner: dict[str, Any]) -> bool:
