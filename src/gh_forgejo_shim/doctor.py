@@ -10,6 +10,7 @@ from .auth import discover_fj_token
 from .config import Config, load_config
 from .external import find_program
 from .gui_path import current_launchd_path, path_contains_dir
+from .repo import detect_from_git
 from .shim import default_bin_dir, is_managed_shim, shim_path
 
 
@@ -26,11 +27,14 @@ def run_checks(
     env: Mapping[str, str] | None = None,
     bin_dir: Path | None = None,
     home: Path | None = None,
+    cwd: str | None = None,
     fallback_dirs: Sequence[str] | None = None,
     launchd_path: str | None = None,
     check_gui_path: bool | None = None,
+    check_current_repo: bool | None = None,
 ) -> list[Check]:
     values = env if env is not None else os.environ
+    should_check_current_repo = check_current_repo if check_current_repo is not None else config is None
     cfg = config or load_config(env=values)
     target_bin_dir = bin_dir or default_bin_dir()
     wrapper = shim_path(target_bin_dir)
@@ -65,6 +69,33 @@ def run_checks(
             "found" if token else "run gh-forgejo-shim auth login HOST or set FJ_SHIM_TOKEN",
         ),
     ]
+
+    if should_check_current_repo:
+        repo = detect_from_git(cwd=cwd)
+        if repo and cfg.is_forgejo_host(repo.host):
+            checks.append(
+                Check(
+                    "current repo host",
+                    True,
+                    f"{repo.host} is allowlisted for {repo.owner}/{repo.repo}",
+                )
+            )
+        elif repo and _is_known_github_host(repo.host):
+            checks.append(
+                Check(
+                    "current repo host",
+                    True,
+                    f"{repo.host} will delegate to the real GitHub CLI for {repo.owner}/{repo.repo}",
+                )
+            )
+        elif repo:
+            checks.append(
+                Check(
+                    "current repo host",
+                    False,
+                    f"{repo.host} is not allowlisted; run gh-forgejo-shim config add-host {repo.host}",
+                )
+            )
 
     if wrapper.exists() and is_managed_shim(wrapper):
         first_gh = _first_program("gh", values.get("PATH", ""))
@@ -132,3 +163,7 @@ def _same_file(left: Path, right: Path) -> bool:
         return left.samefile(right)
     except OSError:
         return left.resolve() == right.resolve()
+
+
+def _is_known_github_host(host: str) -> bool:
+    return host.lower() in {"github.com", "www.github.com"}

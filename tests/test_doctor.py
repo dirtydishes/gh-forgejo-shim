@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,6 +55,58 @@ class DoctorTests(unittest.TestCase):
                 home=Path(tmp),
             )
         self.assertTrue(self._check(checks, "auth token").ok)
+
+    def test_reports_current_repo_host_that_is_not_allowlisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo", "https://new.example.com/owner/repo.git")
+
+            checks = run_checks(
+                config=Config(hosts=("old.example.com",)),
+                env={"PATH": "", "FJ_SHIM_TOKEN": "secret"},
+                home=root,
+                cwd=str(repo),
+                check_current_repo=True,
+            )
+
+        check = self._check(checks, "current repo host")
+        self.assertFalse(check.ok)
+        self.assertIn("new.example.com is not allowlisted", check.detail)
+        self.assertIn("gh-forgejo-shim config add-host new.example.com", check.detail)
+
+    def test_accepts_current_repo_host_when_allowlisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo", "https://git.example.com/owner/repo.git")
+
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": "", "FJ_SHIM_TOKEN": "secret"},
+                home=root,
+                cwd=str(repo),
+                check_current_repo=True,
+            )
+
+        check = self._check(checks, "current repo host")
+        self.assertTrue(check.ok)
+        self.assertIn("git.example.com is allowlisted", check.detail)
+
+    def test_current_github_repo_is_ok_for_delegation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo", "https://github.com/owner/repo.git")
+
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": "", "FJ_SHIM_TOKEN": "secret"},
+                home=root,
+                cwd=str(repo),
+                check_current_repo=True,
+            )
+
+        check = self._check(checks, "current repo host")
+        self.assertTrue(check.ok)
+        self.assertIn("will delegate to the real GitHub CLI", check.detail)
 
     def test_path_ordering_allows_unrelated_dirs_before_shim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +203,15 @@ class DoctorTests(unittest.TestCase):
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
         return path
+
+    def _git_repo(self, path: Path, origin: str) -> Path:
+        path.mkdir(parents=True)
+        self._git(path, "init", "-b", "feature")
+        self._git(path, "remote", "add", "origin", origin)
+        return path
+
+    def _git(self, cwd: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=cwd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _check(self, checks, name):  # type: ignore[no-untyped-def]
         for check in checks:
