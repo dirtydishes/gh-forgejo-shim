@@ -1,24 +1,46 @@
 # gh-forgejo-shim
 
-`gh-forgejo-shim` is a small, stdlib-only Python CLI for Codex.app, T3 Code, and other GitHub-oriented tools used with Forgejo repositories.
+`gh-forgejo-shim` is a small, stdlib-only Python CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories.
 
-It installs a durable management command named `gh-forgejo-shim`, plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still go to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository and pull request commands through Forgejo-friendly behavior.
+It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository, pull request, issue, and check commands through Forgejo-friendly behavior.
 
-V1 is not full `gh` emulation. It exists to keep GitHub-style development tools from treating Forgejo repositories like broken GitHub repositories.
+This is not full `gh` emulation. It is compatibility glue for the `gh` calls and repository probes that GitHub-style development tools commonly use.
+
+## What It Covers
+
+- Repository discovery from `-R/--repo`, `GH_REPO`, `GH_HOST`, and local Git remotes.
+- Opt-in Forgejo host allowlisting so unrelated GitHub work keeps using the real GitHub CLI.
+- Bootstrap setup that detects the current repo, installs the wrapper, allowlists the host, checks auth, and prints repair commands.
+- macOS GUI PATH setup for apps launched from Finder, Dock, Spotlight, or other GUI launchers.
+- Native Forgejo auth login, import, status, and logout commands with macOS Keychain support.
+- Auth discovery from shim-owned storage, environment variables, and common `fj`, `tea`, and `gitea` config files.
+- GitHub-shaped `gh repo view`, `gh pr ...`, and `gh issue ...` output for the fields tools usually probe.
+- Pull request checks mapped from Forgejo commit statuses into GitHub-style `statusCheckRollup` and `gh pr checks` output.
+- Safe rollback commands that remove only shim-managed files.
 
 ## Install
+
+Install with `pipx`:
 
 ```sh
 pipx install gh-forgejo-shim
 ```
 
-From inside a Forgejo checkout, run the bootstrap command:
+From inside a Forgejo checkout, run:
 
 ```sh
 gfj bootstrap
 ```
 
-`bootstrap` detects the current repository, adds its host to the allowlist, installs the user-local `gh` shim, checks whether PATH resolves to the shim, verifies that Forgejo auth can be discovered from native storage, env, or supported CLI config files, checks `origin` and `origin/HEAD`, and prints exact repair commands for anything it cannot fix automatically.
+`bootstrap` does the practical setup work and tells you exactly what still needs attention. It:
+
+- Detects the current Forgejo repository from Git remotes.
+- Adds the repository host to the shim allowlist.
+- Installs the user-local `gh` wrapper.
+- Checks whether `PATH` resolves `gh` to the shim.
+- Checks whether Forgejo auth can be found from shim storage, env, or supported CLI config files.
+- Checks `origin`, `origin/HEAD`, and current-branch upstream tracking.
+- Prints repair commands for anything it cannot fix automatically.
 
 The long command name works the same way:
 
@@ -26,7 +48,33 @@ The long command name works the same way:
 gh-forgejo-shim bootstrap
 ```
 
-If you prefer to do the setup manually, add at least one Forgejo host:
+If the wrapper path already contains an unrelated `gh`, bootstrap refuses to overwrite it unless you opt in:
+
+```sh
+gfj bootstrap --force
+```
+
+## Quickstart For GUI Coding Tools
+
+1. Install the package with `pipx`.
+2. Open a terminal inside your Forgejo repository.
+3. Run `gfj bootstrap`.
+4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
+5. Copy and run any repair commands `bootstrap` prints.
+6. On macOS, run `gfj install-gui-path` if your coding tool is launched from Finder, Dock, Spotlight, Raycast, Alfred, or another GUI launcher.
+7. Confirm the setup:
+
+```sh
+gfj doctor
+```
+
+8. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, pull request, issue, and check workflows.
+
+For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
+
+## Manual Setup
+
+If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
 
 ```sh
 gh-forgejo-shim config add-host git.example.com
@@ -38,55 +86,64 @@ Install the opt-in wrapper:
 gh-forgejo-shim install-shim
 ```
 
-The wrapper is written to `~/.local/bin/gh` by default. Make sure `~/.local/bin` appears before the real `gh` location in `PATH`.
+The wrapper is written to:
 
-On macOS, GUI apps launched from Finder or Dock can inherit a very small `PATH` such as `/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`. If Codex.app says `GitHub CLI (gh) is not installed` even though `gh --version` works in your shell, persist a GUI-friendly PATH and then restart Codex.app:
-
-```sh
-gh-forgejo-shim install-gui-path
+```text
+~/.local/bin/gh
 ```
 
-This writes a LaunchAgent that places `~/.local/bin`, Homebrew, MacPorts, and system executable directories in the user launchd environment. It also applies the PATH to the current login session for newly opened GUI apps.
-
-## Quickstart For GitHub-Style Tools
-
-1. Install the package with `pipx`.
-2. Open a terminal inside your Forgejo repository.
-3. Run `gfj bootstrap`.
-4. Run `gfj auth login HOST`, or `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
-5. Copy and run any other repair commands `bootstrap` prints.
-6. On macOS, run `gfj install-gui-path` if the tool was launched from Finder, Dock, Spotlight, or another GUI launcher.
-7. Confirm the setup:
+Make sure `~/.local/bin` appears before the real `gh` location in `PATH`. You can confirm with:
 
 ```sh
-gfj doctor
+command -v gh
+which -a gh
 ```
 
-8. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, and pull request workflows.
+If you need a different install location:
 
-For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
+```sh
+gh-forgejo-shim install-shim --bin-dir ~/.local/bin
+```
 
-## What This Setup Covers
+## macOS GUI PATH
 
-GitHub-style tools do not rely only on `gh pr ...`. They commonly combine plain Git commands with GitHub CLI commands. The shim helps with the GitHub CLI side, while the repository remote shape below helps the tool recognize the repository before it invokes `gh`.
+macOS GUI apps often start with a small launchd PATH such as:
 
-The setup is intended to cover:
+```text
+/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
+```
 
-- Repository discovery from local Git remotes.
-- Default branch discovery through `origin/HEAD`.
-- Current branch and upstream tracking for branch status, ahead/behind counts, and commit or push UI.
-- Repository metadata through `gh repo view`, including a broad set of GitHub-shaped JSON fields.
-- Pull request creation, listing, viewing, current-branch status, diffs, comments, checks, and checkout through `gh pr ...`.
-- Basic issue listing, viewing, and creation through `gh issue ...`.
-- GUI-launched macOS tools that need a usable PATH to find the shim and the real `gh`.
-- Native Forgejo auth setup through `gh-forgejo-shim auth login/import/status/logout`, stored in macOS Keychain when available or a permission-restricted user config file otherwise.
-- Forgejo auth discovery from native shim storage, environment variables, or common `fj`, `tea`, and `gitea` config files.
+That PATH may miss both `~/.local/bin/gh` and Homebrew tools such as `/opt/homebrew/bin/gh`. If Codex.app or another GUI-launched tool says `GitHub CLI (gh) is not installed` even though `gh --version` works in your shell, persist a GUI-friendly PATH:
 
-## Repository Remote Shape For GitHub-Style Tools
+```sh
+gfj install-gui-path
+```
 
-Codex.app, T3 Code, and similar GitHub-oriented tools usually expect the local repository to look like a conventional GitHub checkout. Even when the shim can answer Forgejo-backed `gh` commands, those tools may still show incomplete repository state, disabled commit or push controls, or unavailable pull request status if the repository only has a remote named `forgejo`, if `origin/HEAD` has not been populated, or if the current branch does not track an `origin/*` branch.
+This writes:
 
-For the best compatibility, each Forgejo checkout should have:
+```text
+~/Library/LaunchAgents/com.gh-forgejo-shim.user-gui-path.plist
+```
+
+It also applies the PATH to the current user launchd session for newly opened GUI apps. Restart existing GUI apps after running it.
+
+To provide an exact PATH:
+
+```sh
+gfj install-gui-path --path "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+```
+
+To only write the LaunchAgent and wait until the next login:
+
+```sh
+gfj install-gui-path --no-apply
+```
+
+## Repository Remote Shape
+
+GitHub-style tools usually inspect the local Git checkout before they invoke `gh`. The shim can answer Forgejo-backed `gh` commands, but tools may still show incomplete repository state, disabled commit or push controls, or unavailable pull request status if the checkout does not look like a conventional GitHub clone.
+
+For best compatibility, each Forgejo checkout should have:
 
 ```text
 origin.url      https://git.example.com/owner/repo.git
@@ -105,13 +162,13 @@ git remote set-head origin -a
 git branch --set-upstream-to=origin/your-branch your-branch
 ```
 
-Replace `git.example.com/owner/repo.git` and `your-branch` with the repository and branch you are using. If the default branch is not discoverable from the server, set it explicitly:
+If the server does not report the default branch clearly, set it explicitly:
 
 ```sh
 git remote set-head origin main
 ```
 
-You can verify the local shape these tools commonly probe with:
+Useful checks:
 
 ```sh
 git config --get remote.origin.url
@@ -123,17 +180,18 @@ gh pr status --json number,title,url,headRefName,state
 gh issue list --json number,title,state,url
 ```
 
-`gfj bootstrap` checks these same basics and prints the matching commands when something is missing.
+If your tool connects to a remote SSH workspace, apply the same remote setup inside that remote checkout too. Fixing the local Mac clone does not change a separate remote clone.
 
-If your tool is connected to a remote SSH workspace, apply the same remote setup inside that remote checkout too. Fixing the local Mac checkout does not change a separate remote clone.
+## Routed Commands
 
-## Supported Wrapper Commands
+Only supported commands in allowlisted Forgejo repositories are routed through Forgejo. Everything else delegates to the real GitHub CLI.
 
-Only these commands are routed for allowlisted Forgejo repositories:
+Supported pull request commands:
 
 ```sh
 gh pr checks
 gh pr checkout
+gh pr co
 gh pr comment
 gh pr create
 gh pr diff
@@ -141,18 +199,29 @@ gh pr list
 gh pr new
 gh pr status
 gh pr view
+```
+
+Supported issue commands:
+
+```sh
 gh issue create
 gh issue list
+gh issue ls
 gh issue new
 gh issue view
+```
+
+Supported repository commands:
+
+```sh
 gh repo view
 ```
 
-Everything else delegates to the real GitHub CLI.
+Unsupported commands and unsupported flags fail explicitly when routed, or delegate to the real `gh` when they are outside the shimmed Forgejo surface.
 
-## Supported `pr create` Flags
+## Pull Request Support
 
-The shim translates the common create flags Codex.app is likely to use:
+`gh pr create` and `gh pr new` support the common flags coding tools tend to use:
 
 ```text
 --title/-t
@@ -161,6 +230,7 @@ The shim translates the common create flags Codex.app is likely to use:
 --base/-B
 --head/-H
 --repo/-R
+--json
 --fill
 --fill-first
 --fill-verbose
@@ -168,28 +238,89 @@ The shim translates the common create flags Codex.app is likely to use:
 --draft/-d
 ```
 
-GitHub-only metadata flags, such as reviewers, labels, assignees, projects, milestones, templates, and maintainer-edit controls, fail with a clear Forgejo-specific error.
+GitHub-only metadata flags such as reviewers, labels, assignees, projects, milestones, templates, recover, and maintainer-edit controls fail with a Forgejo-specific error.
+
+`gh pr list` supports JSON output, repo selection, state, limit, head, and base filters. It currently accepts but does not apply several GitHub search-style filters, including author, app, assignee, label, and search. Real filtering for those flags is tracked as follow-up work in Beads issue `gh-forgejo-shim-9r8`.
+
+`gh pr view` and `gh pr status` return successfully when the current branch has no open PR. For JSON output, `gh pr view --json ...` returns `{}`, and `gh pr status --json ...` returns the GitHub CLI status envelope with `"currentBranch": null`.
+
+`gh pr diff` supports pull number or branch resolution, `--repo`, `--web`, `--name-only`, `--patch`, `--color`, and `--exclude`.
+
+`gh pr comment` supports pull number or branch resolution, `--repo`, `--body`, `--body-file`, and `--web`.
+
+`gh pr checkout` supports pull number or branch resolution, `--repo`, `--branch`, `--detach`, `--force`, and `--recurse-submodules`.
+
+## Checks And Statuses
+
+When `statusCheckRollup` is requested, the shim fetches Forgejo commit statuses for the pull request head SHA and maps them into GitHub-style status context objects.
+
+The same Forgejo status data powers:
+
+```sh
+gh pr checks
+gh pr checks --json bucket,completedAt,conclusion,description,detailsUrl,link,name,startedAt,state,workflow
+```
+
+Forgejo status states are normalized into `pass`, `fail`, or `pending` buckets. When Forgejo returns repeated updates for the same context, the latest status per context is shown.
+
+## Issue Support
+
+`gh issue create` and `gh issue new` support:
+
+```text
+--title/-t
+--body/-b
+--body-file/-F
+--repo/-R
+--web/-w
+--assignee/-a
+--label/-l
+--milestone/-m
+```
+
+Labels are resolved to Forgejo label IDs before issue creation. Milestones are passed through as numeric IDs.
+
+`gh issue list` supports:
+
+```text
+--json
+--repo/-R
+--jq/-q
+--template/-t
+--state/-s
+--limit/-L
+--label/-l
+--search/-S
+--author/-A
+--assignee/-a
+--mention
+--milestone/-m
+--web/-w
+```
+
+`gh issue view` supports issue numbers or URLs, JSON output, repo selection, `--jq`, `--template`, `--comments`, and `--web`.
 
 ## JSON Output
 
-For `--json`, the shim emits a GitHub-shaped subset when Forgejo data is available:
+For `--json`, the shim emits GitHub-shaped subsets when Forgejo data is available.
+
+Pull request fields:
 
 ```text
-number, title, state, isDraft, url, headRefName, baseRefName,
-author, createdAt, updatedAt, mergeable, mergeStateStatus,
+additions, deletions, number, title, state, isDraft, url,
+headRefName, baseRefName, author, createdAt, updatedAt,
+mergeable, mergeStateStatus, reviewDecision, reviewRequests,
 statusCheckRollup
 ```
 
-When `statusCheckRollup` is requested, the shim fetches Forgejo commit statuses for the pull request head SHA and maps them into GitHub-style status context objects. The same status data powers `gh pr checks --json ...`, including common fields such as:
+Check fields:
 
 ```text
 bucket, completedAt, conclusion, description, detailsUrl, link,
 name, startedAt, state, workflow
 ```
 
-Forgejo commit states are bucketed as `pass`, `fail`, or `pending`, with the latest status per context shown when Forgejo returns repeated updates.
-
-`gh issue list --json ...` and `gh issue view --json ...` support the common GitHub CLI issue fields:
+Issue fields:
 
 ```text
 assignees, author, body, closed, closedAt,
@@ -198,7 +329,7 @@ labels, milestone, number, projectCards, projectItems, reactionGroups,
 state, stateReason, title, updatedAt, url
 ```
 
-`gh repo view --json ...` supports the fields GitHub-oriented tools commonly probe:
+Repository fields:
 
 ```text
 archivedAt, assignableUsers, codeOfConduct, contactLinks, createdAt,
@@ -233,7 +364,49 @@ visibility, watchers
 }
 ```
 
-When no current-branch PR exists, `gh pr view --json ...` returns `{}` with exit code `0`, and `gh pr status --json ...` returns the same status envelope with `"currentBranch": null`. This keeps automation from failing just because a Forgejo branch has no PR yet.
+## Auth
+
+Native auth commands:
+
+```sh
+gh-forgejo-shim auth login [host]
+gh-forgejo-shim auth import [host]
+gh-forgejo-shim auth status [host]
+gh-forgejo-shim auth logout [host]
+```
+
+`auth login` prompts for a host when needed, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, stores it in shim-owned auth storage, and adds the host to the allowlist.
+
+`auth import` finds an existing token from supported sources, validates it, and stores it in the same shim-owned storage. This is useful when Terminal already has auth through an environment variable or another Forgejo CLI, but GUI-launched apps do not inherit that shell environment.
+
+`auth status` reports whether shim-owned auth exists for the host without printing secrets. `auth logout` removes only shim-owned stored auth for that host.
+
+On macOS, the shim first tries to store tokens in Keychain with the system `security` tool. If Keychain storage is unavailable or fails, it falls back to:
+
+```text
+~/.config/gh-forgejo-shim/auth.json
+```
+
+The fallback file is written with owner-only permissions.
+
+Token environment variables are checked in this order:
+
+```text
+FJ_SHIM_TOKEN
+FORGEJO_TOKEN
+GITEA_TOKEN
+FJ_TOKEN
+```
+
+Environment variables take precedence for the current process. If none are set, the shim checks native shim storage and then tries common `fj`, `tea`, and `gitea` config files.
+
+On macOS, the current `fj` CLI stores auth in:
+
+```text
+~/Library/Application Support/Cyborus.forgejo-cli/keys.json
+```
+
+The shim can import from that file when present.
 
 ## Configuration
 
@@ -253,9 +426,17 @@ gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
 ```
 
-Environment overrides:
+Config commands:
 
 ```sh
+gh-forgejo-shim config add-host git.example.com
+gh-forgejo-shim config remove-host git.example.com
+gh-forgejo-shim config list
+```
+
+Environment overrides:
+
+```text
 FJ_SHIM_HOSTS
 FJ_SHIM_REAL_GH
 FJ_SHIM_REAL_FJ
@@ -263,20 +444,43 @@ FJ_SHIM_TOKEN
 FORGEJO_TOKEN
 GITEA_TOKEN
 FJ_TOKEN
+GH_REPO
+GH_HOST
 ```
 
-Native auth commands:
+`FJ_SHIM_HOSTS` replaces the configured host list for the current process:
 
 ```sh
-gh-forgejo-shim auth login git.example.com
-gh-forgejo-shim auth import git.example.com
-gh-forgejo-shim auth status git.example.com
-gh-forgejo-shim auth logout git.example.com
+FJ_SHIM_HOSTS=git.example.com,code.example.org gh pr view
 ```
 
-`auth login` validates the token with Forgejo before saving it. On macOS the shim uses Keychain when the system `security` tool accepts the write; otherwise it saves tokens in `~/.config/gh-forgejo-shim/auth.json` with owner-only permissions. `auth import` reads from env, `fj`, `tea`, or `gitea` config, validates the token, and copies it into shim-owned storage so GUI-launched apps can use it without shell env vars.
+`FJ_SHIM_REAL_GH` and `FJ_SHIM_REAL_FJ` override configured executable paths:
 
-See [docs/configuration.md](docs/configuration.md) for details.
+```sh
+FJ_SHIM_REAL_GH=/opt/homebrew/bin/gh
+FJ_SHIM_REAL_FJ=/opt/homebrew/bin/fj
+```
+
+When no explicit executable path is configured, the shim searches the inherited `PATH` first and then checks common user and package-manager directories, including `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, and `/opt/local/bin`.
+
+See [docs/configuration.md](docs/configuration.md) for more detail.
+
+## Doctor
+
+Run:
+
+```sh
+gfj doctor
+```
+
+`doctor` checks:
+
+- Whether the real `gh` can be found.
+- Whether `fj` can be found.
+- Whether at least one Forgejo host is allowlisted.
+- Whether an auth token can be discovered.
+- Whether the managed wrapper exists and is the first `gh` in `PATH`.
+- On macOS, whether the user launchd PATH can expose the shim to new GUI apps.
 
 ## Rollback
 
@@ -292,6 +496,18 @@ Remove the macOS GUI PATH LaunchAgent:
 gfj uninstall-gui-path
 ```
 
+Remove shim-owned auth for a host:
+
+```sh
+gfj auth logout git.example.com
+```
+
+Temporarily bypass Forgejo routing for a process:
+
+```sh
+FJ_SHIM_HOSTS= gh pr view
+```
+
 See [docs/rollback.md](docs/rollback.md) for PATH troubleshooting and recovery steps.
 
 ## Development
@@ -300,6 +516,12 @@ Run tests with:
 
 ```sh
 python3 -m unittest
+```
+
+When running directly from a checkout without installing the package, set `PYTHONPATH`:
+
+```sh
+PYTHONPATH=src python3 -m gh_forgejo_shim --help
 ```
 
 This project intentionally has no runtime dependencies outside the Python standard library.
