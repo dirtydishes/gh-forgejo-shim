@@ -72,7 +72,7 @@ This deletes:
 ~/Library/LaunchAgents/com.gh-forgejo-shim.user-gui-path.plist
 ```
 
-Restart the login session to return newly launched GUI apps to the default launchd PATH. Existing apps keep the environment they already inherited until they restart.
+The command also applies a Homebrew/system PATH to the current launchd session so newly opened GUI apps can still find the real GitHub CLI after the shim is removed. Restart Codex.app or other existing GUI apps before relying on the repaired PATH.
 
 ## Remove Stored Forgejo Auth
 

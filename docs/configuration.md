@@ -98,6 +98,8 @@ To provide an exact value instead of the default:
 gh-forgejo-shim install-gui-path --path "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 ```
 
+If you later run `gh-forgejo-shim uninstall-shim` on macOS while this helper is installed, the helper is rewritten to a real GitHub CLI PATH without `~/.local/bin`. That keeps GUI-launched tools such as Codex.app able to find Homebrew's `gh` after the shim is gone.
+
 `gh-forgejo-shim doctor` reports a `macOS gui PATH` check on macOS so shell and GUI PATH problems are easier to tell apart.
 
 ## Auth

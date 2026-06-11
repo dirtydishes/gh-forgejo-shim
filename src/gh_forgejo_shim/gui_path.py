@@ -47,6 +47,10 @@ def default_gui_path(
     return os.pathsep.join(_dedupe(candidates))
 
 
+def default_real_gh_gui_path() -> str:
+    return os.pathsep.join(_dedupe(list(SYSTEM_GUI_PATH_DIRS)))
+
+
 def launch_agent_plist(path_value: str) -> str:
     escaped_path = xml.sax.saxutils.escape(path_value)
     return "\n".join(
@@ -95,11 +99,17 @@ def install_gui_path(
     return GuiPathResult(target, value, applied=applied, apply_error=error)
 
 
-def uninstall_gui_path(*, plist_path: Path | None = None) -> Path:
+def uninstall_gui_path(*, plist_path: Path | None = None, apply_now: bool = True) -> GuiPathResult:
     target = plist_path or default_plist_path()
     if target.exists():
         target.unlink()
-    return target
+    path_value = default_real_gh_gui_path()
+
+    if not apply_now:
+        return GuiPathResult(target, path_value)
+
+    applied, error = apply_gui_path(path_value)
+    return GuiPathResult(target, path_value, applied=applied, apply_error=error)
 
 
 def apply_gui_path(path_value: str) -> tuple[bool, str | None]:

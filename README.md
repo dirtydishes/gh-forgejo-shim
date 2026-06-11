@@ -507,6 +507,8 @@ Remove the generated wrapper:
 gfj uninstall-shim
 ```
 
+On macOS, if the shim-owned GUI PATH helper is installed, uninstalling the wrapper also rewrites that helper to a real GitHub CLI PATH such as `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` and applies it to the current launchd session. Restart Codex.app or other GUI-launched tools so they inherit the repaired PATH.
+
 Remove the macOS GUI PATH LaunchAgent:
 
 ```sh
