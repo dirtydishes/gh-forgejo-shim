@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import fnmatch
 import json
 import os
@@ -7,10 +8,10 @@ import sys
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
-from typing import Callable, Mapping, TextIO
+from typing import Any, Callable, Mapping, TextIO
 
 from .auth import discover_fj_token
-from .config import Config, load_config
+from .config import Config, load_config, normalize_host
 from .create import CreateParseError, body_from_file, parse_create_args
 from .external import find_program, git_run, run_program
 from .forgejo import ForgejoClient, ForgejoError, RepoRef
@@ -27,9 +28,11 @@ from .normalize import (
     with_status_check_rollup,
 )
 from .repo import (
+    Detection,
     current_branch,
     default_base_branch,
     detect_repo,
+    detect_from_git,
     fill_body,
     fill_title,
     parse_repo_spec,
@@ -53,6 +56,9 @@ ClientFactory = Callable[[str | None], ForgejoClient]
 def _is_supported_command(argv: list[str]) -> bool:
     if len(argv) < 2:
         return False
+    if argv[0] == "api":
+        endpoint = _api_endpoint_from_argv(argv[1:])
+        return endpoint is not None and _is_supported_api_endpoint(endpoint)
     if argv[0] == "pr":
         return argv[1] in SUPPORTED_PR_COMMANDS
     if argv[0] == "issue":
@@ -60,6 +66,30 @@ def _is_supported_command(argv: list[str]) -> bool:
     if argv[0] == "repo":
         return argv[1] in SUPPORTED_REPO_COMMANDS
     return False
+
+
+def _detect_api_repo(
+    argv: list[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    cwd: str | None = None,
+) -> Detection:
+    endpoint, hostname = _api_endpoint_context_from_argv(argv)
+    values = env if env is not None else os.environ
+    fallback = detect_repo(["api"], env=values, cwd=cwd)
+    if endpoint is None:
+        return fallback
+
+    repo = _repo_from_api_endpoint(
+        endpoint,
+        hostname=hostname,
+        default_repo=fallback.repo,
+        env=values,
+        cwd=cwd,
+    )
+    if repo is None:
+        return fallback
+    return Detection(repo, "gh api endpoint")
 
 
 def decide_route(
@@ -72,7 +102,10 @@ def decide_route(
     if len(argv) < 2 or not _is_supported_command(argv):
         return RouteDecision("delegate", "unsupported command")
 
-    detection = detect_repo(argv, env=env, cwd=cwd)
+    if argv[0] == "api":
+        detection = _detect_api_repo(argv[1:], env=env, cwd=cwd)
+    else:
+        detection = detect_repo(argv, env=env, cwd=cwd)
     if detection.repo is None:
         return RouteDecision("delegate", "no repository detected")
     if not config.is_forgejo_host(detection.repo.host):
@@ -134,6 +167,8 @@ def run_forgejo(
     stderr: TextIO,
     stdin: TextIO | None = None,
 ) -> int:
+    if argv[0] == "api":
+        return _run_api(argv[1:], repo, client, cwd=cwd, stdout=stdout, stdin=stdin)
     if argv[0] == "repo":
         return run_forgejo_repo(argv, repo, client, stdout=stdout, stderr=stderr)
     if argv[0] == "issue":
@@ -655,6 +690,62 @@ def _run_issue_create(
     return 0
 
 
+def _run_api(
+    argv: list[str],
+    repo: RepoRef,
+    client: ForgejoClient,
+    *,
+    cwd: str | None,
+    stdout: TextIO,
+    stdin: TextIO | None,
+) -> int:
+    parsed = _parse_api_args(argv, repo=repo, cwd=cwd, stdin=stdin)
+    target_repo = _repo_from_api_endpoint(parsed.endpoint, hostname=parsed.hostname, default_repo=repo, cwd=cwd) or repo
+    method = (parsed.method or ("POST" if parsed.fields or parsed.input_data else "GET")).upper()
+    path, query, _ = _split_api_endpoint(_expand_api_placeholders(parsed.endpoint, repo=target_repo, cwd=cwd))
+    parts = _api_path_parts(path)
+    query_values = _api_query_values(query, parsed.fields if method == "GET" else None)
+    payload = _api_payload(parsed)
+
+    if len(parts) == 4 and parts[:1] == ["repos"] and parts[3] == "branches" and method == "GET":
+        per_page = _api_int(query_values.get("per_page") or query_values.get("limit"), default=30)
+        page = _api_int(query_values.get("page"), default=1)
+        branches = client.list_branches(target_repo, limit=None if parsed.paginate else per_page, page=None if parsed.paginate else page)
+        data = [_github_branch_from_forgejo(target_repo, branch) for branch in branches]
+        _print_api_response(data, parsed, stdout)
+        return 0
+
+    if len(parts) >= 5 and parts[:1] == ["repos"] and parts[3] == "branches" and method == "GET":
+        branch_name = urllib.parse.unquote("/".join(parts[4:]))
+        data = _github_branch_from_forgejo(target_repo, client.get_branch(target_repo, branch_name), detailed=True)
+        _print_api_response(data, parsed, stdout)
+        return 0
+
+    if len(parts) >= 6 and parts[0] == "repos" and parts[3] == "git" and parts[4] in {"ref", "refs"} and method == "GET":
+        ref = urllib.parse.unquote("/".join(parts[5:]))
+        if parts[4] == "refs" and ref in {"heads", "heads/"}:
+            data = _github_refs_matching_prefix(target_repo, client, "heads/")
+        else:
+            data = _github_ref_for_exact_ref(target_repo, client, ref)
+        _print_api_response(data, parsed, stdout)
+        return 0
+
+    if len(parts) >= 6 and parts[0] == "repos" and parts[3] == "git" and parts[4] == "matching-refs" and method == "GET":
+        ref_prefix = urllib.parse.unquote("/".join(parts[5:]))
+        data = _github_refs_matching_prefix(target_repo, client, ref_prefix)
+        _print_api_response(data, parsed, stdout)
+        return 0
+
+    if len(parts) == 5 and parts[0] == "repos" and parts[3] == "git" and parts[4] == "refs" and method == "POST":
+        ref = _required_api_string(payload, "ref")
+        sha = _required_api_string(payload, "sha")
+        data = _create_github_ref(target_repo, client, ref=ref, sha=sha)
+        _print_api_response(data, parsed, stdout)
+        return 0
+
+    raise ValueError(f"unsupported Forgejo API endpoint: {method} {parsed.endpoint}")
+
+
 @dataclass(frozen=True)
 class ViewStatusArgs:
     json_fields: tuple[str, ...] = ()
@@ -763,6 +854,19 @@ class IssueCreateArgs:
     assignees: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
     milestone: int | None = None
+
+
+@dataclass(frozen=True)
+class ApiArgs:
+    endpoint: str
+    method: str | None = None
+    hostname: str | None = None
+    fields: Mapping[str, object] | None = None
+    input_data: Mapping[str, object] | None = None
+    jq: str | None = None
+    template: str | None = None
+    silent: bool = False
+    paginate: bool = False
 
 
 def _parse_list_args(argv: list[str]) -> ListArgs:
@@ -1471,6 +1575,465 @@ def _parse_issue_create_args(argv: list[str], *, stdin: TextIO | None = None) ->
         labels=tuple(labels),
         milestone=milestone,
     )
+
+
+def _api_endpoint_from_argv(argv: list[str]) -> str | None:
+    endpoint, _ = _api_endpoint_context_from_argv(argv)
+    return endpoint
+
+
+def _api_endpoint_context_from_argv(argv: list[str]) -> tuple[str | None, str | None]:
+    endpoint = None
+    hostname = None
+    index = 0
+    flags_with_values = {
+        "-X",
+        "--method",
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "-H",
+        "--header",
+        "--hostname",
+        "--input",
+        "--jq",
+        "-q",
+        "--template",
+        "-t",
+        "--cache",
+        "-p",
+        "--preview",
+    }
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            return (argv[index + 1], hostname) if index + 1 < len(argv) else (endpoint, hostname)
+        if arg == "--hostname" and index + 1 < len(argv):
+            hostname = argv[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--hostname="):
+            hostname = arg.split("=", 1)[1]
+            index += 1
+            continue
+        if arg in flags_with_values:
+            index += 2
+            continue
+        if arg.startswith(
+            (
+                "--method=",
+                "-X=",
+                "--raw-field=",
+                "-f=",
+                "--field=",
+                "-F=",
+                "--header=",
+                "-H=",
+                "--input=",
+                "--jq=",
+                "-q=",
+                "--template=",
+                "-t=",
+                "--cache=",
+                "--preview=",
+                "-p=",
+            )
+        ):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        endpoint = arg
+        break
+    return endpoint, hostname
+
+
+def _is_supported_api_endpoint(endpoint: str) -> bool:
+    path, _, _ = _split_api_endpoint(endpoint)
+    parts = _api_path_parts(path)
+    if len(parts) >= 4 and parts[0] == "repos" and parts[3] == "branches":
+        return True
+    return len(parts) >= 5 and parts[0] == "repos" and parts[3] == "git" and parts[4] in {
+        "ref",
+        "refs",
+        "matching-refs",
+    }
+
+
+def _repo_from_api_endpoint(
+    endpoint: str,
+    *,
+    hostname: str | None,
+    default_repo: RepoRef | None,
+    env: Mapping[str, str] | None = None,
+    cwd: str | None = None,
+) -> RepoRef | None:
+    expanded = _expand_api_placeholders(endpoint, repo=default_repo, cwd=cwd)
+    path, _, endpoint_host = _split_api_endpoint(expanded)
+    parts = _api_path_parts(path)
+    if len(parts) >= 3 and parts[0] == "repos":
+        owner = urllib.parse.unquote(parts[1])
+        name = urllib.parse.unquote(parts[2])
+        if "{" in owner or "}" in owner or "{" in name or "}" in name:
+            return default_repo
+        values = env if env is not None else os.environ
+        remote_repo = default_repo or detect_from_git(cwd=cwd)
+        host = endpoint_host or hostname or values.get("GH_HOST") or (remote_repo.host if remote_repo else None)
+        if host:
+            return RepoRef(normalize_host(host), owner, name)
+    return default_repo
+
+
+def _expand_api_placeholders(endpoint: str, *, repo: RepoRef | None, cwd: str | None) -> str:
+    if repo is None:
+        return endpoint
+    branch = current_branch(cwd=cwd) or ""
+    return (
+        endpoint.replace("{owner}", repo.owner)
+        .replace("{repo}", repo.repo)
+        .replace("{branch}", branch)
+    )
+
+
+def _split_api_endpoint(endpoint: str) -> tuple[str, str, str | None]:
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme and parsed.netloc:
+        return parsed.path, parsed.query, normalize_host(parsed.hostname or parsed.netloc)
+    path, _, query = endpoint.partition("?")
+    return path, query, None
+
+
+def _api_path_parts(path: str) -> list[str]:
+    parts = [urllib.parse.unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) >= 2 and parts[0] == "api" and parts[1] in {"v1", "v3"}:
+        return parts[2:]
+    return parts
+
+
+def _parse_api_args(
+    argv: list[str],
+    *,
+    repo: RepoRef,
+    cwd: str | None,
+    stdin: TextIO | None,
+) -> ApiArgs:
+    endpoint = None
+    method = None
+    hostname = None
+    fields: dict[str, object] = {}
+    input_data: Mapping[str, object] | None = None
+    jq = None
+    template = None
+    silent = False
+    paginate = False
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            if index + 1 >= len(argv):
+                raise ValueError("missing API endpoint")
+            endpoint = argv[index + 1]
+            index += 2
+        elif arg in {"-X", "--method"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            method = argv[index + 1]
+            index += 2
+        elif arg.startswith("--method=") or arg.startswith("-X="):
+            method = arg.split("=", 1)[1]
+            index += 1
+        elif arg == "--hostname":
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --hostname")
+            hostname = argv[index + 1]
+            index += 2
+        elif arg.startswith("--hostname="):
+            hostname = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"-f", "--raw-field", "-F", "--field"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            key, value = _split_api_field(argv[index + 1])
+            fields[key] = _api_field_value(value, typed=arg in {"-F", "--field"}, repo=repo, cwd=cwd, stdin=stdin)
+            index += 2
+        elif arg.startswith("--raw-field=") or arg.startswith("-f="):
+            key, value = _split_api_field(arg.split("=", 1)[1])
+            fields[key] = _api_field_value(value, typed=False, repo=repo, cwd=cwd, stdin=stdin)
+            index += 1
+        elif arg.startswith("--field=") or arg.startswith("-F="):
+            key, value = _split_api_field(arg.split("=", 1)[1])
+            fields[key] = _api_field_value(value, typed=True, repo=repo, cwd=cwd, stdin=stdin)
+            index += 1
+        elif arg == "--input":
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --input")
+            input_data = _read_api_input(argv[index + 1], stdin=stdin)
+            index += 2
+        elif arg.startswith("--input="):
+            input_data = _read_api_input(arg.split("=", 1)[1], stdin=stdin)
+            index += 1
+        elif arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--template", "-t"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            template = argv[index + 1]
+            index += 2
+        elif arg.startswith("--template=") or arg.startswith("-t="):
+            template = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"-H", "--header", "--cache", "-p", "--preview"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            index += 2
+        elif arg.startswith(("--header=", "--cache=", "--preview=", "-H=", "-p=")):
+            index += 1
+        elif arg in {"--silent", "--paginate", "--slurp", "--verbose", "--include", "-i"}:
+            silent = silent or arg == "--silent"
+            paginate = paginate or arg == "--paginate"
+            index += 1
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported Forgejo API flag: {arg}")
+        elif endpoint is None:
+            endpoint = arg
+            index += 1
+        else:
+            raise ValueError(f"unexpected Forgejo API argument: {arg}")
+
+    if endpoint is None:
+        raise ValueError("missing API endpoint")
+    return ApiArgs(
+        endpoint=endpoint,
+        method=method,
+        hostname=hostname,
+        fields=fields,
+        input_data=input_data,
+        jq=jq,
+        template=template,
+        silent=silent,
+        paginate=paginate,
+    )
+
+
+def _split_api_field(raw: str) -> tuple[str, str]:
+    if "=" not in raw:
+        return raw, ""
+    return raw.split("=", 1)
+
+
+def _api_field_value(
+    raw: str,
+    *,
+    typed: bool,
+    repo: RepoRef,
+    cwd: str | None,
+    stdin: TextIO | None,
+) -> object:
+    value = _expand_api_placeholders(raw, repo=repo, cwd=cwd)
+    if typed and value.startswith("@"):
+        return body_from_file(value[1:], stdin=stdin)
+    if not typed:
+        return value
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    if value == "null":
+        return None
+    parsed = _optional_int(value)
+    return parsed if parsed is not None else value
+
+
+def _read_api_input(path_value: str, *, stdin: TextIO | None) -> Mapping[str, object]:
+    raw = body_from_file(path_value, stdin=stdin)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"could not parse API input JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Forgejo API input JSON must be an object")
+    return data
+
+
+def _api_payload(parsed: ApiArgs) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    if parsed.input_data:
+        payload.update(parsed.input_data)
+    if parsed.fields:
+        payload.update(parsed.fields)
+    return payload
+
+
+def _print_api_response(data: object, parsed: ApiArgs, stdout: TextIO) -> None:
+    if parsed.silent:
+        return
+    if parsed.jq:
+        value = _apply_simple_jq(data, parsed.jq)
+        if value is None:
+            return
+        if isinstance(value, str):
+            print(value, file=stdout)
+        else:
+            print(json.dumps(value, sort_keys=True), file=stdout)
+        return
+    print(json.dumps(data, sort_keys=True), file=stdout)
+
+
+def _api_query_values(query: str, fields: Mapping[str, object] | None) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for key, raw_values in urllib.parse.parse_qs(query, keep_blank_values=True).items():
+        if raw_values:
+            values[key] = raw_values[-1]
+    if fields:
+        values.update(fields)
+    return values
+
+
+def _api_int(value: object, *, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        parsed = _optional_int(value)
+        if parsed is not None:
+            return parsed
+    return default
+
+
+def _required_api_string(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Forgejo API create ref requires {key}")
+    return value
+
+
+def _github_branch_from_forgejo(repo: RepoRef, branch: Mapping[str, object], *, detailed: bool = False) -> dict[str, object]:
+    name = _branch_name(branch)
+    sha = _branch_sha(branch) or ""
+    protected = bool(branch.get("protected", False))
+    data: dict[str, object] = {
+        "name": name,
+        "commit": {
+            "sha": sha,
+            "url": f"{repo.api_base_url}/commits/{urllib.parse.quote(sha, safe='')}",
+        },
+        "protected": protected,
+    }
+    if detailed:
+        data["_links"] = {
+            "self": f"{repo.api_base_url}/branches/{urllib.parse.quote(name, safe='')}",
+            "html": f"{repo.web_base_url}/src/branch/{urllib.parse.quote(name, safe='/')}",
+        }
+        data["protection"] = {
+            "enabled": protected,
+            "required_status_checks": {
+                "enforcement_level": "everyone" if branch.get("enable_status_check") else "off",
+                "contexts": branch.get("status_check_contexts") if isinstance(branch.get("status_check_contexts"), list) else [],
+                "checks": [],
+            },
+        }
+        data["protection_url"] = f"{repo.api_base_url}/branches/{urllib.parse.quote(name, safe='')}/protection"
+    return data
+
+
+def _github_ref_for_exact_ref(repo: RepoRef, client: ForgejoClient, ref: str) -> dict[str, object]:
+    branch_name = _branch_name_from_ref(ref)
+    branch = client.get_branch(repo, branch_name)
+    return _github_ref_from_branch(repo, branch, ref=f"refs/heads/{branch_name}")
+
+
+def _github_refs_matching_prefix(repo: RepoRef, client: ForgejoClient, ref_prefix: str) -> list[dict[str, object]]:
+    normalized = ref_prefix.removeprefix("refs/")
+    if normalized == "heads":
+        normalized = "heads/"
+    if not normalized.startswith("heads/"):
+        raise ValueError(f"unsupported Forgejo API ref namespace: {ref_prefix}")
+    full_prefix = f"refs/{normalized}"
+    refs = []
+    for branch in client.list_branches(repo):
+        ref = f"refs/heads/{_branch_name(branch)}"
+        if ref.startswith(full_prefix):
+            refs.append(_github_ref_from_branch(repo, branch, ref=ref))
+    return refs
+
+
+def _create_github_ref(repo: RepoRef, client: ForgejoClient, *, ref: str, sha: str) -> dict[str, object]:
+    branch_name = _branch_name_from_ref(ref)
+    old_branch = _branch_name_for_sha(client.list_branches(repo), sha)
+    if old_branch is None:
+        raise ValueError(
+            "could not create Forgejo branch from requested sha; "
+            "Forgejo branch creation requires a sha that matches an existing branch tip"
+        )
+    created = client.create_branch(repo, new_branch=branch_name, old_branch=old_branch)
+    if not created:
+        created = {"name": branch_name, "commit": {"id": sha}}
+    return _github_ref_from_branch(repo, created, ref=f"refs/heads/{branch_name}", sha=sha)
+
+
+def _github_ref_from_branch(
+    repo: RepoRef,
+    branch: Mapping[str, object],
+    *,
+    ref: str,
+    sha: str | None = None,
+) -> dict[str, object]:
+    resolved_sha = sha or _branch_sha(branch) or ""
+    ref_path = ref.removeprefix("refs/")
+    return {
+        "ref": ref,
+        "node_id": _api_node_id(f"{repo.owner}/{repo.repo}:{ref}"),
+        "url": f"{repo.api_base_url}/git/refs/{urllib.parse.quote(ref_path, safe='/')}",
+        "object": {
+            "type": "commit",
+            "sha": resolved_sha,
+            "url": f"{repo.api_base_url}/git/commits/{urllib.parse.quote(resolved_sha, safe='')}",
+        },
+    }
+
+
+def _branch_name(branch: Mapping[str, object]) -> str:
+    value = branch.get("name")
+    return value if isinstance(value, str) else ""
+
+
+def _branch_sha(branch: Mapping[str, object]) -> str | None:
+    commit = branch.get("commit")
+    if isinstance(commit, dict):
+        value = commit.get("sha") or commit.get("id")
+        return value if isinstance(value, str) and value else None
+    return commit if isinstance(commit, str) and commit else None
+
+
+def _branch_name_for_sha(branches: list[dict[str, Any]], sha: str) -> str | None:
+    for branch in branches:
+        if _branch_sha(branch) == sha:
+            name = _branch_name(branch)
+            if name:
+                return name
+    return None
+
+
+def _branch_name_from_ref(ref: str) -> str:
+    normalized = ref.removeprefix("refs/")
+    if not normalized.startswith("heads/") or normalized == "heads/":
+        raise ValueError(f"unsupported Forgejo API ref: {ref}")
+    return normalized.removeprefix("heads/")
+
+
+def _api_node_id(value: str) -> str:
+    return base64.b64encode(f"Forgejo:{value}".encode("utf-8")).decode("ascii")
 
 
 def _format_pull_text(data: dict[str, object]) -> str:

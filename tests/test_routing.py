@@ -16,14 +16,20 @@ class FakeClient(ForgejoClient):
         self,
         pulls: list[dict] | None = None,
         issues: list[dict] | None = None,
+        branches: list[dict] | None = None,
         statuses: list[dict] | None = None,
     ) -> None:
         super().__init__(None)
         self.pulls = pulls or []
         self.issues = issues or []
+        self.branches = branches or [
+            {"name": "main", "commit": {"id": "abc123"}, "protected": False},
+            {"name": "feature", "commit": {"id": "def456"}, "protected": True},
+        ]
         self.statuses = statuses or []
         self.created: dict | None = None
         self.created_issue: dict | None = None
+        self.created_branch: dict | None = None
         self.comments: list[dict] = []
         self.diff_text = "diff --git a/README.md b/README.md\n"
         self.pull_files = [{"filename": "README.md"}, {"filename": "generated/output.txt"}]
@@ -89,6 +95,26 @@ class FakeClient(ForgejoClient):
 
     def get_repo(self, repo: RepoRef):  # type: ignore[no-untyped-def]
         return self.repo_view
+
+    def list_branches(self, repo: RepoRef, *, limit: int | None = None, page: int | None = None):  # type: ignore[no-untyped-def]
+        if limit is None:
+            return self.branches
+        page = page or 1
+        start = (page - 1) * limit
+        return self.branches[start : start + limit]
+
+    def get_branch(self, repo: RepoRef, branch: str):  # type: ignore[no-untyped-def]
+        for item in self.branches:
+            if item.get("name") == branch:
+                return item
+        raise ValueError("not found")
+
+    def create_branch(self, repo: RepoRef, *, new_branch: str, old_branch: str):  # type: ignore[no-untyped-def]
+        base = self.get_branch(repo, old_branch)
+        created = {"name": new_branch, "commit": base.get("commit", {}), "protected": False}
+        self.created_branch = {"repo": repo, "new_branch": new_branch, "old_branch": old_branch}
+        self.branches.append(created)
+        return created
 
     def list_issues(self, repo: RepoRef, **kwargs):  # type: ignore[no-untyped-def]
         return self.issues
@@ -163,6 +189,25 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(decision.kind, "forgejo")
 
+    def test_routes_supported_branch_api_for_allowlisted_hostname(self) -> None:
+        decision = decide_route(
+            ["api", "--hostname", "git.example.com", "repos/owner/repo/branches"],
+            config=Config(hosts=("git.example.com",)),
+            env={},
+        )
+        self.assertEqual(decision.kind, "forgejo")
+        self.assertIsNotNone(decision.repo)
+        assert decision.repo is not None
+        self.assertEqual((decision.repo.host, decision.repo.owner, decision.repo.repo), ("git.example.com", "owner", "repo"))
+
+    def test_delegates_unsupported_api_endpoint(self) -> None:
+        decision = decide_route(
+            ["api", "--hostname", "git.example.com", "repos/owner/repo/releases"],
+            config=Config(hosts=("git.example.com",)),
+            env={},
+        )
+        self.assertEqual(decision.kind, "delegate")
+
     def test_delegates_non_allowlisted_host(self) -> None:
         decision = decide_route(
             ["pr", "view", "-R", "github.com/owner/repo"],
@@ -211,6 +256,82 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(client.created["title"], "Ship it")
         self.assertTrue(client.created["draft"])
         self.assertEqual(json.loads(out.getvalue()), {"number": 7, "title": "Ship it", "url": "https://git.example.com/owner/repo/pulls/7"})
+
+    def test_api_branch_list_outputs_github_shape(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo(
+            ["api", "repos/owner/repo/branches?per_page=100"],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(branches=[{"name": "main", "commit": {"id": "abc123"}, "protected": False}]),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            [
+                {
+                    "name": "main",
+                    "commit": {
+                        "sha": "abc123",
+                        "url": "https://git.example.com/api/v1/repos/owner/repo/commits/abc123",
+                    },
+                    "protected": False,
+                }
+            ],
+        )
+
+    def test_api_matching_refs_outputs_github_refs(self) -> None:
+        out = io.StringIO()
+        code = run_forgejo(
+            ["api", "repos/owner/repo/git/matching-refs/heads/feat"],
+            RepoRef("git.example.com", "owner", "repo"),
+            FakeClient(
+                branches=[
+                    {"name": "main", "commit": {"id": "abc123"}},
+                    {"name": "feature", "commit": {"id": "def456"}},
+                ]
+            ),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out.getvalue())
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["ref"], "refs/heads/feature")
+        self.assertEqual(data[0]["object"]["sha"], "def456")
+
+    def test_api_create_ref_creates_branch_from_matching_sha(self) -> None:
+        client = FakeClient(branches=[{"name": "main", "commit": {"id": "abc123"}}])
+        out = io.StringIO()
+        code = run_forgejo(
+            [
+                "api",
+                "repos/owner/repo/git/refs",
+                "--method",
+                "POST",
+                "-f",
+                "ref=refs/heads/new-feature",
+                "-f",
+                "sha=abc123",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            client,
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            client.created_branch,
+            {
+                "repo": RepoRef("git.example.com", "owner", "repo"),
+                "new_branch": "new-feature",
+                "old_branch": "main",
+            },
+        )
+        data = json.loads(out.getvalue())
+        self.assertEqual(data["ref"], "refs/heads/new-feature")
+        self.assertEqual(data["object"]["sha"], "abc123")
 
     def test_pr_list_outputs_json_array(self) -> None:
         out = io.StringIO()

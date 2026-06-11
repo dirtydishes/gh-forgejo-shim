@@ -217,6 +217,17 @@ Supported repository commands:
 gh repo view
 ```
 
+Supported API branch/ref endpoints:
+
+```sh
+gh api repos/{owner}/{repo}/branches
+gh api repos/{owner}/{repo}/branches/{branch}
+gh api repos/{owner}/{repo}/git/ref/heads/{branch}
+gh api repos/{owner}/{repo}/git/refs/heads
+gh api repos/{owner}/{repo}/git/matching-refs/heads/{prefix}
+gh api --method POST repos/{owner}/{repo}/git/refs -f ref=refs/heads/new-branch -f sha=<branch-tip-sha>
+```
+
 Unsupported commands and unsupported flags fail explicitly when routed, or delegate to the real `gh` when they are outside the shimmed Forgejo surface.
 
 ## Pull Request Support
@@ -249,6 +260,12 @@ GitHub-only metadata flags such as reviewers, labels, assignees, projects, miles
 `gh pr comment` supports pull number or branch resolution, `--repo`, `--body`, `--body-file`, and `--web`.
 
 `gh pr checkout` supports pull number or branch resolution, `--repo`, `--branch`, `--detach`, `--force`, and `--recurse-submodules`.
+
+## Branch API Support
+
+Some GitHub-oriented GUIs use `gh api` to populate branch pickers or create remote refs. In allowlisted Forgejo repositories, the shim now maps those common GitHub REST shapes onto Forgejo branch data and returns GitHub-shaped JSON with branch names, commit SHAs, and `refs/heads/...` objects.
+
+Forgejo creates branches from an existing branch name, while GitHub's create-reference endpoint creates a ref from a commit SHA. For `POST repos/{owner}/{repo}/git/refs`, the shim creates the Forgejo branch only when the requested SHA matches an existing branch tip. If the SHA is not already the tip of a Forgejo branch, use normal Git push/checkout workflows so the commit exists on the server first.
 
 ## Checks And Statuses
 
