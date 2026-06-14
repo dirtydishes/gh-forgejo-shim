@@ -171,6 +171,14 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(decision.kind, "delegate")
 
+    def test_delegates_github_even_when_accidentally_allowlisted(self) -> None:
+        decision = decide_route(
+            ["pr", "view", "-R", "github.com/owner/repo"],
+            config=Config(hosts=("github.com", "git.example.com")),
+            env={},
+        )
+        self.assertEqual(decision.kind, "delegate")
+
     def test_routes_supported_pr_command_for_allowlisted_host(self) -> None:
         decision = decide_route(
             ["pr", "view", "-R", "git.example.com/owner/repo"],
@@ -814,6 +822,110 @@ class RoutingTests(unittest.TestCase):
             )
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue().strip(), "https://git.example.com/owner/repo/pulls/12")
+
+    def test_pr_view_supports_simple_template_url_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            self._git(cwd, "init")
+            self._git(cwd, "checkout", "-b", "feature")
+            out = io.StringIO()
+            code = run_forgejo_pr(
+                [
+                    "pr",
+                    "view",
+                    "--json",
+                    "number,title,url",
+                    "--template",
+                    "{{.url}}",
+                ],
+                RepoRef("git.example.com", "owner", "repo"),
+                FakeClient(
+                    [
+                        {
+                            "number": 12,
+                            "title": "Ship it",
+                            "state": "open",
+                            "html_url": "https://git.example.com/owner/repo/pulls/12",
+                            "head": {"ref": "feature"},
+                        }
+                    ]
+                ),
+                cwd=str(cwd),
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "https://git.example.com/owner/repo/pulls/12")
+
+    def test_pr_status_supports_nested_template_url_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            self._git(cwd, "init")
+            self._git(cwd, "checkout", "-b", "feature")
+            out = io.StringIO()
+            code = run_forgejo_pr(
+                [
+                    "pr",
+                    "status",
+                    "--json",
+                    "number,title,url",
+                    "--template",
+                    "{{.currentBranch.url}}",
+                ],
+                RepoRef("git.example.com", "owner", "repo"),
+                FakeClient(
+                    [
+                        {
+                            "number": 12,
+                            "title": "Ship it",
+                            "state": "open",
+                            "html_url": "https://git.example.com/owner/repo/pulls/12",
+                            "head": {"ref": "feature"},
+                        }
+                    ]
+                ),
+                cwd=str(cwd),
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "https://git.example.com/owner/repo/pulls/12")
+
+    def test_pr_status_supports_jq_value_template_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            self._git(cwd, "init")
+            self._git(cwd, "checkout", "-b", "feature")
+            out = io.StringIO()
+            code = run_forgejo_pr(
+                [
+                    "pr",
+                    "status",
+                    "--json",
+                    "number,title,url",
+                    "--jq",
+                    ".currentBranch.url",
+                    "--template",
+                    "{{.}}",
+                ],
+                RepoRef("git.example.com", "owner", "repo"),
+                FakeClient(
+                    [
+                        {
+                            "number": 12,
+                            "title": "Ship it",
+                            "state": "open",
+                            "html_url": "https://git.example.com/owner/repo/pulls/12",
+                            "head": {"ref": "feature"},
+                        }
+                    ]
+                ),
+                cwd=str(cwd),
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "https://git.example.com/owner/repo/pulls/12")
 
     def _git(self, cwd: Path, *args: str) -> None:
         import subprocess

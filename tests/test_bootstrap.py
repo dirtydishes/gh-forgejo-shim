@@ -62,6 +62,26 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("git remote set-head origin -a", output)
         self.assertIn("git branch --set-upstream-to=origin/feature feature", output)
 
+    def test_bootstrap_does_not_allowlist_github_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo", origin_url="https://github.com/owner/repo.git")
+            config_path = root / "config.toml"
+
+            result = run_bootstrap(
+                cwd=str(repo),
+                env={"PATH": "", "HOME": str(root)},
+                bin_dir=root / "bin",
+                config_path=config_path,
+                home=root,
+            )
+
+            output = format_bootstrap(result)
+
+        self.assertEqual(load_config(config_path, env={}).hosts, ())
+        self.assertIn("leaving github.com out of the Forgejo allowlist", output)
+        self.assertIn("Forgejo auth is not needed", output)
+
     def test_bootstrap_suggests_origin_when_remote_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -86,6 +106,7 @@ class BootstrapTests(unittest.TestCase):
         add_forgejo_remote: bool = False,
         set_origin_head: bool = True,
         set_upstream: bool = True,
+        origin_url: str = "https://git.example.com/owner/repo.git",
     ) -> Path:
         path.mkdir(parents=True)
         self._git(path, "init", "-b", "feature")
@@ -96,7 +117,7 @@ class BootstrapTests(unittest.TestCase):
         self._git(path, "commit", "-m", "initial")
 
         if add_origin:
-            self._git(path, "remote", "add", "origin", "https://git.example.com/owner/repo.git")
+            self._git(path, "remote", "add", "origin", origin_url)
             self._git(path, "update-ref", "refs/remotes/origin/feature", "HEAD")
             if set_origin_head:
                 self._git(path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")

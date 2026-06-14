@@ -8,6 +8,7 @@ from typing import Mapping
 
 CONFIG_DIR = Path.home() / ".config" / "gh-forgejo-shim"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+KNOWN_GITHUB_HOSTS = ("github.com", "www.github.com")
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,8 @@ class Config:
         if not host:
             return False
         normalized = normalize_host(host)
+        if is_known_github_host(normalized):
+            return False
         return normalized in {normalize_host(item) for item in self.hosts}
 
 
@@ -35,6 +38,12 @@ def normalize_host(host: str) -> str:
         value = value.split("://", 1)[1]
     value = value.split("/", 1)[0]
     return value.lower()
+
+
+def is_known_github_host(host: str | None) -> bool:
+    if not host:
+        return False
+    return normalize_host(host) in KNOWN_GITHUB_HOSTS
 
 
 def load_config(
@@ -50,7 +59,11 @@ def load_config(
         if isinstance(parsed, dict):
             data = parsed
 
-    hosts = tuple(normalize_host(item) for item in _string_list(data.get("hosts")))
+    hosts = tuple(
+        normalized
+        for item in _string_list(data.get("hosts"))
+        if not is_known_github_host(normalized := normalize_host(item))
+    )
 
     paths_data = data.get("paths")
     gh = None
@@ -61,7 +74,11 @@ def load_config(
 
     values = env if env is not None else os.environ
     if "FJ_SHIM_HOSTS" in values:
-        hosts = tuple(normalize_host(item) for item in split_hosts(values.get("FJ_SHIM_HOSTS", "")))
+        hosts = tuple(
+            normalized
+            for item in split_hosts(values.get("FJ_SHIM_HOSTS", ""))
+            if not is_known_github_host(normalized := normalize_host(item))
+        )
     gh = _optional_string(values.get("FJ_SHIM_REAL_GH")) or gh
     fj = _optional_string(values.get("FJ_SHIM_REAL_FJ")) or fj
 
@@ -75,7 +92,11 @@ def split_hosts(value: str) -> list[str]:
 
 def add_host(host: str, path: Path | None = None) -> Config:
     config = load_config(path)
-    hosts = sorted(set(config.hosts) | {normalize_host(host)})
+    normalized = normalize_host(host)
+    hosts = set(config.hosts)
+    if not is_known_github_host(normalized):
+        hosts.add(normalized)
+    hosts = sorted(hosts)
     updated = Config(hosts=tuple(hosts), paths=config.paths, path=config.path)
     write_config(updated)
     return updated

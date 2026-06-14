@@ -57,6 +57,28 @@ class ProgramDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(found, str(configured))
 
+    def test_configured_managed_gh_shim_does_not_win(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            configured_dir = root / "configured"
+            configured = configured_dir / "gh"
+            configured_dir.mkdir(parents=True)
+            configured.write_text(
+                "#!/bin/sh\n# managed by gh-forgejo-shim\nexec python -m gh_forgejo_shim gh \"$@\"\n",
+                encoding="utf-8",
+            )
+            configured.chmod(0o755)
+            fallback = self._fake_executable(root / "fallback", "gh")
+
+            found = find_program(
+                "gh",
+                configured=str(configured),
+                env={"PATH": ""},
+                fallback_dirs=(str(fallback.parent),),
+            )
+
+        self.assertEqual(found, str(fallback))
+
     def _fake_executable(self, root: Path, name: str) -> Path:
         root.mkdir(parents=True, exist_ok=True)
         path = root / name

@@ -80,6 +80,11 @@ If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
 gh-forgejo-shim config add-host git.example.com
 ```
 
+Known GitHub hosts such as `github.com` are ignored even if they appear in the
+allowlist. This keeps normal GitHub repositories delegated to the real GitHub
+CLI if `bootstrap` is accidentally run from a GitHub checkout or an old config
+contains `github.com`.
+
 Install the opt-in wrapper:
 
 ```sh

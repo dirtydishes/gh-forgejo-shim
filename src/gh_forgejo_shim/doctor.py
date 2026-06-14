@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .auth import discover_fj_token
-from .config import Config, load_config
+from .config import Config, is_known_github_host, load_config
 from .external import find_program
 from .gui_path import current_launchd_path, path_contains_dir
 from .repo import detect_from_git
@@ -80,7 +80,7 @@ def run_checks(
                     f"{repo.host} is allowlisted for {repo.owner}/{repo.repo}",
                 )
             )
-        elif repo and _is_known_github_host(repo.host):
+        elif repo and is_known_github_host(repo.host):
             checks.append(
                 Check(
                     "current repo host",
@@ -163,7 +163,3 @@ def _same_file(left: Path, right: Path) -> bool:
         return left.samefile(right)
     except OSError:
         return left.resolve() == right.resolve()
-
-
-def _is_known_github_host(host: str) -> bool:
-    return host.lower() in {"github.com", "www.github.com"}

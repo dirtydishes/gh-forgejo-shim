@@ -31,8 +31,12 @@ def find_program(
     if configured:
         path = Path(configured).expanduser()
         if path.exists() and os.access(path, os.X_OK):
-            return str(path)
-        return None
+            if name == "gh" and is_managed_shim(path):
+                configured = None
+            else:
+                return str(path)
+        if configured:
+            return None
 
     values = env if env is not None else os.environ
     for directory in _candidate_dirs(values, fallback_dirs):
