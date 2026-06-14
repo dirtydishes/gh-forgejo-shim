@@ -28,12 +28,13 @@ class RepoRef:
 
 
 class ForgejoClient:
-    def __init__(self, token: str | None = None, *, timeout: float = 30) -> None:
+    def __init__(self, token: str | None = None, *, timeout: float = 30, base_url: str | None = None) -> None:
         self.token = token
         self.timeout = timeout
+        self.base_url = base_url.rstrip("/") if base_url else None
 
     def get_current_user(self, host: str) -> dict[str, Any]:
-        return self._request_json("GET", f"https://{_host_for_url(host)}/api/v1/user", None)
+        return self._request_json("GET", f"{self._api_root(host)}/user", None)
 
     def create_pull(
         self,
@@ -52,23 +53,23 @@ class ForgejoClient:
             "head": head,
             "draft": draft,
         }
-        return self._request_json("POST", f"{repo.api_base_url}/pulls", payload)
+        return self._request_json("POST", f"{self._repo_api_base_url(repo)}/pulls", payload)
 
     def get_pull(self, repo: RepoRef, number: int) -> dict[str, Any]:
-        return self._request_json("GET", f"{repo.api_base_url}/pulls/{number}", None)
+        return self._request_json("GET", f"{self._repo_api_base_url(repo)}/pulls/{number}", None)
 
     def get_pull_diff(self, repo: RepoRef, number: int, *, patch: bool = False) -> str:
         diff_type = "patch" if patch else "diff"
-        return self._request_text("GET", f"{repo.api_base_url}/pulls/{number}.{diff_type}", None)
+        return self._request_text("GET", f"{self._repo_api_base_url(repo)}/pulls/{number}.{diff_type}", None)
 
     def list_pull_files(self, repo: RepoRef, number: int) -> list[dict[str, Any]]:
-        files = self._request_json("GET", f"{repo.api_base_url}/pulls/{number}/files", None)
+        files = self._request_json("GET", f"{self._repo_api_base_url(repo)}/pulls/{number}/files", None)
         if not isinstance(files, list):
             return []
         return [item for item in files if isinstance(item, dict)]
 
     def list_commit_statuses(self, repo: RepoRef, sha: str) -> list[dict[str, Any]]:
-        statuses = self._request_json("GET", f"{repo.api_base_url}/statuses/{_quote(sha)}", None)
+        statuses = self._request_json("GET", f"{self._repo_api_base_url(repo)}/statuses/{_quote(sha)}", None)
         if isinstance(statuses, dict) and isinstance(statuses.get("statuses"), list):
             statuses = statuses["statuses"]
         if not isinstance(statuses, list):
@@ -76,7 +77,7 @@ class ForgejoClient:
         return [item for item in statuses if isinstance(item, dict)]
 
     def get_repo(self, repo: RepoRef) -> dict[str, Any]:
-        return self._request_json("GET", repo.api_base_url, None)
+        return self._request_json("GET", self._repo_api_base_url(repo), None)
 
     def list_issues(
         self,
@@ -107,16 +108,16 @@ class ForgejoClient:
         if limit is not None:
             params["limit"] = limit
         query_string = urllib.parse.urlencode(params)
-        issues = self._request_json("GET", f"{repo.api_base_url}/issues?{query_string}", None)
+        issues = self._request_json("GET", f"{self._repo_api_base_url(repo)}/issues?{query_string}", None)
         if not isinstance(issues, list):
             return []
         return [item for item in issues if isinstance(item, dict)]
 
     def get_issue(self, repo: RepoRef, number: int) -> dict[str, Any]:
-        return self._request_json("GET", f"{repo.api_base_url}/issues/{number}", None)
+        return self._request_json("GET", f"{self._repo_api_base_url(repo)}/issues/{number}", None)
 
     def list_labels(self, repo: RepoRef) -> list[dict[str, Any]]:
-        labels = self._request_json("GET", f"{repo.api_base_url}/labels", None)
+        labels = self._request_json("GET", f"{self._repo_api_base_url(repo)}/labels", None)
         if not isinstance(labels, list):
             return []
         return [item for item in labels if isinstance(item, dict)]
@@ -141,10 +142,10 @@ class ForgejoClient:
             payload["labels"] = list(labels)
         if milestone is not None:
             payload["milestone"] = milestone
-        return self._request_json("POST", f"{repo.api_base_url}/issues", payload)
+        return self._request_json("POST", f"{self._repo_api_base_url(repo)}/issues", payload)
 
     def create_issue_comment(self, repo: RepoRef, number: int, *, body: str) -> dict[str, Any]:
-        return self._request_json("POST", f"{repo.api_base_url}/issues/{number}/comments", {"body": body})
+        return self._request_json("POST", f"{self._repo_api_base_url(repo)}/issues/{number}/comments", {"body": body})
 
     def list_pulls(
         self,
@@ -154,7 +155,7 @@ class ForgejoClient:
         head: str | None = None,
     ) -> list[dict[str, Any]]:
         query = urllib.parse.urlencode({"state": state})
-        pulls = self._request_json("GET", f"{repo.api_base_url}/pulls?{query}", None)
+        pulls = self._request_json("GET", f"{self._repo_api_base_url(repo)}/pulls?{query}", None)
         if not isinstance(pulls, list):
             return []
         if head is None:
@@ -209,12 +210,23 @@ class ForgejoClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 response_data = response.read()
         except urllib.error.HTTPError as exc:
-            message = exc.read().decode("utf-8", errors="replace")
+            try:
+                message = exc.read().decode("utf-8", errors="replace")
+            finally:
+                exc.close()
             raise ForgejoError(f"Forgejo API returned HTTP {exc.code}: {message}") from exc
         except urllib.error.URLError as exc:
             raise ForgejoError(f"Forgejo API request failed: {exc.reason}") from exc
 
         return response_data
+
+    def _api_root(self, host: str) -> str:
+        if self.base_url:
+            return f"{self.base_url}/api/v1"
+        return f"https://{_host_for_url(host)}/api/v1"
+
+    def _repo_api_base_url(self, repo: RepoRef) -> str:
+        return f"{self._api_root(repo.host)}/repos/{_quote(repo.owner)}/{_quote(repo.repo)}"
 
 
 def _quote(value: str) -> str:
