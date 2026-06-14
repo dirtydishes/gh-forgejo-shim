@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .auth import discover_fj_token
-from .config import add_host, load_config
+from .config import add_host, is_known_github_host, load_config
 from .external import git_output
 from .repo import RepoRef, current_branch, detect_from_git, parse_repo_spec
 from .shim import install_shim, is_managed_shim, shim_path
@@ -49,13 +49,22 @@ def run_bootstrap(
 
     checks: list[BootstrapCheck] = []
     config = load_config(config_path, env=values)
-    if repo:
+    repo_is_github = repo is not None and is_known_github_host(repo.host)
+    if repo and not repo_is_github:
         config = add_host(repo.host, config_path)
         checks.append(
             BootstrapCheck(
                 "repository",
                 True,
                 f"detected {repo.host}/{repo.owner}/{repo.repo} and allowlisted {repo.host}",
+            )
+        )
+    elif repo:
+        checks.append(
+            BootstrapCheck(
+                "repository",
+                True,
+                f"detected GitHub repository {repo.host}/{repo.owner}/{repo.repo}; leaving {repo.host} out of the Forgejo allowlist",
             )
         )
     else:
@@ -89,7 +98,10 @@ def run_bootstrap(
         checks.append(BootstrapCheck("shim", True, f"installed {installed}"))
 
     checks.append(_path_check(target_bin_dir, target_shim, values))
-    checks.append(_auth_check(repo, values, home=home))
+    if repo_is_github:
+        checks.append(BootstrapCheck("auth", True, "Forgejo auth is not needed for GitHub delegation"))
+    else:
+        checks.append(_auth_check(repo, values, home=home))
     checks.extend(_origin_checks(repo, cwd=cwd))
 
     return BootstrapResult(repo=repo, config_path=config.path, shim=installed, checks=tuple(checks))

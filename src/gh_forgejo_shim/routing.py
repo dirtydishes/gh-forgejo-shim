@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import sys
 import urllib.parse
 import webbrowser
@@ -292,7 +293,7 @@ def _run_list(
         for pull in pulls
     ]
     if parsed.json_fields:
-        _print_json_or_jq_list(normalized, parsed.jq, stdout)
+        _print_json_or_jq_list(normalized, parsed.jq, stdout, template=parsed.template)
     else:
         for pull in normalized:
             print(_format_pull_list_item(pull), file=stdout)
@@ -486,7 +487,7 @@ def _run_view(
 
     if pull is None:
         if parsed.json_fields:
-            _print_json_or_jq({}, parsed.jq, stdout)
+            _print_json_or_jq({}, parsed.jq, stdout, template=parsed.template)
         return 0
 
     normalized = normalize_pull(_enrich_pull_statuses(repo, client, pull, parsed.json_fields))
@@ -497,7 +498,7 @@ def _run_view(
             print(url, file=stdout)
         return 0
     if parsed.json_fields:
-        _print_json_or_jq(filter_fields(normalized, parsed.json_fields), parsed.jq, stdout)
+        _print_json_or_jq(filter_fields(normalized, parsed.json_fields), parsed.jq, stdout, template=parsed.template)
     else:
         print(_format_pull_text(normalized), file=stdout)
     return 0
@@ -522,7 +523,7 @@ def _run_repo_view(
             print(url, file=stdout)
         return 0
     if parsed.json_fields:
-        _print_json_or_jq(filter_repo_fields(data, parsed.json_fields), parsed.jq, stdout)
+        _print_json_or_jq(filter_repo_fields(data, parsed.json_fields), parsed.jq, stdout, template=parsed.template)
     else:
         print(data.get("url") or target_repo.web_base_url, file=stdout)
     return 0
@@ -545,12 +546,12 @@ def _run_status(
 
     if pull is None:
         if parsed.json_fields:
-            _print_json_or_jq(status_for_current_branch(None, parsed.json_fields), parsed.jq, stdout)
+            _print_json_or_jq(status_for_current_branch(None, parsed.json_fields), parsed.jq, stdout, template=parsed.template)
         return 0
 
     if parsed.json_fields:
         enriched = _enrich_pull_statuses(repo, client, pull, parsed.json_fields)
-        _print_json_or_jq(status_for_current_branch(enriched, parsed.json_fields), parsed.jq, stdout)
+        _print_json_or_jq(status_for_current_branch(enriched, parsed.json_fields), parsed.jq, stdout, template=parsed.template)
     else:
         normalized = normalize_pull(pull)
         print(_format_pull_text(normalized), file=stdout)
@@ -589,7 +590,7 @@ def _run_issue_list(
 
     normalized = [filter_issue_fields(normalize_issue(issue), parsed.json_fields) for issue in issues]
     if parsed.json_fields:
-        _print_json_or_jq_list(normalized, parsed.jq, stdout)
+        _print_json_or_jq_list(normalized, parsed.jq, stdout, template=parsed.template)
     else:
         for issue in normalized:
             print(_format_issue_list_item(issue), file=stdout)
@@ -617,7 +618,7 @@ def _run_issue_view(
         print(url, file=stdout)
         return 0
     if parsed.json_fields:
-        _print_json_or_jq(filter_issue_fields(normalized, parsed.json_fields), parsed.jq, stdout)
+        _print_json_or_jq(filter_issue_fields(normalized, parsed.json_fields), parsed.jq, stdout, template=parsed.template)
     else:
         print(_format_issue_text(normalized), file=stdout)
     return 0
@@ -1511,30 +1512,49 @@ def _format_check_item(data: dict[str, object]) -> str:
     return f"{bucket}\t{name}\t{description}".rstrip()
 
 
-def _print_json_or_jq(data: dict[str, object], jq: str | None, stdout: TextIO) -> None:
-    if jq:
-        value = _apply_simple_jq(data, jq)
-        if value is None:
-            return
-        if isinstance(value, str):
-            print(value, file=stdout)
-        else:
-            print(json.dumps(value, sort_keys=True), file=stdout)
-        return
-    print(json.dumps(data, sort_keys=True), file=stdout)
+_TEMPLATE_FIELD_RE = re.compile(r"{{\s*\.([A-Za-z0-9_][A-Za-z0-9_.]*)?\s*}}")
 
 
-def _print_json_or_jq_list(data: list[dict[str, object]], jq: str | None, stdout: TextIO) -> None:
+def _print_json_or_jq(
+    data: dict[str, object],
+    jq: str | None,
+    stdout: TextIO,
+    *,
+    template: str | None = None,
+) -> None:
+    value: object = data
     if jq:
-        value = _apply_simple_jq(data, jq)
+        value = _apply_simple_jq(value, jq)
         if value is None:
             return
-        if isinstance(value, str):
-            print(value, file=stdout)
-        else:
-            print(json.dumps(value, sort_keys=True), file=stdout)
+    if template:
+        stdout.write(_render_simple_template(value, template))
         return
-    print(json.dumps(data, sort_keys=True), file=stdout)
+    if isinstance(value, str):
+        print(value, file=stdout)
+    else:
+        print(json.dumps(value, sort_keys=True), file=stdout)
+
+
+def _print_json_or_jq_list(
+    data: list[dict[str, object]],
+    jq: str | None,
+    stdout: TextIO,
+    *,
+    template: str | None = None,
+) -> None:
+    value: object = data
+    if jq:
+        value = _apply_simple_jq(value, jq)
+        if value is None:
+            return
+    if template:
+        stdout.write(_render_simple_template(value, template))
+        return
+    if isinstance(value, str):
+        print(value, file=stdout)
+    else:
+        print(json.dumps(value, sort_keys=True), file=stdout)
 
 
 def _apply_simple_jq(data: object, expression: str) -> object:
@@ -1554,6 +1574,35 @@ def _apply_simple_jq(data: object, expression: str) -> object:
             key = part[:-2]
             value = [item.get(key) for item in value if isinstance(item, dict)]
         elif isinstance(value, dict):
+            value = value.get(part)
+        else:
+            return None
+    return value
+
+
+def _render_simple_template(data: object, template: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        query = match.group(1)
+        value = data if not query else _lookup_dotted(data, query)
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        return json.dumps(value, sort_keys=True)
+
+    return _TEMPLATE_FIELD_RE.sub(replace, template)
+
+
+def _lookup_dotted(data: object, query: str) -> object:
+    value = data
+    for part in query.split("."):
+        if not part:
+            continue
+        if isinstance(value, dict):
             value = value.get(part)
         else:
             return None

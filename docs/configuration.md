@@ -42,6 +42,10 @@ gh-forgejo-shim config list
 
 The shim routes Forgejo commands only when the detected repository host is in the allowlist.
 
+Known GitHub hosts such as `github.com` are ignored even if they appear in the
+allowlist. This preserves native GitHub CLI behavior for GitHub repositories and
+prevents a stale or accidental `github.com` entry from being treated as Forgejo.
+
 ## Environment Overrides
 
 `FJ_SHIM_HOSTS` replaces the configured host list for the current process:
