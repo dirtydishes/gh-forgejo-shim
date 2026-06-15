@@ -42,7 +42,12 @@ class BootstrapTests(unittest.TestCase):
     def test_bootstrap_prints_exact_repairs_for_repo_shape_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo = self._git_repo(root / "repo", set_origin_head=False, set_upstream=False)
+            repo = self._git_repo(
+                root / "repo",
+                set_origin_head=False,
+                set_upstream=False,
+                set_codex_upstream=False,
+            )
             bin_dir = root / "bin"
 
             result = run_bootstrap(
@@ -61,6 +66,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("git fetch origin", output)
         self.assertIn("git remote set-head origin -a", output)
         self.assertIn("git branch --set-upstream-to=origin/feature feature", output)
+        self.assertIn("git remote add upstream https://git.example.com/owner/repo.git", output)
 
     def test_bootstrap_does_not_allowlist_github_repo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -106,6 +112,7 @@ class BootstrapTests(unittest.TestCase):
         add_forgejo_remote: bool = False,
         set_origin_head: bool = True,
         set_upstream: bool = True,
+        set_codex_upstream: bool = True,
         origin_url: str = "https://git.example.com/owner/repo.git",
     ) -> Path:
         path.mkdir(parents=True)
@@ -123,6 +130,8 @@ class BootstrapTests(unittest.TestCase):
                 self._git(path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
             if set_upstream:
                 self._git(path, "branch", "--set-upstream-to=origin/feature", "feature")
+            if set_codex_upstream:
+                self._git(path, "remote", "add", "upstream", origin_url)
         if add_forgejo_remote:
             self._git(path, "remote", "add", "forgejo", "https://git.example.com/owner/repo.git")
         return path

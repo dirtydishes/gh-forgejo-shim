@@ -39,7 +39,7 @@ gfj bootstrap
 - Installs the user-local `gh` wrapper.
 - Checks whether `PATH` resolves `gh` to the shim.
 - Checks whether Forgejo auth can be found from shim storage, env, or supported CLI config files.
-- Checks `origin`, `origin/HEAD`, and current-branch upstream tracking.
+- Checks `origin`, `origin/HEAD`, current-branch upstream tracking, and Codex.app's `remote.upstream.url` PR-status probe.
 - Prints repair commands for anything it cannot fix automatically.
 
 The long command name works the same way:
@@ -61,14 +61,15 @@ gfj bootstrap --force
 3. Run `gfj bootstrap`.
 4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
 5. Copy and run any repair commands `bootstrap` prints.
-6. On macOS, run `gfj install-gui-path` if your coding tool is launched from Finder, Dock, Spotlight, Raycast, Alfred, or another GUI launcher.
-7. Confirm the setup:
+6. Run `gfj repair-codex-remote` if `bootstrap` or `doctor` says `remote.upstream.url` is missing.
+7. On macOS, run `gfj install-gui-path` if your coding tool is launched from Finder, Dock, Spotlight, Raycast, Alfred, or another GUI launcher.
+8. Confirm the setup:
 
 ```sh
 gfj doctor
 ```
 
-8. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, pull request, issue, and check workflows.
+9. Restart the GUI tool, open the Forgejo repository, and use the normal repository, branch, commit, push, pull request, issue, and check workflows.
 
 For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
@@ -153,9 +154,23 @@ For best compatibility, each Forgejo checkout should have:
 ```text
 origin.url      https://git.example.com/owner/repo.git
 origin.pushurl  git@ssh.example.com:owner/repo.git
+upstream.url    https://git.example.com/owner/repo.git
+upstream.pushurl git@ssh.example.com:owner/repo.git
 origin/HEAD     refs/remotes/origin/main
 branch upstream origin/current-branch
 ```
+
+Recent Codex.app builds may run `git config --get remote.upstream.url` before
+showing PR status. In a non-fork checkout, it is safe to add `upstream` as an
+alias of `origin`:
+
+```sh
+gfj repair-codex-remote
+```
+
+The command only adds `upstream` when it is missing. When `origin` has a
+separate push URL, the command copies that push URL to the alias. If your
+repository already has a real fork upstream, the shim leaves it alone.
 
 If your checkout already has a Forgejo remote under another name, keep it and add `origin` as a compatibility alias:
 
@@ -177,6 +192,7 @@ Useful checks:
 
 ```sh
 git config --get remote.origin.url
+git config --get remote.upstream.url
 git symbolic-ref --quiet refs/remotes/origin/HEAD
 git rev-parse --abbrev-ref --symbolic-full-name @{u}
 git status --short --branch

@@ -8,6 +8,7 @@ from typing import Mapping
 
 from .auth import discover_fj_token
 from .config import add_host, is_known_github_host, load_config
+from .codex_remote import check_codex_upstream_remote
 from .external import git_output
 from .repo import RepoRef, current_branch, detect_from_git, parse_repo_spec
 from .shim import install_shim, is_managed_shim, shim_path
@@ -216,6 +217,16 @@ def _origin_checks(repo: RepoRef | None, *, cwd: str | None) -> tuple[BootstrapC
         )
     else:
         checks.append(BootstrapCheck("branch upstream", False, "not on a named branch"))
+
+    codex_remote = check_codex_upstream_remote(cwd=cwd)
+    checks.append(
+        BootstrapCheck(
+            "Codex upstream remote",
+            codex_remote.ok,
+            codex_remote.detail,
+            codex_remote.repair_commands,
+        )
+    )
 
     return tuple(checks)
 

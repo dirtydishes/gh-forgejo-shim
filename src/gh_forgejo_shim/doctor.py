@@ -8,6 +8,7 @@ from typing import Mapping, Sequence
 
 from .auth import discover_fj_token
 from .config import Config, is_known_github_host, load_config
+from .codex_remote import check_codex_upstream_remote
 from .external import find_program
 from .gui_path import current_launchd_path, path_contains_dir
 from .repo import detect_from_git
@@ -96,6 +97,8 @@ def run_checks(
                     f"{repo.host} is not allowlisted; run gh-forgejo-shim config add-host {repo.host}",
                 )
             )
+        codex_remote = check_codex_upstream_remote(cwd=cwd)
+        checks.append(Check("Codex upstream remote", codex_remote.ok, codex_remote.detail))
 
     if wrapper.exists() and is_managed_shim(wrapper):
         first_gh = _first_program("gh", values.get("PATH", ""))
