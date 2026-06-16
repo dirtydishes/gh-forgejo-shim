@@ -45,8 +45,6 @@ def run_checks(
     else:
         real_gh = find_program("gh", configured=cfg.paths.gh, env=values, fallback_dirs=fallback_dirs)
         real_fj = find_program("fj", configured=cfg.paths.fj, env=values, fallback_dirs=fallback_dirs)
-    token = discover_fj_token(next(iter(cfg.hosts), None), env=values, home=home)
-
     checks = [
         Check(
             "real gh",
@@ -63,11 +61,7 @@ def run_checks(
             bool(cfg.hosts),
             ", ".join(cfg.hosts) if cfg.hosts else "add one with gh-forgejo-shim config add-host HOST",
         ),
-        Check(
-            "auth token",
-            token is not None,
-            "found" if token else "run gh-forgejo-shim auth login HOST or set FJ_SHIM_TOKEN",
-        ),
+        _auth_check(cfg.hosts, values, home=home),
     ]
 
     if should_check_current_repo:
@@ -138,6 +132,30 @@ def run_checks(
             )
 
     return checks
+
+
+def _auth_check(hosts: tuple[str, ...], env: Mapping[str, str], *, home: Path | None) -> Check:
+    if not hosts:
+        return Check("auth token", False, "add a Forgejo host before checking auth")
+
+    found: list[str] = []
+    missing: list[str] = []
+    for host in hosts:
+        token = discover_fj_token(host, env=env, home=home)
+        if token:
+            found.append(host)
+        else:
+            missing.append(host)
+
+    if not missing:
+        return Check("auth token", True, f"found for {', '.join(found)}")
+
+    repair = "; ".join(f"gh-forgejo-shim auth login {host}" for host in missing)
+    if found:
+        detail = f"found for {', '.join(found)}; missing for {', '.join(missing)}; run {repair}"
+    else:
+        detail = f"missing for {', '.join(missing)}; run {repair} or set FJ_SHIM_TOKEN"
+    return Check("auth token", False, detail)
 
 
 def format_checks(checks: list[Check]) -> str:

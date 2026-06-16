@@ -39,6 +39,8 @@ from .repo import (
 SUPPORTED_PR_COMMANDS = {"checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view"}
 SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}
 SUPPORTED_REPO_COMMANDS = {"view"}
+AUTH_REQUIRED_PR_COMMANDS = {"comment", "create", "new"}
+AUTH_REQUIRED_ISSUE_COMMANDS = {"create", "new"}
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,10 @@ def run_gh(
 
     assert decision.repo is not None
     token = discover_fj_token(decision.repo.host, env=values)
+    if token is None and _requires_forgejo_auth(argv):
+        print(_missing_auth_message(decision.repo.host), file=err)
+        return 1
+
     client = client_factory(token) if client_factory else ForgejoClient(token)
     try:
         return run_forgejo(
@@ -123,6 +129,24 @@ def run_gh(
     except (CreateParseError, ForgejoError, ValueError) as exc:
         print(f"gh-forgejo-shim: {exc}", file=err)
         return 1
+
+
+def _requires_forgejo_auth(argv: list[str]) -> bool:
+    if len(argv) < 2:
+        return False
+    if argv[0] == "pr":
+        return argv[1] in AUTH_REQUIRED_PR_COMMANDS
+    if argv[0] == "issue":
+        return argv[1] in AUTH_REQUIRED_ISSUE_COMMANDS
+    return False
+
+
+def _missing_auth_message(host: str) -> str:
+    return (
+        f"gh-forgejo-shim: Forgejo auth is not configured for {host}; "
+        f"run gh-forgejo-shim auth login {host} "
+        f"or gh-forgejo-shim auth import {host}"
+    )
 
 
 def run_forgejo(

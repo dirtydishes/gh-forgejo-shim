@@ -386,6 +386,8 @@ gh-forgejo-shim auth logout [host]
 
 `auth status` reports whether shim-owned auth exists for the host without printing secrets. `auth logout` removes only shim-owned stored auth for that host.
 
+Auth is host-specific. If multiple Forgejo hosts are allowlisted, `gh-forgejo-shim doctor` reports which hosts have tokens and which hosts still need `auth login` or `auth import`. Routed write commands such as `gh pr create` fail before contacting Forgejo when the target host has no token, so the repair command points at the right host.
+
 On macOS, the shim first tries to store tokens in Keychain with the system `security` tool. If Keychain storage is unavailable or fails, it falls back to:
 
 ```text

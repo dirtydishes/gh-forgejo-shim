@@ -8,7 +8,7 @@ from pathlib import Path
 
 from gh_forgejo_shim.config import Config
 from gh_forgejo_shim.forgejo import ForgejoClient, RepoRef
-from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr
+from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr, run_gh
 
 
 class FakeClient(ForgejoClient):
@@ -219,6 +219,37 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(client.created["title"], "Ship it")
         self.assertTrue(client.created["draft"])
         self.assertEqual(json.loads(out.getvalue()), {"number": 7, "title": "Ship it", "url": "https://git.example.com/owner/repo/pulls/7"})
+
+    def test_pr_create_requires_forgejo_auth_before_client_call(self) -> None:
+        def fail_factory(token: str | None) -> ForgejoClient:
+            raise AssertionError(f"client should not be created without auth, got {token!r}")
+
+        err = io.StringIO()
+        code = run_gh(
+            [
+                "pr",
+                "create",
+                "--title",
+                "Ship it",
+                "--base",
+                "main",
+                "--head",
+                "feature",
+            ],
+            env={
+                "FJ_SHIM_HOSTS": "git.example.com",
+                "GH_REPO": "git.example.com/owner/repo",
+                "PATH": "",
+            },
+            stdout=io.StringIO(),
+            stderr=err,
+            client_factory=fail_factory,
+        )
+
+        self.assertEqual(code, 1)
+        self.assertIn("Forgejo auth is not configured for git.example.com", err.getvalue())
+        self.assertIn("gh-forgejo-shim auth login git.example.com", err.getvalue())
+        self.assertIn("gh-forgejo-shim auth import git.example.com", err.getvalue())
 
     def test_pr_list_outputs_json_array(self) -> None:
         out = io.StringIO()

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from gh_forgejo_shim.auth import write_stored_token
 from gh_forgejo_shim.config import Config, PathsConfig
 from gh_forgejo_shim.doctor import run_checks
 from gh_forgejo_shim.shim import install_shim
@@ -55,6 +56,23 @@ class DoctorTests(unittest.TestCase):
                 home=Path(tmp),
             )
         self.assertTrue(self._check(checks, "auth token").ok)
+
+    def test_reports_auth_per_configured_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_stored_token("git.authed.example", "secret", home=root, platform="linux")
+
+            checks = run_checks(
+                config=Config(hosts=("git.authed.example", "git.missing.example")),
+                env={"PATH": ""},
+                home=root,
+            )
+
+        check = self._check(checks, "auth token")
+        self.assertFalse(check.ok)
+        self.assertIn("found for git.authed.example", check.detail)
+        self.assertIn("missing for git.missing.example", check.detail)
+        self.assertIn("gh-forgejo-shim auth login git.missing.example", check.detail)
 
     def test_reports_current_repo_host_that_is_not_allowlisted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
