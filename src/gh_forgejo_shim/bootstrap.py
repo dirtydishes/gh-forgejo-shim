@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -9,6 +10,7 @@ from typing import Mapping
 from .auth import discover_fj_token
 from .config import add_host, load_config
 from .external import git_output
+from .gui_path import current_launchd_path, path_contains_dir
 from .repo import RepoRef, current_branch, detect_from_git, parse_repo_spec
 from .shim import install_shim, is_managed_shim, shim_path
 
@@ -41,6 +43,8 @@ def run_bootstrap(
     config_path: Path | None = None,
     force: bool = False,
     home: Path | None = None,
+    launchd_path: str | None = None,
+    check_gui_path: bool | None = None,
 ) -> BootstrapResult:
     values = env if env is not None else os.environ
     target_bin_dir = bin_dir or Path.home() / ".local" / "bin"
@@ -89,6 +93,8 @@ def run_bootstrap(
         checks.append(BootstrapCheck("shim", True, f"installed {installed}"))
 
     checks.append(_path_check(target_bin_dir, target_shim, values))
+    if check_gui_path if check_gui_path is not None else sys.platform == "darwin":
+        checks.append(_gui_path_check(target_bin_dir, launchd_path=launchd_path))
     checks.append(_auth_check(repo, values, home=home))
     checks.extend(_origin_checks(repo, cwd=cwd))
 
@@ -133,6 +139,26 @@ def _path_check(bin_dir: Path, target_shim: Path, env: Mapping[str, str]) -> Boo
     else:
         detail = f"{target_shim} exists but gh was not found in PATH"
     return BootstrapCheck("PATH", False, detail, (export, "gh-forgejo-shim doctor"))
+
+
+def _gui_path_check(bin_dir: Path, *, launchd_path: str | None) -> BootstrapCheck:
+    gui_path = launchd_path if launchd_path is not None else current_launchd_path()
+    if gui_path and path_contains_dir(gui_path, bin_dir):
+        return BootstrapCheck("macOS GUI PATH", True, f"{bin_dir} is visible to new GUI apps")
+    command = "gh-forgejo-shim install-gui-path"
+    if gui_path:
+        return BootstrapCheck(
+            "macOS GUI PATH",
+            False,
+            f"{bin_dir} is not in launchd PATH; Codex.app will not see the shim after restart",
+            (command,),
+        )
+    return BootstrapCheck(
+        "macOS GUI PATH",
+        False,
+        "launchd PATH is unset; GUI apps may not find gh or the shim after restart",
+        (command,),
+    )
 
 
 def _auth_check(repo: RepoRef | None, env: Mapping[str, str], *, home: Path | None = None) -> BootstrapCheck:

@@ -78,6 +78,46 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertIn("git remote add origin https://git.example.com/owner/repo.git", output)
 
+    def test_bootstrap_warns_when_macos_gui_path_cannot_see_shim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo")
+            bin_dir = root / "bin"
+
+            result = run_bootstrap(
+                cwd=str(repo),
+                env={"PATH": str(bin_dir), "FJ_SHIM_TOKEN": "secret", "HOME": str(root)},
+                bin_dir=bin_dir,
+                config_path=root / "config.toml",
+                home=root,
+                launchd_path="/opt/homebrew/bin:/usr/bin:/bin",
+                check_gui_path=True,
+            )
+
+            output = format_bootstrap(result)
+
+        self.assertFalse(self._check(result, "macOS GUI PATH").ok)
+        self.assertIn("Codex.app will not see the shim after restart", output)
+        self.assertIn("gh-forgejo-shim install-gui-path", output)
+
+    def test_bootstrap_accepts_macos_gui_path_with_shim_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo")
+            bin_dir = root / "bin"
+
+            result = run_bootstrap(
+                cwd=str(repo),
+                env={"PATH": str(bin_dir), "FJ_SHIM_TOKEN": "secret", "HOME": str(root)},
+                bin_dir=bin_dir,
+                config_path=root / "config.toml",
+                home=root,
+                launchd_path=os.pathsep.join(["/usr/bin", str(bin_dir)]),
+                check_gui_path=True,
+            )
+
+        self.assertTrue(self._check(result, "macOS GUI PATH").ok)
+
     def _git_repo(
         self,
         path: Path,

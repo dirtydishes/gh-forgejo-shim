@@ -38,6 +38,7 @@ gfj bootstrap
 - Adds the repository host to the shim allowlist.
 - Installs the user-local `gh` wrapper.
 - Checks whether `PATH` resolves `gh` to the shim.
+- On macOS, checks whether the user launchd PATH exposes the shim to newly opened GUI apps.
 - Checks whether Forgejo auth can be found from shim storage, env, or supported CLI config files.
 - Checks `origin`, `origin/HEAD`, and current-branch upstream tracking.
 - Prints repair commands for anything it cannot fix automatically.
@@ -61,7 +62,7 @@ gfj bootstrap --force
 3. Run `gfj bootstrap`.
 4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
 5. Copy and run any repair commands `bootstrap` prints.
-6. On macOS, run `gfj install-gui-path` if your coding tool is launched from Finder, Dock, Spotlight, Raycast, Alfred, or another GUI launcher.
+6. On macOS, run `gfj install-gui-path` if `bootstrap` reports that Codex.app or another GUI-launched tool cannot see the shim.
 7. Confirm the setup:
 
 ```sh
@@ -506,6 +507,8 @@ Remove the generated wrapper:
 ```sh
 gfj uninstall-shim
 ```
+
+On macOS, if the shim-owned GUI PATH helper is installed, uninstalling the wrapper also rewrites that helper to a real GitHub CLI PATH such as `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` and applies it to the current launchd session. Restart Codex.app or other GUI-launched tools so they inherit the repaired PATH.
 
 Remove the macOS GUI PATH LaunchAgent:
 

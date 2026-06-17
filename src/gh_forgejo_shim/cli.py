@@ -19,7 +19,7 @@ from .bootstrap import format_bootstrap, run_bootstrap
 from .config import add_host, load_config, normalize_host, remove_host
 from .doctor import format_checks, run_checks
 from .forgejo import ForgejoClient, ForgejoError
-from .gui_path import install_gui_path, uninstall_gui_path
+from .gui_path import default_plist_path, default_real_gh_gui_path, install_gui_path, uninstall_gui_path
 from .routing import run_gh
 from .shim import install_shim, uninstall_shim
 
@@ -54,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"gh-forgejo-shim: {exc}", file=sys.stderr)
             return 1
         print(f"removed gh shim at {path}")
+        if sys.platform == "darwin":
+            _repair_gui_path_after_shim_uninstall()
         return 0
 
     if command == "doctor":
@@ -93,9 +95,14 @@ def main(argv: list[str] | None = None) -> int:
         if sys.platform != "darwin":
             print("gh-forgejo-shim: uninstall-gui-path is only supported on macOS", file=sys.stderr)
             return 1
-        path = uninstall_gui_path()
-        print(f"removed macOS GUI PATH LaunchAgent at {path}")
-        print("restart your login session to return GUI apps to the default launchd PATH")
+        result = uninstall_gui_path()
+        print(f"removed macOS GUI PATH LaunchAgent at {result.plist_path}")
+        print(f"PATH={result.path_value}")
+        if result.applied:
+            print("applied a real-gh GUI PATH to the current launchd user session; restart GUI apps to inherit it")
+        else:
+            print(f"warning: could not apply PATH immediately: {result.apply_error}", file=sys.stderr)
+            print("restart your login session before relying on GUI apps to find the real GitHub CLI")
         return 0
 
     if command == "config":
@@ -110,6 +117,20 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 0
+
+
+def _repair_gui_path_after_shim_uninstall() -> None:
+    plist = default_plist_path()
+    if not plist.exists():
+        return
+    result = install_gui_path(path_value=default_real_gh_gui_path(), plist_path=plist)
+    print(f"updated macOS GUI PATH LaunchAgent at {result.plist_path}")
+    print(f"PATH={result.path_value}")
+    if result.applied:
+        print("applied a real-gh GUI PATH to the current launchd user session; restart GUI apps to inherit it")
+    else:
+        print(f"warning: could not apply PATH immediately: {result.apply_error}", file=sys.stderr)
+        print("the LaunchAgent will apply the real-gh PATH at the next login")
 
 
 def build_parser() -> argparse.ArgumentParser:
