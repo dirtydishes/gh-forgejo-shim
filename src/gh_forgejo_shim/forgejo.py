@@ -78,6 +78,47 @@ class ForgejoClient:
     def get_repo(self, repo: RepoRef) -> dict[str, Any]:
         return self._request_json("GET", repo.api_base_url, None)
 
+    def list_branches(
+        self,
+        repo: RepoRef,
+        *,
+        limit: int | None = None,
+        page: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if limit is None and page is None:
+            branches: list[dict[str, Any]] = []
+            page_size = 100
+            for page_number in range(1, 101):
+                batch = self.list_branches(repo, limit=page_size, page=page_number)
+                if not batch:
+                    break
+                branches.extend(batch)
+            return branches
+
+        params: dict[str, object] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if page is not None:
+            params["page"] = page
+        query_string = urllib.parse.urlencode(params)
+        url = f"{repo.api_base_url}/branches"
+        if query_string:
+            url = f"{url}?{query_string}"
+        branches = self._request_json("GET", url, None)
+        if not isinstance(branches, list):
+            return []
+        return [item for item in branches if isinstance(item, dict)]
+
+    def get_branch(self, repo: RepoRef, branch: str) -> dict[str, Any]:
+        return self._request_json("GET", f"{repo.api_base_url}/branches/{_quote(branch)}", None)
+
+    def create_branch(self, repo: RepoRef, *, new_branch: str, old_branch: str) -> dict[str, Any]:
+        payload = {
+            "new_branch_name": new_branch,
+            "old_branch_name": old_branch,
+        }
+        return self._request_json("POST", f"{repo.api_base_url}/branches", payload)
+
     def list_issues(
         self,
         repo: RepoRef,
