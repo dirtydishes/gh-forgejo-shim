@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
 from gh_forgejo_shim.config import Config
 from gh_forgejo_shim.forgejo import ForgejoClient, RepoRef
-from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr
+from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr, run_gh
+
+
+def codex_create_pr_url(output: str) -> str | None:
+    for match in re.finditer(r"https?://\S+", output):
+        url = match.group(0).rstrip("),.")
+        if re.search(r"/pull/\d+(?:\b|$)", url):
+            return url
+    return None
 
 
 class FakeClient(ForgejoClient):
@@ -27,6 +36,7 @@ class FakeClient(ForgejoClient):
         self.comments: list[dict] = []
         self.diff_text = "diff --git a/README.md b/README.md\n"
         self.pull_files = [{"filename": "README.md"}, {"filename": "generated/output.txt"}]
+        self.current_user = {"login": "alice", "full_name": "Alice Example"}
         self.repo_view = {
             "id": 99,
             "name": "repo",
@@ -118,6 +128,9 @@ class FakeClient(ForgejoClient):
         self.comments.append(comment)
         return comment
 
+    def get_current_user(self, host: str):  # type: ignore[no-untyped-def]
+        return self.current_user
+
 
 class RoutingTests(unittest.TestCase):
     def test_delegates_non_pr_command(self) -> None:
@@ -127,6 +140,104 @@ class RoutingTests(unittest.TestCase):
             env={},
         )
         self.assertEqual(decision.kind, "delegate")
+
+    def test_routes_auth_status_for_allowlisted_gh_host(self) -> None:
+        decision = decide_route(
+            ["auth", "status"],
+            config=Config(hosts=("git.example.com",)),
+            env={"GH_HOST": "git.example.com"},
+        )
+        self.assertEqual(decision.kind, "forgejo")
+
+    def test_forgejo_auth_status_uses_shim_auth_instead_of_real_gh(self) -> None:
+        out = io.StringIO()
+        code = run_gh(
+            ["auth", "status"],
+            env={
+                "FJ_SHIM_HOSTS": "git.example.com",
+                "FJ_SHIM_REAL_GH": "/missing/gh",
+                "FJ_SHIM_TOKEN": "secret-token",
+                "GH_HOST": "git.example.com",
+                "PATH": "",
+            },
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("git.example.com", out.getvalue())
+        self.assertIn("Logged in", out.getvalue())
+
+    def test_forgejo_auth_status_supports_json_hosts_field(self) -> None:
+        out = io.StringIO()
+        code = run_gh(
+            ["auth", "status", "--json", "hosts"],
+            env={
+                "FJ_SHIM_HOSTS": "git.example.com",
+                "FJ_SHIM_REAL_GH": "/missing/gh",
+                "FJ_SHIM_TOKEN": "secret-token",
+                "GH_HOST": "git.example.com",
+                "PATH": "",
+            },
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()),
+            {
+                "hosts": {
+                    "git.example.com": [
+                        {
+                            "active": True,
+                            "gitProtocol": "https",
+                            "host": "git.example.com",
+                            "login": "",
+                            "scopes": "",
+                            "state": "success",
+                            "tokenSource": "gh-forgejo-shim",
+                        }
+                    ]
+                }
+            },
+        )
+
+    def test_forgejo_auth_token_uses_shim_auth_instead_of_real_gh(self) -> None:
+        out = io.StringIO()
+        code = run_gh(
+            ["auth", "token", "--hostname", "git.example.com"],
+            env={
+                "FJ_SHIM_HOSTS": "git.example.com",
+                "FJ_SHIM_REAL_GH": "/missing/gh",
+                "FJ_SHIM_TOKEN": "secret-token",
+                "PATH": "",
+            },
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "secret-token\n")
+
+    def test_forgejo_api_user_probe_uses_forgejo_client(self) -> None:
+        out = io.StringIO()
+        code = run_gh(
+            ["api", "user", "--jq", ".login"],
+            env={
+                "FJ_SHIM_HOSTS": "git.example.com",
+                "FJ_SHIM_REAL_GH": "/missing/gh",
+                "FJ_SHIM_TOKEN": "secret-token",
+                "GH_HOST": "git.example.com",
+                "PATH": "",
+            },
+            stdout=out,
+            stderr=io.StringIO(),
+            client_factory=lambda token: FakeClient(),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "alice\n")
 
     def test_routes_issue_list_for_allowlisted_host(self) -> None:
         decision = decide_route(
@@ -219,6 +330,35 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(client.created["title"], "Ship it")
         self.assertTrue(client.created["draft"])
         self.assertEqual(json.loads(out.getvalue()), {"number": 7, "title": "Ship it", "url": "https://git.example.com/owner/repo/pulls/7"})
+
+    def test_create_default_output_surfaces_url_for_codex_app(self) -> None:
+        client = FakeClient()
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            [
+                "pr",
+                "create",
+                "-R",
+                "git.example.com/owner/repo",
+                "--title",
+                "Ship it",
+                "--body",
+                "body",
+                "--base",
+                "main",
+                "--head",
+                "feature",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            client,
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            codex_create_pr_url(out.getvalue()),
+            "https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7",
+        )
 
     def test_pr_list_outputs_json_array(self) -> None:
         out = io.StringIO()
