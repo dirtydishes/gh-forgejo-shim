@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fix Codex GitHub CLI Availability</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --surface: #141a22;
+      --surface-2: #1a2230;
+      --ink: #edf2f7;
+      --muted: #a9b5c5;
+      --line: #2b3544;
+      --accent: #77d5c8;
+      --accent-2: #f0c36a;
+      --ok: #7ee787;
+      --warn: #f0c36a;
+      --code: #090d13;
+      --add-bg: rgba(35, 134, 54, 0.32);
+      --del-bg: rgba(218, 54, 51, 0.28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; }
+    main { width: min(1120px, calc(100vw - 40px)); margin: 0 auto; padding: 44px 0 64px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 28px; }
+    h1, h2, h3 { margin: 0; line-height: 1.18; letter-spacing: 0; text-wrap: balance; }
+    h1 { max-width: 860px; font-size: 2.25rem; }
+    h2 { margin-top: 34px; font-size: 1.25rem; }
+    h3 { margin: 0 0 6px; font-size: 1rem; color: var(--accent); }
+    p, li { max-width: 74ch; color: var(--muted); }
+    code { background: var(--code); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 0.08rem 0.28rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+    pre { overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 14px; color: var(--ink); }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 0.92rem; }
+    .pill { border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 5px 10px; }
+    .lead { font-size: 1.06rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 14px; }
+    .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 15px; }
+    .panel p { margin: 0; }
+    .status { color: var(--ok); font-weight: 650; }
+    .diff { margin-top: 14px; }
+    .diff code { display: block; padding: 0; border: 0; background: transparent; color: inherit; font-size: 0.84rem; line-height: 1.55; white-space: pre; min-width: max-content; }
+    .file { color: var(--accent-2); }
+    .add { display: block; background: var(--add-bg); color: #ddffdf; }
+    .del { display: block; background: var(--del-bg); color: #ffd9d7; }
+    .ctx { display: block; color: #c8d3df; }
+    ul { padding-left: 1.2rem; }
+    li + li { margin-top: 0.36rem; }
+    @media (max-width: 680px) {
+      main { width: min(100% - 28px, 1120px); padding: 30px 0 48px; }
+      h1 { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span class="pill">2026-06-17</span>
+      <span class="pill">Repository implementation</span>
+      <span class="pill">Issue gh-forgejo-shim-b95</span>
+    </div>
+    <h1>Fixed Codex GitHub CLI availability probes for Forgejo hosts</h1>
+    <p class="lead">The shim now answers Forgejo-scoped <code>gh auth status</code>, <code>gh auth token</code>, and <code>gh api user</code> probes itself, while GitHub repositories still delegate to the real GitHub CLI.</p>
+  </header>
+
+  <section>
+    <h2>Summary</h2>
+    <p>Codex.app was again reporting GitHub CLI unavailable for Forgejo and GitHub workflows. The repo and machine checks showed the GUI PATH and installed shim were visible, but a newer availability-style probe fails when <code>GH_HOST</code> points at a Forgejo host and the shim delegates auth/API commands to the real <code>gh</code>. This change makes those host-scoped auth probes part of the Forgejo compatibility surface.</p>
+  </section>
+
+  <section>
+    <h2>Changes Made</h2>
+    <div class="grid">
+      <article class="panel"><h3>Forgejo Auth Routing</h3><p>Added host-scoped routing for <code>gh auth status</code> and <code>gh auth token</code> when <code>GH_HOST</code>, <code>--hostname</code>, or the current repo resolves to an allowlisted Forgejo host.</p></article>
+      <article class="panel"><h3>API Identity Probe</h3><p>Added support for the common <code>gh api user</code> probe, including <code>--jq .login</code>, so tools can confirm the active Forgejo identity without the real GitHub CLI rejecting the host.</p></article>
+      <article class="panel"><h3>Machine-Readable Status</h3><p>Implemented <code>gh auth status --json hosts</code> with a GitHub-shaped <code>hosts</code> envelope and a shim-specific token source.</p></article>
+      <article class="panel"><h3>Version Signal</h3><p>Bumped package metadata from <code>0.1.0</code> to <code>0.1.1</code> so the installed <code>gfj version</code> can distinguish this regression fix.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Context</h2>
+    <p>The important failing repro was not basic PATH discovery. <code>gfj doctor</code> already reported a good GUI PATH, installed shim, real <code>gh</code>, <code>fj</code>, and Forgejo auth. The red path was a constrained invocation such as <code>GH_HOST=git.dirtydishes.dev gh auth status</code>: before this change, the shim delegated <code>auth</code> to the real GitHub CLI, which tried to validate Forgejo auth as if it were GitHub Enterprise auth and returned a failure.</p>
+  </section>
+
+  <section>
+    <h2>Important Implementation Details</h2>
+    <ul>
+      <li><code>RouteDecision</code> now carries an optional host, because auth and identity checks can be host-scoped without needing a repository owner/name pair.</li>
+      <li>Host-scoped Forgejo routing checks explicit <code>--hostname</code> first, then <code>GH_HOST</code>, then the current repo detection path.</li>
+      <li><code>gh auth status</code> reports discoverable shim auth without live validation. Live validation still happens when commands call Forgejo APIs.</li>
+      <li>Unsupported <code>gh api</code> endpoints continue to delegate; only <code>user</code> and <code>/user</code> are claimed by the shim for Forgejo hosts.</li>
+      <li>GitHub hosts remain delegated because <code>Config.is_forgejo_host("github.com")</code> is still false.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Relevant Diff Snippets</h2>
+    <p>Focused unified diff fallback. It shows the routing surface, auth/API handlers, version bump, and regression tests without embedding the full file diff.</p>
+    <pre class="diff"><code><span class="file">diff --git a/src/gh_forgejo_shim/routing.py b/src/gh_forgejo_shim/routing.py</span>
+<span class="ctx">@@</span>
+<span class="del">-from .config import Config, load_config</span>
+<span class="add">+from .config import Config, load_config, normalize_host</span>
+<span class="ctx">@@</span>
+<span class="ctx"> SUPPORTED_PR_COMMANDS = {"checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view"}</span>
+<span class="ctx"> SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}</span>
+<span class="ctx"> SUPPORTED_REPO_COMMANDS = {"view"}</span>
+<span class="add">+SUPPORTED_AUTH_COMMANDS = {"status", "token"}</span>
+<span class="ctx">@@</span>
+<span class="ctx"> class RouteDecision:</span>
+<span class="ctx">     kind: str</span>
+<span class="ctx">     reason: str</span>
+<span class="ctx">     repo: RepoRef | None = None</span>
+<span class="add">+    host: str | None = None</span>
+<span class="ctx">@@</span>
+<span class="add">+def _is_supported_auth_command(argv: list[str]) -&gt; bool:</span>
+<span class="add">+    return len(argv) &gt;= 2 and argv[0] == "auth" and argv[1] in SUPPORTED_AUTH_COMMANDS</span>
+<span class="add">+</span>
+<span class="add">+def _is_supported_api_command(argv: list[str]) -&gt; bool:</span>
+<span class="add">+    return len(argv) &gt;= 2 and argv[0] == "api" and _api_endpoint(argv[1:]) in {"user", "/user"}</span>
+<span class="ctx">@@</span>
+<span class="add">+    if _is_supported_auth_command(argv):</span>
+<span class="add">+        return _decide_host_route(</span>
+<span class="add">+            argv,</span>
+<span class="add">+            config=config,</span>
+<span class="add">+            env=values,</span>
+<span class="add">+            cwd=cwd,</span>
+<span class="add">+            host=_hostname_arg(argv[2:], allow_short=True) or values.get("GH_HOST"),</span>
+<span class="add">+        )</span>
+<span class="add">+</span>
+<span class="add">+    if _is_supported_api_command(argv):</span>
+<span class="add">+        return _decide_host_route(</span>
+<span class="add">+            argv,</span>
+<span class="add">+            config=config,</span>
+<span class="add">+            env=values,</span>
+<span class="add">+            cwd=cwd,</span>
+<span class="add">+            host=_hostname_arg(argv[1:], allow_short=False) or values.get("GH_HOST"),</span>
+<span class="add">+        )</span>
+<span class="ctx">@@</span>
+<span class="add">+def run_forgejo_auth(</span>
+<span class="add">+    argv: list[str],</span>
+<span class="add">+    host: str,</span>
+<span class="add">+    token: str | None,</span>
+<span class="add">+    *,</span>
+<span class="add">+    stdout: TextIO,</span>
+<span class="add">+    stderr: TextIO,</span>
+<span class="add">+) -&gt; int:</span>
+<span class="add">+    command = argv[1]</span>
+<span class="add">+    rest = argv[2:]</span>
+<span class="add">+    if command == "status":</span>
+<span class="add">+        parsed = _parse_auth_status_args(rest)</span>
+<span class="add">+        if token is None:</span>
+<span class="add">+            _print_missing_auth_status(host, stderr)</span>
+<span class="add">+            return 1</span>
+<span class="add">+        data = _auth_status_data(host, token, show_token=parsed.show_token)</span>
+<span class="add">+        if parsed.json_fields:</span>
+<span class="add">+            _print_json_or_jq(_filter_selected_fields(data, parsed.json_fields), parsed.jq, stdout, template=parsed.template)</span>
+<span class="add">+        else:</span>
+<span class="add">+            _print_auth_status_text(host, token if parsed.show_token else None, stdout)</span>
+<span class="add">+        return 0</span>
+<span class="ctx">@@</span>
+<span class="add">+def run_forgejo_api(</span>
+<span class="add">+    argv: list[str],</span>
+<span class="add">+    host: str,</span>
+<span class="add">+    client: ForgejoClient,</span>
+<span class="add">+    *,</span>
+<span class="add">+    stdout: TextIO,</span>
+<span class="add">+) -&gt; int:</span>
+<span class="add">+    parsed = _parse_api_args(argv[1:])</span>
+<span class="add">+    if parsed.endpoint not in {"user", "/user"}:</span>
+<span class="add">+        raise ValueError(f"unsupported Forgejo api endpoint: {parsed.endpoint}")</span>
+<span class="add">+    user = client.get_current_user(host)</span>
+<span class="add">+    if parsed.silent:</span>
+<span class="add">+        return 0</span>
+<span class="add">+    _print_json_or_jq(user, parsed.jq, stdout, template=parsed.template)</span>
+<span class="add">+    return 0</span>
+
+<span class="file">diff --git a/tests/test_routing.py b/tests/test_routing.py</span>
+<span class="ctx">@@</span>
+<span class="add">+    def test_forgejo_auth_status_uses_shim_auth_instead_of_real_gh(self) -&gt; None:</span>
+<span class="add">+        out = io.StringIO()</span>
+<span class="add">+        code = run_gh(</span>
+<span class="add">+            ["auth", "status"],</span>
+<span class="add">+            env={</span>
+<span class="add">+                "FJ_SHIM_HOSTS": "git.example.com",</span>
+<span class="add">+                "FJ_SHIM_REAL_GH": "/missing/gh",</span>
+<span class="add">+                "FJ_SHIM_TOKEN": "secret-token",</span>
+<span class="add">+                "GH_HOST": "git.example.com",</span>
+<span class="add">+                "PATH": "",</span>
+<span class="add">+            },</span>
+<span class="add">+            stdout=out,</span>
+<span class="add">+            stderr=io.StringIO(),</span>
+<span class="add">+        )</span>
+<span class="add">+</span>
+<span class="add">+        self.assertEqual(code, 0)</span>
+<span class="add">+        self.assertIn("git.example.com", out.getvalue())</span>
+<span class="add">+        self.assertIn("Logged in", out.getvalue())</span>
+<span class="ctx">@@</span>
+<span class="add">+    def test_forgejo_api_user_probe_uses_forgejo_client(self) -&gt; None:</span>
+<span class="add">+        out = io.StringIO()</span>
+<span class="add">+        code = run_gh(</span>
+<span class="add">+            ["api", "user", "--jq", ".login"],</span>
+<span class="add">+            env={</span>
+<span class="add">+                "FJ_SHIM_HOSTS": "git.example.com",</span>
+<span class="add">+                "FJ_SHIM_REAL_GH": "/missing/gh",</span>
+<span class="add">+                "FJ_SHIM_TOKEN": "secret-token",</span>
+<span class="add">+                "GH_HOST": "git.example.com",</span>
+<span class="add">+                "PATH": "",</span>
+<span class="add">+            },</span>
+<span class="add">+            stdout=out,</span>
+<span class="add">+            stderr=io.StringIO(),</span>
+<span class="add">+            client_factory=lambda token: FakeClient(),</span>
+<span class="add">+        )</span>
+<span class="add">+</span>
+<span class="add">+        self.assertEqual(code, 0)</span>
+<span class="add">+        self.assertEqual(out.getvalue(), "alice\n")</span>
+
+<span class="file">diff --git a/pyproject.toml b/pyproject.toml</span>
+<span class="ctx">@@</span>
+<span class="del">-version = "0.1.0"</span>
+<span class="add">+version = "0.1.1"</span></code></pre>
+  </section>
+
+  <section>
+    <h2>Expected Impact for End-Users</h2>
+    <p>Codex.app should stop treating Forgejo-hosted workspaces as having an unavailable GitHub CLI when it probes auth or identity through <code>GH_HOST</code>. GitHub repositories should continue to use the real GitHub CLI and should keep reporting normal GitHub auth and repository metadata.</p>
+  </section>
+
+  <section>
+    <h2>Validation</h2>
+    <ul>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest</code> ran 100 tests.</li>
+      <li><span class="status">Passed:</span> source smoke check for <code>PYTHONPATH=/Users/kell/dev/gh-forgejo-shim/src GH_HOST=git.dirtydishes.dev python3 -m gh_forgejo_shim gh auth status</code>.</li>
+      <li><span class="status">Passed:</span> source smoke check for <code>PYTHONPATH=/Users/kell/dev/gh-forgejo-shim/src GH_HOST=git.dirtydishes.dev python3 -m gh_forgejo_shim gh api user --jq .login</code>.</li>
+      <li><span class="status">Passed:</span> installed-path smoke checks after <code>pipx install --force /Users/kell/dev/gh-forgejo-shim</code> and <code>gfj install-shim</code>.</li>
+      <li><span class="status">Passed:</span> <code>gfj doctor</code> reports real <code>gh</code>, <code>fj</code>, Forgejo auth, shim PATH, and macOS GUI PATH all ok.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Issues, Limitations, and Mitigations</h2>
+    <ul>
+      <li><code>gh auth status</code> is a token-discovery compatibility response, not a live validation request. Actual API commands still validate by calling Forgejo.</li>
+      <li><code>gh api</code> support remains intentionally narrow. Only the identity probe is implemented; broader API emulation should be added only when a concrete tool probe requires it.</li>
+      <li>The local machine install was updated separately from this repository change and is documented in a separate non-repo task record.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Follow-up Work</h2>
+    <p>No new follow-up issue is required for this fix. A useful future improvement would be a dedicated compatibility test script that runs the common Codex probes against the installed shim, but the current regression tests cover the failing auth/API seams.</p>
+  </section>
+</main>
+</body>
+</html>

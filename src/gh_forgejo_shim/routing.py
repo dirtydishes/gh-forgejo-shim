@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Mapping, TextIO
 
 from .auth import discover_fj_token
-from .config import Config, load_config
+from .config import Config, load_config, normalize_host
 from .create import CreateParseError, body_from_file, parse_create_args
 from .external import find_program, git_run, run_program
 from .forgejo import ForgejoClient, ForgejoError, RepoRef
@@ -39,6 +39,9 @@ from .repo import (
 SUPPORTED_PR_COMMANDS = {"checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view"}
 SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}
 SUPPORTED_REPO_COMMANDS = {"view"}
+SUPPORTED_AUTH_COMMANDS = {"status", "token"}
+AUTH_REQUIRED_PR_COMMANDS = {"comment", "create", "new"}
+AUTH_REQUIRED_ISSUE_COMMANDS = {"create", "new"}
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class RouteDecision:
     kind: str
     reason: str
     repo: RepoRef | None = None
+    host: str | None = None
 
 
 ClientFactory = Callable[[str | None], ForgejoClient]
@@ -63,6 +67,14 @@ def _is_supported_command(argv: list[str]) -> bool:
     return False
 
 
+def _is_supported_auth_command(argv: list[str]) -> bool:
+    return len(argv) >= 2 and argv[0] == "auth" and argv[1] in SUPPORTED_AUTH_COMMANDS
+
+
+def _is_supported_api_command(argv: list[str]) -> bool:
+    return len(argv) >= 2 and argv[0] == "api" and _api_endpoint(argv[1:]) in {"user", "/user"}
+
+
 def decide_route(
     argv: list[str],
     *,
@@ -70,15 +82,114 @@ def decide_route(
     env: Mapping[str, str] | None = None,
     cwd: str | None = None,
 ) -> RouteDecision:
+    values = env if env is not None else os.environ
+    if _is_supported_auth_command(argv):
+        return _decide_host_route(
+            argv,
+            config=config,
+            env=values,
+            cwd=cwd,
+            host=_hostname_arg(argv[2:], allow_short=True) or values.get("GH_HOST"),
+        )
+
+    if _is_supported_api_command(argv):
+        return _decide_host_route(
+            argv,
+            config=config,
+            env=values,
+            cwd=cwd,
+            host=_hostname_arg(argv[1:], allow_short=False) or values.get("GH_HOST"),
+        )
+
     if len(argv) < 2 or not _is_supported_command(argv):
         return RouteDecision("delegate", "unsupported command")
+
+    detection = detect_repo(argv, env=values, cwd=cwd)
+    if detection.repo is None:
+        return RouteDecision("delegate", "no repository detected")
+    if not config.is_forgejo_host(detection.repo.host):
+        return RouteDecision("delegate", f"host {detection.repo.host} is not allowlisted", detection.repo)
+    return RouteDecision("forgejo", detection.source, detection.repo, detection.repo.host)
+
+
+def _decide_host_route(
+    argv: list[str],
+    *,
+    config: Config,
+    env: Mapping[str, str],
+    cwd: str | None,
+    host: str | None,
+) -> RouteDecision:
+    if host:
+        normalized = normalize_host(host)
+        if config.is_forgejo_host(normalized):
+            return RouteDecision("forgejo", "host", host=normalized)
+        return RouteDecision("delegate", f"host {normalized} is not allowlisted")
 
     detection = detect_repo(argv, env=env, cwd=cwd)
     if detection.repo is None:
         return RouteDecision("delegate", "no repository detected")
     if not config.is_forgejo_host(detection.repo.host):
         return RouteDecision("delegate", f"host {detection.repo.host} is not allowlisted", detection.repo)
-    return RouteDecision("forgejo", detection.source, detection.repo)
+    return RouteDecision("forgejo", detection.source, detection.repo, detection.repo.host)
+
+
+_API_FLAGS_WITH_VALUES = {
+    "--cache",
+    "-F",
+    "--field",
+    "-H",
+    "--header",
+    "--hostname",
+    "--input",
+    "--method",
+    "-X",
+    "--preview",
+    "-p",
+    "-f",
+    "--raw-field",
+}
+_API_FLAGS_WITH_VALUE_PREFIXES = tuple(f"{flag}=" for flag in _API_FLAGS_WITH_VALUES)
+
+
+def _hostname_arg(argv: list[str], *, allow_short: bool) -> str | None:
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--hostname" or (allow_short and arg == "-h"):
+            if index + 1 >= len(argv):
+                return None
+            return argv[index + 1]
+        if arg.startswith("--hostname="):
+            return arg.split("=", 1)[1]
+        if allow_short and arg.startswith("-h="):
+            return arg.split("=", 1)[1]
+        index += 1
+    return None
+
+
+def _api_endpoint(argv: list[str]) -> str | None:
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            return argv[index + 1] if index + 1 < len(argv) else None
+        if arg in _API_FLAGS_WITH_VALUES or arg in {"--jq", "-q", "--template", "-t"}:
+            index += 2
+        elif _has_any_prefix(arg, _API_FLAGS_WITH_VALUE_PREFIXES) or _has_any_prefix(
+            arg,
+            ("--jq=", "-q=", "--template=", "-t="),
+        ):
+            index += 1
+        elif arg.startswith("-"):
+            index += 1
+        else:
+            return arg
+    return None
+
+
+def _has_any_prefix(value: str, prefixes: tuple[str, ...]) -> bool:
+    return any(value.startswith(prefix) for prefix in prefixes)
 
 
 def run_gh(
@@ -107,9 +218,32 @@ def run_gh(
             return 127
         return run_program(real_gh, argv)
 
-    assert decision.repo is not None
-    token = discover_fj_token(decision.repo.host, env=values)
+    host = decision.host or (decision.repo.host if decision.repo else None)
+    assert host is not None
+    token = discover_fj_token(host, env=values)
+    if argv and argv[0] == "auth":
+        try:
+            return run_forgejo_auth(argv, host, token, stdout=out, stderr=err)
+        except ValueError as exc:
+            print(f"gh-forgejo-shim: {exc}", file=err)
+            return 1
+
+    if token is None and _requires_forgejo_auth(argv):
+        print(_missing_auth_message(host), file=err)
+        return 1
+
     client = client_factory(token) if client_factory else ForgejoClient(token)
+    if argv and argv[0] == "api":
+        if token is None:
+            print(_missing_auth_message(host), file=err)
+            return 1
+        try:
+            return run_forgejo_api(argv, host, client, stdout=out)
+        except (ForgejoError, ValueError) as exc:
+            print(f"gh-forgejo-shim: {exc}", file=err)
+            return 1
+
+    assert decision.repo is not None
     try:
         return run_forgejo(
             argv,
@@ -123,6 +257,75 @@ def run_gh(
     except (CreateParseError, ForgejoError, ValueError) as exc:
         print(f"gh-forgejo-shim: {exc}", file=err)
         return 1
+
+
+def run_forgejo_auth(
+    argv: list[str],
+    host: str,
+    token: str | None,
+    *,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    command = argv[1]
+    rest = argv[2:]
+    if command == "status":
+        parsed = _parse_auth_status_args(rest)
+        if token is None:
+            _print_missing_auth_status(host, stderr)
+            return 1
+        data = _auth_status_data(host, token, show_token=parsed.show_token)
+        if parsed.json_fields:
+            _print_json_or_jq(_filter_selected_fields(data, parsed.json_fields), parsed.jq, stdout, template=parsed.template)
+        else:
+            _print_auth_status_text(host, token if parsed.show_token else None, stdout)
+        return 0
+
+    if command == "token":
+        _parse_auth_token_args(rest)
+        if token is None:
+            print(_missing_auth_message(host), file=stderr)
+            return 1
+        print(token, file=stdout)
+        return 0
+
+    print(f"gh-forgejo-shim: unsupported Forgejo auth command: {command}", file=stderr)
+    return 1
+
+
+def run_forgejo_api(
+    argv: list[str],
+    host: str,
+    client: ForgejoClient,
+    *,
+    stdout: TextIO,
+) -> int:
+    parsed = _parse_api_args(argv[1:])
+    if parsed.endpoint not in {"user", "/user"}:
+        raise ValueError(f"unsupported Forgejo api endpoint: {parsed.endpoint}")
+    user = client.get_current_user(host)
+    if parsed.silent:
+        return 0
+    _print_json_or_jq(user, parsed.jq, stdout, template=parsed.template)
+    return 0
+
+
+def _requires_forgejo_auth(argv: list[str]) -> bool:
+    if len(argv) < 2:
+        return False
+    if argv[0] == "pr":
+        return argv[1] in AUTH_REQUIRED_PR_COMMANDS
+    if argv[0] == "issue":
+        return argv[1] in AUTH_REQUIRED_ISSUE_COMMANDS
+    return False
+
+
+def _missing_auth_message(host: str) -> str:
+    return (
+        f"gh-forgejo-shim: Forgejo auth is not configured for {host}; "
+        f"run gh-forgejo-shim auth login {host} "
+        f"or gh-forgejo-shim auth import {host}"
+    )
 
 
 def run_forgejo(
@@ -764,6 +967,142 @@ class IssueCreateArgs:
     assignees: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
     milestone: int | None = None
+
+
+@dataclass(frozen=True)
+class AuthStatusArgs:
+    json_fields: tuple[str, ...] = ()
+    jq: str | None = None
+    template: str | None = None
+    show_token: bool = False
+    active: bool = False
+
+
+@dataclass(frozen=True)
+class ApiArgs:
+    endpoint: str
+    jq: str | None = None
+    template: str | None = None
+    silent: bool = False
+
+
+def _parse_auth_status_args(argv: list[str]) -> AuthStatusArgs:
+    json_fields: tuple[str, ...] = ()
+    jq = None
+    template = None
+    show_token = False
+    active = False
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"-h", "--hostname"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            index += 2
+        elif arg.startswith("--hostname=") or arg.startswith("-h="):
+            index += 1
+        elif arg in {"--json"}:
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --json")
+            json_fields = _split_fields(argv[index + 1])
+            index += 2
+        elif arg.startswith("--json="):
+            json_fields = _split_fields(arg.split("=", 1)[1])
+            index += 1
+        elif arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg == "--template":
+            if index + 1 >= len(argv):
+                raise ValueError("missing value for --template")
+            template = argv[index + 1]
+            index += 2
+        elif arg.startswith("--template="):
+            template = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"-t", "--show-token"}:
+            show_token = True
+            index += 1
+        elif arg in {"-a", "--active"}:
+            active = True
+            index += 1
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported Forgejo auth status flag: {arg}")
+        else:
+            raise ValueError(f"unexpected positional argument for Forgejo auth status: {arg}")
+    return AuthStatusArgs(
+        json_fields=json_fields,
+        jq=jq,
+        template=template,
+        show_token=show_token,
+        active=active,
+    )
+
+
+def _parse_auth_token_args(argv: list[str]) -> None:
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"-h", "--hostname", "-u", "--user"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            index += 2
+        elif arg.startswith(("--hostname=", "-h=", "--user=", "-u=")):
+            index += 1
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported Forgejo auth token flag: {arg}")
+        else:
+            raise ValueError(f"unexpected positional argument for Forgejo auth token: {arg}")
+
+
+def _parse_api_args(argv: list[str]) -> ApiArgs:
+    endpoint = None
+    jq = None
+    template = None
+    silent = False
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"--jq", "-q"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            jq = argv[index + 1]
+            index += 2
+        elif arg.startswith("--jq=") or arg.startswith("-q="):
+            jq = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--template", "-t"}:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            template = argv[index + 1]
+            index += 2
+        elif arg.startswith("--template=") or arg.startswith("-t="):
+            template = arg.split("=", 1)[1]
+            index += 1
+        elif arg == "--silent":
+            silent = True
+            index += 1
+        elif arg in _API_FLAGS_WITH_VALUES:
+            if index + 1 >= len(argv):
+                raise ValueError(f"missing value for {arg}")
+            index += 2
+        elif _has_any_prefix(arg, _API_FLAGS_WITH_VALUE_PREFIXES):
+            index += 1
+        elif arg.startswith("-"):
+            index += 1
+        elif endpoint is None:
+            endpoint = arg
+            index += 1
+        else:
+            raise ValueError(f"unexpected positional argument for Forgejo api: {arg}")
+    if endpoint is None:
+        raise ValueError("missing Forgejo api endpoint")
+    return ApiArgs(endpoint=endpoint, jq=jq, template=template, silent=silent)
 
 
 def _parse_list_args(argv: list[str]) -> ListArgs:
@@ -1510,6 +1849,42 @@ def _format_check_item(data: dict[str, object]) -> str:
     name = data.get("name") or "status"
     description = data.get("description") or ""
     return f"{bucket}\t{name}\t{description}".rstrip()
+
+
+def _auth_status_data(host: str, token: str, *, show_token: bool) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "state": "success",
+        "active": True,
+        "host": host,
+        "login": "",
+        "tokenSource": "gh-forgejo-shim",
+        "scopes": "",
+        "gitProtocol": "https",
+    }
+    if show_token:
+        entry["token"] = token
+    return {"hosts": {host: [entry]}}
+
+
+def _print_auth_status_text(host: str, token: str | None, stdout: TextIO) -> None:
+    print(host, file=stdout)
+    print(f"  [ok] Logged in to {host} using gh-forgejo-shim", file=stdout)
+    print("  - Active account: true", file=stdout)
+    print("  - Token source: gh-forgejo-shim", file=stdout)
+    if token is not None:
+        print(f"  - Token: {token}", file=stdout)
+
+
+def _print_missing_auth_status(host: str, stderr: TextIO) -> None:
+    print(host, file=stderr)
+    print(f"  X Not logged in to {host}", file=stderr)
+    print(f"  - Run: gh-forgejo-shim auth login {host}", file=stderr)
+
+
+def _filter_selected_fields(data: dict[str, object], fields: tuple[str, ...]) -> dict[str, object]:
+    if not fields:
+        return data
+    return {field: data.get(field) for field in fields if field in data}
 
 
 _TEMPLATE_FIELD_RE = re.compile(r"{{\s*\.([A-Za-z0-9_][A-Za-z0-9_.]*)?\s*}}")

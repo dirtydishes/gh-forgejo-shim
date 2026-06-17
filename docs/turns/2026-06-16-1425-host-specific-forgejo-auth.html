@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Host-Specific Forgejo Auth</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1117;
+      --surface: #171b23;
+      --surface-2: #202633;
+      --text: #f4f7fb;
+      --muted: #b8c2d2;
+      --accent: #7dd3fc;
+      --accent-2: #a7f3d0;
+      --border: #354052;
+      --code: #dbeafe;
+      --add-bg: #102d22;
+      --add-text: #b7f7d2;
+      --del-bg: #351922;
+      --del-text: #ffc3cd;
+      --hunk: #93c5fd;
+      --file: #c4b5fd;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 48px 24px 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+    }
+
+    h1,
+    h2 {
+      line-height: 1.2;
+      text-wrap: balance;
+    }
+
+    h1 {
+      font-size: 2.25rem;
+      margin: 0 0 12px;
+    }
+
+    h2 {
+      color: var(--accent);
+      font-size: 1.12rem;
+      margin: 30px 0 10px;
+    }
+
+    p,
+    li {
+      color: var(--muted);
+    }
+
+    strong {
+      color: var(--text);
+    }
+
+    code {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      padding: 0.1rem 0.35rem;
+    }
+
+    section {
+      margin: 0 0 22px;
+    }
+
+    .lede {
+      color: var(--text);
+      font-size: 1.05rem;
+      max-width: 72ch;
+    }
+
+    .meta {
+      color: var(--accent-2);
+      font-size: 0.92rem;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    pre {
+      background: #090c12;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 14px 0;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre;
+    }
+
+    pre code {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      color: #d9e2f1;
+      display: block;
+      padding: 0;
+    }
+
+    .diff-line {
+      display: block;
+      min-width: max-content;
+    }
+
+    .file {
+      color: var(--file);
+    }
+
+    .hunk {
+      color: var(--hunk);
+    }
+
+    .add {
+      background: var(--add-bg);
+      color: var(--add-text);
+    }
+
+    .del {
+      background: var(--del-bg);
+      color: var(--del-text);
+    }
+
+    .ctx {
+      color: #d9e2f1;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="meta">Repository implementation turn · 2026-06-16 14:25</p>
+      <h1>Host-Specific Forgejo Auth</h1>
+      <p class="lede">Changed the shim so auth-required Forgejo writes fail before making an unauthenticated API request, and made <code>doctor</code> report missing tokens for the exact configured host.</p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>A failed Codex.app <code>gh pr create</code> against <code>git.dirtydishes.dev</code> showed Forgejo returning <code>HTTP 401</code> with <code>token is required</code>. The local machine had auth for another configured Forgejo host, so the old doctor check looked healthy while the routed PR create still had no token for the target host.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Added an early auth guard for routed write commands: <code>gh pr create</code>, <code>gh pr new</code>, <code>gh pr comment</code>, <code>gh issue create</code>, and <code>gh issue new</code>.</li>
+        <li>Changed <code>gh-forgejo-shim doctor</code> to check auth for each configured Forgejo host instead of only the first host.</li>
+        <li>Added regression tests for the early <code>pr create</code> failure and for mixed per-host auth state.</li>
+        <li>Updated README and configuration docs to explain that auth is host-specific.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The original command was routed correctly to Forgejo, but <code>discover_fj_token("git.dirtydishes.dev")</code> returned no token. Before this change, the shim built a client with <code>None</code>, sent the POST, and surfaced the raw Forgejo 401 response. The live doctor output now reports: <code>found for git.deltaisland.io; missing for git.dirtydishes.dev</code>.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <div class="panel">
+        <p><strong>Write-only guard:</strong> read paths such as <code>pr list</code>, <code>pr view</code>, and <code>repo view</code> can still run without a token for public repositories. Mutating paths now require host auth before client creation.</p>
+        <p><strong>Actionable error:</strong> missing auth now prints <code>gh-forgejo-shim auth login HOST</code> and <code>gh-forgejo-shim auth import HOST</code> for the routed host.</p>
+        <p><strong>Doctor semantics:</strong> the auth check is healthy only when every configured Forgejo host has a discoverable token. Mixed state becomes a warning that names both found and missing hosts.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>This is an intentional excerpt focused on the routing guard and per-host doctor check.</p>
+      <pre class="diff"><code><span class="diff-line file">diff --git a/src/gh_forgejo_shim/routing.py b/src/gh_forgejo_shim/routing.py</span>
+<span class="diff-line hunk">@@</span>
+<span class="diff-line ctx"> SUPPORTED_PR_COMMANDS = {"checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view"}</span>
+<span class="diff-line ctx"> SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}</span>
+<span class="diff-line add">+AUTH_REQUIRED_PR_COMMANDS = {"comment", "create", "new"}</span>
+<span class="diff-line add">+AUTH_REQUIRED_ISSUE_COMMANDS = {"create", "new"}</span>
+<span class="diff-line hunk">@@</span>
+<span class="diff-line ctx">     assert decision.repo is not None</span>
+<span class="diff-line ctx">     token = discover_fj_token(decision.repo.host, env=values)</span>
+<span class="diff-line add">+    if token is None and _requires_forgejo_auth(argv):</span>
+<span class="diff-line add">+        print(_missing_auth_message(decision.repo.host), file=err)</span>
+<span class="diff-line add">+        return 1</span>
+<span class="diff-line ctx">     client = client_factory(token) if client_factory else ForgejoClient(token)</span>
+<span class="diff-line hunk">@@</span>
+<span class="diff-line add">+def _missing_auth_message(host: str) -&gt; str:</span>
+<span class="diff-line add">+    return (</span>
+<span class="diff-line add">+        f"gh-forgejo-shim: Forgejo auth is not configured for {host}; "</span>
+<span class="diff-line add">+        f"run gh-forgejo-shim auth login {host} "</span>
+<span class="diff-line add">+        f"or gh-forgejo-shim auth import {host}"</span>
+<span class="diff-line add">+    )</span>
+
+<span class="diff-line file">diff --git a/src/gh_forgejo_shim/doctor.py b/src/gh_forgejo_shim/doctor.py</span>
+<span class="diff-line hunk">@@</span>
+<span class="diff-line del">-    token = discover_fj_token(next(iter(cfg.hosts), None), env=values, home=home)</span>
+<span class="diff-line hunk">@@</span>
+<span class="diff-line del">-        Check(</span>
+<span class="diff-line del">-            "auth token",</span>
+<span class="diff-line del">-            token is not None,</span>
+<span class="diff-line del">-            "found" if token else "run gh-forgejo-shim auth login HOST or set FJ_SHIM_TOKEN",</span>
+<span class="diff-line del">-        ),</span>
+<span class="diff-line add">+        _auth_check(cfg.hosts, values, home=home),</span>
+<span class="diff-line hunk">@@</span>
+<span class="diff-line add">+def _auth_check(hosts: tuple[str, ...], env: Mapping[str, str], *, home: Path | None) -&gt; Check:</span>
+<span class="diff-line add">+    found: list[str] = []</span>
+<span class="diff-line add">+    missing: list[str] = []</span>
+<span class="diff-line add">+    for host in hosts:</span>
+<span class="diff-line add">+        token = discover_fj_token(host, env=env, home=home)</span>
+<span class="diff-line add">+        if token:</span>
+<span class="diff-line add">+            found.append(host)</span>
+<span class="diff-line add">+        else:</span>
+<span class="diff-line add">+            missing.append(host)</span>
+<span class="diff-line add">+    if not missing:</span>
+<span class="diff-line add">+        return Check("auth token", True, f"found for {', '.join(found)}")</span></code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>Codex.app users should get a direct repair command instead of a raw Forgejo 401 when creating PRs without auth for the target host. Doctor output should also stop hiding mixed auth state when more than one Forgejo host is configured.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li>Ran <code>PYTHONPATH=src python3 -m unittest tests.test_routing tests.test_doctor</code>: <code>Ran 44 tests</code>, <code>OK</code>.</li>
+        <li>Ran <code>PYTHONPATH=src python3 -m unittest</code>: <code>Ran 104 tests</code>, <code>OK</code>.</li>
+        <li>Ran the original <code>gh pr create</code> shape through the source tree with <code>GH_REPO=git.dirtydishes.dev/dishes/islandflow</code> and confirmed it prints the host-specific auth repair command before any API call.</li>
+        <li>Ran source-tree <code>doctor</code> and confirmed it reports <code>git.dirtydishes.dev</code> as missing auth while preserving the existing token report for <code>git.deltaisland.io</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>This does not create a token for <code>git.dirtydishes.dev</code>; it makes the missing auth visible and prevents an unauthenticated write request.</li>
+        <li>Read-only commands are intentionally still allowed without a token for public Forgejo repositories.</li>
+        <li><code>gh-forgejo-shim doctor</code> may now warn when any allowlisted host lacks auth, even if the current repo uses a different host. The warning names the missing hosts so stale allowlist entries are easy to clean up or authenticate.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Run <code>gh-forgejo-shim auth login git.dirtydishes.dev</code> or <code>gh-forgejo-shim auth import git.dirtydishes.dev</code> on this machine before retrying the IslandFlow PR create command.</li>
+        <li>Consider adding a Beads issue if doctor should prefer the current repository host over all configured hosts for its exit code.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
