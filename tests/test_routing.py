@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,14 @@ from pathlib import Path
 from gh_forgejo_shim.config import Config
 from gh_forgejo_shim.forgejo import ForgejoClient, RepoRef
 from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr, run_gh
+
+
+def codex_create_pr_url(output: str) -> str | None:
+    for match in re.finditer(r"https?://\S+", output):
+        url = match.group(0).rstrip("),.")
+        if re.search(r"/pull/\d+(?:\b|$)", url):
+            return url
+    return None
 
 
 class FakeClient(ForgejoClient):
@@ -321,6 +330,35 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(client.created["title"], "Ship it")
         self.assertTrue(client.created["draft"])
         self.assertEqual(json.loads(out.getvalue()), {"number": 7, "title": "Ship it", "url": "https://git.example.com/owner/repo/pulls/7"})
+
+    def test_create_default_output_surfaces_url_for_codex_app(self) -> None:
+        client = FakeClient()
+        out = io.StringIO()
+        code = run_forgejo_pr(
+            [
+                "pr",
+                "create",
+                "-R",
+                "git.example.com/owner/repo",
+                "--title",
+                "Ship it",
+                "--body",
+                "body",
+                "--base",
+                "main",
+                "--head",
+                "feature",
+            ],
+            RepoRef("git.example.com", "owner", "repo"),
+            client,
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            codex_create_pr_url(out.getvalue()),
+            "https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7",
+        )
 
     def test_pr_list_outputs_json_array(self) -> None:
         out = io.StringIO()

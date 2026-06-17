@@ -40,6 +40,7 @@ SUPPORTED_PR_COMMANDS = {"checks", "checkout", "co", "comment", "create", "diff"
 SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}
 SUPPORTED_REPO_COMMANDS = {"view"}
 SUPPORTED_AUTH_COMMANDS = {"status", "token"}
+CODEX_CREATE_PR_URL_RE = re.compile(r"/pull/\d+(?:\b|$)")
 
 
 @dataclass(frozen=True)
@@ -447,7 +448,8 @@ def _run_create(
     if options.json_fields:
         print(json.dumps(filter_fields(normalized, options.json_fields), sort_keys=True), file=stdout)
     else:
-        print(normalized.get("url") or pull.get("html_url") or pull.get("url") or "", file=stdout)
+        created_url = normalized.get("url") or pull.get("html_url") or pull.get("url") or ""
+        print(format_created_pull_url(created_url), file=stdout)
     return 0
 
 
@@ -2049,6 +2051,22 @@ def _number_from_url(value: str, *, kind: str) -> int | None:
         if part in markers and index + 1 < len(parts) and parts[index + 1].isdigit():
             return int(parts[index + 1])
     return None
+
+
+def format_created_pull_url(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    if CODEX_CREATE_PR_URL_RE.search(value):
+        return value
+    number = _number_from_url(value, kind="pull")
+    if number is None:
+        return value
+    marker = f"codex-pr=/pull/{number}"
+    parsed = urllib.parse.urlparse(value)
+    if CODEX_CREATE_PR_URL_RE.search(parsed.fragment):
+        return value
+    fragment = f"{parsed.fragment}&{marker}" if parsed.fragment else marker
+    return urllib.parse.urlunparse(parsed._replace(fragment=fragment))
 
 
 def _resolve_pull(

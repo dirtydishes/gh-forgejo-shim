@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Surface Forgejo PR URLs in Codex.app</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --surface: #141a22;
+      --ink: #edf2f7;
+      --muted: #a9b5c5;
+      --line: #2b3544;
+      --accent: #77d5c8;
+      --accent-2: #f0c36a;
+      --ok: #7ee787;
+      --warn: #f0c36a;
+      --code: #090d13;
+      --add-bg: rgba(35, 134, 54, 0.32);
+      --del-bg: rgba(218, 54, 51, 0.28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; }
+    main { width: min(1120px, calc(100vw - 40px)); margin: 0 auto; padding: 44px 0 64px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 28px; }
+    h1, h2, h3 { margin: 0; line-height: 1.18; letter-spacing: 0; text-wrap: balance; }
+    h1 { max-width: 850px; font-size: 2.25rem; }
+    h2 { margin-top: 34px; font-size: 1.25rem; }
+    h3 { margin: 0 0 6px; font-size: 1rem; color: var(--accent); }
+    p, li { max-width: 74ch; color: var(--muted); }
+    code { background: var(--code); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 0.08rem 0.28rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+    pre { overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 14px; color: var(--ink); }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 0.92rem; }
+    .pill { border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 5px 10px; }
+    .lead { font-size: 1.06rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 14px; }
+    .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 15px; }
+    .panel p { margin: 0; }
+    .status { color: var(--ok); font-weight: 650; }
+    .caveat { color: var(--warn); font-weight: 650; }
+    .diff { margin-top: 14px; }
+    .diff code { display: block; padding: 0; border: 0; background: transparent; color: inherit; font-size: 0.84rem; line-height: 1.55; white-space: pre; min-width: max-content; }
+    .file { color: var(--accent-2); }
+    .add { display: block; background: var(--add-bg); color: #ddffdf; }
+    .del { display: block; background: var(--del-bg); color: #ffd9d7; }
+    .ctx { display: block; color: #c8d3df; }
+    ul { padding-left: 1.2rem; }
+    li + li { margin-top: 0.36rem; }
+    @media (max-width: 680px) {
+      main { width: min(100% - 28px, 1120px); padding: 30px 0 48px; }
+      h1 { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span class="pill">2026-06-17</span>
+      <span class="pill">Repository implementation</span>
+      <span class="pill">Issue gh-forgejo-shim-ewk</span>
+    </div>
+    <h1>Surfaced Forgejo PR links in Codex.app</h1>
+    <p class="lead">The shim now prints a Forgejo pull request URL that Codex.app can recognize after <code>gh pr create</code>, without changing the real Forgejo URL or JSON output contract.</p>
+  </header>
+
+  <section>
+    <h2>Summary</h2>
+    <p>Codex.app was creating Forgejo pull requests but not surfacing the resulting link. The local Codex.app bundle showed that its create-PR action scans command output for an HTTP URL containing GitHub-style <code>/pull/7</code>. Forgejo correctly returns <code>/pulls/7</code>, so the URL was skipped. This change appends a harmless fragment marker, such as <code>#codex-pr=/pull/7</code>, to default human output only.</p>
+  </section>
+
+  <section>
+    <h2>Changes Made</h2>
+    <div class="grid">
+      <article class="panel"><h3>Codex Link Marker</h3><p>Added <code>format_created_pull_url</code> so default <code>gh pr create</code> output keeps the Forgejo <code>/pulls/7</code> path and adds a Codex-recognized fragment marker.</p></article>
+      <article class="panel"><h3>Clean JSON Output</h3><p>Left <code>gh pr create --json ...</code> unchanged, so API-style callers still receive the canonical Forgejo pull request URL.</p></article>
+      <article class="panel"><h3>Regression Test</h3><p>Added a small parser copy of Codex.app's URL recognition rule and a focused test proving the shim output is now detectable.</p></article>
+      <article class="panel"><h3>README Note</h3><p>Documented why the default URL includes a fragment marker and why it exists only for Codex.app compatibility.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Context</h2>
+    <p>The important distinction is that the Forgejo URL was already valid for a browser, but Codex.app was filtering it out before presenting the link. The app's local create-PR action combines stdout and stderr, extracts HTTP URLs, trims trailing punctuation, and accepts only URLs that match <code>/pull/\d+</code>. A Forgejo URL like <code>https://git.example.com/owner/repo/pulls/7</code> therefore failed the GUI's link detector even though it pointed to the right page.</p>
+  </section>
+
+  <section>
+    <h2>Important Implementation Details</h2>
+    <ul>
+      <li>The fragment preserves browser behavior: opening <code>https://host/owner/repo/pulls/7#codex-pr=/pull/7</code> still loads the real Forgejo pull request page.</li>
+      <li>The formatter is idempotent for URLs that already contain a GitHub-style <code>/pull/7</code> path or fragment.</li>
+      <li>If the value is not a URL or does not contain a pull request number, the shim prints it unchanged rather than guessing.</li>
+      <li>The regression test mirrors the observed Codex.app recognition rule, so a future change that drops the marker will fail before reaching the installed wrapper.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Relevant Diff Snippets</h2>
+    <p>Focused unified diff fallback. It shows the output formatter, the Codex-style regression test, and the README note without embedding unrelated context.</p>
+    <pre class="diff"><code><span class="file">diff --git a/src/gh_forgejo_shim/routing.py b/src/gh_forgejo_shim/routing.py</span>
+<span class="ctx">@@</span>
+<span class="ctx"> SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}</span>
+<span class="ctx"> SUPPORTED_REPO_COMMANDS = {"view"}</span>
+<span class="ctx"> SUPPORTED_AUTH_COMMANDS = {"status", "token"}</span>
+<span class="add">+CODEX_CREATE_PR_URL_RE = re.compile(r"/pull/\d+(?:\b|$)")</span>
+<span class="ctx">@@</span>
+<span class="ctx">     if options.json_fields:</span>
+<span class="ctx">         print(json.dumps(filter_fields(normalized, options.json_fields), sort_keys=True), file=stdout)</span>
+<span class="ctx">     else:</span>
+<span class="del">-        print(normalized.get("url") or pull.get("html_url") or pull.get("url") or "", file=stdout)</span>
+<span class="add">+        created_url = normalized.get("url") or pull.get("html_url") or pull.get("url") or ""</span>
+<span class="add">+        print(format_created_pull_url(created_url), file=stdout)</span>
+<span class="ctx">     return 0</span>
+<span class="ctx">@@</span>
+<span class="add">+def format_created_pull_url(value: object) -&gt; str:</span>
+<span class="add">+    if not isinstance(value, str) or not value:</span>
+<span class="add">+        return ""</span>
+<span class="add">+    if CODEX_CREATE_PR_URL_RE.search(value):</span>
+<span class="add">+        return value</span>
+<span class="add">+    number = _number_from_url(value, kind="pull")</span>
+<span class="add">+    if number is None:</span>
+<span class="add">+        return value</span>
+<span class="add">+    marker = f"codex-pr=/pull/{number}"</span>
+<span class="add">+    parsed = urllib.parse.urlparse(value)</span>
+<span class="add">+    if CODEX_CREATE_PR_URL_RE.search(parsed.fragment):</span>
+<span class="add">+        return value</span>
+<span class="add">+    fragment = f"{parsed.fragment}&amp;{marker}" if parsed.fragment else marker</span>
+<span class="add">+    return urllib.parse.urlunparse(parsed._replace(fragment=fragment))</span>
+
+<span class="file">diff --git a/tests/test_routing.py b/tests/test_routing.py</span>
+<span class="ctx">@@</span>
+<span class="add">+def codex_create_pr_url(output: str) -&gt; str | None:</span>
+<span class="add">+    for match in re.finditer(r"https?://\S+", output):</span>
+<span class="add">+        url = match.group(0).rstrip("),.")</span>
+<span class="add">+        if re.search(r"/pull/\d+(?:\b|$)", url):</span>
+<span class="add">+            return url</span>
+<span class="add">+    return None</span>
+<span class="ctx">@@</span>
+<span class="add">+    def test_create_default_output_surfaces_url_for_codex_app(self) -&gt; None:</span>
+<span class="add">+        client = FakeClient()</span>
+<span class="add">+        out = io.StringIO()</span>
+<span class="add">+        code = run_forgejo_pr(</span>
+<span class="add">+            ["pr", "create", "-R", "git.example.com/owner/repo", "--title", "Ship it", "--body", "body", "--base", "main", "--head", "feature"],</span>
+<span class="add">+            RepoRef("git.example.com", "owner", "repo"),</span>
+<span class="add">+            client,</span>
+<span class="add">+            stdout=out,</span>
+<span class="add">+            stderr=io.StringIO(),</span>
+<span class="add">+        )</span>
+<span class="add">+        self.assertEqual(code, 0)</span>
+<span class="add">+        self.assertEqual(</span>
+<span class="add">+            codex_create_pr_url(out.getvalue()),</span>
+<span class="add">+            "https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7",</span>
+<span class="add">+        )</span>
+
+<span class="file">diff --git a/README.md b/README.md</span>
+<span class="ctx">@@</span>
+<span class="ctx"> GitHub-only metadata flags such as reviewers, labels, assignees, projects, milestones, templates, recover, and maintainer-edit controls fail with a Forgejo-specific error.</span>
+<span class="add">+By default, `gh pr create` prints the created Forgejo pull request URL. For Codex.app compatibility, Forgejo `/pulls/7` URLs include a harmless fragment marker like `#codex-pr=/pull/7`, because Codex.app's create-PR action recognizes GitHub-style `/pull/7` URL markers when surfacing the new PR link.</span></code></pre>
+  </section>
+
+  <section>
+    <h2>Expected Impact for End-Users</h2>
+    <p>After Codex.app creates a Forgejo pull request through the shim, the app should be able to surface the clickable PR link instead of silently losing it. CLI users still see a URL that opens the Forgejo pull request page, and JSON consumers continue to receive the unmodified Forgejo URL.</p>
+  </section>
+
+  <section>
+    <h2>Validation</h2>
+    <ul>
+      <li><span class="status">Passed:</span> the new focused regression test failed before the formatter was added, proving it covered the observed Codex.app behavior.</li>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest tests.test_routing.RoutingTests.test_create_default_output_surfaces_url_for_codex_app</code>.</li>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest tests.test_routing.RoutingTests.test_create_calls_forgejo_client</code>, confirming JSON output still returns the clean Forgejo URL.</li>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest</code> ran 99 tests successfully.</li>
+      <li><span class="status">Passed:</span> <code>pipx install --force .</code> updated the active local wrapper package.</li>
+      <li><span class="status">Passed:</span> <code>/Users/kell/.local/bin/gh-forgejo-shim version</code> reported <code>0.1.1</code>.</li>
+      <li><span class="status">Passed:</span> the installed formatter returned <code>https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7</code> for a Forgejo pull URL.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Issues, Limitations, and Mitigations</h2>
+    <ul>
+      <li><span class="caveat">Limitation:</span> this depends on the Codex.app parser behavior observed in the local app bundle. The regression test documents that contract so future parser changes are easier to notice.</li>
+      <li><span class="caveat">Tradeoff:</span> the default CLI output now includes a fragment on Forgejo create URLs. It is intentionally harmless for browsers and does not affect JSON output.</li>
+      <li><span class="caveat">Deployment note:</span> the active pipx-installed shim was refreshed from this checkout, so new Codex.app PR creation attempts should use the fixed formatter.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Follow-up Work</h2>
+    <ul>
+      <li>Run a real Codex.app PR creation flow against a Forgejo test repository and confirm the app presents the link in the UI.</li>
+      <li>If Codex.app later accepts <code>/pulls/7</code> directly, remove the compatibility fragment and simplify the formatter.</li>
+      <li>Consider adding a small integration smoke command that prints the default create URL shape without needing to create a remote pull request.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

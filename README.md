@@ -245,6 +245,8 @@ Unsupported commands and unsupported flags fail explicitly when routed, or deleg
 
 GitHub-only metadata flags such as reviewers, labels, assignees, projects, milestones, templates, recover, and maintainer-edit controls fail with a Forgejo-specific error.
 
+By default, `gh pr create` prints the created Forgejo pull request URL. For Codex.app compatibility, Forgejo `/pulls/7` URLs include a harmless fragment marker like `#codex-pr=/pull/7`, because Codex.app's create-PR action recognizes GitHub-style `/pull/7` URL markers when surfacing the new PR link.
+
 `gh pr list` supports JSON output, repo selection, state, limit, head, and base filters. It currently accepts but does not apply several GitHub search-style filters, including author, app, assignee, label, and search. Real filtering for those flags is tracked as follow-up work in Beads issue `gh-forgejo-shim-9r8`.
 
 `gh pr view` and `gh pr status` return successfully when the current branch has no open PR. For JSON output, `gh pr view --json ...` returns `{}`, and `gh pr status --json ...` returns the GitHub CLI status envelope with `"currentBranch": null`.
