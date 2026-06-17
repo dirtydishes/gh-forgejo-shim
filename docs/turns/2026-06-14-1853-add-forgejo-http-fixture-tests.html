@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add Forgejo HTTP Fixture Tests</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101114;
+      --panel: #191b21;
+      --panel-2: #20242c;
+      --text: #f2f5f7;
+      --muted: #abb6c4;
+      --accent: #7dd3fc;
+      --accent-2: #a7f3d0;
+      --border: #343a46;
+      --add-bg: #123022;
+      --add-text: #b7f7d2;
+      --del-bg: #3a1a22;
+      --del-text: #ffc3cd;
+      --code: #dbeafe;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 48px 24px 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+    }
+
+    h1, h2 {
+      line-height: 1.2;
+      text-wrap: balance;
+    }
+
+    h1 {
+      font-size: 2.35rem;
+      margin: 0 0 12px;
+    }
+
+    h2 {
+      font-size: 1.15rem;
+      margin: 30px 0 10px;
+      color: var(--accent);
+    }
+
+    p, li {
+      color: var(--muted);
+    }
+
+    strong {
+      color: var(--text);
+    }
+
+    code {
+      color: var(--code);
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 0.1rem 0.35rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    section {
+      margin: 0 0 22px;
+    }
+
+    .lede {
+      color: var(--text);
+      max-width: 72ch;
+      font-size: 1.05rem;
+    }
+
+    .meta {
+      color: var(--accent-2);
+      font-size: 0.92rem;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: #0b0d11;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 14px 0;
+      padding: 16px;
+      white-space: pre;
+    }
+
+    pre code {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      color: #d9e2f1;
+      display: block;
+      padding: 0;
+    }
+
+    .diff .file { color: #c4b5fd; }
+    .diff .hunk { color: #93c5fd; }
+    .diff .add { color: var(--add-text); background: var(--add-bg); display: block; }
+    .diff .del { color: var(--del-text); background: var(--del-bg); display: block; }
+    .diff .ctx { color: #d9e2f1; display: block; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="meta">Repository implementation turn · 2026-06-14 18:53</p>
+      <h1>Add Forgejo HTTP Fixture Tests</h1>
+      <p class="lede">Added a stdlib-only integration layer that drives <code>ForgejoClient</code> through a local HTTP server, covering real request construction without Docker or a live Forgejo instance.</p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>The client can now be pointed at a local base URL for tests while preserving the default <code>https://host/api/v1</code> behavior in normal use. A new integration test module verifies HTTP methods, URL quoting, headers, JSON bodies, query strings, text diffs, response shape handling, invalid JSON, and HTTP errors.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Added optional <code>base_url</code> support to <code>ForgejoClient</code>.</li>
+        <li>Routed all repo API URLs through a shared helper so localhost fixtures and production hosts use the same path construction.</li>
+        <li>Added <code>tests/test_forgejo_integration.py</code> with a <code>ThreadingHTTPServer</code> fixture that records requests and serves Forgejo-shaped responses.</li>
+        <li>Closed <code>HTTPError</code> objects after reading error bodies to avoid resource warnings on modern Python.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The previous test suite covered routing and normalization with fake client objects. This new layer sits one boundary lower: it uses real <code>urllib.request</code> calls against a local server, so regressions in paths, headers, encoded query strings, or JSON/text decoding are visible without needing a disposable Forgejo container.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <div class="panel">
+        <p><strong>Base URL override:</strong> <code>ForgejoClient(token, base_url="http://127.0.0.1:PORT")</code> now builds URLs as <code>{base_url}/api/v1/...</code>. Without an override, URLs are still built from the repo host as before.</p>
+        <p><strong>Fixture behavior:</strong> the test server records method, path, parsed query, headers, raw body, and decoded JSON body for each request. Tests assert those records directly.</p>
+        <p><strong>Offline scope:</strong> the fixture validates Forgejo-compatible HTTP boundary behavior, not full real-server parity.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>This excerpt shows the key production change and representative fixture assertions.</p>
+      <pre class="diff"><code><span class="file">diff --git a/src/gh_forgejo_shim/forgejo.py b/src/gh_forgejo_shim/forgejo.py</span>
+<span class="hunk">@@ class ForgejoClient:</span>
+<span class="del">-    def __init__(self, token: str | None = None, *, timeout: float = 30) -&gt; None:</span>
+<span class="add">+    def __init__(self, token: str | None = None, *, timeout: float = 30, base_url: str | None = None) -&gt; None:</span>
+<span class="ctx">         self.token = token</span>
+<span class="ctx">         self.timeout = timeout</span>
+<span class="add">+        self.base_url = base_url.rstrip("/") if base_url else None</span>
+<span class="ctx"> </span>
+<span class="ctx">     def get_current_user(self, host: str) -&gt; dict[str, Any]:</span>
+<span class="del">-        return self._request_json("GET", f"https://{_host_for_url(host)}/api/v1/user", None)</span>
+<span class="add">+        return self._request_json("GET", f"{self._api_root(host)}/user", None)</span>
+<span class="hunk">@@</span>
+<span class="add">+    def _api_root(self, host: str) -&gt; str:</span>
+<span class="add">+        if self.base_url:</span>
+<span class="add">+            return f"{self.base_url}/api/v1"</span>
+<span class="add">+        return f"https://{_host_for_url(host)}/api/v1"</span>
+<span class="add">+</span>
+<span class="add">+    def _repo_api_base_url(self, repo: RepoRef) -&gt; str:</span>
+<span class="add">+        return f"{self._api_root(repo.host)}/repos/{_quote(repo.owner)}/{_quote(repo.repo)}"</span>
+
+<span class="file">diff --git a/tests/test_forgejo_integration.py b/tests/test_forgejo_integration.py</span>
+<span class="hunk">@@</span>
+<span class="add">+class ForgejoClientHttpFixtureTests(unittest.TestCase):</span>
+<span class="add">+    def setUp(self) -&gt; None:</span>
+<span class="add">+        self.fixture = ForgejoFixture()</span>
+<span class="add">+        self.fixture.start()</span>
+<span class="add">+        self.client = ForgejoClient("test-token", timeout=5, base_url=self.fixture.base_url)</span>
+<span class="add">+        self.repo = RepoRef("ignored.example", "owner", "repo")</span>
+<span class="hunk">@@</span>
+<span class="add">+    def test_path_components_are_url_quoted(self) -&gt; None:</span>
+<span class="add">+        quoted_repo = RepoRef("ignored.example", "space owner", "repo/name")</span>
+<span class="add">+        self.client.get_repo(quoted_repo)</span>
+<span class="add">+        self.client.list_commit_statuses(quoted_repo, "abc/123")</span>
+<span class="add">+        self.assertEqual(</span>
+<span class="add">+            [request.path for request in self.fixture.requests],</span>
+<span class="add">+            ["/api/v1/repos/space%20owner/repo%2Fname", "/api/v1/repos/space%20owner/repo%2Fname/statuses/abc%2F123"],</span>
+<span class="add">+        )</span></code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>End users should see no behavior change. The main benefit is maintainability: future client changes have a faster offline safety net that catches broken Forgejo REST calls before they reach real repositories.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li>Ran <code>PYTHONPATH=src python3 -m unittest</code>.</li>
+        <li>Result: <code>Ran 102 tests in 10.747s</code>, <code>OK</code>.</li>
+        <li>Confirmed the warning-free HTTP error path after explicitly closing <code>HTTPError</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The fixture is Forgejo-compatible but intentionally not a full Forgejo implementation.</li>
+        <li>The tests do not cover TLS, auth storage, server pagination, or network retries.</li>
+        <li>The local server keeps the integration layer fast and deterministic, which is the intended first pass.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <p>Optional future work: file a separate Beads issue for a Docker-backed Forgejo smoke test if real-server parity becomes important for release gates.</p>
+    </section>
+  </main>
+</body>
+</html>
