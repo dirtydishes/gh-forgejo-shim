@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Python Development Testing Loop</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1118;
+      --surface: #131a24;
+      --surface-2: #182232;
+      --ink: #eef4fb;
+      --muted: #aeb9c8;
+      --line: #2b3646;
+      --accent: #79d6c9;
+      --accent-2: #f0c36a;
+      --ok: #7ee787;
+      --code: #080d13;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.62;
+    }
+
+    main {
+      width: min(1040px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 44px 0 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 30px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.2;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 860px;
+      font-size: 2.35rem;
+    }
+
+    h2 {
+      margin-top: 34px;
+      font-size: 1.32rem;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      color: var(--accent);
+      font-size: 1rem;
+    }
+
+    p,
+    li {
+      max-width: 74ch;
+      color: var(--muted);
+    }
+
+    code {
+      background: var(--code);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 0.08rem 0.28rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      color: var(--ink);
+      padding: 14px;
+    }
+
+    pre code {
+      display: block;
+      min-width: max-content;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      white-space: pre;
+      line-height: 1.55;
+      font-size: 0.86rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+
+    .lead {
+      max-width: 78ch;
+      font-size: 1.07rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 16px;
+    }
+
+    .panel p {
+      margin: 0;
+    }
+
+    .callout {
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-2) 84%, var(--accent) 16%);
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .callout p {
+      margin: 0;
+      color: var(--ink);
+    }
+
+    .ok {
+      color: var(--ok);
+      font-weight: 650;
+    }
+
+    .warn {
+      color: var(--accent-2);
+      font-weight: 650;
+    }
+
+    ul,
+    ol {
+      padding-left: 1.2rem;
+    }
+
+    li + li {
+      margin-top: 0.42rem;
+    }
+
+    @media (max-width: 680px) {
+      main {
+        width: min(100% - 28px, 1040px);
+        padding: 30px 0 48px;
+      }
+
+      h1 {
+        font-size: 1.85rem;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span class="pill">gh-forgejo-shim</span>
+      <span class="pill">python development</span>
+      <span class="pill">testing loop</span>
+    </div>
+    <h1>Test Python changes without reinstalling every time</h1>
+    <p class="lead">During normal development, install the project once in editable mode, then run tests and CLI smoke checks against the live source tree. Reinstall only when packaging metadata, dependencies, or entry points change.</p>
+  </header>
+
+  <section>
+    <h2>The Rule</h2>
+    <div class="callout">
+      <p><strong>Use <code>python -m pip install -e .</code> for development.</strong> Editable install keeps command entry points available while importing the package from the checkout, so ordinary <code>.py</code> edits are picked up the next time tests or commands run.</p>
+    </div>
+    <div class="grid">
+      <article class="panel">
+        <h3>No Reinstall</h3>
+        <p>Needed after normal source edits in package modules or tests. Re-run the command or test process instead.</p>
+      </article>
+      <article class="panel">
+        <h3>Editable Reinstall</h3>
+        <p>Useful after changing dependencies, package metadata, console scripts, or <code>pyproject.toml</code>.</p>
+      </article>
+      <article class="panel">
+        <h3>Real Install</h3>
+        <p>Use only when validating the package as a user would install it, including pipx or release packaging behavior.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>One-Time Development Setup</h2>
+    <p>Create a local virtual environment, activate it, then install the package in editable mode. If the repo defines optional test dependencies, use the test extra.</p>
+    <pre><code>cd "$HOME/dev/gh-forgejo-shim"
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]"</code></pre>
+    <p>If the project does not define a <code>test</code> extra, install editable mode directly and add the test runner separately:</p>
+    <pre><code>python -m pip install -e .
+python -m pip install pytest</code></pre>
+  </section>
+
+  <section>
+    <h2>Daily Test Loop</h2>
+    <p>Run the smallest check that proves the thing you changed, then broaden before committing.</p>
+    <pre><code>python -m pytest</code></pre>
+    <p>Run one test file while iterating:</p>
+    <pre><code>python -m pytest tests/test_auth.py</code></pre>
+    <p>Run one specific test when you know the failing behavior:</p>
+    <pre><code>python -m pytest tests/test_auth.py::test_name_here</code></pre>
+  </section>
+
+  <section>
+    <h2>CLI Smoke Checks</h2>
+    <p>After an editable install, console commands should point at the live checkout. Re-run the command after each edit; the process starts fresh and imports the latest source.</p>
+    <pre><code>gfj --help
+gh-forgejo-shim --help
+gh-forgejo-shim doctor</code></pre>
+    <p>You can also bypass installed entry points and run the module directly:</p>
+    <pre><code>python -m gh_forgejo_shim --help</code></pre>
+  </section>
+
+  <section>
+    <h2>When To Reinstall</h2>
+    <ul>
+      <li><span class="ok">Do not reinstall</span> after changing regular Python files such as <code>auth.py</code>, <code>routing.py</code>, or tests.</li>
+      <li><span class="warn">Reinstall editable</span> after changing <code>pyproject.toml</code>, dependency declarations, package data, or console-script entry points.</li>
+      <li><span class="warn">Do a real install</span> when validating pipx behavior, wheel contents, release packaging, or the installed wrapper path.</li>
+    </ul>
+    <pre><code>python -m pip install -e .
+python -m pip install .</code></pre>
+  </section>
+
+  <section>
+    <h2>Pipx Validation</h2>
+    <p>Use pipx when you need to prove the package behaves like a user-installed command-line tool. This is a slower packaging check, not the inner development loop.</p>
+    <pre><code>pipx install --force .
+gfj --help
+gh-forgejo-shim doctor</code></pre>
+  </section>
+
+  <section>
+    <h2>Troubleshooting</h2>
+    <ul>
+      <li>If imports fail, confirm the virtual environment is active with <code>which python</code>.</li>
+      <li>If <code>gfj</code> still runs old behavior, confirm it resolves inside the virtual environment with <code>which gfj</code>.</li>
+      <li>If tests cannot find <code>pytest</code>, install the test extra or run <code>python -m pip install pytest</code>.</li>
+      <li>If GUI-launched tools still see old behavior, reinstall through the same mechanism those tools use and restart the app.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
