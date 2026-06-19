@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Developer Testing Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --surface: #141a22;
+      --surface-2: #192230;
+      --ink: #eef4fb;
+      --muted: #aeb9c8;
+      --line: #2b3544;
+      --accent: #77d5c8;
+      --accent-2: #f0c36a;
+      --ok: #7ee787;
+      --code: #090d13;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.62;
+    }
+    main {
+      width: min(1120px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 44px 0 64px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 30px;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.2;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+    h1 {
+      max-width: 860px;
+      font-size: 2.35rem;
+    }
+    h2 {
+      margin-top: 36px;
+      font-size: 1.32rem;
+    }
+    h3 {
+      margin-bottom: 8px;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+    p, li {
+      max-width: 74ch;
+      color: var(--muted);
+    }
+    a {
+      color: var(--accent);
+      text-underline-offset: 0.18em;
+    }
+    code {
+      background: var(--code);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 0.08rem 0.28rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow: auto;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      color: var(--ink);
+    }
+    pre code {
+      display: block;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      white-space: pre;
+      min-width: max-content;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+    .lead {
+      max-width: 78ch;
+      font-size: 1.08rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 16px;
+    }
+    .panel p {
+      margin: 0;
+    }
+    .callout {
+      margin-top: 16px;
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-2) 80%, var(--accent) 20%);
+      padding: 16px;
+    }
+    .callout p {
+      margin: 0;
+      color: var(--ink);
+    }
+    .check {
+      color: var(--ok);
+      font-weight: 650;
+    }
+    ul {
+      padding-left: 1.2rem;
+    }
+    li + li {
+      margin-top: 0.38rem;
+    }
+    @media (max-width: 680px) {
+      main {
+        width: min(100% - 28px, 1120px);
+        padding: 30px 0 48px;
+      }
+      h1 {
+        font-size: 1.85rem;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span class="pill">gh-forgejo-shim</span>
+      <span class="pill">developer docs</span>
+      <span class="pill">testing workflow</span>
+    </div>
+    <h1>Testing During Development</h1>
+    <p class="lead">Most changes can be tested directly from the checkout. Reinstall the package only when you need to verify the installed <code>gh</code> wrapper or a GUI app such as Codex.app.</p>
+  </header>
+
+  <section>
+    <h2>The Mental Model</h2>
+    <p>There are three useful testing loops in this project. Pick the smallest one that proves the thing you changed.</p>
+    <div class="grid">
+      <article class="panel">
+        <h3>Source Loop</h3>
+        <p>Fastest. Run unit tests or invoke the module with <code>PYTHONPATH=src</code>. No reinstall needed.</p>
+      </article>
+      <article class="panel">
+        <h3>Installed Wrapper Loop</h3>
+        <p>Use this when testing the real <code>~/.local/bin/gh</code> wrapper, pipx packaging, entry points, or the installed venv.</p>
+      </article>
+      <article class="panel">
+        <h3>Codex.app Loop</h3>
+        <p>Use this when validating GUI behavior. Refresh the installed package, restart the app when needed, and test a fresh action.</p>
+      </article>
+    </div>
+    <div class="callout">
+      <p><strong>Rule of thumb:</strong> edit code, run source tests repeatedly, reinstall once when you are ready to test the behavior as Codex.app or another external tool will see it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Paths Used In Examples</h2>
+    <p>Examples use <code>$HOME</code> so they work for any macOS user. On this machine, <code>$HOME</code> expands to <code>/Users/kell</code>. If your checkout is elsewhere, replace <code>$HOME/dev/gh-forgejo-shim</code> with your repo path.</p>
+    <pre><code>cd "$HOME/dev/gh-forgejo-shim"</code></pre>
+  </section>
+
+  <section>
+    <h2>Python Version</h2>
+    <p>The package requires Python 3.11 or newer. If <code>python3</code> points at Apple's older system Python, tests can fail before reaching the behavior you changed because modules such as <code>tomllib</code> are missing.</p>
+    <pre><code>python3 --version
+/opt/homebrew/bin/python3 --version</code></pre>
+    <p>Use the newer interpreter explicitly when needed:</p>
+    <pre><code>PYTHON=/opt/homebrew/bin/python3
+$PYTHON -m unittest</code></pre>
+  </section>
+
+  <section>
+    <h2>Fast Source Testing</h2>
+    <p>Use this loop for normal implementation work. It exercises the files in your checkout, not the package installed into pipx.</p>
+    <pre><code>python3 -m unittest</code></pre>
+    <p>Run focused tests while iterating on a specific behavior:</p>
+    <pre><code>python3 -m unittest tests.test_routing.RoutingTests.test_create_default_output_surfaces_url_for_codex_app
+python3 -m unittest tests.test_routing.RoutingTests.test_create_calls_forgejo_client</code></pre>
+    <p>For direct CLI smoke checks from the checkout, set <code>PYTHONPATH</code>:</p>
+    <pre><code>PYTHONPATH=src python3 -m gh_forgejo_shim --help
+PYTHONPATH=src python3 -m gh_forgejo_shim version</code></pre>
+    <p>For helper-level checks, import from the source tree directly:</p>
+    <pre><code>PYTHONPATH=src python3 -c 'from gh_forgejo_shim.routing import format_created_pull_url; print(format_created_pull_url("https://git.example.com/owner/repo/pulls/7"))'</code></pre>
+  </section>
+
+  <section>
+    <h2>When To Reinstall</h2>
+    <p>You do not need to reinstall after every edit. Reinstall when the thing you are testing runs through the package installed by pipx, such as <code>gh</code>, <code>gfj</code>, <code>gh-forgejo-shim</code>, or Codex.app.</p>
+    <pre><code>pipx install --force "$HOME/dev/gh-forgejo-shim"</code></pre>
+    <p>The managed wrapper usually does not need to be rewritten after a reinstall, because it points at the same pipx venv. Reinstall the wrapper only if <code>~/.local/bin/gh</code> is missing, points somewhere unexpected, or was replaced:</p>
+    <pre><code>gfj install-shim</code></pre>
+    <p>Verify the installed path before blaming the code:</p>
+    <pre><code>command -v gh
+head -3 "$(command -v gh)"
+gh-forgejo-shim version</code></pre>
+    <p>A healthy managed wrapper starts like this:</p>
+    <pre><code>#!/bin/sh
+# managed by gh-forgejo-shim
+exec /Users/&lt;user&gt;/.local/pipx/venvs/gh-forgejo-shim/bin/python -m gh_forgejo_shim gh "$@"</code></pre>
+  </section>
+
+  <section>
+    <h2>Editable Install Option</h2>
+    <p>If you are doing repeated installed-wrapper testing, an editable pipx install can make the wrapper pick up most <code>src/</code> edits without forcing a reinstall every time.</p>
+    <pre><code>pipx uninstall gh-forgejo-shim
+pipx install --editable "$HOME/dev/gh-forgejo-shim"
+gfj install-shim</code></pre>
+    <p>Use a normal forced reinstall when testing packaging metadata, entry point changes, version changes, or anything that should behave exactly like a fresh install.</p>
+  </section>
+
+  <section>
+    <h2>Testing Codex.app Behavior</h2>
+    <p>Codex.app sees the installed wrapper, not your checkout. For GUI-facing changes, refresh the package, confirm the wrapper, and restart Codex.app if it was already open.</p>
+    <pre><code>pipx install --force "$HOME/dev/gh-forgejo-shim"
+gfj doctor</code></pre>
+    <p>For PR-link behavior, create a fresh pull request from Codex.app. The default <code>gh pr create</code> output should be shaped so Codex.app can discover a GitHub-style marker while the browser still opens the real Forgejo PR page:</p>
+    <pre><code>https://forgejo-host/owner/repo/pulls/7#codex-pr=/pull/7</code></pre>
+    <p>Old completed app runs will not retroactively pick up a new parser or output shape. Test with a new action after refreshing the installed shim.</p>
+  </section>
+
+  <section>
+    <h2>Before Commit</h2>
+    <p>A good pre-commit pass for code changes is:</p>
+    <pre><code>python3 -m unittest
+git diff --check</code></pre>
+    <p>For documentation-only changes, still run a whitespace check on the touched files:</p>
+    <pre><code>git diff --check -- docs/dev/testing.html</code></pre>
+    <p>If you changed turn documents under <code>docs/turns/</code>, also follow the repository turn-document checks from <code>AGENTS.md</code>.</p>
+  </section>
+
+  <section>
+    <h2>Common Failure Modes</h2>
+    <ul>
+      <li><span class="check">Source tests pass, Codex.app still behaves old:</span> reinstall the pipx package and restart Codex.app.</li>
+      <li><span class="check">Terminal uses the wrong <code>gh</code>:</span> check <code>command -v gh</code> and ensure <code>~/.local/bin</code> is before the real GitHub CLI in <code>PATH</code>.</li>
+      <li><span class="check">GUI app cannot find <code>gh</code>:</span> run <code>gfj install-gui-path</code>, then restart the GUI app.</li>
+      <li><span class="check">Forgejo commands route unexpectedly:</span> check configured hosts with <code>gfj config list</code> and run <code>gfj doctor</code>.</li>
+      <li><span class="check">Need to bypass Forgejo routing once:</span> run the command with <code>FJ_SHIM_HOSTS=</code> for that process.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
