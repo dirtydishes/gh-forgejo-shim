@@ -4,7 +4,9 @@ import fnmatch
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ from .repo import (
     fill_title,
     parse_repo_spec,
 )
+from .trace import append_trace, build_record, capture_streams, suppress_stdout_body, tracing_enabled
 
 SUPPORTED_PR_COMMANDS = {"checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view"}
 SUPPORTED_ISSUE_COMMANDS = {"create", "list", "ls", "new", "view"}
@@ -201,57 +204,146 @@ def run_gh(
     stdin: TextIO | None = None,
     client_factory: ClientFactory | None = None,
 ) -> int:
-    out = stdout or sys.stdout
-    err = stderr or sys.stderr
     values = env if env is not None else os.environ
-    config = load_config(env=values)
-    decision = decide_route(argv, config=config, env=values, cwd=cwd)
-
-    if decision.kind == "delegate":
-        real_gh = find_program("gh", configured=config.paths.gh, env=values)
-        if not real_gh:
-            print(
-                "gh-forgejo-shim: could not find the real gh executable; set FJ_SHIM_REAL_GH",
-                file=err,
-            )
-            return 127
-        return run_program(real_gh, argv)
-
-    host = decision.host or (decision.repo.host if decision.repo else None)
-    assert host is not None
-    token = discover_fj_token(host, env=values)
-    if argv and argv[0] == "auth":
-        try:
-            return run_forgejo_auth(argv, host, token, stdout=out, stderr=err)
-        except ValueError as exc:
-            print(f"gh-forgejo-shim: {exc}", file=err)
-            return 1
-
-    client = client_factory(token) if client_factory else ForgejoClient(token)
-    if argv and argv[0] == "api":
-        if token is None:
-            print(_missing_auth_message(host), file=err)
-            return 1
-        try:
-            return run_forgejo_api(argv, host, client, stdout=out)
-        except (ForgejoError, ValueError) as exc:
-            print(f"gh-forgejo-shim: {exc}", file=err)
-            return 1
-
-    assert decision.repo is not None
-    try:
-        return run_forgejo(
-            argv,
-            decision.repo,
-            client,
-            cwd=cwd,
-            stdout=out,
-            stderr=err,
-            stdin=stdin,
+    traced = tracing_enabled(values)
+    out, err = (
+        capture_streams(
+            stdout=stdout,
+            stderr=stderr,
+            env=values,
+            redact_stdout_body=suppress_stdout_body(argv),
         )
-    except (CreateParseError, ForgejoError, ValueError) as exc:
-        print(f"gh-forgejo-shim: {exc}", file=err)
-        return 1
+        if traced
+        else (stdout or sys.stdout, stderr or sys.stderr)
+    )
+    started = time.perf_counter()
+    decision: RouteDecision | None = None
+    exit_code = 1
+
+    try:
+        config = load_config(env=values)
+        decision = decide_route(argv, config=config, env=values, cwd=cwd)
+
+        if decision.kind == "delegate":
+            real_gh = find_program("gh", configured=config.paths.gh, env=values)
+            if not real_gh:
+                print(
+                    "gh-forgejo-shim: could not find the real gh executable; set FJ_SHIM_REAL_GH",
+                    file=err,
+                )
+                exit_code = 127
+                return exit_code
+            exit_code = _run_delegate_program(real_gh, argv, traced=traced, env=values, stdout=out, stderr=err)
+            return exit_code
+
+        host = decision.host or (decision.repo.host if decision.repo else None)
+        assert host is not None
+        token = discover_fj_token(host, env=values)
+        if argv and argv[0] == "auth":
+            try:
+                exit_code = run_forgejo_auth(argv, host, token, stdout=out, stderr=err)
+                return exit_code
+            except ValueError as exc:
+                print(f"gh-forgejo-shim: {exc}", file=err)
+                exit_code = 1
+                return exit_code
+
+        client = client_factory(token) if client_factory else ForgejoClient(token)
+        if argv and argv[0] == "api":
+            if token is None:
+                print(_missing_auth_message(host), file=err)
+                exit_code = 1
+                return exit_code
+            try:
+                exit_code = run_forgejo_api(argv, host, client, stdout=out)
+                return exit_code
+            except (ForgejoError, ValueError) as exc:
+                print(f"gh-forgejo-shim: {exc}", file=err)
+                exit_code = 1
+                return exit_code
+
+        assert decision.repo is not None
+        try:
+            exit_code = run_forgejo(
+                argv,
+                decision.repo,
+                client,
+                cwd=cwd,
+                stdout=out,
+                stderr=err,
+                stdin=stdin,
+            )
+            return exit_code
+        except (CreateParseError, ForgejoError, ValueError) as exc:
+            print(f"gh-forgejo-shim: {exc}", file=err)
+            exit_code = 1
+            return exit_code
+    finally:
+        if traced:
+            append_trace(
+                build_record(
+                    kind="gh",
+                    argv=argv,
+                    cwd=cwd,
+                    env=values,
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                    exit_code=exit_code,
+                    stdout_summary=out.summary(),  # type: ignore[attr-defined]
+                    stderr_summary=err.summary(),  # type: ignore[attr-defined]
+                    route=_trace_route(decision),
+                    host=_trace_host(decision),
+                    repo=_trace_repo(decision),
+                ),
+                env=values,
+            )
+
+
+def _run_delegate_program(
+    path: str,
+    argv: list[str],
+    *,
+    traced: bool,
+    env: Mapping[str, str],
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    if not traced:
+        return run_program(path, argv)
+    try:
+        completed = subprocess.run(
+            [path, *argv],
+            env=dict(env),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        return 127
+    except OSError as exc:
+        print(str(exc), file=stderr)
+        return 127
+    stdout.write(completed.stdout or "")
+    stderr.write(completed.stderr or "")
+    return completed.returncode
+
+
+def _trace_route(decision: RouteDecision | None) -> dict[str, str] | None:
+    if decision is None:
+        return None
+    return {"kind": decision.kind, "reason": decision.reason}
+
+
+def _trace_host(decision: RouteDecision | None) -> str | None:
+    if decision is None:
+        return None
+    return decision.host or (decision.repo.host if decision.repo else None)
+
+
+def _trace_repo(decision: RouteDecision | None) -> dict[str, str] | None:
+    if decision is None or decision.repo is None:
+        return None
+    return {"host": decision.repo.host, "owner": decision.repo.owner, "repo": decision.repo.repo}
 
 
 def run_forgejo_auth(

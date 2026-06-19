@@ -253,6 +253,20 @@ gfj doctor</code></pre>
   </section>
 
   <section>
+    <h2>Capturing Codex Probe Traces</h2>
+    <p>When the app reports unavailable CLI, PR status, or branch data, capture the exact probes first. The shim only writes trace records when <code>FJ_SHIM_TRACE</code> is set.</p>
+    <pre><code>export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"
+export FJ_SHIM_TRACE_BODY=1
+gfj trace smoke
+gfj trace summarize "$FJ_SHIM_TRACE"</code></pre>
+    <p>For branch selector issues, add the temporary git recorder because those probes may bypass <code>gh</code> entirely:</p>
+    <pre><code>gfj trace git-recorder create "$PWD/codex-probe-trace.jsonl"
+# launch Codex with the printed PATH and FJ_SHIM_TRACE values
+gfj trace git-recorder remove /path/to/printed/wrapper-dir</code></pre>
+    <p>The trace includes command argv, cwd, route decision, host/repo, duration, exit code, output sizes, and redacted excerpts when body tracing is enabled. <code>gh auth token</code> output is never copied into excerpts.</p>
+  </section>
+
+  <section>
     <h2>Before Commit</h2>
     <p>A good pre-commit pass for code changes is:</p>
     <pre><code>python3 -m unittest

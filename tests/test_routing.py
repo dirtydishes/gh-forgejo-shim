@@ -10,6 +10,7 @@ from pathlib import Path
 from gh_forgejo_shim.config import Config
 from gh_forgejo_shim.forgejo import ForgejoClient, RepoRef
 from gh_forgejo_shim.routing import decide_route, run_forgejo, run_forgejo_pr, run_gh
+from gh_forgejo_shim.trace import TRACE_BODY_ENV, TRACE_ENV
 
 
 def codex_create_pr_url(output: str) -> str | None:
@@ -238,6 +239,63 @@ class RoutingTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "alice\n")
+
+    def test_run_gh_trace_records_forgejo_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = Path(tmp) / "trace.jsonl"
+            out = io.StringIO()
+            code = run_gh(
+                ["auth", "status"],
+                env={
+                    "FJ_SHIM_HOSTS": "git.example.com",
+                    "FJ_SHIM_REAL_GH": "/missing/gh",
+                    "FJ_SHIM_TOKEN": "secret-token",
+                    "GH_HOST": "git.example.com",
+                    "PATH": "",
+                    TRACE_ENV: str(trace_path),
+                    TRACE_BODY_ENV: "1",
+                },
+                cwd="/work/repo",
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+            record = json.loads(trace_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(record["kind"], "gh")
+        self.assertEqual(record["argv"], ["auth", "status"])
+        self.assertEqual(record["cwd"], "/work/repo")
+        self.assertEqual(record["route"], {"kind": "forgejo", "reason": "host"})
+        self.assertEqual(record["host"], "git.example.com")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertIn("duration_ms", record)
+        self.assertEqual(record["stdout"]["bytes"], len(out.getvalue().encode("utf-8")))
+        self.assertIn("Logged in", record["stdout"]["excerpt"])
+        self.assertNotIn("secret-token", json.dumps(record))
+
+    def test_run_gh_trace_suppresses_auth_token_stdout_excerpt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = Path(tmp) / "trace.jsonl"
+            out = io.StringIO()
+            code = run_gh(
+                ["auth", "token", "--hostname", "git.example.com"],
+                env={
+                    "FJ_SHIM_HOSTS": "git.example.com",
+                    "FJ_SHIM_REAL_GH": "/missing/gh",
+                    "FJ_SHIM_TOKEN": "secret-token",
+                    "PATH": "",
+                    TRACE_ENV: str(trace_path),
+                    TRACE_BODY_ENV: "1",
+                },
+                stdout=out,
+                stderr=io.StringIO(),
+            )
+            record = json.loads(trace_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "secret-token\n")
+        self.assertEqual(record["stdout"]["excerpt"], "[redacted: gh auth token output]")
+        self.assertNotIn("secret-token", json.dumps(record))
 
     def test_routes_issue_list_for_allowlisted_host(self) -> None:
         decision = decide_route(

@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Probe Trace Capture</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1118;
+      --surface: #131a24;
+      --surface-2: #182232;
+      --ink: #eef4fb;
+      --muted: #aeb9c8;
+      --line: #2b3646;
+      --accent: #79d6c9;
+      --accent-2: #f0c36a;
+      --ok: #7ee787;
+      --warn: #f0c36a;
+      --code: #080d13;
+      --add-bg: rgba(46, 160, 67, 0.28);
+      --del-bg: rgba(248, 81, 73, 0.24);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.62;
+    }
+    main {
+      width: min(1120px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 44px 0 64px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 30px;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.2;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+    h1 {
+      max-width: 880px;
+      font-size: 2.35rem;
+    }
+    h2 {
+      margin-top: 34px;
+      font-size: 1.32rem;
+    }
+    h3 {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 1rem;
+    }
+    p, li {
+      max-width: 74ch;
+      color: var(--muted);
+    }
+    code {
+      background: var(--code);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 0.08rem 0.28rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      color: var(--ink);
+      padding: 14px;
+    }
+    pre code {
+      display: block;
+      min-width: max-content;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      white-space: pre;
+      line-height: 1.55;
+      font-size: 0.86rem;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 5px 10px;
+    }
+    .lead {
+      max-width: 78ch;
+      font-size: 1.07rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 16px;
+    }
+    .panel p {
+      margin: 0;
+    }
+    .status {
+      color: var(--ok);
+      font-weight: 650;
+    }
+    .caveat {
+      color: var(--warn);
+      font-weight: 650;
+    }
+    .diff .file {
+      color: var(--accent-2);
+    }
+    .diff .ctx {
+      display: block;
+      color: #c7d1df;
+    }
+    .diff .add {
+      display: block;
+      background: var(--add-bg);
+      color: #e6ffe8;
+    }
+    .diff .del {
+      display: block;
+      background: var(--del-bg);
+      color: #ffe0de;
+    }
+    ul {
+      padding-left: 1.2rem;
+    }
+    li + li {
+      margin-top: 0.36rem;
+    }
+    @media (max-width: 680px) {
+      main {
+        width: min(100% - 28px, 1120px);
+        padding: 30px 0 48px;
+      }
+      h1 {
+        font-size: 1.85rem;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span class="pill">2026-06-19</span>
+      <span class="pill">Repository implementation</span>
+      <span class="pill">Issue gh-forgejo-shim-1ii</span>
+    </div>
+    <h1>Added Codex probe capture and replay diagnostics</h1>
+    <p class="lead">The shim can now record opt-in <code>gh</code> and temporary <code>git</code> probe traces, summarize those JSONL files, and run a local Codex-style smoke sequence without changing default runtime behavior.</p>
+  </header>
+
+  <section>
+    <h2>Summary</h2>
+    <p>Implemented a diagnostic-first loop for the reported Codex.app states: CLI availability, PR status availability, and branch selector freshness. Tracing is enabled only by <code>FJ_SHIM_TRACE</code>, body excerpts require <code>FJ_SHIM_TRACE_BODY=1</code>, and auth-sensitive output is redacted or suppressed.</p>
+  </section>
+
+  <section>
+    <h2>Changes Made</h2>
+    <div class="grid">
+      <article class="panel"><h3>Shim Trace Capture</h3><p>Added <code>src/gh_forgejo_shim/trace.py</code> and wired <code>routing.run_gh()</code> to append route, host/repo, duration, exit code, env keys, and output-size records when tracing is enabled.</p></article>
+      <article class="panel"><h3>Trace Summary</h3><p>Added <code>gfj trace summarize &lt;trace.jsonl&gt;</code> to group failures, slow calls, unsupported commands, routes, and known Codex probe patterns.</p></article>
+      <article class="panel"><h3>Codex Smoke Replay</h3><p>Added <code>gfj trace smoke</code>, which runs the observed read-only <code>gh</code> and raw <code>git</code> probe family and reports exit codes, timings, and output sizes.</p></article>
+      <article class="panel"><h3>Temporary Git Recorder</h3><p>Added <code>gfj trace git-recorder create/remove</code> for one-session raw <code>git</code> tracing when branch UI behavior bypasses the <code>gh</code> shim.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Context</h2>
+    <p>Previous fixes added Forgejo-shaped support for <code>gh auth status</code>, <code>gh api user</code>, <code>gh pr status</code>, and Codex PR board fields, but the next compatibility step needed exact observations instead of more guessing. This change turns live Codex subprocess behavior into replayable records and focused tests.</p>
+  </section>
+
+  <section>
+    <h2>Important Implementation Details</h2>
+    <ul>
+      <li><code>run_gh()</code> remains a no-op for tracing unless <code>FJ_SHIM_TRACE</code> is present.</li>
+      <li>Forgejo-routed commands use forwarding capture streams, so terminal output still appears while byte counts and optional excerpts are recorded.</li>
+      <li>Delegated <code>gh</code> calls use a traced subprocess path only when tracing is enabled; the normal delegate path still calls the existing <code>run_program()</code>.</li>
+      <li>The temporary <code>git</code> recorder prepends one wrapper directory to <code>PATH</code>, streams real <code>git</code> output, records JSONL, and removes the directory with <code>gfj trace git-recorder remove</code>.</li>
+      <li>Documentation was updated in <code>README.md</code> and <code>docs/dev/testing.html</code> so future Codex diagnosis starts from traces and smoke checks.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Relevant Diff Snippets</h2>
+    <p>Focused unified diff excerpt. It shows the trace hook, CLI surface, recorder creation, and documentation entry without embedding full test hunks or generated trace data.</p>
+    <pre class="diff"><code><span class="file">diff --git a/src/gh_forgejo_shim/routing.py b/src/gh_forgejo_shim/routing.py</span>
+<span class="ctx">@@</span>
+<span class="add">+from .trace import append_trace, build_record, capture_streams, suppress_stdout_body, tracing_enabled</span>
+<span class="ctx">@@</span>
+<span class="ctx"> def run_gh(</span>
+<span class="ctx">     argv: list[str],</span>
+<span class="ctx">@@</span>
+<span class="add">+    traced = tracing_enabled(values)</span>
+<span class="add">+    out, err = (</span>
+<span class="add">+        capture_streams(</span>
+<span class="add">+            stdout=stdout,</span>
+<span class="add">+            stderr=stderr,</span>
+<span class="add">+            env=values,</span>
+<span class="add">+            redact_stdout_body=suppress_stdout_body(argv),</span>
+<span class="add">+        )</span>
+<span class="add">+        if traced</span>
+<span class="add">+        else (stdout or sys.stdout, stderr or sys.stderr)</span>
+<span class="add">+    )</span>
+<span class="add">+    started = time.perf_counter()</span>
+<span class="ctx">@@</span>
+<span class="add">+    finally:</span>
+<span class="add">+        if traced:</span>
+<span class="add">+            append_trace(</span>
+<span class="add">+                build_record(</span>
+<span class="add">+                    kind="gh",</span>
+<span class="add">+                    argv=argv,</span>
+<span class="add">+                    cwd=cwd,</span>
+<span class="add">+                    env=values,</span>
+<span class="add">+                    duration_ms=(time.perf_counter() - started) * 1000,</span>
+<span class="add">+                    exit_code=exit_code,</span>
+<span class="add">+                    stdout_summary=out.summary(),</span>
+<span class="add">+                    stderr_summary=err.summary(),</span>
+<span class="add">+                    route=_trace_route(decision),</span>
+<span class="add">+                    host=_trace_host(decision),</span>
+<span class="add">+                    repo=_trace_repo(decision),</span>
+<span class="add">+                ),</span>
+<span class="add">+                env=values,</span>
+<span class="add">+            )</span>
+
+<span class="file">diff --git a/src/gh_forgejo_shim/cli.py b/src/gh_forgejo_shim/cli.py</span>
+<span class="ctx">@@</span>
+<span class="add">+    trace = subparsers.add_parser("trace", help="capture and summarize Codex gh/git diagnostics")</span>
+<span class="add">+    trace_subparsers = trace.add_subparsers(dest="trace_command", required=True)</span>
+<span class="add">+    summarize = trace_subparsers.add_parser("summarize", help="summarize a shim trace JSONL file")</span>
+<span class="add">+    summarize.add_argument("trace_path")</span>
+<span class="add">+    smoke = trace_subparsers.add_parser("smoke", help="run the local Codex gh/git probe smoke checks")</span>
+<span class="add">+    git_recorder = trace_subparsers.add_parser("git-recorder", help="generate or remove a temporary git recorder wrapper")</span>
+
+<span class="file">diff --git a/src/gh_forgejo_shim/git_recorder.py b/src/gh_forgejo_shim/git_recorder.py</span>
+<span class="ctx">@@</span>
+<span class="add">+TRACE_PATH_ENV = "FJ_SHIM_TRACE"</span>
+<span class="add">+REAL_GIT_ENV = "FJ_SHIM_REAL_GIT"</span>
+<span class="ctx">@@</span>
+<span class="add">+def create_git_recorder(</span>
+<span class="add">+    trace_path: str | Path,</span>
+<span class="add">+    *,</span>
+<span class="add">+    real_git: str | Path | None = None,</span>
+<span class="add">+    root_dir: str | Path | None = None,</span>
+<span class="add">+    wrapper_dir: str | Path | None = None,</span>
+<span class="add">+    env: Mapping[str, str] | None = None,</span>
+<span class="add">+) -&gt; GitRecorder:</span>
+<span class="add">+    """Create a temporary ``git`` executable that records JSONL invocations."""</span>
+
+<span class="file">diff --git a/README.md b/README.md</span>
+<span class="ctx">@@</span>
+<span class="add">+## Codex Probe Diagnostics</span>
+<span class="add">+</span>
+<span class="add">+When Codex.app reports `GitHub CLI unavailable`, `Pull request status unavailable`, or stale branch data, enable tracing before guessing at the fix.</span>
+<span class="add">+</span>
+<span class="add">+```sh</span>
+<span class="add">+export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"</span>
+<span class="add">+export FJ_SHIM_TRACE_BODY=1</span>
+<span class="add">+gfj trace summarize codex-probe-trace.jsonl</span>
+<span class="add">+```</span></code></pre>
+  </section>
+
+  <section>
+    <h2>Expected Impact for End-Users</h2>
+    <p>Users and future agents can capture the exact command that caused a Codex.app compatibility state, summarize the likely failure class, and replay the local probe family before changing shim behavior. The default installed shim remains unchanged until tracing is explicitly enabled.</p>
+  </section>
+
+  <section>
+    <h2>Validation</h2>
+    <ul>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest</code> ran 119 tests.</li>
+      <li><span class="status">Passed:</span> <code>python3 -m compileall -q src tests</code>.</li>
+      <li><span class="status">Passed:</span> <code>git diff --check</code>.</li>
+      <li><span class="status">Passed:</span> Focused tests cover trace writing, redaction, summary classification, smoke probe formatting, recorder wrapper execution, CLI parsing, and traced <code>run_gh()</code> records.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Issues, Limitations, and Mitigations</h2>
+    <ul>
+      <li><span class="caveat">Limitation:</span> I did not launch the GUI Codex.app reproduction flow in this pass. The new trace and smoke commands are the intended path for that manual validation.</li>
+      <li><span class="caveat">Tradeoff:</span> Traced delegate <code>gh</code> calls capture subprocess output before forwarding it. This is opt-in only and keeps the existing streaming delegate path for normal runtime.</li>
+      <li><span class="caveat">Risk:</span> Body excerpts can still contain surprising local paths or command text, so they remain disabled unless <code>FJ_SHIM_TRACE_BODY=1</code> is set. Tokens and auth-sensitive patterns are redacted, and <code>gh auth token</code> stdout excerpts are suppressed.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Follow-up Work</h2>
+    <ul>
+      <li>No new Beads issue was filed for immediate follow-up.</li>
+      <li>Use <code>FJ_SHIM_TRACE</code> during the next real Codex.app reproduction and convert any newly observed unsupported command shape into a focused replay test.</li>
+      <li>If future traces show branch selector staleness is entirely raw Git cache behavior, document the Codex-side refresh workaround separately from shim compatibility fixes.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

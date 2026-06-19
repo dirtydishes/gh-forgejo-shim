@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import shlex
 import sys
 from pathlib import Path
 from typing import Callable, Mapping, TextIO
@@ -17,11 +18,14 @@ from .auth import (
 )
 from .bootstrap import format_bootstrap, run_bootstrap
 from .config import add_host, load_config, normalize_host, remove_host
+from .codex_smoke import format_codex_smoke, run_codex_smoke
 from .doctor import format_checks, run_checks
 from .forgejo import ForgejoClient, ForgejoError
+from .git_recorder import create_git_recorder, remove_git_recorder
 from .gui_path import install_gui_path, uninstall_gui_path
 from .routing import run_gh
 from .shim import install_shim, uninstall_shim
+from .trace_summary import format_trace_summary, summarize_trace_file
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -104,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "auth":
         return run_auth(namespace)
 
+    if command == "trace":
+        return run_trace(namespace)
+
     if command == "version":
         print(__version__)
         return 0
@@ -166,6 +173,23 @@ def build_parser() -> argparse.ArgumentParser:
     logout = auth_subparsers.add_parser("logout", help="remove stored shim auth for a Forgejo host")
     logout.add_argument("host", nargs="?")
 
+    trace = subparsers.add_parser("trace", help="capture and summarize Codex gh/git diagnostics")
+    trace_subparsers = trace.add_subparsers(dest="trace_command", required=True)
+    summarize = trace_subparsers.add_parser("summarize", help="summarize a shim trace JSONL file")
+    summarize.add_argument("trace_path")
+    smoke = trace_subparsers.add_parser("smoke", help="run the local Codex gh/git probe smoke checks")
+    smoke.add_argument("--cwd", help="workspace to run probes in")
+    git_recorder = trace_subparsers.add_parser(
+        "git-recorder",
+        help="generate or remove a temporary git recorder wrapper",
+    )
+    git_recorder_subparsers = git_recorder.add_subparsers(dest="git_recorder_command", required=True)
+    git_recorder_create = git_recorder_subparsers.add_parser("create")
+    git_recorder_create.add_argument("trace_path")
+    git_recorder_create.add_argument("--real-git", help="path to the real git executable")
+    git_recorder_remove = git_recorder_subparsers.add_parser("remove")
+    git_recorder_remove.add_argument("path", help="wrapper path or wrapper directory to remove")
+
     return parser
 
 
@@ -196,6 +220,47 @@ def print_hosts(hosts: tuple[str, ...]) -> None:
         return
     for host in hosts:
         print(host)
+
+
+def run_trace(namespace: argparse.Namespace) -> int:
+    if namespace.trace_command == "summarize":
+        print(format_trace_summary(summarize_trace_file(Path(namespace.trace_path).expanduser())))
+        return 0
+
+    if namespace.trace_command == "smoke":
+        results = run_codex_smoke(cwd=namespace.cwd)
+        print(format_codex_smoke(results))
+        return 0 if all(result.ok for result in results) else 1
+
+    if namespace.trace_command == "git-recorder":
+        if namespace.git_recorder_command == "create":
+            try:
+                recorder = create_git_recorder(
+                    Path(namespace.trace_path).expanduser(),
+                    real_git=Path(namespace.real_git).expanduser() if namespace.real_git else None,
+                )
+            except OSError as exc:
+                print(f"gh-forgejo-shim: {exc}", file=sys.stderr)
+                return 1
+            print(f"created temporary git recorder at {recorder.wrapper_path}")
+            print(f"trace file: {recorder.trace_path}")
+            print("launch environment:")
+            print(f"  export FJ_SHIM_TRACE={shlex.quote(str(recorder.trace_path))}")
+            print(f"  export PATH={shlex.quote(recorder.env['PATH'])}")
+            print("remove with:")
+            print(f"  gfj trace git-recorder remove {shlex.quote(str(recorder.wrapper_dir))}")
+            return 0
+
+        if namespace.git_recorder_command == "remove":
+            try:
+                removed = remove_git_recorder(Path(namespace.path).expanduser())
+            except (OSError, ValueError) as exc:
+                print(f"gh-forgejo-shim: {exc}", file=sys.stderr)
+                return 1
+            print(f"removed temporary git recorder at {removed}")
+            return 0
+
+    return 1
 
 
 def run_auth(
