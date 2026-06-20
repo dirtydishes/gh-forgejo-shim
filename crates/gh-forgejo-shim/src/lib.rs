@@ -4,6 +4,8 @@
 //! porting command behavior. The installed Python package remains the runtime
 //! until the cutover phase.
 
+#![recursion_limit = "256"]
+
 pub mod auth;
 pub mod bootstrap;
 pub mod cli;
