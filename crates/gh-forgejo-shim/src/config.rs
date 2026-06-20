@@ -138,12 +138,7 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
-    let env = current_env();
-    add_host_with_env(host, path, &env)
-}
-
-pub fn add_host_with_env(host: &str, path: Option<&Path>, env: &EnvMap) -> Result<Config> {
-    let config = load_config_with_env(path, env)?;
+    let config = load_config_with_env(path, &EnvMap::new())?;
     let mut hosts = config.hosts;
     if let Some(normalized) = normalized_forgejo_host(host) {
         if !hosts.iter().any(|configured| configured == &normalized) {
@@ -162,12 +157,7 @@ pub fn add_host_with_env(host: &str, path: Option<&Path>, env: &EnvMap) -> Resul
 }
 
 pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
-    let env = current_env();
-    remove_host_with_env(host, path, &env)
-}
-
-pub fn remove_host_with_env(host: &str, path: Option<&Path>, env: &EnvMap) -> Result<Config> {
-    let config = load_config_with_env(path, env)?;
+    let config = load_config_with_env(path, &EnvMap::new())?;
     let normalized = normalize_host(host);
     let hosts = config
         .hosts
@@ -353,11 +343,11 @@ mod tests {
         let root = temp_root()?;
         let path = root.join("config.toml");
 
-        add_host_with_env("https://Git.Example.com/path", Some(&path), &EnvMap::new())?;
+        add_host("https://Git.Example.com/path", Some(&path))?;
         let config = load_config_with_env(Some(&path), &EnvMap::new())?;
         assert_eq!(config.hosts, vec!["git.example.com"]);
 
-        remove_host_with_env("git.example.com", Some(&path), &EnvMap::new())?;
+        remove_host("git.example.com", Some(&path))?;
         let config = load_config_with_env(Some(&path), &EnvMap::new())?;
         assert!(config.hosts.is_empty());
         assert_eq!(
@@ -373,7 +363,7 @@ mod tests {
         let root = temp_root()?;
         let path = root.join("config.toml");
 
-        add_host_with_env("github.com", Some(&path), &EnvMap::new())?;
+        add_host("github.com", Some(&path))?;
         let config = load_config_with_env(Some(&path), &EnvMap::new())?;
 
         assert!(config.hosts.is_empty());
@@ -396,6 +386,39 @@ mod tests {
 
         assert_eq!(config.paths.gh.as_deref(), Some("/custom/gh"));
         assert_eq!(config.paths.fj.as_deref(), Some("/custom/fj"));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn add_host_does_not_persist_env_overrides() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\"git.example.com\"]\n\n[paths]\ngh = \"/bin/gh\"\n",
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+        let env = env([
+            ("FJ_SHIM_HOSTS", "env.example.com"),
+            ("FJ_SHIM_REAL_GH", "/env/gh"),
+            ("FJ_SHIM_REAL_FJ", "/env/fj"),
+        ]);
+
+        let effective = load_config_with_env(Some(&path), &env)?;
+        assert_eq!(effective.hosts, vec!["env.example.com"]);
+        assert_eq!(effective.paths.gh.as_deref(), Some("/env/gh"));
+        assert_eq!(effective.paths.fj.as_deref(), Some("/env/fj"));
+
+        let config = add_host("new.example.com", Some(&path))?;
+
+        assert_eq!(config.hosts, vec!["git.example.com", "new.example.com"]);
+        assert_eq!(config.paths.gh.as_deref(), Some("/bin/gh"));
+        assert_eq!(config.paths.fj, None);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap_or_default(),
+            "hosts = [\"git.example.com\", \"new.example.com\"]\n\n[paths]\ngh = \"/bin/gh\"\n"
+        );
         fs::remove_dir_all(root).ok();
         Ok(())
     }

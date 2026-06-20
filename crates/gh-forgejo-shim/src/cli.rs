@@ -213,13 +213,13 @@ fn run_config(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) ->
     let path = config::config_path(runtime.home());
     match args {
         [command, host] if command == "add-host" => {
-            let config = config::add_host_with_env(host, Some(&path), runtime.env())?;
+            let config = config::add_host(host, Some(&path))?;
             writeln!(stdout, "added Forgejo host: {host}")?;
             print_hosts(&config.hosts, stdout)?;
             Ok(0)
         }
         [command, host] if command == "remove-host" => {
-            let config = config::remove_host_with_env(host, Some(&path), runtime.env())?;
+            let config = config::remove_host(host, Some(&path))?;
             writeln!(stdout, "removed Forgejo host: {host}")?;
             print_hosts(&config.hosts, stdout)?;
             Ok(0)
@@ -281,7 +281,7 @@ fn auth_login(
     let platform = runtime.platform().to_string();
     let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
     let config_path = config::config_path(home.as_deref());
-    config::add_host_with_env(&host, Some(&config_path), runtime.env())?;
+    config::add_host(&host, Some(&config_path))?;
 
     writeln!(
         stdout,
@@ -310,7 +310,7 @@ fn auth_import(
     let storage =
         auth::write_stored_token(&host, &discovery.token, home.as_deref(), Some(&platform))?;
     let config_path = config::config_path(home.as_deref());
-    config::add_host_with_env(&host, Some(&config_path), runtime.env())?;
+    config::add_host(&host, Some(&config_path))?;
 
     writeln!(
         stdout,
@@ -586,11 +586,7 @@ mod tests {
     fn status_reports_stored_auth_without_secret() -> Result<()> {
         let home = temp_root()?;
         let runtime = FakeRuntime::new(home.clone());
-        config::add_host_with_env(
-            "git.example.com",
-            Some(&config::config_path(Some(&home))),
-            &EnvMap::new(),
-        )?;
+        config::add_host("git.example.com", Some(&config::config_path(Some(&home))))?;
         auth::write_stored_token(
             "git.example.com",
             "stored-secret",

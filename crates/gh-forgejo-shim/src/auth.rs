@@ -350,8 +350,8 @@ fn find_token_in_text(text: &str, host: Option<&str>) -> Option<String> {
         let lower_text = text.to_ascii_lowercase();
         let lower_host = host.to_ascii_lowercase();
         let host_index = lower_text.find(&lower_host)?;
-        let end = text.len().min(host_index + 2000);
-        return token_line(&text[host_index..end]);
+        let nearby = text[host_index..].chars().take(2000).collect::<String>();
+        return token_line(&nearby);
     }
     token_line(text)
 }
@@ -523,11 +523,16 @@ fn create_temp_file(parent: &Path) -> io::Result<(File, PathBuf)> {
             ".{AUTH_FILE_NAME}.{}-{id}-{nanos}",
             std::process::id()
         ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+
+        match options.open(&temp_path) {
             Ok(file) => return Ok((file, temp_path)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -841,6 +846,34 @@ mod tests {
 
         assert!(deleted);
         assert!(token.is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn text_token_scan_handles_utf8_near_scan_boundary() {
+        let padding = "a".repeat(2000 - "git.example.com".len() - 1);
+        let text = format!("git.example.com{padding}é\ntoken: secret");
+
+        assert_eq!(find_token_in_text(&text, Some("git.example.com")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auth_temp_file_starts_private() -> Result<()> {
+        let home = temp_root()?;
+        let (file, temp_path) = create_temp_file(&home)
+            .map_err(|error| ShimError::new(format!("could not create temp file: {error}")))?;
+        drop(file);
+
+        let mode = fs::metadata(&temp_path)
+            .map_err(|error| ShimError::new(error.to_string()))?
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(mode, 0o600);
+        fs::remove_file(temp_path).ok();
         fs::remove_dir_all(home).ok();
         Ok(())
     }
