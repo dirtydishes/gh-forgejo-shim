@@ -1,10 +1,11 @@
 //! Command-line scaffold shared by the Rust binaries.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::{self, EnvMap};
+use crate::routing;
 use crate::{auth, Result, ShimError, VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +24,14 @@ impl BinaryName {
 }
 
 pub fn run_from_env(binary: BinaryName) -> i32 {
-    let args = std::env::args_os().skip(1);
+    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if binary == BinaryName::GhForgejoShim
+        && args.first().is_some_and(|arg| arg == OsStr::new("gh"))
+    {
+        args.remove(0);
+        return routing::run_gh_from_env(args);
+    }
+
     let stdout = io::stdout();
     let stderr = io::stderr();
     let mut runtime = SystemRuntime::new();
@@ -59,17 +67,26 @@ where
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
 
-    let result = if args.is_empty() || is_one_of(&args, &["--help", "-h", "help"]) {
-        print_help(binary, stdout)
-    } else if is_one_of(&args, &["--version", "-V", "version"]) {
-        print_version(stdout)
-    } else if args.first().is_some_and(|arg| arg == "config") {
-        run_config(&args[1..], stdout, runtime)
-    } else if args.first().is_some_and(|arg| arg == "auth") {
-        run_auth(&args[1..], stdout, runtime)
-    } else {
-        print_pending(binary, stderr)
-    };
+    let result =
+        if binary == BinaryName::GhForgejoShim && args.first().is_some_and(|arg| arg == "gh") {
+            Ok(routing::run_gh_captured(
+                args[1..].to_vec(),
+                std::env::vars().collect(),
+                std::env::current_dir().ok().as_deref(),
+                stdout,
+                stderr,
+            ))
+        } else if args.is_empty() || is_one_of(&args, &["--help", "-h", "help"]) {
+            print_help(binary, stdout)
+        } else if is_one_of(&args, &["--version", "-V", "version"]) {
+            print_version(stdout)
+        } else if args.first().is_some_and(|arg| arg == "config") {
+            run_config(&args[1..], stdout, runtime)
+        } else if args.first().is_some_and(|arg| arg == "auth") {
+            run_auth(&args[1..], stdout, runtime)
+        } else {
+            print_pending(binary, stderr)
+        };
 
     match result {
         Ok(code) => code,
@@ -180,7 +197,7 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "STATUS:")?;
     writeln!(
         stdout,
-        "    config and auth management commands are implemented in Rust; other command behavior remains pending."
+        "    managed gh dispatch, config, and auth management commands are implemented in Rust; other command behavior remains pending."
     )?;
     writeln!(stdout)?;
     writeln!(stdout, "COMMANDS:")?;
@@ -204,7 +221,7 @@ fn print_pending(binary: BinaryName, stderr: &mut dyn Write) -> Result<i32> {
     )?;
     writeln!(
         stderr,
-        "Use the installed Python package until the Rust cutover phase."
+        "Only the managed gh dispatcher is native in this phase."
     )?;
     Ok(2)
 }
