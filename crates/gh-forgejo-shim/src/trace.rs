@@ -16,6 +16,7 @@ pub const TRACE_ENV: &str = "FJ_SHIM_TRACE";
 const FALSE_VALUES: &[&str] = &["", "0", "false", "no", "off"];
 const REDACTED: &str = "<redacted>";
 const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", "--token"];
+const SENSITIVE_KEY_PARTS: &[&str] = &["credential", "password", "secret", "token"];
 
 pub fn tracing_enabled(env: &HashMap<String, String>) -> bool {
     env.get(TRACE_ENV)
@@ -134,46 +135,207 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
 
 fn redact_text(value: &str) -> String {
     let mut result = redact_url_credentials(value);
-    for name in [
-        "FJ_SHIM_TOKEN",
-        "FORGEJO_TOKEN",
-        "GITEA_TOKEN",
-        "FJ_TOKEN",
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-    ] {
-        result = redact_assignment(&result, name);
-    }
+    result = redact_sensitive_key_values(&result);
+    result = redact_token_prefixes(&result);
     redact_authorization_header(&result)
 }
 
 fn redact_url_credentials(value: &str) -> String {
-    if let Some(scheme_index) = value.find("://") {
-        let credential_start = scheme_index + 3;
-        if let Some(relative_at) = value[credential_start..].find('@') {
+    let mut ranges = Vec::new();
+    let mut index = 0;
+
+    while let Some(relative_scheme) = value[index..].find("://") {
+        let scheme_index = index + relative_scheme;
+        let credential_start = scheme_index + "://".len();
+        let authority_end = value[credential_start..]
+            .find(|character: char| {
+                character.is_whitespace() || matches!(character, '/' | '?' | '#')
+            })
+            .map_or(value.len(), |offset| credential_start + offset);
+
+        if let Some(relative_at) = value[credential_start..authority_end].find('@') {
             let at = credential_start + relative_at;
-            if value[credential_start..at].contains(':') {
-                let mut redacted = value.to_string();
-                redacted.replace_range(credential_start..at, REDACTED);
-                return redacted;
+            if at > credential_start {
+                ranges.push((credential_start, at));
             }
         }
+
+        index = authority_end;
     }
-    value.to_string()
+
+    replace_ranges(value, &ranges)
 }
 
-fn redact_assignment(value: &str, name: &str) -> String {
-    let prefix = format!("{name}=");
-    if let Some(index) = value.find(&prefix) {
-        let value_start = index + prefix.len();
-        let value_end = value[value_start..]
-            .find(char::is_whitespace)
-            .map_or(value.len(), |offset| value_start + offset);
-        let mut redacted = value.to_string();
-        redacted.replace_range(value_start..value_end, REDACTED);
-        return redacted;
+fn redact_sensitive_key_values(value: &str) -> String {
+    let mut ranges = Vec::new();
+    let mut index = 0;
+
+    while let Some((delimiter_index, delimiter)) = find_assignment_delimiter(value, index) {
+        if let Some((value_start, value_end)) = sensitive_value_range(value, delimiter_index) {
+            ranges.push((value_start, value_end));
+            index = value_end;
+        } else {
+            index = delimiter_index + delimiter.len_utf8();
+        }
     }
-    value.to_string()
+
+    replace_ranges(value, &ranges)
+}
+
+fn find_assignment_delimiter(value: &str, start: usize) -> Option<(usize, char)> {
+    value[start..]
+        .char_indices()
+        .find(|(_, character)| matches!(character, '=' | ':'))
+        .map(|(offset, character)| (start + offset, character))
+}
+
+fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, usize)> {
+    let key = key_before_delimiter(value, delimiter_index)?;
+    if !is_sensitive_key(key) {
+        return None;
+    }
+
+    let mut value_start = delimiter_index + 1;
+    value_start = skip_whitespace(value, value_start);
+    let (first_offset, first) = value[value_start..].char_indices().next()?;
+    value_start += first_offset;
+
+    if matches!(first, '"' | '\'') {
+        let quoted_start = value_start + first.len_utf8();
+        let quoted_end = value[quoted_start..]
+            .find(first)
+            .map_or(value.len(), |offset| quoted_start + offset);
+        return Some((quoted_start, quoted_end));
+    }
+
+    let value_end = value[value_start..]
+        .find(|character: char| {
+            character.is_whitespace() || matches!(character, ',' | '}' | ']' | ';' | '&')
+        })
+        .map_or(value.len(), |offset| value_start + offset);
+    Some((value_start, value_end))
+}
+
+fn key_before_delimiter(value: &str, delimiter_index: usize) -> Option<&str> {
+    let key_end = value[..delimiter_index].trim_end().len();
+    if key_end == 0 {
+        return None;
+    }
+
+    let last = value[..key_end].chars().next_back()?;
+    if matches!(last, '"' | '\'') {
+        let quote_end = key_end - last.len_utf8();
+        let quote_start = value[..quote_end].rfind(last)?;
+        return Some(&value[quote_start + last.len_utf8()..quote_end]);
+    }
+
+    let mut key_start = key_end;
+    for (index, character) in value[..key_end].char_indices().rev() {
+        if is_key_character(character) {
+            key_start = index;
+        } else {
+            break;
+        }
+    }
+    (key_start < key_end).then_some(&value[key_start..key_end])
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    SENSITIVE_KEY_PARTS
+        .iter()
+        .any(|part| normalized.contains(part))
+}
+
+fn is_key_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+}
+
+fn skip_whitespace(value: &str, mut index: usize) -> usize {
+    while let Some(character) = value[index..].chars().next() {
+        if !character.is_whitespace() {
+            break;
+        }
+        index += character.len_utf8();
+    }
+    index
+}
+
+fn redact_token_prefixes(value: &str) -> String {
+    let mut ranges = Vec::new();
+    let mut index = 0;
+
+    while index < value.len() {
+        if let Some(length) = token_prefix_match_len(value, index) {
+            ranges.push((index, index + length));
+            index += length;
+        } else if let Some(character) = value[index..].chars().next() {
+            index += character.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    replace_ranges(value, &ranges)
+}
+
+fn token_prefix_match_len(value: &str, index: usize) -> Option<usize> {
+    let bytes = value.as_bytes();
+    if index > 0 && is_token_character(bytes[index - 1]) {
+        return None;
+    }
+
+    if bytes[index..].starts_with(b"github_pat_") {
+        return token_len_after_prefix(bytes, index, b"github_pat_".len(), 20);
+    }
+
+    if bytes[index..].len() >= 4
+        && bytes[index] == b'g'
+        && bytes[index + 1] == b'h'
+        && matches!(bytes[index + 2], b'p' | b'o' | b'u' | b's' | b'r')
+        && bytes[index + 3] == b'_'
+    {
+        return token_len_after_prefix(bytes, index, 4, 8);
+    }
+
+    None
+}
+
+fn token_len_after_prefix(
+    bytes: &[u8],
+    index: usize,
+    prefix_len: usize,
+    min_suffix_len: usize,
+) -> Option<usize> {
+    let suffix_start = index + prefix_len;
+    let mut end = suffix_start;
+    while end < bytes.len() && is_token_character(bytes[end]) {
+        end += 1;
+    }
+    (end - suffix_start >= min_suffix_len).then_some(end - index)
+}
+
+fn is_token_character(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn replace_ranges(value: &str, ranges: &[(usize, usize)]) -> String {
+    if ranges.is_empty() {
+        return value.to_string();
+    }
+
+    let mut redacted = String::with_capacity(value.len());
+    let mut copied_until = 0;
+    for &(start, end) in ranges {
+        if start < copied_until {
+            continue;
+        }
+        redacted.push_str(&value[copied_until..start]);
+        redacted.push_str(REDACTED);
+        copied_until = end;
+    }
+    redacted.push_str(&value[copied_until..]);
+    redacted
 }
 
 fn redact_authorization_header(value: &str) -> String {
@@ -223,12 +385,29 @@ fn expand_home(value: &str, env: &HashMap<String, String>) -> PathBuf {
 }
 
 fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    create_parent_dirs(path)?;
+
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+
+    let mut file = options.open(path)?;
     serde_json::to_writer(&mut file, record)?;
     file.write_all(b"\n")?;
+    Ok(())
+}
+
+fn create_parent_dirs(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
     Ok(())
 }
 
@@ -262,5 +441,29 @@ mod tests {
                 "--header=Authorization: token <redacted>"
             ]
         );
+    }
+
+    #[test]
+    fn redacts_sensitive_key_values_and_token_prefixes() {
+        let token = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+        let argv = vec![
+            "api".to_string(),
+            "user".to_string(),
+            format!("--field=access_token={token}"),
+            r#"{"password":"hunter2","credential":"plain-secret"}"#.to_string(),
+            "https://alice:hunter2@git.example.com/owner/repo".to_string(),
+        ];
+
+        let redacted = redact_argv(&argv).join(" ");
+
+        assert!(!redacted.contains(token), "{redacted}");
+        assert!(!redacted.contains("hunter2"), "{redacted}");
+        assert!(!redacted.contains("plain-secret"), "{redacted}");
+        assert!(redacted.contains(REDACTED), "{redacted}");
+    }
+
+    #[test]
+    fn local_trace_path_does_not_try_to_create_empty_parent() {
+        create_parent_dirs(Path::new("trace.jsonl")).expect("local trace path should be valid");
     }
 }

@@ -169,6 +169,28 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
 }
 
 #[test]
+fn managed_gh_trace_can_use_local_path() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho traced\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("FJ_SHIM_TRACE", "trace.jsonl")
+        .arg("gh")
+        .arg("--version")
+        .output()?;
+
+    assert!(output.status.success());
+    let trace_path = fixture.repo().join("trace.jsonl");
+    let trace = fs::read_to_string(trace_path)?;
+    let record: Value = serde_json::from_str(trace.trim())?;
+    assert_eq!(record["kind"], "gh");
+    assert_eq!(record["route"]["kind"], "delegate");
+    Ok(())
+}
+
+#[test]
 fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestResult {
     let fixture = CliFixture::new()?;
 
