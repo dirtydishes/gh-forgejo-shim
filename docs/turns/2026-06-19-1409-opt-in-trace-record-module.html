@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opt-in Trace Record Module</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1117;
+      --panel: #111923;
+      --panel-2: #162230;
+      --text: #e7edf5;
+      --muted: #a9b8c8;
+      --line: #2a394a;
+      --accent: #7dd3fc;
+      --accent-2: #a7f3d0;
+      --warn: #fbbf24;
+      --add-bg: #10251b;
+      --add: #b7f7cc;
+      --remove-bg: #321718;
+      --remove: #f9c0c0;
+      --code: #d9e6f2;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1040px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 48px 0 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 28px;
+      padding-bottom: 24px;
+    }
+
+    h1, h2 {
+      margin: 0;
+      line-height: 1.15;
+      text-wrap: balance;
+    }
+
+    h1 {
+      font-size: 2.1rem;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      color: var(--accent);
+      font-size: 1.05rem;
+      margin-top: 34px;
+    }
+
+    p {
+      max-width: 75ch;
+      margin: 10px 0 0;
+    }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 1.25rem;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    code {
+      color: var(--code);
+      background: #1a2532;
+      border: 1px solid #2a3a4d;
+      border-radius: 6px;
+      padding: 0.1rem 0.32rem;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .summary {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px 20px;
+    }
+
+    .meta {
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      margin-top: 14px;
+    }
+
+    .note {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+
+    .note strong {
+      color: var(--accent-2);
+    }
+
+    pre.diff {
+      background: #071018;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      margin: 14px 0 0;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre;
+    }
+
+    .diff .file {
+      color: #93c5fd;
+    }
+
+    .diff .hunk {
+      color: #c4b5fd;
+    }
+
+    .diff .add {
+      background: var(--add-bg);
+      color: var(--add);
+      display: block;
+    }
+
+    .diff .remove {
+      background: var(--remove-bg);
+      color: var(--remove);
+      display: block;
+    }
+
+    .diff .plain {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Opt-in Trace Record Module</h1>
+      <p class="meta">Repository implementation note for <code>gh-forgejo-shim</code>, generated June 19, 2026 at 14:09.</p>
+    </header>
+
+    <section class="summary">
+      <h2>Summary</h2>
+      <p>Added the core trace-recording module and focused tests for opt-in JSONL diagnostics. The module is not wired into CLI or routing behavior by this change, but it exposes the small API that routing can call later.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Created <code>src/gh_forgejo_shim/trace.py</code> with env-gated tracing using <code>FJ_SHIM_TRACE</code> and <code>FJ_SHIM_TRACE_BODY</code>.</li>
+        <li>Added JSONL append support with parent-directory creation, append mode, deterministic JSON key ordering, and restrictive file creation mode.</li>
+        <li>Added redaction helpers for auth headers, token-like keys, known GitHub token prefixes, token environment variables, and URL credentials.</li>
+        <li>Added body excerpt handling that is disabled by default and suppresses <code>gh auth token</code> stdout even when body tracing is enabled.</li>
+        <li>Created <code>tests/test_trace.py</code> covering redaction, no-op behavior, JSONL writes, opt-in body excerpts, and auth token suppression.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The main integration work is expected to happen elsewhere. This task only introduced the core trace module and tests, keeping the routing and CLI files untouched by this workstream.</p>
+      <p>The worktree already contained unrelated in-progress edits in routing and other untracked files. Those were left intact. The trace module does expose compatibility helpers used by that pending routing work, but this turn did not modify those files.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <div class="grid">
+        <div class="note"><strong>Activation:</strong> <code>FJ_SHIM_TRACE</code> is treated as the JSONL output path. Empty, <code>0</code>, <code>false</code>, <code>no</code>, and <code>off</code> disable tracing.</div>
+        <div class="note"><strong>Body capture:</strong> <code>FJ_SHIM_TRACE_BODY</code> must be truthy before stdout or stderr excerpts are recorded. Sizes are recorded without body opt-in.</div>
+        <div class="note"><strong>Record shape:</strong> records include timestamp, cwd, argv, route, host, repo, duration in milliseconds, exit code, and stdout/stderr byte summaries.</div>
+        <div class="note"><strong>Routing API:</strong> routing can use <code>TraceRecorder</code>, <code>build_record</code>, <code>capture_streams</code>, <code>append_trace</code>, <code>tracing_enabled</code>, and <code>suppress_stdout_body</code>.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>Focused excerpts from the new files show the public surface, safe append behavior, and tests that pin the security-sensitive cases.</p>
+      <pre class="diff"><code><span class="file">diff --git a/src/gh_forgejo_shim/trace.py b/src/gh_forgejo_shim/trace.py</span>
+<span class="file">new file mode 100644</span>
+<span class="remove">--- /dev/null</span>
+<span class="add">+++ b/src/gh_forgejo_shim/trace.py</span>
+<span class="hunk">@@ -0,0 +1,16 @@</span>
+<span class="add">+TRACE_ENV = "FJ_SHIM_TRACE"</span>
+<span class="add">+TRACE_BODY_ENV = "FJ_SHIM_TRACE_BODY"</span>
+<span class="add">+DEFAULT_MAX_EXCERPT_CHARS = 4096</span>
+<span class="add">+REDACTED = "&lt;redacted&gt;"</span>
+<span class="add">+AUTH_TOKEN_REDACTED = "[redacted: gh auth token output]"</span>
+<span class="add">+</span>
+<span class="add">+@dataclass(frozen=True)</span>
+<span class="add">+class TraceRecorder:</span>
+<span class="add">+    path: Path | None = None</span>
+<span class="add">+    include_body: bool = False</span>
+<span class="add">+    clock: Callable[[], datetime] = field(default_factory=lambda: _utc_now)</span>
+<span class="add">+    max_excerpt_chars: int = DEFAULT_MAX_EXCERPT_CHARS</span>
+<span class="hunk">@@ -0,0 +70,20 @@</span>
+<span class="add">+def tracing_enabled(env: Mapping[str, str] | None = None) -&gt; bool:</span>
+<span class="add">+    values = env if env is not None else os.environ</span>
+<span class="add">+    value = values.get(TRACE_ENV, "").strip()</span>
+<span class="add">+    return bool(value) and value.lower() not in _FALSE_VALUES</span>
+<span class="add">+</span>
+<span class="add">+def suppress_stdout_body(argv: Sequence[str]) -&gt; bool:</span>
+<span class="add">+    return _is_auth_token_command(argv)</span>
+<span class="add">+</span>
+<span class="add">+def append_jsonl(path: Path, record: Mapping[str, object]) -&gt; None:</span>
+<span class="add">+    path.parent.mkdir(parents=True, exist_ok=True)</span>
+<span class="add">+    line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"</span>
+<span class="add">+    data = line.encode("utf-8")</span>
+<span class="add">+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)</span>
+<span class="add">+    try:</span>
+<span class="add">+        while data:</span>
+<span class="add">+            written = os.write(fd, data)</span>
+<span class="add">+            data = data[written:]</span>
+<span class="add">+    finally:</span>
+<span class="add">+        os.close(fd)</span>
+
+<span class="file">diff --git a/tests/test_trace.py b/tests/test_trace.py</span>
+<span class="file">new file mode 100644</span>
+<span class="remove">--- /dev/null</span>
+<span class="add">+++ b/tests/test_trace.py</span>
+<span class="hunk">@@ -0,0 +20,21 @@</span>
+<span class="add">+def test_noop_when_trace_env_is_unset(self) -&gt; None:</span>
+<span class="add">+    recorder = TraceRecorder.from_env({}, clock=fixed_now)</span>
+<span class="add">+    emitted = recorder.emit(</span>
+<span class="add">+        argv=["repo", "view"],</span>
+<span class="add">+        route=TraceRoute("delegate", "disabled"),</span>
+<span class="add">+        duration_ms=1,</span>
+<span class="add">+        exit_code=0,</span>
+<span class="add">+        stdout="ok",</span>
+<span class="add">+        stderr="",</span>
+<span class="add">+    )</span>
+<span class="add">+    self.assertFalse(emitted)</span>
+<span class="hunk">@@ -0,0 +120,18 @@</span>
+<span class="add">+def test_auth_token_stdout_is_suppressed_even_when_body_enabled(self) -&gt; None:</span>
+<span class="add">+    token = "plain-forgejo-token-without-a-known-prefix"</span>
+<span class="add">+    recorder = TraceRecorder.from_env(</span>
+<span class="add">+        {"FJ_SHIM_TRACE": str(path), "FJ_SHIM_TRACE_BODY": "true"},</span>
+<span class="add">+        clock=fixed_now,</span>
+<span class="add">+    )</span>
+<span class="add">+    recorder.emit(argv=["auth", "token"], route=TraceRoute("forgejo"), stdout=f"{token}\n")</span>
+<span class="add">+    raw = path.read_text(encoding="utf-8")</span>
+<span class="add">+    record = json.loads(raw)</span>
+<span class="add">+    self.assertNotIn(token, raw)</span>
+<span class="add">+    self.assertEqual(record["stdout"]["excerpt"], AUTH_TOKEN_REDACTED)</span></code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>No user-visible CLI behavior changes until the routing layer calls this module. Once integrated, users can opt into local JSONL trace records without logging command bodies by default, and can opt into bounded body excerpts when they need deeper diagnostics.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><code>python3 -m py_compile src/gh_forgejo_shim/trace.py tests/test_trace.py</code> passed.</li>
+        <li><code>python3 -m unittest tests.test_trace</code> passed: 5 tests.</li>
+        <li><code>python3 -m unittest</code> passed: 119 tests.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>Trace collection is not wired into <code>cli.py</code> or <code>routing.py</code> by this task. Mitigation: the module exposes the intended call surface for the integration agent.</li>
+        <li>Body excerpts are deliberately bounded and redacted, but arbitrary nonstandard secrets can still be hard to identify perfectly. Mitigation: body capture remains opt-in and <code>gh auth token</code> stdout is fully suppressed.</li>
+        <li>Trace write failures return <code>false</code> instead of interrupting command execution. Mitigation: tracing remains diagnostic and should not break normal shim use.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Integrate <code>TraceRecorder</code> or the functional helpers into routing once the main agent owns that layer.</li>
+        <li>Document the trace environment variables in user-facing configuration docs after integration is complete.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

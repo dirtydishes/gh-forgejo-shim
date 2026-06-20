@@ -187,6 +187,45 @@ gh issue list --json number,title,state,url
 
 If your tool connects to a remote SSH workspace, apply the same remote setup inside that remote checkout too. Fixing the local Mac clone does not change a separate remote clone.
 
+## Codex Probe Diagnostics
+
+When Codex.app reports `GitHub CLI unavailable`, `Pull request status unavailable`, or stale branch data, enable tracing before guessing at the fix. The shim can record the exact `gh` commands it handles or delegates:
+
+```sh
+export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"
+export FJ_SHIM_TRACE_BODY=1
+```
+
+`FJ_SHIM_TRACE` is opt-in. With it unset, runtime behavior is unchanged. Trace records include timestamp, cwd, argv, route decision, host/repo, duration, exit code, stdout/stderr byte counts, relevant environment keys, and redacted excerpts when `FJ_SHIM_TRACE_BODY=1` is also set. Sensitive auth material is not logged; `gh auth token` stdout is always suppressed in trace excerpts.
+
+Summarize a trace file:
+
+```sh
+gfj trace summarize codex-probe-trace.jsonl
+```
+
+Run the local Codex-style smoke probes directly:
+
+```sh
+gfj trace smoke
+```
+
+The smoke command runs the observed read-only probe family: `gh --version`, `gh auth status`, `gh api user`, PR status/list JSON checks, and the local Git repo/default/upstream/current-branch/ref checks that branch and PR UI usually depend on.
+
+Some Codex branch UI checks use raw `git`, not `gh`. To capture those calls for one launch session, create a temporary `git` recorder wrapper and use the printed launch environment for that Codex session:
+
+```sh
+gfj trace git-recorder create "$PWD/codex-probe-trace.jsonl"
+```
+
+Remove it when the session is done:
+
+```sh
+gfj trace git-recorder remove /path/to/printed/wrapper-dir
+```
+
+The recorder wrapper is temporary, prepends one directory to `PATH`, forwards real `git` stdout/stderr, and appends JSONL records to the same trace file.
+
 ## Routed Commands
 
 Only supported commands in allowlisted Forgejo repositories are routed through Forgejo. Everything else delegates to the real GitHub CLI.
@@ -447,6 +486,9 @@ Environment overrides:
 FJ_SHIM_HOSTS
 FJ_SHIM_REAL_GH
 FJ_SHIM_REAL_FJ
+FJ_SHIM_TRACE
+FJ_SHIM_TRACE_BODY
+FJ_SHIM_REAL_GIT
 FJ_SHIM_TOKEN
 FORGEJO_TOKEN
 GITEA_TOKEN

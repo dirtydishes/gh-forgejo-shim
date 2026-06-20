@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Temporary Git Recorder Core</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --surface: #141a22;
+      --surface-2: #101720;
+      --ink: #edf2f7;
+      --muted: #a9b5c5;
+      --line: #2b3544;
+      --accent: #77d5c8;
+      --accent-2: #f0c36a;
+      --ok: #7ee787;
+      --warn: #f0c36a;
+      --code: #090d13;
+      --add-bg: rgba(35, 134, 54, 0.32);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; }
+    main { width: min(1120px, calc(100vw - 40px)); margin: 0 auto; padding: 44px 0 64px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 28px; }
+    h1, h2, h3 { margin: 0; line-height: 1.18; letter-spacing: 0; text-wrap: balance; }
+    h1 { max-width: 900px; font-size: 2.25rem; }
+    h2 { margin-top: 34px; font-size: 1.25rem; }
+    h3 { margin: 0 0 6px; font-size: 1rem; color: var(--accent); }
+    p, li { max-width: 76ch; color: var(--muted); }
+    code { background: var(--code); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 0.08rem 0.28rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+    pre { overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 14px; color: var(--ink); }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 0.92rem; }
+    .pill { border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 5px 10px; }
+    .lead { font-size: 1.06rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 14px; }
+    .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 15px; }
+    .panel p { margin: 0; }
+    .status { color: var(--ok); font-weight: 650; }
+    .caveat { color: var(--warn); font-weight: 650; }
+    .diff { margin-top: 14px; background: var(--surface-2); }
+    .diff code { display: block; padding: 0; border: 0; background: transparent; color: inherit; font-size: 0.84rem; line-height: 1.55; white-space: pre; min-width: max-content; }
+    .file { color: var(--accent-2); }
+    .add { display: block; background: var(--add-bg); color: #ddffdf; }
+    .ctx { display: block; color: #c8d3df; }
+    ul { padding-left: 1.2rem; }
+    li + li { margin-top: 0.36rem; }
+    @media (max-width: 680px) {
+      main { width: min(100% - 28px, 1120px); padding: 30px 0 48px; }
+      h1 { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span class="pill">2026-06-19</span>
+      <span class="pill">Repository implementation</span>
+      <span class="pill">Issue gh-forgejo-shim-6iw</span>
+    </div>
+    <h1>Temporary Git Recorder Core</h1>
+    <p class="lead">Added the isolated recorder core for creating a temporary <code>git</code> wrapper around one Codex launch session. The wrapper writes sanitized JSONL records and can be removed without changing persistent PATH configuration.</p>
+  </header>
+
+  <section>
+    <h2>Summary</h2>
+    <p>The new recorder module creates a managed temporary <code>git</code> executable, returns the launch environment a caller should use, invokes a caller-specified real git executable, forwards output, preserves the exit code, and appends one JSON record per invocation.</p>
+  </section>
+
+  <section>
+    <h2>Changes Made</h2>
+    <div class="grid">
+      <article class="panel"><h3>Recorder API</h3><p>Added <code>GitRecorder</code>, <code>create_git_recorder</code>, <code>remove_git_recorder</code>, and <code>git_recorder_script</code>.</p></article>
+      <article class="panel"><h3>Launch Env</h3><p>The return object includes <code>wrapper_dir</code>, <code>wrapper_path</code>, <code>trace_path</code>, <code>real_git</code>, <code>path</code>, and <code>env</code>.</p></article>
+      <article class="panel"><h3>Trace Safety</h3><p>Trace records include timestamp, cwd, sanitized argv, duration, exit code, and stdout/stderr byte counts. Excerpts require <code>FJ_SHIM_TRACE_BODY=1</code>.</p></article>
+      <article class="panel"><h3>Unit Tests</h3><p>Added fake-git coverage for wrapper creation, execution, cleanup, output forwarding, byte counts, and redaction.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Context</h2>
+    <p>This task intentionally does not wire the recorder into <code>cli.py</code>. The main integration flow can call the helper, launch Codex with <code>recorder.env</code> or <code>recorder.path</code>, and call <code>remove_git_recorder</code> afterward.</p>
+  </section>
+
+  <section>
+    <h2>Important Implementation Details</h2>
+    <ul>
+      <li>The generated wrapper is a standalone Python script built with stdlib-only code.</li>
+      <li><code>create_git_recorder</code> accepts a fake <code>real_git</code> path, which keeps tests independent from the machine's installed git.</li>
+      <li>Output is forwarded through reader threads, allowing the wrapper to count bytes without storing full stdout or stderr bodies.</li>
+      <li>Secret-like argv values, authorization headers, token assignments, URL userinfo, and common token prefixes are redacted before records are appended.</li>
+      <li>Cleanup refuses unmanaged directories by checking the wrapper marker before deleting the temporary directory.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Relevant Diff Snippets</h2>
+    <p>Focused unified diff fallback showing the new public API, trace fields, and representative tests.</p>
+    <pre class="diff"><code><span class="file">diff --git a/src/gh_forgejo_shim/git_recorder.py b/src/gh_forgejo_shim/git_recorder.py</span>
+<span class="ctx">new file mode 100644</span>
+<span class="ctx">--- /dev/null</span>
+<span class="ctx">+++ b/src/gh_forgejo_shim/git_recorder.py</span>
+<span class="ctx">@@</span>
+<span class="add">+TRACE_PATH_ENV = "FJ_SHIM_GIT_TRACE"</span>
+<span class="add">+TRACE_BODY_ENV = "FJ_SHIM_TRACE_BODY"</span>
+<span class="add">+REAL_GIT_ENV = "FJ_SHIM_REAL_GIT"</span>
+<span class="add">+</span>
+<span class="add">+@dataclass(frozen=True)</span>
+<span class="add">+class GitRecorder:</span>
+<span class="add">+    wrapper_dir: Path</span>
+<span class="add">+    wrapper_path: Path</span>
+<span class="add">+    trace_path: Path</span>
+<span class="add">+    real_git: Path</span>
+<span class="add">+    path: str</span>
+<span class="add">+    env: dict[str, str]</span>
+<span class="ctx">@@</span>
+<span class="add">+def create_git_recorder(trace_path: str | Path, *, real_git: str | Path | None = None, root_dir: str | Path | None = None, wrapper_dir: str | Path | None = None, env: Mapping[str, str] | None = None) -&gt; GitRecorder:</span>
+<span class="add">+    git_path = _resolve_real_git(real_git, values)</span>
+<span class="add">+    wrapper.write_text(git_recorder_script(git_path, trace), encoding="utf-8")</span>
+<span class="add">+    launch_env["PATH"] = path</span>
+<span class="add">+    launch_env[TRACE_PATH_ENV] = str(trace)</span>
+<span class="add">+    launch_env[REAL_GIT_ENV] = str(git_path)</span>
+<span class="ctx">@@</span>
+<span class="add">+    record["duration"] = round(duration, 6)</span>
+<span class="add">+    record["duration_ms"] = round(duration * 1000, 3)</span>
+<span class="add">+    record["exit_code"] = exit_code</span>
+<span class="add">+    record["stdout_bytes"] = stdout_bytes</span>
+<span class="add">+    record["stderr_bytes"] = stderr_bytes</span>
+<span class="add">+    if include_excerpt:</span>
+<span class="add">+        record["stdout_excerpt"] = _redact_text(_safe_decode(stdout_excerpt))</span>
+<span class="add">+        record["stderr_excerpt"] = _redact_text(_safe_decode(stderr_excerpt))</span>
+
+<span class="file">diff --git a/tests/test_git_recorder.py b/tests/test_git_recorder.py</span>
+<span class="ctx">new file mode 100644</span>
+<span class="ctx">--- /dev/null</span>
+<span class="ctx">+++ b/tests/test_git_recorder.py</span>
+<span class="ctx">@@</span>
+<span class="add">+def test_wrapper_records_invocation_and_preserves_real_git_result(self) -&gt; None:</span>
+<span class="add">+    completed = subprocess.run(["git", "status", "--short"], cwd=root, env=recorder.env, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)</span>
+<span class="add">+    self.assertEqual(record["command_argv"], ["git", "status", "--short"])</span>
+<span class="add">+    self.assertEqual(record["stdout_bytes"], len(b"fake stdout\n"))</span>
+<span class="add">+    self.assertNotIn("stdout_excerpt", record)</span>
+<span class="ctx">@@</span>
+<span class="add">+def test_trace_body_excerpts_are_opt_in_and_redacted(self) -&gt; None:</span>
+<span class="add">+    env[TRACE_BODY_ENV] = "1"</span>
+<span class="add">+    serialized = json.dumps(record)</span>
+<span class="add">+    self.assertIn("[REDACTED]", serialized)</span>
+<span class="add">+    self.assertNotIn("argv-secret", serialized)</span>
+<span class="add">+    self.assertIn("visible", record["stdout_excerpt"])</span></code></pre>
+  </section>
+
+  <section>
+    <h2>Expected Impact for End-Users</h2>
+    <p>No CLI behavior changes yet. After integration, Codex launch sessions can temporarily shadow <code>git</code>, collect sanitized command telemetry, and cleanly remove the wrapper directory at the end of the session.</p>
+  </section>
+
+  <section>
+    <h2>Validation</h2>
+    <ul>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest tests.test_git_recorder</code>.</li>
+      <li><span class="status">Passed:</span> <code>python3 -m py_compile src/gh_forgejo_shim/git_recorder.py tests/test_git_recorder.py</code>.</li>
+      <li><span class="status">Passed:</span> <code>python3 -m unittest</code> ran 119 tests successfully in the shared tree.</li>
+      <li><span class="status">Passed:</span> <code>git diff --check -- docs/turns/</code> and <code>git diff --cached --check</code> before commit.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Issues, Limitations, and Mitigations</h2>
+    <ul>
+      <li><span class="caveat">Not wired yet:</span> callers must use the helper directly until the main integration adds CLI/session wiring.</li>
+      <li><span class="caveat">Redaction is best-effort:</span> excerpts are opt-in and sanitized, but the recorder is not a formal secret scanner.</li>
+      <li><span class="caveat">Shared workspace:</span> unrelated tracked and untracked work was present and intentionally left outside this commit.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Follow-up Work</h2>
+    <ul>
+      <li>Wire the helper into the Codex launch/session flow.</li>
+      <li>Exercise the JSONL schema against real Codex git traffic before freezing any downstream summary UI.</li>
+      <li>Expand redaction patterns if real traces reveal additional credential shapes.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
