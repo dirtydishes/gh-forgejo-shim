@@ -73,6 +73,20 @@ tests/
 - Initial integration test helpers exist.
 - No installed `gh` behavior changes yet unless explicitly opted in for testing.
 
+## Implementation Notes
+
+This phase is scaffold only. The Cargo workspace and Rust binaries are not wired into the Python package, generated `gh` wrapper, or user install path. Until the cutover phase, the installed `gh-forgejo-shim`, `gfj`, and managed `gh` behavior remains served by the Python package.
+
+Rust behavior commands should fail clearly until their owning phases port them. The phase-02 Rust test harness loads the phase-01 compatibility contract directly and runs binaries under temporary homes, temporary repositories, and fake environment maps so later phases can add parity checks without touching user configuration. The harness prepends a fixture `bin` directory to `PATH`, allowing tests to shadow tools like `gh` while still leaving real system tools like `git` available for repository-discovery parity tests.
+
+Rust quality gates:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
 ## Acceptance Criteria
 
 - Rust workspace builds on the developer machine.

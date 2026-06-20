@@ -13,7 +13,15 @@ python3 -m pip install -e .
 python3 -m unittest
 ```
 
-Runtime code must stay Python stdlib-only. Test code should also stay stdlib-only unless the project deliberately changes that policy later.
+Until the Rust cutover, installed runtime behavior still comes from the Python package. Python runtime code must stay stdlib-only. Test code should also stay stdlib-only unless the project deliberately changes that policy later.
+
+The Rust rewrite scaffold is non-installed until cutover. Use these commands when touching Rust code:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
 
 ## Compatibility Goals
 
