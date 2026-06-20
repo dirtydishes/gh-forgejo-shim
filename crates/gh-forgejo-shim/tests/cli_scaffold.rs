@@ -2,9 +2,11 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::fs;
 use std::io;
 
 use gh_forgejo_shim::VERSION;
+use serde_json::Value;
 use support::{load_contract, CliFixture, TestResult};
 
 #[test]
@@ -20,7 +22,7 @@ fn long_binary_prints_help_under_isolated_environment() -> TestResult {
         stdout.contains(&format!("gh-forgejo-shim {VERSION}")),
         "{stdout}"
     );
-    assert!(stdout.contains("phase 02 scaffold only"), "{stdout}");
+    assert!(stdout.contains("managed gh dispatch is native"), "{stdout}");
     Ok(())
 }
 
@@ -37,15 +39,132 @@ fn short_binary_prints_version_without_python() -> TestResult {
 }
 
 #[test]
-fn behavior_commands_are_explicitly_out_of_scope_for_phase_02() -> TestResult {
+fn management_commands_remain_explicitly_out_of_scope_for_later_phases() -> TestResult {
     let fixture = CliFixture::new()?;
 
     let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
 
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains("Rust scaffold only"), "{stderr}");
-    assert!(stderr.contains("phase 02"), "{stderr}");
+    assert!(
+        stderr.contains("not implemented for this surface yet"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("managed gh dispatcher is native"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn managed_gh_version_delegates_to_real_gh() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho 'gh version 9.9.9 (fake)'\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .arg("gh")
+        .arg("--version")
+        .output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert_eq!(stdout, "gh version 9.9.9 (fake)\n");
+    Ok(())
+}
+
+#[test]
+fn managed_gh_missing_real_gh_preserves_error_shape() -> TestResult {
+    let fixture = CliFixture::new()?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("PATH", "")
+        .env("FJ_SHIM_REAL_GH", "/missing/gh")
+        .arg("gh")
+        .arg("--version")
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(127));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("could not find the real gh executable; set FJ_SHIM_REAL_GH"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn managed_gh_forgejo_repo_selects_native_route_without_delegating() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\nexit 17\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .arg("gh")
+        .arg("pr")
+        .arg("view")
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("Forgejo route selected for git.example.com"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("could not find the real gh"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn managed_gh_github_repo_delegates_even_when_allowlisted() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated-github\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("FJ_SHIM_HOSTS", "github.com,git.example.com")
+        .arg("gh")
+        .arg("pr")
+        .arg("view")
+        .arg("-R")
+        .arg("github.com/owner/repo")
+        .output()?;
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout)?, "delegated-github\n");
+    Ok(())
+}
+
+#[test]
+fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho traced\n")?;
+    let trace_path = fixture.root().join("trace.jsonl");
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("FJ_SHIM_TRACE", &trace_path)
+        .arg("gh")
+        .arg("--version")
+        .arg("--token")
+        .arg("secret-token")
+        .output()?;
+
+    assert!(output.status.success());
+    let trace = fs::read_to_string(trace_path)?;
+    let record: Value = serde_json::from_str(trace.trim())?;
+    assert_eq!(record["kind"], "gh");
+    assert_eq!(record["route"]["kind"], "delegate");
+    assert_eq!(record["route"]["reason"], "unsupported command");
+    assert_eq!(record["argv"][2], "<redacted>");
+    assert_eq!(record["stdout"]["bytes"], Value::Null);
     Ok(())
 }
 
