@@ -2,6 +2,7 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::fs;
 use std::io;
 
 use gh_forgejo_shim::VERSION;
@@ -20,7 +21,18 @@ fn long_binary_prints_help_under_isolated_environment() -> TestResult {
         stdout.contains(&format!("gh-forgejo-shim {VERSION}")),
         "{stdout}"
     );
-    assert!(stdout.contains("phase 02 scaffold only"), "{stdout}");
+    assert!(
+        stdout.contains("config and auth management commands"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("config <add-host|remove-host|list>"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("auth <login|import|status|logout>"),
+        "{stdout}"
+    );
     Ok(())
 }
 
@@ -37,15 +49,74 @@ fn short_binary_prints_version_without_python() -> TestResult {
 }
 
 #[test]
-fn behavior_commands_are_explicitly_out_of_scope_for_phase_02() -> TestResult {
+fn non_config_auth_behavior_commands_are_still_out_of_scope() -> TestResult {
     let fixture = CliFixture::new()?;
 
     let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
 
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains("Rust scaffold only"), "{stderr}");
-    assert!(stderr.contains("phase 02"), "{stderr}");
+    assert!(stderr.contains("Rust config/auth phase only"), "{stderr}");
+    assert!(stderr.contains("not implemented yet"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn config_add_host_persists_python_readable_config() -> TestResult {
+    let fixture = CliFixture::new()?;
+
+    let mut add = fixture.command("gh-forgejo-shim")?;
+    add.env_remove("FJ_SHIM_HOSTS")
+        .env_remove("FJ_SHIM_REAL_GH")
+        .args(["config", "add-host", "https://Git.Example.com/path"]);
+    let output = add.output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("added Forgejo host: https://Git.Example.com/path"));
+    assert!(stdout.contains("git.example.com"));
+
+    let config_path = fixture
+        .home()
+        .join(".config")
+        .join("gh-forgejo-shim")
+        .join("config.toml");
+    let text = fs::read_to_string(config_path)?;
+    assert_eq!(text, "hosts = [\"git.example.com\"]\n");
+
+    let mut list = fixture.command("gfj")?;
+    list.env_remove("FJ_SHIM_HOSTS")
+        .env_remove("FJ_SHIM_REAL_GH")
+        .args(["config", "list"]);
+    let output = list.output()?;
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout)?, "git.example.com\n");
+    Ok(())
+}
+
+#[test]
+fn auth_status_reports_stored_auth_without_secret() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let host = format!("auth-test-{}.invalid", std::process::id());
+    let config_dir = fixture.home().join(".config").join("gh-forgejo-shim");
+    fs::create_dir_all(&config_dir)?;
+    fs::write(
+        config_dir.join("config.toml"),
+        format!("hosts = [\"{host}\"]\n"),
+    )?;
+    fs::write(
+        config_dir.join("auth.json"),
+        format!("{{\"hosts\":{{\"{host}\":{{\"token\":\"stored-secret\"}}}}}}\n"),
+    )?;
+
+    let mut command = fixture.command("gfj")?;
+    command.env_remove("FJ_SHIM_HOSTS").args(["auth", "status"]);
+    let output = command.output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains(&format!("{host}: logged in")), "{stdout}");
+    assert!(!stdout.contains("stored-secret"), "{stdout}");
     Ok(())
 }
 

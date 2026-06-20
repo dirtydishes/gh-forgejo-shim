@@ -54,3 +54,9 @@ impl fmt::Display for ShimError {
 }
 
 impl std::error::Error for ShimError {}
+
+impl From<std::io::Error> for ShimError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
