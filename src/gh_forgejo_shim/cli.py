@@ -16,6 +16,7 @@ from .auth import (
     write_stored_token,
 )
 from .bootstrap import format_bootstrap, run_bootstrap
+from .codex_remote import repair_codex_upstream_remote
 from .config import add_host, load_config, normalize_host, remove_host
 from .doctor import format_checks, run_checks
 from .forgejo import ForgejoClient, ForgejoError
@@ -71,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"gh-forgejo-shim: {exc}", file=sys.stderr)
             return 1
         print(format_bootstrap(result))
+        return 0 if result.ok else 1
+
+    if command == "repair-codex-remote":
+        result = repair_codex_upstream_remote()
+        print(result.detail)
         return 0 if result.ok else 1
 
     if command == "install-gui-path":
@@ -137,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("uninstall-gui-path", help="remove the macOS GUI PATH LaunchAgent")
 
     subparsers.add_parser("doctor", help="check shim configuration")
+
+    subparsers.add_parser(
+        "repair-codex-remote",
+        help="add an upstream remote alias for Codex.app PR status probes when one is missing",
+    )
 
     bootstrap = subparsers.add_parser(
         "bootstrap",

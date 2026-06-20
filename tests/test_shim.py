@@ -9,6 +9,11 @@ from gh_forgejo_shim.shim import install_shim, is_managed_shim, shim_script, uni
 
 
 class ShimLifecycleTests(unittest.TestCase):
+    def test_generated_shim_can_use_management_command(self) -> None:
+        script = shim_script(management_command="/tmp/bin/gh-forgejo-shim")
+        self.assertIn("exec /tmp/bin/gh-forgejo-shim gh", script)
+        self.assertNotIn("-m gh_forgejo_shim", script)
+
     def test_generated_shim_uses_absolute_python_module_invocation(self) -> None:
         script = shim_script("/tmp/pipx-venv/bin/python")
         self.assertIn("exec /tmp/pipx-venv/bin/python -m gh_forgejo_shim gh", script)

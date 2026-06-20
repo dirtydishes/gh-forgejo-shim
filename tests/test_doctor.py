@@ -108,6 +108,41 @@ class DoctorTests(unittest.TestCase):
         self.assertTrue(check.ok)
         self.assertIn("will delegate to the real GitHub CLI", check.detail)
 
+    def test_current_repo_reports_missing_codex_upstream_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo", "https://git.example.com/owner/repo.git")
+
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": "", "FJ_SHIM_TOKEN": "secret"},
+                home=root,
+                cwd=str(repo),
+                check_current_repo=True,
+            )
+
+        check = self._check(checks, "Codex upstream remote")
+        self.assertFalse(check.ok)
+        self.assertIn("remote.upstream.url is missing", check.detail)
+
+    def test_current_repo_accepts_codex_upstream_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._git_repo(root / "repo", "https://git.example.com/owner/repo.git")
+            self._git(repo, "remote", "add", "upstream", "https://git.example.com/owner/repo.git")
+
+            checks = run_checks(
+                config=Config(hosts=("git.example.com",)),
+                env={"PATH": "", "FJ_SHIM_TOKEN": "secret"},
+                home=root,
+                cwd=str(repo),
+                check_current_repo=True,
+            )
+
+        check = self._check(checks, "Codex upstream remote")
+        self.assertTrue(check.ok)
+        self.assertIn("remote.upstream.url points at", check.detail)
+
     def test_path_ordering_allows_unrelated_dirs_before_shim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
