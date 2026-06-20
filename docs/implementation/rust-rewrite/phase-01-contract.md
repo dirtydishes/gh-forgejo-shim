@@ -49,6 +49,10 @@ Do not let subagents edit the final fixture format independently. One integrator
 - A clear list of unsupported commands and expected delegation behavior.
 - Baseline timing numbers comparing the Python shim and real `gh`.
 
+Frozen contract artifact:
+
+- [contracts/compatibility-contract.v1.json](contracts/compatibility-contract.v1.json)
+
 ## Acceptance Criteria
 
 - A future Rust command can be tested against the frozen fixtures without launching Codex.
