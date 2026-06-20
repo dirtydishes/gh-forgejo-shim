@@ -753,7 +753,8 @@
       "api_requests": [
         {
           "method": "GET",
-          "path": "/api/v1/repos/{owner}/{repo}/issues?state={state}&type=issues"
+          "path": "/api/v1/repos/{owner}/{repo}/issues?state={state}&type=issues&limit={limit}",
+          "default_limit": 30
         }
       ],
       "tests": [
