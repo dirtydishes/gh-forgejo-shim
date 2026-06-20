@@ -1,0 +1,27 @@
+[package]
+name = "gh-forgejo-shim"
+description = "Rust scaffold for the gh-forgejo-shim rewrite."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "gh_forgejo_shim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gh-forgejo-shim"
+path = "src/main.rs"
+
+[[bin]]
+name = "gfj"
+path = "src/bin/gfj.rs"
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[lints]
+workspace = true
