@@ -1,7 +1,10 @@
 mod support;
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
+use std::io;
 
+use gh_forgejo_shim::VERSION;
 use support::{load_contract, CliFixture, TestResult};
 
 #[test]
@@ -13,7 +16,10 @@ fn long_binary_prints_help_under_isolated_environment() -> TestResult {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("gh-forgejo-shim 0.1.1"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("gh-forgejo-shim {VERSION}")),
+        "{stdout}"
+    );
     assert!(stdout.contains("phase 02 scaffold only"), "{stdout}");
     Ok(())
 }
@@ -26,7 +32,7 @@ fn short_binary_prints_version_without_python() -> TestResult {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
-    assert_eq!(stdout.trim(), "0.1.1");
+    assert_eq!(stdout.trim(), VERSION);
     Ok(())
 }
 
@@ -40,6 +46,32 @@ fn behavior_commands_are_explicitly_out_of_scope_for_phase_02() -> TestResult {
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains("Rust scaffold only"), "{stderr}");
     assert!(stderr.contains("phase 02"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestResult {
+    let fixture = CliFixture::new()?;
+
+    assert!(fixture.root().is_dir(), "{:?}", fixture.root());
+    assert!(fixture.home().is_dir(), "{:?}", fixture.home());
+    assert!(fixture.repo().is_dir(), "{:?}", fixture.repo());
+    assert!(fixture.bin().is_dir(), "{:?}", fixture.bin());
+
+    let fake = fixture.write_executable("gh", "#!/bin/sh\nexit 0\n")?;
+    assert!(fake.exists(), "{fake:?}");
+
+    let command = fixture.command("gh-forgejo-shim")?;
+    let path_value = command
+        .get_envs()
+        .find_map(|(name, value)| (name == OsStr::new("PATH")).then_some(value))
+        .flatten()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fixture PATH is not set"))?;
+    let first_path = std::env::split_paths(path_value)
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fixture PATH is empty"))?;
+
+    assert_eq!(first_path, fixture.bin());
     Ok(())
 }
 
