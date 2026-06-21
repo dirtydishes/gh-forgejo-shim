@@ -26,6 +26,11 @@ Install with `pipx`:
 pipx install gh-forgejo-shim
 ```
 
+Phase 09 is moving releases to a Rust-first install path. Existing pipx users
+should follow [Migrate From pipx To The Rust Binary](docs/pipx-to-rust-migration.md)
+when installing a Rust release. PyPI is not intended to remain the long-term
+distribution channel once the Rust binary release path is active.
+
 From inside a Forgejo checkout, run:
 
 ```sh
@@ -558,6 +563,8 @@ FJ_SHIM_HOSTS= gh pr view
 ```
 
 See [docs/rollback.md](docs/rollback.md) for PATH troubleshooting and recovery steps.
+For old pipx installs moving to Rust, see
+[docs/pipx-to-rust-migration.md](docs/pipx-to-rust-migration.md).
 
 ## Development
 
