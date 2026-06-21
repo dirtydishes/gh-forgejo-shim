@@ -27,6 +27,12 @@ pub struct ProgramOutput {
     pub stderr: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRunResult {
+    pub code: i32,
+    pub message: String,
+}
+
 pub fn find_program(
     name: &str,
     configured: Option<&Path>,
@@ -112,6 +118,34 @@ pub fn git_output(args: &[&str], cwd: Option<&Path>) -> Option<String> {
     }
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+pub fn git_run(args: &[&str], cwd: Option<&Path>) -> GitRunResult {
+    let mut command = Command::new("git");
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            return GitRunResult {
+                code: 127,
+                message: error.to_string(),
+            };
+        }
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    GitRunResult {
+        code: output.status.code().unwrap_or(1),
+        message: if stderr.is_empty() { stdout } else { stderr },
+    }
 }
 
 fn command_with_env(

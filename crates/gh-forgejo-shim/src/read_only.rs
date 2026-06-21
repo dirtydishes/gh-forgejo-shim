@@ -1,15 +1,18 @@
 //! Read-only Forgejo command handlers for managed `gh` invocations.
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::auth;
 use crate::config::EnvMap;
-use crate::external::git_output;
-use crate::forgejo::{ForgejoClient, ForgejoResult, ListIssuesOptions, RepoRef as ForgejoRepoRef};
+use crate::external::{git_output, git_run, GitRunResult};
+use crate::forgejo::{
+    CreateIssueRequest, CreatePullRequest, ForgejoClient, ForgejoResult, ListIssuesOptions,
+    RepoRef as ForgejoRepoRef,
+};
 use crate::normalize::{
     filter_check_fields, filter_fields, filter_issue_fields, filter_repo_fields, normalize_issue,
     normalize_pr_checks, normalize_pull, normalize_repo, render_json_or_jq, render_json_or_jq_list,
@@ -17,11 +20,17 @@ use crate::normalize::{
 };
 use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
 use crate::routing::RouteDecision;
+use crate::{auth, create};
 use crate::{Result, ShimError};
 
 trait ForgejoApi {
     fn get_current_user(&self, host: &str) -> ForgejoResult<Value>;
     fn get_repo(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Value>;
+    fn create_pull(
+        &self,
+        repo: &ForgejoRepoRef,
+        request: &CreatePullRequest,
+    ) -> ForgejoResult<Value>;
     fn list_pulls(
         &self,
         repo: &ForgejoRepoRef,
@@ -43,6 +52,18 @@ trait ForgejoApi {
         options: &ListIssuesOptions,
     ) -> ForgejoResult<Vec<Value>>;
     fn get_issue(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value>;
+    fn list_labels(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Vec<Value>>;
+    fn create_issue(
+        &self,
+        repo: &ForgejoRepoRef,
+        request: &CreateIssueRequest,
+    ) -> ForgejoResult<Value>;
+    fn create_issue_comment(
+        &self,
+        repo: &ForgejoRepoRef,
+        number: u64,
+        body: &str,
+    ) -> ForgejoResult<Value>;
 }
 
 impl ForgejoApi for ForgejoClient {
@@ -52,6 +73,14 @@ impl ForgejoApi for ForgejoClient {
 
     fn get_repo(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Value> {
         ForgejoClient::get_repo(self, repo)
+    }
+
+    fn create_pull(
+        &self,
+        repo: &ForgejoRepoRef,
+        request: &CreatePullRequest,
+    ) -> ForgejoResult<Value> {
+        ForgejoClient::create_pull(self, repo, request)
     }
 
     fn list_pulls(
@@ -94,6 +123,27 @@ impl ForgejoApi for ForgejoClient {
 
     fn get_issue(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
         ForgejoClient::get_issue(self, repo, number)
+    }
+
+    fn list_labels(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Vec<Value>> {
+        ForgejoClient::list_labels(self, repo)
+    }
+
+    fn create_issue(
+        &self,
+        repo: &ForgejoRepoRef,
+        request: &CreateIssueRequest,
+    ) -> ForgejoResult<Value> {
+        ForgejoClient::create_issue(self, repo, request)
+    }
+
+    fn create_issue_comment(
+        &self,
+        repo: &ForgejoRepoRef,
+        number: u64,
+        body: &str,
+    ) -> ForgejoResult<Value> {
+        ForgejoClient::create_issue_comment(self, repo, number, body)
     }
 }
 
@@ -162,6 +212,41 @@ struct DiffArgs {
     excludes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CreateArgs {
+    output: OutputArgs,
+    title: Option<String>,
+    body: Option<String>,
+    base: Option<String>,
+    head: Option<String>,
+    repo: Option<String>,
+    fill: bool,
+    fill_first: bool,
+    fill_verbose: bool,
+    web: bool,
+    draft: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CommentArgs {
+    repo: Option<String>,
+    number: Option<u64>,
+    branch: Option<String>,
+    body: Option<String>,
+    web: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CheckoutArgs {
+    repo: Option<String>,
+    number: Option<u64>,
+    branch: Option<String>,
+    local_branch: Option<String>,
+    detach: bool,
+    force: bool,
+    recurse_submodules: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IssueListArgs {
     output: OutputArgs,
@@ -205,6 +290,17 @@ struct IssueViewArgs {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct IssueCreateArgs {
+    title: Option<String>,
+    body: Option<String>,
+    repo: Option<String>,
+    web: bool,
+    assignees: Vec<String>,
+    labels: Vec<String>,
+    milestone: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct AuthStatusArgs {
     output: OutputArgs,
     show_token: bool,
@@ -226,6 +322,7 @@ pub fn run(
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
 ) -> i32 {
     let host = decision.trace_host().map(ToOwned::to_owned);
     let repo = decision.repo.as_ref().map(to_forgejo_repo);
@@ -241,6 +338,7 @@ pub fn run(
         cwd,
         stdout,
         stderr,
+        stdin,
     );
 
     match result {
@@ -262,6 +360,7 @@ fn run_with_context(
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
 ) -> Result<i32> {
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
@@ -286,7 +385,16 @@ fn run_with_context(
     let token_present = token.is_some();
     let client = ForgejoClient::new(token);
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
-    run_repo_command(argv, repo, &client, token_present, cwd, stdout, stderr)
+    run_repo_command(
+        argv,
+        repo,
+        &client,
+        token_present,
+        cwd,
+        stdout,
+        stderr,
+        stdin,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -300,6 +408,7 @@ fn run_with_client(
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
 ) -> Result<i32> {
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
@@ -319,7 +428,16 @@ fn run_with_client(
     }
 
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
-    run_repo_command(argv, repo, client, token.is_some(), cwd, stdout, stderr)
+    run_repo_command(
+        argv,
+        repo,
+        client,
+        token.is_some(),
+        cwd,
+        stdout,
+        stderr,
+        stdin,
+    )
 }
 
 fn run_auth(
@@ -398,11 +516,23 @@ fn run_repo_command(
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
 ) -> Result<i32> {
     match argv.first().map(String::as_str) {
         Some("repo") => run_repo_view_command(argv, repo, client, token_present, stdout, stderr),
-        Some("issue") => run_issue_command(argv, repo, client, token_present, stdout, stderr),
-        Some("pr") => run_pr_command(argv, repo, client, token_present, cwd, stdout, stderr),
+        Some("issue") => {
+            run_issue_command(argv, repo, client, token_present, stdout, stderr, stdin)
+        }
+        Some("pr") => run_pr_command(
+            argv,
+            repo,
+            client,
+            token_present,
+            cwd,
+            stdout,
+            stderr,
+            stdin,
+        ),
         Some(other) => Err(ShimError::new(format!(
             "unsupported Forgejo command: {other}"
         ))),
@@ -418,12 +548,36 @@ fn run_pr_command(
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
 ) -> Result<i32> {
     let Some(command) = argv.get(1).map(String::as_str) else {
         return Err(ShimError::new("missing Forgejo PR command"));
     };
     match command {
         "checks" => run_checks(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
+        "checkout" | "co" => {
+            run_checkout(&argv[2..], repo, client, token_present, cwd, stdout, stderr)
+        }
+        "comment" => run_comment(
+            &argv[2..],
+            repo,
+            client,
+            token_present,
+            cwd,
+            stdout,
+            stderr,
+            stdin,
+        ),
+        "create" | "new" => run_create(
+            &argv[2..],
+            repo,
+            client,
+            token_present,
+            cwd,
+            stdout,
+            stderr,
+            stdin,
+        ),
         "diff" => run_diff(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
         "list" => run_list(&argv[2..], repo, client, token_present, stdout, stderr),
         "status" => run_status(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
@@ -466,11 +620,21 @@ fn run_issue_command(
     token_present: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
 ) -> Result<i32> {
     let Some(command) = argv.get(1).map(String::as_str) else {
         return Err(ShimError::new("missing Forgejo issue command"));
     };
     match command {
+        "create" | "new" => run_issue_create(
+            &argv[2..],
+            repo,
+            client,
+            token_present,
+            stdout,
+            stderr,
+            stdin,
+        ),
         "list" | "ls" => run_issue_list(&argv[2..], repo, client, token_present, stdout, stderr),
         "view" => run_issue_view(&argv[2..], repo, client, token_present, stdout, stderr),
         other => {
@@ -542,6 +706,118 @@ fn run_list(
     Ok(0)
 }
 
+fn run_checkout(
+    argv: &[String],
+    repo: &ForgejoRepoRef,
+    client: &dyn ForgejoApi,
+    token_present: bool,
+    cwd: Option<&Path>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<i32> {
+    let parsed = parse_checkout_args(argv)?;
+    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
+    let pull = resolve_pull(
+        &target_repo,
+        client,
+        parsed.number,
+        parsed.branch.as_deref(),
+        cwd,
+    )?
+    .ok_or_else(|| ShimError::new("could not find pull request to check out"))?;
+    let number = pull_number(&pull);
+    let head_ref = pull_head_ref(&pull);
+
+    let mut fetch_refs = Vec::new();
+    if let Some(head_ref) = head_ref.as_deref() {
+        fetch_refs.push(head_ref.to_string());
+    }
+    if let Some(number) = number {
+        fetch_refs.push(format!("refs/pull/{number}/head"));
+    }
+
+    let mut fetch_error = String::new();
+    let mut fetched = false;
+    for fetch_ref in dedupe_strings(fetch_refs) {
+        let output = git_run(&["fetch", "origin", fetch_ref.as_str()], cwd);
+        if output.code == 0 {
+            fetched = true;
+            break;
+        }
+        fetch_error = output.message;
+    }
+    if !fetched {
+        writeln!(
+            stderr,
+            "{}",
+            if fetch_error.is_empty() {
+                "git fetch failed"
+            } else {
+                fetch_error.as_str()
+            }
+        )?;
+        return Ok(1);
+    }
+
+    if parsed.detach {
+        let output = git_run(&["checkout", "--detach", "FETCH_HEAD"], cwd);
+        if output.code != 0 {
+            writeln!(
+                stderr,
+                "{}",
+                git_error_message(&output, "git checkout failed")
+            )?;
+            return Ok(output.code);
+        }
+        writeln!(stdout, "checked out FETCH_HEAD")?;
+        return Ok(0);
+    }
+
+    let branch = parsed
+        .local_branch
+        .clone()
+        .or(head_ref)
+        .or_else(|| number.map(|number| format!("pull-{number}")))
+        .ok_or_else(|| ShimError::new("could not determine local branch name"))?;
+    let output = if parsed.force {
+        git_run(&["checkout", "-B", branch.as_str(), "FETCH_HEAD"], cwd)
+    } else {
+        let ref_name = format!("refs/heads/{branch}");
+        let exists = git_run(&["show-ref", "--verify", "--quiet", ref_name.as_str()], cwd);
+        if exists.code == 0 {
+            git_run(&["checkout", branch.as_str()], cwd)
+        } else {
+            git_run(&["checkout", "-b", branch.as_str(), "FETCH_HEAD"], cwd)
+        }
+    };
+    if output.code != 0 {
+        writeln!(
+            stderr,
+            "{}",
+            git_error_message(&output, "git checkout failed")
+        )?;
+        return Ok(output.code);
+    }
+
+    if parsed.recurse_submodules {
+        let output = git_run(&["submodule", "update", "--init", "--recursive"], cwd);
+        if output.code != 0 {
+            writeln!(
+                stderr,
+                "{}",
+                git_error_message(&output, "git submodule update failed")
+            )?;
+            return Ok(output.code);
+        }
+    }
+
+    writeln!(stdout, "checked out {branch}")?;
+    Ok(0)
+}
+
 fn run_checks(
     argv: &[String],
     repo: &ForgejoRepoRef,
@@ -585,6 +861,51 @@ fn run_checks(
         };
         print_json_list(&checks, &output, stdout)?;
     }
+    Ok(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_comment(
+    argv: &[String],
+    repo: &ForgejoRepoRef,
+    client: &dyn ForgejoApi,
+    token_present: bool,
+    cwd: Option<&Path>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
+) -> Result<i32> {
+    let parsed = parse_comment_args(argv, stdin)?;
+    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
+
+    let pull = resolve_pull(
+        &target_repo,
+        client,
+        parsed.number,
+        parsed.branch.as_deref(),
+        cwd,
+    )?
+    .ok_or_else(|| ShimError::new("could not find pull request to comment on"))?;
+    let number = pull_number(&pull)
+        .ok_or_else(|| ShimError::new("could not determine pull request number"))?;
+
+    if parsed.web {
+        let normalized = normalize_pull(&pull);
+        let url = normalized.get("url").and_then(Value::as_str).map_or_else(
+            || format!("{}/pulls/{number}", target_repo.web_base_url()),
+            str::to_string,
+        );
+        writeln!(stdout, "{url}#new-comment")?;
+        return Ok(0);
+    }
+
+    let body = parsed
+        .body
+        .ok_or_else(|| ShimError::new("Forgejo PR comment requires --body or --body-file"))?;
+    client.create_issue_comment(&target_repo, number, &body)?;
     Ok(0)
 }
 
@@ -752,6 +1073,87 @@ fn run_status(
     Ok(0)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_create(
+    argv: &[String],
+    repo: &ForgejoRepoRef,
+    client: &dyn ForgejoApi,
+    token_present: bool,
+    cwd: Option<&Path>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
+) -> Result<i32> {
+    let parsed = create::parse_create_args_with_reader(argv, stdin)?;
+    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
+
+    let base = parsed
+        .base
+        .unwrap_or_else(|| create::default_base_branch(cwd));
+    let head = parsed
+        .head
+        .or_else(|| current_branch(cwd))
+        .ok_or_else(|| ShimError::new("could not determine head branch; pass --head"))?;
+    let title = parsed
+        .title
+        .or_else(|| {
+            (parsed.fill || parsed.fill_first || parsed.fill_verbose)
+                .then(|| create::fill_title(cwd))
+                .flatten()
+        })
+        .ok_or_else(|| {
+            ShimError::new(
+                "Forgejo PR create requires --title or one of --fill/--fill-first/--fill-verbose",
+            )
+        })?;
+    let body = parsed
+        .body
+        .or_else(|| {
+            (parsed.fill || parsed.fill_first || parsed.fill_verbose)
+                .then(|| create::fill_body(parsed.fill_verbose, cwd))
+        })
+        .unwrap_or_default();
+
+    if parsed.web {
+        writeln!(
+            stdout,
+            "{}/compare/{base}...{head}",
+            target_repo.web_base_url()
+        )?;
+        return Ok(0);
+    }
+
+    let pull = client.create_pull(
+        &target_repo,
+        &CreatePullRequest::new(title, body, base, head).draft(parsed.draft),
+    )?;
+    let normalized = normalize_pull(&pull);
+    if parsed.json_fields.is_empty() {
+        let url = normalized
+            .get("url")
+            .or_else(|| pull.get("html_url"))
+            .or_else(|| pull.get("url"))
+            .and_then(Value::as_str)
+            .map(create::format_created_pull_url)
+            .unwrap_or_default();
+        writeln!(stdout, "{url}")?;
+    } else {
+        print_json(
+            &filter_fields(&normalized, &parsed.json_fields),
+            &OutputArgs {
+                json_fields: parsed.json_fields,
+                jq: None,
+                template: None,
+            },
+            stdout,
+        )?;
+    }
+    Ok(0)
+}
+
 fn run_repo_view(
     argv: &[String],
     repo: &ForgejoRepoRef,
@@ -786,6 +1188,52 @@ fn run_repo_view(
             stdout,
         )?;
     }
+    Ok(0)
+}
+
+fn run_issue_create(
+    argv: &[String],
+    repo: &ForgejoRepoRef,
+    client: &dyn ForgejoApi,
+    token_present: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    stdin: &mut dyn Read,
+) -> Result<i32> {
+    let parsed = parse_issue_create_args(argv, stdin)?;
+    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
+
+    if parsed.web {
+        writeln!(stdout, "{}/issues/new", target_repo.web_base_url())?;
+        return Ok(0);
+    }
+
+    let title = parsed
+        .title
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| ShimError::new("Forgejo issue create requires --title"))?;
+    let labels = resolve_label_ids(client, &target_repo, &parsed.labels)?;
+    let request = CreateIssueRequest::new(title)
+        .body(parsed.body.unwrap_or_default())
+        .assignees(parsed.assignees)
+        .labels(labels);
+    let request = if let Some(milestone) = parsed.milestone {
+        request.milestone(milestone)
+    } else {
+        request
+    };
+    let issue = client.create_issue(&target_repo, &request)?;
+    let normalized = normalize_issue(&issue);
+    let url = normalized
+        .get("url")
+        .or_else(|| issue.get("html_url"))
+        .or_else(|| issue.get("url"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    writeln!(stdout, "{url}")?;
     Ok(0)
 }
 
@@ -1037,6 +1485,46 @@ fn parse_list_args(argv: &[String]) -> Result<ListArgs> {
     Ok(parsed)
 }
 
+fn parse_checkout_args(argv: &[String]) -> Result<CheckoutArgs> {
+    let mut parsed = CheckoutArgs::default();
+    let mut index = 0;
+    while index < argv.len() {
+        let arg = argv[index].as_str();
+        if matches!(arg, "-R" | "--repo") {
+            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value(arg, "--repo") {
+            parsed.repo = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--branch" | "-b") {
+            parsed.local_branch = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--branch", "-b"]) {
+            parsed.local_branch = Some(value.to_string());
+            index += 1;
+        } else if arg == "--detach" {
+            parsed.detach = true;
+            index += 1;
+        } else if matches!(arg, "--force" | "-f") {
+            parsed.force = true;
+            index += 1;
+        } else if arg == "--recurse-submodules" {
+            parsed.recurse_submodules = true;
+            index += 1;
+        } else if arg.starts_with('-') {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR checkout flag: {arg}"
+            )));
+        } else {
+            let (number, branch) = parse_number_or_branch(arg, "pull");
+            parsed.number = number;
+            parsed.branch = branch;
+            index += 1;
+        }
+    }
+    Ok(parsed)
+}
+
 fn parse_checks_args(argv: &[String]) -> Result<ChecksArgs> {
     let mut parsed = ChecksArgs::default();
     let mut index = 0;
@@ -1118,6 +1606,181 @@ fn parse_diff_args(argv: &[String]) -> Result<DiffArgs> {
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
                 "unsupported Forgejo PR diff flag: {arg}"
+            )));
+        } else {
+            let (number, branch) = parse_number_or_branch(arg, "pull");
+            parsed.number = number;
+            parsed.branch = branch;
+            index += 1;
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_create_args(argv: &[String], stdin: &mut dyn Read) -> Result<CreateArgs> {
+    let mut parsed = CreateArgs::default();
+    let mut index = 0;
+    while index < argv.len() {
+        let arg = argv[index].as_str();
+        if parse_output_arg(argv, &mut index, &mut parsed.output)? {
+            continue;
+        }
+        if matches!(
+            arg,
+            "--reviewer"
+                | "--reviewers"
+                | "-r"
+                | "--assignee"
+                | "--assignees"
+                | "-a"
+                | "--label"
+                | "--labels"
+                | "-l"
+                | "--project"
+                | "--projects"
+                | "-p"
+                | "--milestone"
+                | "-m"
+                | "--template"
+                | "-T"
+                | "--recover"
+        ) {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR create flag: {arg}"
+            )));
+        } else if has_value_prefix(
+            arg,
+            &[
+                "--reviewer",
+                "--reviewers",
+                "-r",
+                "--assignee",
+                "--assignees",
+                "-a",
+                "--label",
+                "--labels",
+                "-l",
+                "--project",
+                "--projects",
+                "-p",
+                "--milestone",
+                "-m",
+                "--template",
+                "-T",
+                "--recover",
+            ],
+        ) {
+            let flag = arg.split_once('=').map_or(arg, |(flag, _)| flag);
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR create flag: {flag}"
+            )));
+        } else if matches!(
+            arg,
+            "--maintainer-can-modify" | "--no-maintainer-edit" | "--no-maintainer-can-modify"
+        ) {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR create flag: {arg}"
+            )));
+        } else if matches!(arg, "--title" | "-t") {
+            parsed.title = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--title", "-t"]) {
+            parsed.title = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--body" | "-b") {
+            parsed.body = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--body", "-b"]) {
+            parsed.body = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--body-file" | "-F") {
+            parsed.body = Some(body_from_file(required_value(argv, index, arg)?, stdin)?);
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--body-file", "-F"]) {
+            parsed.body = Some(body_from_file(value, stdin)?);
+            index += 1;
+        } else if matches!(arg, "--base" | "-B") {
+            parsed.base = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--base", "-B"]) {
+            parsed.base = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--head" | "-H") {
+            parsed.head = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--head", "-H"]) {
+            parsed.head = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "-R" | "--repo") {
+            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value(arg, "--repo") {
+            parsed.repo = Some(value.to_string());
+            index += 1;
+        } else if arg == "--fill" {
+            parsed.fill = true;
+            index += 1;
+        } else if arg == "--fill-first" {
+            parsed.fill_first = true;
+            index += 1;
+        } else if arg == "--fill-verbose" {
+            parsed.fill_verbose = true;
+            index += 1;
+        } else if matches!(arg, "--web" | "-w") {
+            parsed.web = true;
+            index += 1;
+        } else if matches!(arg, "--draft" | "-d") {
+            parsed.draft = true;
+            index += 1;
+        } else if arg.starts_with('-') {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR create flag: {arg}"
+            )));
+        } else {
+            return Err(ShimError::new(format!(
+                "unexpected positional argument for Forgejo PR create: {arg}"
+            )));
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_comment_args(argv: &[String], stdin: &mut dyn Read) -> Result<CommentArgs> {
+    let mut parsed = CommentArgs::default();
+    let mut index = 0;
+    while index < argv.len() {
+        let arg = argv[index].as_str();
+        if matches!(arg, "-R" | "--repo") {
+            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value(arg, "--repo") {
+            parsed.repo = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--body" | "-b") {
+            parsed.body = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--body", "-b"]) {
+            parsed.body = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--body-file" | "-F") {
+            parsed.body = Some(body_from_file(required_value(argv, index, arg)?, stdin)?);
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--body-file", "-F"]) {
+            parsed.body = Some(body_from_file(value, stdin)?);
+            index += 1;
+        } else if matches!(arg, "--web" | "-w") {
+            parsed.web = true;
+            index += 1;
+        } else if matches!(
+            arg,
+            "--create-if-none" | "--delete-last" | "--edit-last" | "--editor" | "-e" | "--yes"
+        ) {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR comment flag: {arg}"
+            )));
+        } else if arg.starts_with('-') {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo PR comment flag: {arg}"
             )));
         } else {
             let (number, branch) = parse_number_or_branch(arg, "pull");
@@ -1308,6 +1971,86 @@ fn parse_issue_view_args(argv: &[String]) -> Result<IssueViewArgs> {
     Ok(parsed)
 }
 
+fn parse_issue_create_args(argv: &[String], stdin: &mut dyn Read) -> Result<IssueCreateArgs> {
+    let mut parsed = IssueCreateArgs::default();
+    let mut index = 0;
+    while index < argv.len() {
+        let arg = argv[index].as_str();
+        if matches!(arg, "--title" | "-t") {
+            parsed.title = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--title", "-t"]) {
+            parsed.title = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--body" | "-b") {
+            parsed.body = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--body", "-b"]) {
+            parsed.body = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--body-file" | "-F") {
+            parsed.body = Some(body_from_file(required_value(argv, index, arg)?, stdin)?);
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--body-file", "-F"]) {
+            parsed.body = Some(body_from_file(value, stdin)?);
+            index += 1;
+        } else if matches!(arg, "-R" | "--repo") {
+            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value(arg, "--repo") {
+            parsed.repo = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--web" | "-w") {
+            parsed.web = true;
+            index += 1;
+        } else if matches!(arg, "--assignee" | "-a") {
+            parsed
+                .assignees
+                .extend(split_label_values(required_value(argv, index, arg)?));
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--assignee", "-a"]) {
+            parsed.assignees.extend(split_label_values(value));
+            index += 1;
+        } else if matches!(arg, "--label" | "-l") {
+            parsed
+                .labels
+                .extend(split_label_values(required_value(argv, index, arg)?));
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--label", "-l"]) {
+            parsed.labels.extend(split_label_values(value));
+            index += 1;
+        } else if matches!(arg, "--milestone" | "-m") {
+            parsed.milestone = optional_i64(required_value(argv, index, arg)?);
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--milestone", "-m"]) {
+            parsed.milestone = optional_i64(value);
+            index += 1;
+        } else if matches!(
+            arg,
+            "--editor" | "-e" | "--project" | "-p" | "--recover" | "--template" | "-T"
+        ) {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo issue create flag: {arg}"
+            )));
+        } else if has_value_prefix(arg, &["--project", "-p", "--recover", "--template", "-T"]) {
+            let flag = arg.split_once('=').map_or(arg, |(flag, _)| flag);
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo issue create flag: {flag}"
+            )));
+        } else if arg.starts_with('-') {
+            return Err(ShimError::new(format!(
+                "unsupported Forgejo issue create flag: {arg}"
+            )));
+        } else {
+            return Err(ShimError::new(format!(
+                "unexpected positional argument for Forgejo issue create: {arg}"
+            )));
+        }
+    }
+    parsed.assignees.retain(|assignee| assignee != "@me");
+    Ok(parsed)
+}
+
 fn parse_output_arg(argv: &[String], index: &mut usize, output: &mut OutputArgs) -> Result<bool> {
     let arg = argv[*index].as_str();
     if arg == "--json" {
@@ -1435,6 +2178,142 @@ fn target_repo(value: Option<&str>, fallback: &ForgejoRepoRef) -> Result<Forgejo
             .ok_or_else(|| ShimError::new("could not parse --repo value")),
         None => Ok(fallback.clone()),
     }
+}
+
+fn body_from_file(path_value: &str, stdin: &mut dyn Read) -> Result<String> {
+    if path_value == "-" {
+        let mut body = String::new();
+        stdin
+            .read_to_string(&mut body)
+            .map_err(|error| ShimError::new(format!("could not read stdin body: {error}")))?;
+        return Ok(body);
+    }
+    fs::read_to_string(path_value)
+        .map_err(|error| ShimError::new(format!("could not read body file {path_value}: {error}")))
+}
+
+fn default_base_branch(cwd: Option<&Path>) -> String {
+    git_output(
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+        cwd,
+    )
+    .and_then(|value| value.split_once('/').map(|(_, branch)| branch.to_string()))
+    .unwrap_or_else(|| "main".to_string())
+}
+
+fn fill_title(cwd: Option<&Path>) -> Option<String> {
+    git_output(&["log", "-1", "--pretty=%s"], cwd).or_else(|| current_branch(cwd))
+}
+
+fn fill_body(verbose: bool, cwd: Option<&Path>) -> String {
+    if verbose {
+        git_output(&["log", "-1", "--pretty=%b"], cwd).unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+fn format_created_pull_url(value: &str) -> String {
+    if value.is_empty() || codex_create_pr_url_present(value) {
+        return value.to_string();
+    }
+    let Some(number) = number_from_url(value, "pull") else {
+        return value.to_string();
+    };
+    let marker = format!("codex-pr=/pull/{number}");
+    if let Some((base, fragment)) = value.split_once('#') {
+        if codex_create_pr_url_present(fragment) {
+            value.to_string()
+        } else if fragment.is_empty() {
+            format!("{base}#{marker}")
+        } else {
+            format!("{base}#{fragment}&{marker}")
+        }
+    } else {
+        format!("{value}#{marker}")
+    }
+}
+
+fn codex_create_pr_url_present(value: &str) -> bool {
+    value
+        .split("/pull/")
+        .nth(1)
+        .is_some_and(|tail| tail.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+}
+
+fn pull_head_ref(pull: &Value) -> Option<String> {
+    pull.get("head")
+        .and_then(Value::as_object)
+        .and_then(|head| head.get("ref"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn resolve_label_ids(
+    client: &dyn ForgejoApi,
+    repo: &ForgejoRepoRef,
+    labels: &[String],
+) -> Result<Vec<i64>> {
+    if labels.is_empty() {
+        return Ok(Vec::new());
+    }
+    let unresolved = labels
+        .iter()
+        .filter(|label| optional_i64(label).is_none())
+        .collect::<Vec<_>>();
+    let mut label_map = HashMap::new();
+    if !unresolved.is_empty() {
+        for label in client.list_labels(repo)? {
+            if let (Some(name), Some(id)) = (
+                label.get("name").and_then(Value::as_str),
+                label.get("id").and_then(Value::as_i64),
+            ) {
+                label_map.insert(name.to_string(), id);
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    for label in labels {
+        if let Some(id) = optional_i64(label) {
+            result.push(id);
+        } else if let Some(id) = label_map.get(label) {
+            result.push(*id);
+        } else {
+            return Err(ShimError::new(format!(
+                "could not resolve Forgejo issue label: {label}"
+            )));
+        }
+    }
+    Ok(result)
+}
+
+fn optional_i64(value: &str) -> Option<i64> {
+    value.parse::<i64>().ok()
+}
+
+fn git_error_message<'a>(output: &'a GitRunResult, fallback: &'a str) -> &'a str {
+    if output.message.is_empty() {
+        fallback
+    } else {
+        output.message.as_str()
+    }
+}
+
+fn dedupe_strings(values: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for value in values {
+        if !result.contains(&value) {
+            result.push(value);
+        }
+    }
+    result
 }
 
 fn resolve_pull(
@@ -1802,16 +2681,26 @@ fn to_forgejo_repo(repo: &DetectedRepoRef) -> ForgejoRepoRef {
 mod tests {
     use super::*;
     use crate::forgejo::ForgejoError;
+    use std::cell::RefCell;
+    use std::ffi::OsStr;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_GIT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
     #[derive(Clone)]
     struct FakeApi {
         pulls: Vec<Value>,
         issues: Vec<Value>,
+        labels: Vec<Value>,
         statuses: Vec<Value>,
         files: Vec<Value>,
         repo: Value,
         user: Value,
         diff: String,
+        created_pulls: RefCell<Vec<(ForgejoRepoRef, CreatePullRequest)>>,
+        created_issues: RefCell<Vec<(ForgejoRepoRef, CreateIssueRequest)>>,
+        comments: RefCell<Vec<(ForgejoRepoRef, u64, String)>>,
     }
 
     impl Default for FakeApi {
@@ -1819,6 +2708,7 @@ mod tests {
             Self {
                 pulls: Vec::new(),
                 issues: Vec::new(),
+                labels: Vec::new(),
                 statuses: Vec::new(),
                 files: vec![
                     json!({"filename": "README.md"}),
@@ -1849,6 +2739,9 @@ mod tests {
                 }),
                 user: json!({"login": "alice", "full_name": "Alice Example"}),
                 diff: "diff --git a/README.md b/README.md\n".to_string(),
+                created_pulls: RefCell::new(Vec::new()),
+                created_issues: RefCell::new(Vec::new()),
+                comments: RefCell::new(Vec::new()),
             }
         }
     }
@@ -1860,6 +2753,26 @@ mod tests {
 
         fn get_repo(&self, _repo: &ForgejoRepoRef) -> ForgejoResult<Value> {
             Ok(self.repo.clone())
+        }
+
+        fn create_pull(
+            &self,
+            repo: &ForgejoRepoRef,
+            request: &CreatePullRequest,
+        ) -> ForgejoResult<Value> {
+            self.created_pulls
+                .borrow_mut()
+                .push((repo.clone(), request.clone()));
+            Ok(json!({
+                "number": 7,
+                "title": request.title,
+                "body": request.body,
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/pulls/7",
+                "head": {"ref": request.head},
+                "base": {"ref": request.base},
+                "draft": request.draft,
+            }))
         }
 
         fn list_pulls(
@@ -1932,6 +2845,40 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| ForgejoError::new("not found"))
         }
+
+        fn list_labels(&self, _repo: &ForgejoRepoRef) -> ForgejoResult<Vec<Value>> {
+            Ok(self.labels.clone())
+        }
+
+        fn create_issue(
+            &self,
+            repo: &ForgejoRepoRef,
+            request: &CreateIssueRequest,
+        ) -> ForgejoResult<Value> {
+            self.created_issues
+                .borrow_mut()
+                .push((repo.clone(), request.clone()));
+            Ok(json!({
+                "number": 13,
+                "title": request.title,
+                "body": request.body,
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/issues/13",
+                "user": {"login": "alice"},
+            }))
+        }
+
+        fn create_issue_comment(
+            &self,
+            repo: &ForgejoRepoRef,
+            number: u64,
+            body: &str,
+        ) -> ForgejoResult<Value> {
+            self.comments
+                .borrow_mut()
+                .push((repo.clone(), number, body.to_string()));
+            Ok(json!({"body": body}))
+        }
     }
 
     fn repo() -> ForgejoRepoRef {
@@ -1948,8 +2895,19 @@ mod tests {
         token: Option<&str>,
         cwd: Option<&Path>,
     ) -> (i32, String, String) {
+        run_fake_with_stdin(args, client, token, cwd, "")
+    }
+
+    fn run_fake_with_stdin(
+        args: &[&str],
+        client: &FakeApi,
+        token: Option<&str>,
+        cwd: Option<&Path>,
+        stdin_text: &str,
+    ) -> (i32, String, String) {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
+        let mut stdin = std::io::Cursor::new(stdin_text.as_bytes());
         let code = run_with_client(
             &argv(args),
             Some("git.example.com"),
@@ -1959,6 +2917,7 @@ mod tests {
             cwd,
             &mut stdout,
             &mut stderr,
+            &mut stdin,
         )
         .unwrap_or_else(|error| {
             let _ = writeln!(stderr, "gh-forgejo-shim: {error}");
@@ -1969,6 +2928,139 @@ mod tests {
             String::from_utf8_lossy(&stdout).into_owned(),
             String::from_utf8_lossy(&stderr).into_owned(),
         )
+    }
+
+    struct CheckoutGitFixture {
+        root: PathBuf,
+        work: PathBuf,
+    }
+
+    impl CheckoutGitFixture {
+        fn new() -> Self {
+            let id = NEXT_GIT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "gh-forgejo-shim-checkout-{}-{id}",
+                std::process::id()
+            ));
+            let seed = root.join("seed");
+            let origin = root.join("origin.git");
+            let work = root.join("work");
+            fs::create_dir_all(&seed).expect("create seed repo directory");
+
+            git(&seed, ["init", "-b", "main"]);
+            git(&seed, ["config", "user.email", "test@example.com"]);
+            git(&seed, ["config", "user.name", "Test User"]);
+            fs::write(seed.join("README.md"), "main\n").expect("write main file");
+            git(&seed, ["add", "README.md"]);
+            git(&seed, ["commit", "-m", "initial"]);
+            git(&seed, ["checkout", "-b", "feature-pr"]);
+            fs::write(seed.join("README.md"), "feature\n").expect("write feature file");
+            git(&seed, ["commit", "-am", "feature"]);
+            git(&seed, ["checkout", "main"]);
+
+            git(
+                &root,
+                [
+                    OsStr::new("clone"),
+                    OsStr::new("--bare"),
+                    seed.as_os_str(),
+                    origin.as_os_str(),
+                ],
+            );
+            git(
+                &origin,
+                [
+                    OsStr::new("update-ref"),
+                    OsStr::new("refs/pull/12/head"),
+                    OsStr::new("refs/heads/feature-pr"),
+                ],
+            );
+            git(
+                &root,
+                [OsStr::new("clone"), origin.as_os_str(), work.as_os_str()],
+            );
+            git(&work, ["config", "user.email", "test@example.com"]);
+            git(&work, ["config", "user.name", "Test User"]);
+
+            Self { root, work }
+        }
+
+        fn work(&self) -> &Path {
+            &self.work
+        }
+
+        fn readme(&self) -> String {
+            fs::read_to_string(self.work.join("README.md")).expect("read worktree file")
+        }
+
+        fn branch(&self) -> Option<String> {
+            current_branch(Some(&self.work))
+        }
+    }
+
+    impl Drop for CheckoutGitFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    struct FillGitFixture {
+        root: PathBuf,
+    }
+
+    impl FillGitFixture {
+        fn new() -> Self {
+            let id = NEXT_GIT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "gh-forgejo-shim-create-fill-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).expect("create fill repo directory");
+            git(&root, ["init", "-b", "feature"]);
+            git(&root, ["config", "user.email", "test@example.com"]);
+            git(&root, ["config", "user.name", "Test User"]);
+            fs::write(root.join("README.md"), "fill\n").expect("write fill file");
+            git(&root, ["add", "README.md"]);
+            git(&root, ["commit", "-m", "Ship fill", "-m", "Fill body"]);
+            Self { root }
+        }
+
+        fn path(&self) -> &Path {
+            &self.root
+        }
+    }
+
+    impl Drop for FillGitFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn git<I, S>(cwd: &Path, args: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = args
+            .into_iter()
+            .map(|arg| arg.as_ref().to_owned())
+            .collect::<Vec<_>>();
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed with {}\nstdout:\n{}\nstderr:\n{}",
+            args,
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -2021,6 +3113,95 @@ mod tests {
 
         assert_eq!(code, 0, "{stderr}");
         assert_eq!(stdout, "alice\n");
+    }
+
+    #[test]
+    fn pr_create_posts_payload_and_outputs_json() {
+        let client = FakeApi::default();
+
+        let (code, stdout, stderr) = run_fake_with_stdin(
+            &[
+                "pr",
+                "create",
+                "--title",
+                "Ship it",
+                "--body-file",
+                "-",
+                "--base",
+                "main",
+                "--head",
+                "feature",
+                "--draft",
+                "--json",
+                "number,title,url,isDraft,baseRefName,headRefName",
+            ],
+            &client,
+            Some("token"),
+            None,
+            "body from stdin",
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).ok(),
+            Some(json!({
+                "baseRefName": "main",
+                "headRefName": "feature",
+                "isDraft": true,
+                "number": 7,
+                "title": "Ship it",
+                "url": "https://git.example.com/owner/repo/pulls/7",
+            }))
+        );
+        let created = client.created_pulls.borrow();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].0, repo());
+        assert_eq!(created[0].1.title, "Ship it");
+        assert_eq!(created[0].1.body, "body from stdin");
+        assert_eq!(created[0].1.base, "main");
+        assert_eq!(created[0].1.head, "feature");
+        assert!(created[0].1.draft);
+    }
+
+    #[test]
+    fn pr_create_default_output_adds_codex_url_marker() {
+        let client = FakeApi::default();
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr", "new", "--title", "Ship it", "--base", "main", "--head", "feature",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            stdout.trim(),
+            "https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7"
+        );
+    }
+
+    #[test]
+    fn pr_create_fill_verbose_uses_temporary_git_repo() {
+        let fixture = FillGitFixture::new();
+        let client = FakeApi::default();
+
+        let (code, _stdout, stderr) = run_fake(
+            &["pr", "create", "--fill-verbose"],
+            &client,
+            Some("token"),
+            Some(fixture.path()),
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        let created = client.created_pulls.borrow();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].1.title, "Ship fill");
+        assert_eq!(created[0].1.body, "Fill body");
+        assert_eq!(created[0].1.base, "main");
+        assert_eq!(created[0].1.head, "feature");
     }
 
     #[test]
@@ -2125,6 +3306,85 @@ mod tests {
     }
 
     #[test]
+    fn pr_checkout_fetches_head_ref_and_creates_local_branch() {
+        let git_repo = CheckoutGitFixture::new();
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 12,
+                "head": {"ref": "feature-pr", "sha": "abc123"},
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out feature-pr\n");
+        assert_eq!(stderr, "");
+        assert_eq!(git_repo.branch().as_deref(), Some("feature-pr"));
+        assert_eq!(git_repo.readme(), "feature\n");
+    }
+
+    #[test]
+    fn pr_co_falls_back_to_pull_ref_when_head_ref_is_absent() {
+        let git_repo = CheckoutGitFixture::new();
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 12,
+                "head": {"sha": "abc123"},
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "co", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out pull-12\n");
+        assert_eq!(stderr, "");
+        assert_eq!(git_repo.branch().as_deref(), Some("pull-12"));
+        assert_eq!(git_repo.readme(), "feature\n");
+    }
+
+    #[test]
+    fn pr_checkout_preserves_git_dirty_worktree_error() {
+        let git_repo = CheckoutGitFixture::new();
+        fs::write(git_repo.work().join("README.md"), "dirty\n").expect("dirty worktree file");
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 12,
+                "head": {"ref": "feature-pr", "sha": "abc123"},
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_ne!(code, 0);
+        assert_eq!(stdout, "");
+        assert!(
+            stderr.contains("Your local changes") || stderr.contains("would be overwritten"),
+            "{stderr}"
+        );
+        assert_eq!(git_repo.branch().as_deref(), Some("main"));
+        assert_eq!(git_repo.readme(), "dirty\n");
+    }
+
+    #[test]
     fn no_current_pr_view_and_status_return_empty_success_shapes() {
         let client = FakeApi::default();
 
@@ -2226,14 +3486,143 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_mutating_commands_are_not_masked_by_missing_auth() {
+    fn mutating_commands_require_configured_auth() {
         let client = FakeApi::default();
 
-        let (code, stdout, stderr) = run_fake(&["pr", "create"], &client, None, None);
+        let (code, stdout, stderr) =
+            run_fake(&["issue", "create", "--title", "Bug"], &client, None, None);
 
         assert_eq!(code, 1);
         assert_eq!(stdout, "");
-        assert!(stderr.contains("unsupported Forgejo PR command: create"));
-        assert!(!stderr.contains("Forgejo auth is not configured"));
+        assert!(stderr.contains("Forgejo auth is not configured for git.example.com"));
+        assert!(client.created_issues.borrow().is_empty());
+    }
+
+    #[test]
+    fn pr_comment_posts_stdin_body_to_issue_comments() {
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 8,
+                "title": "Make Codex happy",
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/pulls/8",
+                "head": {"ref": "feature"},
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake_with_stdin(
+            &["pr", "comment", "8", "--body-file", "-"],
+            &client,
+            Some("token"),
+            None,
+            "from stdin\n",
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "");
+        let comments = client.comments.borrow();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].1, 8);
+        assert_eq!(comments[0].2, "from stdin\n");
+    }
+
+    #[test]
+    fn pr_comment_requires_body_unless_opening_web_url() {
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 8,
+                "html_url": "https://git.example.com/owner/repo/pulls/8",
+                "head": {"ref": "feature"},
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) =
+            run_fake(&["pr", "comment", "8"], &client, Some("token"), None);
+
+        assert_eq!(code, 1);
+        assert_eq!(stdout, "");
+        assert!(stderr.contains("Forgejo PR comment requires --body or --body-file"));
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "comment", "8", "--web"],
+            &client,
+            Some("token"),
+            None,
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "https://git.example.com/owner/repo/pulls/8#new-comment\n"
+        );
+        assert!(client.comments.borrow().is_empty());
+    }
+
+    #[test]
+    fn issue_create_posts_payload_with_body_file_labels_and_repo_override() {
+        let client = FakeApi {
+            labels: vec![json!({"id": 5, "name": "bug"})],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake_with_stdin(
+            &[
+                "issue",
+                "new",
+                "--title",
+                "Bug",
+                "--body-file",
+                "-",
+                "--label",
+                "bug,7",
+                "--assignee",
+                "@me,bob",
+                "--milestone",
+                "3",
+                "-R",
+                "other/project",
+            ],
+            &client,
+            Some("token"),
+            None,
+            "details\n",
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "https://git.example.com/owner/repo/issues/13\n");
+        let created = client.created_issues.borrow();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].0.owner, "other");
+        assert_eq!(created[0].0.repo, "project");
+        assert_eq!(created[0].1.title, "Bug");
+        assert_eq!(created[0].1.body, "details\n");
+        assert_eq!(created[0].1.assignees, vec!["bob".to_string()]);
+        assert_eq!(created[0].1.labels, vec![5, 7]);
+        assert_eq!(created[0].1.milestone, Some(3));
+    }
+
+    #[test]
+    fn issue_create_requires_title_and_supports_web_url() {
+        let client = FakeApi::default();
+
+        let (code, stdout, stderr) = run_fake(
+            &["issue", "create", "--body", "missing"],
+            &client,
+            Some("token"),
+            None,
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(stdout, "");
+        assert!(stderr.contains("Forgejo issue create requires --title"));
+
+        let (code, stdout, stderr) =
+            run_fake(&["issue", "create", "--web"], &client, Some("token"), None);
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "https://git.example.com/owner/repo/issues/new\n");
+        assert!(client.created_issues.borrow().is_empty());
     }
 }
