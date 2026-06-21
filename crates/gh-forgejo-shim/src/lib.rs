@@ -1,8 +1,7 @@
-//! Rust workspace scaffold for `gh-forgejo-shim`.
+//! Native Rust runtime for `gh-forgejo-shim`.
 //!
-//! Phase 02 intentionally creates module boundaries and test harnesses without
-//! porting command behavior. The installed Python package remains the runtime
-//! until the cutover phase.
+//! The installed `gh-forgejo-shim`, `gfj`, and managed `gh` paths are served by
+//! this crate.
 
 #![recursion_limit = "256"]
 

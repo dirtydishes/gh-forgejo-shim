@@ -162,7 +162,7 @@
       <span class="pill">testing workflow</span>
     </div>
     <h1>Testing During Development</h1>
-    <p class="lead">Most changes can be tested directly from the checkout. Reinstall the package only when you need to verify the installed <code>gh</code> wrapper or a GUI app such as Codex.app.</p>
+    <p class="lead">Most changes can be tested directly from the checkout. Build a release-style archive only when you need to verify the installed <code>gh</code> wrapper or a GUI app such as Codex.app.</p>
   </header>
 
   <section>
@@ -171,11 +171,11 @@
     <div class="grid">
       <article class="panel">
         <h3>Source Loop</h3>
-        <p>Fastest. Run unit tests or invoke the module with <code>PYTHONPATH=src</code>. No reinstall needed.</p>
+        <p>Fastest. Run Cargo checks or invoke the native binaries with <code>cargo run</code>. No install needed.</p>
       </article>
       <article class="panel">
         <h3>Installed Wrapper Loop</h3>
-        <p>Use this when testing the real <code>~/.local/bin/gh</code> wrapper, pipx packaging, entry points, or the installed venv.</p>
+        <p>Use this when testing the real <code>~/.local/bin/gh</code> wrapper, release tarballs, Homebrew formula behavior, or installed entry points.</p>
       </article>
       <article class="panel">
         <h3>Codex.app Loop</h3>
@@ -183,7 +183,7 @@
       </article>
     </div>
     <div class="callout">
-      <p><strong>Rule of thumb:</strong> edit code, run source tests repeatedly, reinstall once when you are ready to test the behavior as Codex.app or another external tool will see it.</p>
+      <p><strong>Rule of thumb:</strong> edit code, run Cargo checks repeatedly, then smoke a release-style install when you are ready to test the behavior as Codex.app or another external tool will see it.</p>
     </div>
   </section>
 
@@ -194,58 +194,55 @@
   </section>
 
   <section>
-    <h2>Python Version</h2>
-    <p>The package requires Python 3.11 or newer. If <code>python3</code> points at Apple's older system Python, tests can fail before reaching the behavior you changed because modules such as <code>tomllib</code> are missing.</p>
-    <pre><code>python3 --version
-/opt/homebrew/bin/python3 --version</code></pre>
-    <p>Use the newer interpreter explicitly when needed:</p>
-    <pre><code>PYTHON=/opt/homebrew/bin/python3
-$PYTHON -m unittest</code></pre>
+    <h2>Rust Toolchain</h2>
+    <p>The project builds with the stable Rust toolchain. Install <code>rustfmt</code> and <code>clippy</code> because CI treats formatting and warnings as release blockers.</p>
+    <pre><code>rustup toolchain install stable --component rustfmt --component clippy
+rustc --version
+cargo --version</code></pre>
   </section>
 
   <section>
     <h2>Fast Source Testing</h2>
-    <p>Use this loop for normal implementation work. It exercises the files in your checkout, not the package installed into pipx.</p>
-    <pre><code>python3 -m unittest</code></pre>
+    <p>Use this loop for normal implementation work. It exercises the Rust crate in your checkout, not an installed release artifact.</p>
+    <pre><code>cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked</code></pre>
     <p>Run focused tests while iterating on a specific behavior:</p>
-    <pre><code>python3 -m unittest tests.test_routing.RoutingTests.test_create_default_output_surfaces_url_for_codex_app
-python3 -m unittest tests.test_routing.RoutingTests.test_create_calls_forgejo_client</code></pre>
-    <p>For direct CLI smoke checks from the checkout, set <code>PYTHONPATH</code>:</p>
-    <pre><code>PYTHONPATH=src python3 -m gh_forgejo_shim --help
-PYTHONPATH=src python3 -m gh_forgejo_shim version</code></pre>
-    <p>For helper-level checks, import from the source tree directly:</p>
-    <pre><code>PYTHONPATH=src python3 -c 'from gh_forgejo_shim.routing import format_created_pull_url; print(format_created_pull_url("https://git.example.com/owner/repo/pulls/7"))'</code></pre>
+    <pre><code>cargo test -p gh-forgejo-shim routing::tests::github_hosts_are_not_forgejo_hosts --locked
+cargo test -p gh-forgejo-shim cli_scaffold --test cli_scaffold --locked</code></pre>
+    <p>Run direct CLI smoke checks from the checkout with Cargo:</p>
+    <pre><code>cargo run -p gh-forgejo-shim --bin gh-forgejo-shim -- --help
+cargo run -p gh-forgejo-shim --bin gfj -- --version
+cargo run -p gh-forgejo-shim --bin gfj -- doctor</code></pre>
   </section>
 
   <section>
-    <h2>When To Reinstall</h2>
-    <p>You do not need to reinstall after every edit. Reinstall when the thing you are testing runs through the package installed by pipx, such as <code>gh</code>, <code>gfj</code>, <code>gh-forgejo-shim</code>, or Codex.app.</p>
-    <pre><code>pipx install --force "$HOME/dev/gh-forgejo-shim"</code></pre>
-    <p>The managed wrapper usually does not need to be rewritten after a reinstall, because it points at the same pipx venv. Reinstall the wrapper only if <code>~/.local/bin/gh</code> is missing, points somewhere unexpected, or was replaced:</p>
-    <pre><code>gfj install-shim</code></pre>
-    <p>Verify the installed path before blaming the code:</p>
-    <pre><code>command -v gh
-head -3 "$(command -v gh)"
-gh-forgejo-shim version</code></pre>
+    <h2>Installed Runtime Smoke</h2>
+    <p>Use this loop when the thing you are testing runs through installed <code>gh</code>, <code>gfj</code>, <code>gh-forgejo-shim</code>, or Codex.app.</p>
+    <pre><code>scripts/package-release.sh
+archive="$(find dist -maxdepth 1 -name 'gh-forgejo-shim-*.tar.gz' -print -quit)"
+install_dir="$(mktemp -d)"
+tar -xzf "$archive" -C "$install_dir"
+"$install_dir/gfj" --version
+"$install_dir/gh-forgejo-shim" --help</code></pre>
+    <p>Install the managed wrapper into an isolated directory and verify that <code>gh</code> resolves to the wrapper while the wrapper targets the native binary.</p>
+    <pre><code>shim_dir="$(mktemp -d)"
+"$install_dir/gfj" install-shim --bin-dir "$shim_dir"
+PATH="$shim_dir:$PATH" command -v gh
+head -4 "$shim_dir/gh"
+PATH="$shim_dir:$PATH" gh --version</code></pre>
     <p>A healthy managed wrapper starts like this:</p>
     <pre><code>#!/bin/sh
 # managed by gh-forgejo-shim
-exec /Users/&lt;user&gt;/.local/pipx/venvs/gh-forgejo-shim/bin/python -m gh_forgejo_shim gh "$@"</code></pre>
-  </section>
-
-  <section>
-    <h2>Editable Install Option</h2>
-    <p>If you are doing repeated installed-wrapper testing, an editable pipx install can make the wrapper pick up most <code>src/</code> edits without forcing a reinstall every time.</p>
-    <pre><code>pipx uninstall gh-forgejo-shim
-pipx install --editable "$HOME/dev/gh-forgejo-shim"
-gfj install-shim</code></pre>
-    <p>Use a normal forced reinstall when testing packaging metadata, entry point changes, version changes, or anything that should behave exactly like a fresh install.</p>
+# rollback-compatible marker: gh-forgejo-shim gh
+# rust gh-forgejo-shim wrapper
+exec /path/to/gh-forgejo-shim gh "$@"</code></pre>
   </section>
 
   <section>
     <h2>Testing Codex.app Behavior</h2>
-    <p>Codex.app sees the installed wrapper, not your checkout. For GUI-facing changes, refresh the package, confirm the wrapper, and restart Codex.app if it was already open.</p>
-    <pre><code>pipx install --force "$HOME/dev/gh-forgejo-shim"
+    <p>Codex.app sees the installed wrapper, not your checkout. For GUI-facing changes, install a native build, confirm the wrapper, and restart Codex.app if it was already open.</p>
+    <pre><code>gfj install-shim --force
 gfj doctor</code></pre>
     <p>For PR-link behavior, create a fresh pull request from Codex.app. The default <code>gh pr create</code> output should be shaped so Codex.app can discover a GitHub-style marker while the browser still opens the real Forgejo PR page:</p>
     <pre><code>https://forgejo-host/owner/repo/pulls/7#codex-pr=/pull/7</code></pre>
@@ -269,7 +266,9 @@ gfj trace git-recorder remove /path/to/printed/wrapper-dir</code></pre>
   <section>
     <h2>Before Commit</h2>
     <p>A good pre-commit pass for code changes is:</p>
-    <pre><code>python3 -m unittest
+    <pre><code>cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 git diff --check</code></pre>
     <p>For documentation-only changes, still run a whitespace check on the touched files:</p>
     <pre><code>git diff --check -- docs/dev/testing.html</code></pre>
@@ -279,7 +278,7 @@ git diff --check</code></pre>
   <section>
     <h2>Common Failure Modes</h2>
     <ul>
-      <li><span class="check">Source tests pass, Codex.app still behaves old:</span> reinstall the pipx package and restart Codex.app.</li>
+      <li><span class="check">Source tests pass, Codex.app still behaves old:</span> install the native build that Codex.app will see and restart Codex.app.</li>
       <li><span class="check">Terminal uses the wrong <code>gh</code>:</span> check <code>command -v gh</code> and ensure <code>~/.local/bin</code> is before the real GitHub CLI in <code>PATH</code>.</li>
       <li><span class="check">GUI app cannot find <code>gh</code>:</span> run <code>gfj install-gui-path</code>, then restart the GUI app.</li>
       <li><span class="check">Forgejo commands route unexpectedly:</span> check configured hosts with <code>gfj config list</code> and run <code>gfj doctor</code>.</li>

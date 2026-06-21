@@ -212,7 +212,7 @@
       <li>Summarize the trace to find failures, slow calls, unsupported commands, and known Codex probe shapes.</li>
       <li>Convert the failing command shape into a focused unit or replay test.</li>
       <li>Patch only the mismatch proven by that trace.</li>
-      <li>Re-run the smoke command, the focused test, and the full Python suite.</li>
+      <li>Re-run the smoke command, the focused Rust test, and the full Cargo suite.</li>
     </ol>
     <div class="callout">
       <p><strong>Rule:</strong> do not guess at Codex behavior when a trace can show the exact argv, cwd, route decision, exit code, duration, output sizes, and redacted stderr/stdout excerpt.</p>
@@ -278,12 +278,13 @@ gfj trace summarize "$FJ_SHIM_TRACE"</code></pre>
 
   <section>
     <h2>Turn A Trace Into A Test</h2>
-    <p>Before changing behavior, copy the observed command shape into the smallest focused test that would fail today. Prefer existing test homes:</p>
+    <p>Before changing behavior, copy the observed command shape into the smallest focused Rust test that would fail today. Prefer existing test homes:</p>
     <ul class="compact-list">
-      <li><code>tests/test_routing.py</code> for <code>gh</code> routing, PR, repo, issue, auth, API, and JSON shape behavior.</li>
-      <li><code>tests/test_trace_summary.py</code> for new summary classifications.</li>
-      <li><code>tests/test_codex_smoke.py</code> for changes to the replayed probe family.</li>
-      <li><code>tests/test_git_recorder.py</code> for raw <code>git</code> recorder behavior.</li>
+      <li><code>crates/gh-forgejo-shim/src/routing.rs</code> for route decisions and host/repo detection.</li>
+      <li><code>crates/gh-forgejo-shim/src/read_only.rs</code> and <code>crates/gh-forgejo-shim/src/create.rs</code> for Forgejo command behavior and JSON shape compatibility.</li>
+      <li><code>crates/gh-forgejo-shim/src/trace_summary.rs</code> for new summary classifications.</li>
+      <li><code>crates/gh-forgejo-shim/src/codex_smoke.rs</code> for changes to the replayed probe family.</li>
+      <li><code>crates/gh-forgejo-shim/src/git_recorder.rs</code> for raw <code>git</code> recorder behavior.</li>
     </ul>
     <pre><code># Good adaptation path:
 # 1. Add a failing test with the exact traced argv.
@@ -291,8 +292,8 @@ gfj trace summarize "$FJ_SHIM_TRACE"</code></pre>
 # 3. Re-run the focused test.
 # 4. Run the full suite.
 
-python3 -m unittest tests.test_routing.RoutingTests.test_name_here
-python3 -m unittest</code></pre>
+cargo test -p gh-forgejo-shim routing::tests::test_name_here --locked
+cargo test --workspace --locked</code></pre>
   </section>
 
   <section>
@@ -321,10 +322,11 @@ python3 -m unittest</code></pre>
     <h2>Recommended Validation</h2>
     <pre><code>gfj trace smoke
 gfj trace summarize "$FJ_SHIM_TRACE"
-python3 -m unittest
-python3 -m compileall -q src tests
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 git diff --check</code></pre>
-    <p>For GUI-facing changes, reinstall or refresh the active shim before re-testing Codex.app, then capture a new trace from the app itself.</p>
+    <p>For GUI-facing changes, install or refresh the native shim before re-testing Codex.app, then capture a new trace from the app itself.</p>
   </section>
 </main>
 </body>

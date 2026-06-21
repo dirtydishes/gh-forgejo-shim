@@ -1,6 +1,6 @@
 # gh-forgejo-shim
 
-`gh-forgejo-shim` is a small CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories. The install path is moving to native Rust binaries; legacy Python code remains in this repository during the rewrite for compatibility testing and migration.
+`gh-forgejo-shim` is a native Rust CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories without putting Python in the installed `gh`, `gfj`, or `gh-forgejo-shim` runtime path.
 
 It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository, pull request, issue, and check commands through Forgejo-friendly behavior.
 
@@ -28,10 +28,9 @@ brew install gh-forgejo-shim
 gfj --version
 ```
 
-Phase 09 is moving releases to a Rust-first install path. Existing pipx users
-should follow [Migrate From pipx To The Rust Binary](docs/pipx-to-rust-migration.md)
-when installing a Rust release. PyPI is not intended to remain the long-term
-distribution channel once the Rust binary release path is active.
+Existing pipx users should follow
+[Migrate From pipx To The Rust Binary](docs/pipx-to-rust-migration.md) when
+installing a native Rust release. PyPI is not a supported product runtime.
 
 GitHub release tarballs are also available for macOS and Linux. See
 [docs/installation.md](docs/installation.md) for manual tarball installs,
@@ -577,15 +576,18 @@ For old pipx installs moving to Rust, see
 Run tests with:
 
 ```sh
-cargo test --workspace
-python3 -m unittest
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
-When running directly from a checkout without installing the package, set `PYTHONPATH`:
+Run the native binaries directly from the checkout:
 
 ```sh
-PYTHONPATH=src python3 -m gh_forgejo_shim --help
+cargo run -p gh-forgejo-shim --bin gh-forgejo-shim -- --help
+cargo run -p gh-forgejo-shim --bin gfj -- --version
 ```
 
-The Rust binary is the target runtime. The Python package remains in this
-repository during the rewrite for compatibility testing and migration only.
+For installed-runtime validation, build the release archive with
+`scripts/package-release.sh`, unpack it into a temporary directory, and run the
+`gh-forgejo-shim`, `gfj`, and managed `gh` wrapper smoke checks from there.

@@ -1,7 +1,7 @@
 # Installation
 
 `gh-forgejo-shim` is distributed as native Rust binaries. Python packaging is
-legacy only and is not the long-term install path.
+not part of the supported product runtime.
 
 ## Homebrew
 

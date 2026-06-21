@@ -251,7 +251,7 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "STATUS:")?;
     writeln!(
         stdout,
-        "    managed gh dispatch, bootstrap, doctor, config, auth, shim lifecycle, and macOS GUI PATH commands are implemented in Rust; other command behavior remains pending."
+        "    native Rust runtime for managed gh dispatch, bootstrap, doctor, config, auth, shim lifecycle, trace tools, and Forgejo-routed command compatibility."
     )?;
     writeln!(stdout)?;
     writeln!(stdout, "COMMANDS:")?;
@@ -295,12 +295,13 @@ fn print_version(stdout: &mut dyn Write) -> Result<i32> {
 fn print_pending(binary: BinaryName, stderr: &mut dyn Write) -> Result<i32> {
     writeln!(
         stderr,
-        "{}: Rust setup/config/auth phase only; this command is not implemented yet.",
+        "{}: unsupported management command.",
         binary.as_str()
     )?;
     writeln!(
         stderr,
-        "Only the managed gh dispatcher and selected setup commands are native in this phase."
+        "Run `{} --help` for supported commands. Forgejo-routed `gh` compatibility is available through the managed `gh` wrapper.",
+        binary.as_str()
     )?;
     Ok(2)
 }
