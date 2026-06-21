@@ -66,6 +66,13 @@ trait ForgejoApi {
     ) -> ForgejoResult<Value>;
 }
 
+struct RepoCommandContext<'a> {
+    repo: &'a ForgejoRepoRef,
+    client: &'a dyn ForgejoApi,
+    token_present: bool,
+    cwd: Option<&'a Path>,
+}
+
 impl ForgejoApi for ForgejoClient {
     fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {
         ForgejoClient::get_current_user(self, host)
@@ -370,16 +377,13 @@ fn run_with_context(
     let token_present = token.is_some();
     let client = ForgejoClient::new(token);
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
-    run_repo_command(
-        argv,
+    let context = RepoCommandContext {
         repo,
-        &client,
+        client: &client,
         token_present,
         cwd,
-        stdout,
-        stderr,
-        stdin,
-    )
+    };
+    run_repo_command(argv, &context, stdout, stderr, stdin)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -413,16 +417,13 @@ fn run_with_client(
     }
 
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
-    run_repo_command(
-        argv,
+    let context = RepoCommandContext {
         repo,
         client,
-        token.is_some(),
+        token_present: token.is_some(),
         cwd,
-        stdout,
-        stderr,
-        stdin,
-    )
+    };
+    run_repo_command(argv, &context, stdout, stderr, stdin)
 }
 
 fn run_auth(
@@ -495,29 +496,30 @@ fn run_api(
 
 fn run_repo_command(
     argv: &[String],
-    repo: &ForgejoRepoRef,
-    client: &dyn ForgejoApi,
-    token_present: bool,
-    cwd: Option<&Path>,
+    context: &RepoCommandContext<'_>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     match argv.first().map(String::as_str) {
-        Some("repo") => run_repo_view_command(argv, repo, client, token_present, stdout, stderr),
-        Some("issue") => {
-            run_issue_command(argv, repo, client, token_present, stdout, stderr, stdin)
-        }
-        Some("pr") => run_pr_command(
+        Some("repo") => run_repo_view_command(
             argv,
-            repo,
-            client,
-            token_present,
-            cwd,
+            context.repo,
+            context.client,
+            context.token_present,
+            stdout,
+            stderr,
+        ),
+        Some("issue") => run_issue_command(
+            argv,
+            context.repo,
+            context.client,
+            context.token_present,
             stdout,
             stderr,
             stdin,
         ),
+        Some("pr") => run_pr_command(argv, context, stdout, stderr, stdin),
         Some(other) => Err(ShimError::new(format!(
             "unsupported Forgejo command: {other}"
         ))),
@@ -527,10 +529,7 @@ fn run_repo_command(
 
 fn run_pr_command(
     argv: &[String],
-    repo: &ForgejoRepoRef,
-    client: &dyn ForgejoApi,
-    token_present: bool,
-    cwd: Option<&Path>,
+    context: &RepoCommandContext<'_>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
@@ -539,34 +538,79 @@ fn run_pr_command(
         return Err(ShimError::new("missing Forgejo PR command"));
     };
     match command {
-        "checks" => run_checks(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
-        "checkout" | "co" => {
-            run_checkout(&argv[2..], repo, client, token_present, cwd, stdout, stderr)
-        }
+        "checks" => run_checks(
+            &argv[2..],
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
+            stdout,
+            stderr,
+        ),
+        "checkout" | "co" => run_checkout(
+            &argv[2..],
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
+            stdout,
+            stderr,
+        ),
         "comment" => run_comment(
             &argv[2..],
-            repo,
-            client,
-            token_present,
-            cwd,
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
             stdout,
             stderr,
             stdin,
         ),
         "create" | "new" => run_create(
             &argv[2..],
-            repo,
-            client,
-            token_present,
-            cwd,
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
             stdout,
             stderr,
             stdin,
         ),
-        "diff" => run_diff(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
-        "list" => run_list(&argv[2..], repo, client, token_present, stdout, stderr),
-        "status" => run_status(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
-        "view" => run_view(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
+        "diff" => run_diff(
+            &argv[2..],
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
+            stdout,
+            stderr,
+        ),
+        "list" => run_list(
+            &argv[2..],
+            context.repo,
+            context.client,
+            context.token_present,
+            stdout,
+            stderr,
+        ),
+        "status" => run_status(
+            &argv[2..],
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
+            stdout,
+            stderr,
+        ),
+        "view" => run_view(
+            &argv[2..],
+            context.repo,
+            context.client,
+            context.token_present,
+            context.cwd,
+            stdout,
+            stderr,
+        ),
         other => {
             writeln!(
                 stderr,
@@ -1628,13 +1672,6 @@ fn parse_comment_args(argv: &[String], stdin: &mut dyn Read) -> Result<CommentAr
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
             index += 1;
-        } else if matches!(
-            arg,
-            "--create-if-none" | "--delete-last" | "--edit-last" | "--editor" | "-e" | "--yes"
-        ) {
-            return Err(ShimError::new(format!(
-                "unsupported Forgejo PR comment flag: {arg}"
-            )));
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
                 "unsupported Forgejo PR comment flag: {arg}"
