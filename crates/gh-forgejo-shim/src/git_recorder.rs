@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{ChildStderr, ChildStdout, Command, Stdio};
+use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -116,14 +117,14 @@ pub fn run_git_recorder(real_git: &Path, trace_path: &Path, args: &[String]) -> 
     let mut command = Command::new(real_git);
     command
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     let mut record = base_record(args, &cwd);
     let include_excerpt = env::var(TRACE_BODY_ENV).ok().as_deref() == Some("1");
 
-    let child = match command.spawn() {
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             let message =
@@ -146,8 +147,13 @@ pub fn run_git_recorder(real_git: &Path, trace_path: &Path, args: &[String]) -> 
         }
     };
 
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_forwarder = stdout.map(|stream| forward_stdout(stream, include_excerpt));
+    let stderr_forwarder = stderr.map(|stream| forward_stderr(stream, include_excerpt));
+
+    let status = match child.wait() {
+        Ok(status) => status,
         Err(error) => {
             let message =
                 format!("gh-forgejo-shim git recorder: unable to wait for real git: {error}\n");
@@ -168,36 +174,76 @@ pub fn run_git_recorder(real_git: &Path, trace_path: &Path, args: &[String]) -> 
             return 127;
         }
     };
-    let exit_code = output.status.code().unwrap_or(1);
-    let _ = io::stdout().write_all(&output.stdout);
-    let _ = io::stdout().flush();
-    let _ = io::stderr().write_all(&output.stderr);
-    let _ = io::stderr().flush();
-    let stdout_excerpt = if include_excerpt {
-        &output.stdout[..output.stdout.len().min(EXCERPT_LIMIT)]
-    } else {
-        &[]
-    };
-    let stderr_excerpt = if include_excerpt {
-        &output.stderr[..output.stderr.len().min(EXCERPT_LIMIT)]
-    } else {
-        &[]
-    };
+    let exit_code = status.code().unwrap_or(1);
+    let stdout_stats = stdout_forwarder
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr_stats = stderr_forwarder
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
 
     finish_record(
         &mut record,
         FinishedGit {
             started,
             exit_code,
-            stdout_bytes: output.stdout.len(),
-            stderr_bytes: output.stderr.len(),
-            stdout_excerpt,
-            stderr_excerpt,
+            stdout_bytes: stdout_stats.bytes,
+            stderr_bytes: stderr_stats.bytes,
+            stdout_excerpt: &stdout_stats.excerpt,
+            stderr_excerpt: &stderr_stats.excerpt,
             include_excerpt,
         },
     );
     let _ = append_jsonl(trace_path, &record);
     exit_code
+}
+
+#[derive(Debug, Default)]
+struct StreamStats {
+    bytes: usize,
+    excerpt: Vec<u8>,
+}
+
+fn forward_stdout(stream: ChildStdout, include_excerpt: bool) -> thread::JoinHandle<StreamStats> {
+    thread::spawn(move || {
+        let stdout = io::stdout();
+        forward_stream(stream, stdout.lock(), include_excerpt)
+    })
+}
+
+fn forward_stderr(stream: ChildStderr, include_excerpt: bool) -> thread::JoinHandle<StreamStats> {
+    thread::spawn(move || {
+        let stderr = io::stderr();
+        forward_stream(stream, stderr.lock(), include_excerpt)
+    })
+}
+
+fn forward_stream<R, W>(mut source: R, mut destination: W, include_excerpt: bool) -> StreamStats
+where
+    R: Read,
+    W: Write,
+{
+    let mut stats = StreamStats::default();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = match source.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        stats.bytes += read;
+        if include_excerpt && stats.excerpt.len() < EXCERPT_LIMIT {
+            let remaining = EXCERPT_LIMIT - stats.excerpt.len();
+            stats
+                .excerpt
+                .extend_from_slice(&buffer[..read.min(remaining)]);
+        }
+        if destination.write_all(&buffer[..read]).is_err() {
+            continue;
+        }
+        let _ = destination.flush();
+    }
+    stats
 }
 
 fn base_record(args: &[String], cwd: &Path) -> Value {
@@ -604,5 +650,18 @@ mod tests {
 
         assert!(script.contains(MARKER));
         assert!(script.contains("trace git-recorder run"));
+    }
+
+    #[test]
+    fn forward_stream_copies_output_and_collects_limited_excerpt() {
+        let input = vec![b'a'; EXCERPT_LIMIT + 3];
+        let mut output = Vec::new();
+
+        let stats = forward_stream(input.as_slice(), &mut output, true);
+
+        assert_eq!(stats.bytes, EXCERPT_LIMIT + 3);
+        assert_eq!(stats.excerpt.len(), EXCERPT_LIMIT);
+        assert_eq!(output.len(), EXCERPT_LIMIT + 3);
+        assert!(stats.excerpt.iter().all(|byte| *byte == b'a'));
     }
 }
