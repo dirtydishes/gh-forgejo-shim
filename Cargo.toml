@@ -7,6 +7,12 @@ version = "0.1.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/dirtydishes/gh-forgejo-shim"
+homepage = "https://github.com/dirtydishes/gh-forgejo-shim"
+readme = "README.md"
+description = "Opt-in gh wrapper for Forgejo repositories, tuned for Codex.app workflows."
+authors = ["dirtydishes"]
+keywords = ["forgejo", "gitea", "github-cli", "codex", "gh"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
