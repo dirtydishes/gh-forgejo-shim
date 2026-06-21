@@ -54,7 +54,7 @@ jobs:
       - name: Build release archive
         run: scripts/package-release.sh
 
-      - name: Verify archive checksum and native doctor entrypoint
+      - name: Verify archive checksum and native entrypoints
         shell: bash
         run: |
           set -euo pipefail
@@ -73,6 +73,7 @@ jobs:
           tar -xzf "$archive" -C dist/smoke-install
 
           dist/smoke-install/gfj --version
+          dist/smoke-install/gh-forgejo-shim --help
 
           set +e
           output="$(dist/smoke-install/gfj doctor 2>&1)"
@@ -82,3 +83,20 @@ jobs:
           printf '%s\n' "$output"
           test "$status" -eq 0 -o "$status" -eq 1
           printf '%s\n' "$output" | grep -F "gh-forgejo-shim doctor"
+
+          real_bin="$(mktemp -d)"
+          shim_bin="$(mktemp -d)"
+          cat > "$real_bin/gh" <<'EOF'
+          #!/usr/bin/env sh
+          printf '%s\n' 'gh version 9.9.9 (ci fake)'
+          EOF
+          chmod +x "$real_bin/gh"
+
+          dist/smoke-install/gfj install-shim --bin-dir "$shim_bin"
+          test -x "$shim_bin/gh"
+          if grep -Eiq 'python|pipx' "$shim_bin/gh"; then
+            sed -n '1,20p' "$shim_bin/gh" >&2
+            exit 1
+          fi
+          test "$(PATH="$shim_bin:$real_bin:$PATH" command -v gh)" = "$shim_bin/gh"
+          test "$(PATH="$shim_bin:$real_bin:$PATH" FJ_SHIM_REAL_GH="$real_bin/gh" gh --version)" = "gh version 9.9.9 (ci fake)"
