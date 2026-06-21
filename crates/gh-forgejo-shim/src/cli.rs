@@ -385,7 +385,7 @@ fn auth_logout(
     let host = prompt_host(host_arg, runtime)?;
     let home = runtime.home().map(Path::to_path_buf);
     let platform = runtime.platform().to_string();
-    if auth::delete_stored_token(&host, home.as_deref(), Some(&platform)) {
+    if auth::delete_stored_token(&host, home.as_deref(), Some(&platform))? {
         writeln!(stdout, "logged out of {host}")?;
     } else {
         writeln!(stdout, "no stored shim auth for {host}")?;
@@ -472,6 +472,7 @@ mod tests {
         host_prompts: Vec<String>,
         token_prompts: Vec<String>,
         login: Option<String>,
+        validation_error: Option<String>,
         validated: Vec<(String, String)>,
     }
 
@@ -484,6 +485,7 @@ mod tests {
                 host_prompts: Vec::new(),
                 token_prompts: Vec::new(),
                 login: Some("alice".to_string()),
+                validation_error: None,
                 validated: Vec::new(),
             }
         }
@@ -518,6 +520,9 @@ mod tests {
 
         fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>> {
             self.validated.push((host.to_string(), token.to_string()));
+            if let Some(message) = &self.validation_error {
+                return Err(ShimError::new(message.clone()));
+            }
             Ok(self.login.clone())
         }
     }
@@ -595,6 +600,84 @@ mod tests {
         );
         assert!(output.contains("source: FJ_SHIM_TOKEN"), "{output}");
         assert!(!output.contains("import-token"), "{output}");
+        assert_eq!(
+            config::load_config_with_env(Some(&config::config_path(Some(&home))), &EnvMap::new())?
+                .hosts,
+            vec!["git.example.com"]
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_validation_failure_does_not_store_or_allowlist_token() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("bad-token".to_string());
+        runtime.validation_error = Some("Forgejo API returned HTTP 401: unauthorized".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        let error = String::from_utf8(stderr).map_err(|error| ShimError::new(error.to_string()))?;
+        assert!(
+            error.contains("Forgejo API returned HTTP 401: unauthorized"),
+            "{error}"
+        );
+        assert!(
+            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+        );
+        assert!(config::load_config_with_env(
+            Some(&config::config_path(Some(&home))),
+            &EnvMap::new()
+        )?
+        .hosts
+        .is_empty());
+        assert_eq!(
+            runtime.validated,
+            vec![("git.example.com".to_string(), "bad-token".to_string())]
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_empty_token_fails_before_validation_or_writes() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("  ".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        let error = String::from_utf8(stderr).map_err(|error| ShimError::new(error.to_string()))?;
+        assert!(error.contains("Forgejo token is required"), "{error}");
+        assert!(runtime.validated.is_empty());
+        assert!(
+            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+        );
+        assert!(config::load_config_with_env(
+            Some(&config::config_path(Some(&home))),
+            &EnvMap::new()
+        )?
+        .hosts
+        .is_empty());
         fs::remove_dir_all(home).ok();
         Ok(())
     }
@@ -627,6 +710,71 @@ mod tests {
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
         assert!(output.contains("git.example.com: logged in"), "{output}");
         assert!(!output.contains("stored-secret"), "{output}");
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn logout_removes_only_shim_auth_and_keeps_allowlist() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        config::add_host("git.example.com", Some(&config::config_path(Some(&home))))?;
+        auth::write_stored_token(
+            "git.example.com",
+            "stored-secret",
+            Some(&home),
+            Some("linux"),
+        )?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "logout", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        let output =
+            String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert!(output.contains("logged out of git.example.com"), "{output}");
+        assert!(!output.contains("stored-secret"), "{output}");
+        assert!(
+            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+        );
+        assert_eq!(
+            config::load_config_with_env(Some(&config::config_path(Some(&home))), &EnvMap::new())?
+                .hosts,
+            vec!["git.example.com"]
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn logout_without_stored_auth_is_a_clear_noop() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "logout", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        let output =
+            String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert!(
+            output.contains("no stored shim auth for git.example.com"),
+            "{output}"
+        );
         fs::remove_dir_all(home).ok();
         Ok(())
     }
