@@ -2,9 +2,9 @@
 
 This guide is for existing users who installed `gh-forgejo-shim` with `pipx`.
 
-Phase 09 makes the release path Rust-first. Use the Rust-first install method named in the release notes for the version you are installing. Do not treat PyPI as the long-term distribution channel for new installs. A PyPI release may exist only as a short migration bridge, and any such bridge should point users to the Rust binary rather than keeping Python as the product runtime.
+Use the Rust install method named in the release notes for the version you are installing. Do not treat PyPI as a supported distribution channel for new installs. A PyPI release may exist only as a short migration bridge, and any such bridge should point users to the Rust binary rather than keeping Python as the product runtime.
 
-These steps only migrate an existing user install. They do not remove Python source, tests, or development tooling from the repository.
+These steps only migrate an existing user install from an older release. Current repository development and release artifacts are Rust-only.
 
 ## Before You Start
 
@@ -74,19 +74,20 @@ gfj doctor
 
 Your existing config and auth live under `~/.config/gh-forgejo-shim` or the macOS Keychain and are shared by the Rust binary. Removing the pipx package should not delete that state.
 
-## Roll Back To pipx
+## If The Rust Binary Fails
 
-If the Rust binary fails after migration, remove only the managed wrapper first:
+If the Rust binary fails after migration, remove only the managed wrapper first
+so normal GitHub CLI behavior is restored:
 
 ```sh
 gfj uninstall-shim
 ```
 
-Then reinstall the old pipx package and recreate the wrapper from pipx:
+Then install a known-good older native release through Homebrew or by replacing
+the two binaries with an older GitHub release tarball:
 
 ```sh
-pipx install gh-forgejo-shim
-gfj install-shim --force
+brew reinstall gh-forgejo-shim
 gfj doctor
 ```
 
