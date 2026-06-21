@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+use std::process::Command;
 
 use gh_forgejo_shim::VERSION;
 use serde_json::Value;
@@ -22,10 +23,11 @@ fn long_binary_prints_help_under_isolated_environment() -> TestResult {
         stdout.contains(&format!("gh-forgejo-shim {VERSION}")),
         "{stdout}"
     );
-    assert!(
-        stdout.contains("managed gh dispatch, config, and auth management commands"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("shim lifecycle"), "{stdout}");
+    assert!(stdout.contains("install-shim [--bin-dir DIR] [--force]"));
+    assert!(stdout.contains("uninstall-shim [--bin-dir DIR]"));
+    assert!(stdout.contains("bootstrap [--bin-dir DIR] [--force]"));
+    assert!(stdout.contains("doctor"));
     assert!(
         stdout.contains("config <add-host|remove-host|list>"),
         "{stdout}"
@@ -50,15 +52,185 @@ fn short_binary_prints_version_without_python() -> TestResult {
 }
 
 #[test]
-fn non_config_auth_behavior_commands_are_still_out_of_scope() -> TestResult {
+fn doctor_runs_native_diagnostics() -> TestResult {
     let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
 
     let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
 
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("gh-forgejo-shim doctor"), "{stdout}");
+    assert!(stdout.contains("[warn] real gh:"), "{stdout}");
+    assert!(stdout.contains("] fj:"), "{stdout}");
+    assert!(
+        stdout.contains("[ok] forgejo hosts: git.example.com"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("[warn] auth token:"), "{stdout}");
+    assert!(stdout.contains("[ok] current repo host:"), "{stdout}");
+    assert!(stdout.contains("[warn] shim path:"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_installs_shim_allowlists_repo_and_prints_repairs() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let target = fixture.bin().join("gh");
+
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_TOKEN", "secret-token")
+        .args(["bootstrap", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(target.exists());
+    let script = fs::read_to_string(&target)?;
+    assert!(script.contains("gh-forgejo-shim gh"), "{script}");
+    assert!(!script.contains("secret-token"), "{script}");
+
+    let config_path = fixture
+        .home()
+        .join(".config")
+        .join("gh-forgejo-shim")
+        .join("config.toml");
+    assert_eq!(
+        fs::read_to_string(config_path)?,
+        "hosts = [\"git.example.com\"]\n"
+    );
+
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("gh-forgejo-shim bootstrap"), "{stdout}");
+    assert!(
+        stdout.contains("repo: git.example.com/owner/repo"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "[ok] repository: detected git.example.com/owner/repo and allowlisted git.example.com"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("[ok] shim:"), "{stdout}");
+    assert!(stdout.contains("[ok] PATH:"), "{stdout}");
+    assert!(
+        stdout.contains("[ok] auth: found Forgejo token"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("[fix] origin/HEAD: origin/HEAD is not set"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("repair commands:"), "{stdout}");
+    assert!(stdout.contains("git remote set-head origin -a"), "{stdout}");
+    assert!(!stdout.contains("secret-token"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn install_and_uninstall_shim_use_isolated_bin_dir() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let target = fixture.bin().join("gh");
+
+    let output = fixture
+        .command("gfj")?
+        .args(["install-shim", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert_eq!(
+        stdout,
+        format!("installed gh shim at {}\n", target.display())
+    );
+    let script = fs::read_to_string(&target)?;
+    assert!(script.contains("# managed by gh-forgejo-shim"));
+    assert!(script.contains("rollback-compatible marker: gh-forgejo-shim gh"));
+    assert!(script.contains(" gh \"$@\""));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_ne!(fs::metadata(&target)?.permissions().mode() & 0o111, 0);
+    }
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .args(["uninstall-shim", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert_eq!(stdout, format!("removed gh shim at {}\n", target.display()));
+    assert!(!target.exists());
+    Ok(())
+}
+
+#[test]
+fn install_shim_refuses_unmanaged_file_until_forced() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let target = fixture.bin().join("gh");
+    fs::write(&target, "unrelated")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .args(["install-shim", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains("Rust config/auth phase only"), "{stderr}");
-    assert!(stderr.contains("not implemented yet"), "{stderr}");
+    assert!(
+        stderr.contains("exists and is not managed by gh-forgejo-shim; pass --force to overwrite"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&target)?, "unrelated");
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .args(["install-shim", "--force", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert!(output.status.success());
+    assert!(fs::read_to_string(&target)?.contains("# managed by gh-forgejo-shim"));
+    Ok(())
+}
+
+#[test]
+fn bootstrap_installs_shim_and_prints_temp_repo_repairs() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let target = fixture.bin().join("gh");
+
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(target.exists());
+    let script = fs::read_to_string(&target)?;
+    assert!(script.contains("# managed by gh-forgejo-shim"));
+    assert!(!script.contains("bootstrap-token"));
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("gh-forgejo-shim bootstrap"), "{stdout}");
+    assert!(
+        stdout.contains("repo: git.example.com/owner/repo"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("[ok] repository"), "{stdout}");
+    assert!(stdout.contains("[ok] shim"), "{stdout}");
+    assert!(stdout.contains("[ok] auth"), "{stdout}");
+    assert!(stdout.contains("repair commands:"), "{stdout}");
+    assert!(!stdout.contains("bootstrap-token"), "{stdout}");
     Ok(())
 }
 
@@ -223,6 +395,123 @@ fn managed_gh_trace_can_use_local_path() -> TestResult {
     let record: Value = serde_json::from_str(trace.trim())?;
     assert_eq!(record["kind"], "gh");
     assert_eq!(record["route"]["kind"], "delegate");
+    Ok(())
+}
+
+#[test]
+fn trace_summarize_reports_routes_probes_and_failures() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let trace_path = fixture.root().join("trace.jsonl");
+    fs::write(
+        &trace_path,
+        r#"{"kind":"gh","argv":["pr","status"],"exit_code":1,"duration_ms":25,"route":{"kind":"forgejo","reason":"git remote"}}"#,
+    )?;
+    fs::write(
+        &trace_path,
+        format!(
+            "{}\n{}\n",
+            fs::read_to_string(&trace_path)?,
+            r#"{"kind":"git","argv":["branch","--show-current"],"exit_code":0,"duration_ms":5}"#
+        ),
+    )?;
+
+    let output = fixture
+        .command("gfj")?
+        .args(["trace", "summarize"])
+        .arg(&trace_path)
+        .output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("Trace records: 2"), "{stdout}");
+    assert!(stdout.contains("Routes: forgejo=1"), "{stdout}");
+    assert!(stdout.contains("Known Codex probes:"), "{stdout}");
+    assert!(stdout.contains("gh pr status=1"), "{stdout}");
+    assert!(stdout.contains("git current branch=1"), "{stdout}");
+    assert!(stdout.contains("Failures: 1"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn trace_smoke_uses_fake_gh_and_git_in_temp_path() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho fake-gh\n")?;
+    fixture.write_executable("git", "#!/bin/sh\necho fake-git\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .args(["trace", "smoke", "--cwd"])
+        .arg(fixture.repo())
+        .output()?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("Codex probe smoke results:"), "{stdout}");
+    assert!(stdout.contains("[ok] gh version"), "{stdout}");
+    assert!(stdout.contains("[ok] git repo root"), "{stdout}");
+    assert!(stdout.contains("Required probes passed."), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn trace_git_recorder_captures_fake_git_and_removes_wrapper() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let real_git = fixture.write_executable(
+        "real-git",
+        "#!/bin/sh\necho real-git \"$@\"\necho stderr-$1 >&2\n",
+    )?;
+    let trace_path = fixture.root().join("git-trace.jsonl");
+
+    let output = fixture
+        .command("gfj")?
+        .args(["trace", "git-recorder", "create"])
+        .arg(&trace_path)
+        .args(["--real-git"])
+        .arg(&real_git)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let wrapper_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("created temporary git recorder at "))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, stdout.clone()))?;
+    let wrapper_path = std::path::PathBuf::from(wrapper_path);
+    assert!(wrapper_path.exists());
+
+    let output = Command::new(&wrapper_path)
+        .arg("status")
+        .arg("--token")
+        .arg("secret-value")
+        .output()?;
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "real-git status --token secret-value\n"
+    );
+    let record: Value = serde_json::from_str(fs::read_to_string(&trace_path)?.trim())?;
+    assert_eq!(record["kind"], "git");
+    assert_eq!(record["argv"][0], "status");
+    assert_eq!(record["argv"][1], "--token");
+    assert_eq!(record["argv"][2], "[REDACTED]");
+    assert_eq!(record["stdout"]["bytes"], 37);
+    assert!(!fs::read_to_string(&trace_path)?.contains("secret-value"));
+
+    let output = fixture
+        .command("gfj")?
+        .args(["trace", "git-recorder", "remove"])
+        .arg(wrapper_path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "wrapper path has no parent")
+        })?)
+        .output()?;
+
+    assert!(output.status.success());
+    assert!(!wrapper_path.exists());
     Ok(())
 }
 
