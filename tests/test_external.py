@@ -10,12 +10,14 @@ from gh_forgejo_shim.external import find_program
 class ProgramDiscoveryTests(unittest.TestCase):
     def test_finds_real_gh_in_fallback_dirs_when_path_is_minimal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            minimal_path = Path(tmp) / "minimal" / "bin"
+            minimal_path.mkdir(parents=True)
             fallback = Path(tmp) / "homebrew" / "bin"
             real_gh = self._fake_executable(fallback, "gh")
 
             found = find_program(
                 "gh",
-                env={"PATH": "/usr/bin:/bin", "HOME": tmp},
+                env={"PATH": str(minimal_path), "HOME": tmp},
                 fallback_dirs=(str(fallback),),
             )
 
