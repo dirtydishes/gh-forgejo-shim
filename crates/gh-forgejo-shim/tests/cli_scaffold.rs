@@ -109,19 +109,21 @@ fn managed_gh_forgejo_repo_selects_native_route_without_delegating() -> TestResu
 
     let output = fixture
         .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_TOKEN", "secret-token")
         .arg("gh")
-        .arg("pr")
-        .arg("view")
+        .arg("auth")
+        .arg("status")
         .output()?;
 
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("git.example.com"), "{stdout}");
+    assert!(stdout.contains("Logged in"), "{stdout}");
+    assert!(!stdout.contains("secret-token"), "{stdout}");
     let stderr = String::from_utf8(output.stderr)?;
-    assert!(
-        stderr.contains("Forgejo route selected for git.example.com"),
-        "{stderr}"
-    );
+    assert_eq!(stderr, "");
     assert!(!stderr.contains("could not find the real gh"), "{stderr}");
+    assert!(!stdout.contains("delegated"), "{stdout}");
     Ok(())
 }
 
@@ -170,6 +172,35 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
     assert_eq!(record["route"]["reason"], "unsupported command");
     assert_eq!(record["argv"][2], "<redacted>");
     assert_eq!(record["stdout"]["bytes"], Value::Null);
+    Ok(())
+}
+
+#[test]
+fn managed_gh_forgejo_auth_status_records_trace() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\nexit 17\n")?;
+    let trace_path = fixture.root().join("forgejo-trace.jsonl");
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_TOKEN", "secret-token")
+        .env("FJ_SHIM_TRACE", &trace_path)
+        .arg("gh")
+        .arg("auth")
+        .arg("status")
+        .output()?;
+
+    assert!(output.status.success());
+    let trace = fs::read_to_string(trace_path)?;
+    let record: Value = serde_json::from_str(trace.trim())?;
+    assert_eq!(record["kind"], "gh");
+    assert_eq!(record["route"]["kind"], "forgejo");
+    assert_eq!(record["route"]["reason"], "git remote");
+    assert_eq!(record["host"], "git.example.com");
+    assert_eq!(record["repo"]["full_name"], "owner/repo");
+    assert_eq!(record["exit_code"], 0);
+    assert!(!trace.contains("secret-token"));
     Ok(())
 }
 
