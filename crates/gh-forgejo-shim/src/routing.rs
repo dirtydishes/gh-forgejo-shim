@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::external::{find_program, run_program_capture, run_program_inherit};
+use crate::read_only;
 use crate::repo::{detect_repo, RepoRef};
 use crate::trace;
 
@@ -227,7 +228,7 @@ fn run_gh(
 
     let exit_code = match decision.kind {
         RouteKind::Delegate => run_delegate(&argv, &env, cwd, &config, &mut mode),
-        RouteKind::Forgejo => run_forgejo_placeholder(&decision, &mut mode),
+        RouteKind::Forgejo => run_forgejo(&argv, &env, cwd, &decision, &mut mode),
     };
 
     if trace_enabled {
@@ -283,16 +284,30 @@ fn run_delegate(
     }
 }
 
-fn run_forgejo_placeholder(decision: &RouteDecision, mode: &mut DelegateMode<'_>) -> i32 {
-    let host = decision.trace_host().unwrap_or("unknown host");
-    write_error(
-        mode,
-        &format!(
-            "gh-forgejo-shim: Forgejo route selected for {host} ({}); Rust command handling is not implemented in this phase",
-            decision.reason
-        ),
-    );
-    2
+fn run_forgejo(
+    argv: &[String],
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+    decision: &RouteDecision,
+    mode: &mut DelegateMode<'_>,
+) -> i32 {
+    match mode {
+        DelegateMode::Inherit => {
+            let stdout = io::stdout();
+            let stderr = io::stderr();
+            read_only::run(
+                argv,
+                decision,
+                env,
+                cwd,
+                &mut stdout.lock(),
+                &mut stderr.lock(),
+            )
+        }
+        DelegateMode::Capture { stdout, stderr } => {
+            read_only::run(argv, decision, env, cwd, *stdout, *stderr)
+        }
+    }
 }
 
 fn write_error(mode: &mut DelegateMode<'_>, message: &str) {
