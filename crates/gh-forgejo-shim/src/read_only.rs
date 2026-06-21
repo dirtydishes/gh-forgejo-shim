@@ -283,9 +283,10 @@ fn run_with_context(
         return run_api(argv, host, &client, stdout);
     }
 
+    let token_present = token.is_some();
     let client = ForgejoClient::new(token);
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
-    run_repo_command(argv, repo, &client, cwd, stdout, stderr)
+    run_repo_command(argv, repo, &client, token_present, cwd, stdout, stderr)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -318,7 +319,7 @@ fn run_with_client(
     }
 
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
-    run_repo_command(argv, repo, client, cwd, stdout, stderr)
+    run_repo_command(argv, repo, client, token.is_some(), cwd, stdout, stderr)
 }
 
 fn run_auth(
@@ -393,14 +394,15 @@ fn run_repo_command(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     match argv.first().map(String::as_str) {
-        Some("repo") => run_repo_view_command(argv, repo, client, stdout, stderr),
-        Some("issue") => run_issue_command(argv, repo, client, stdout, stderr),
-        Some("pr") => run_pr_command(argv, repo, client, cwd, stdout, stderr),
+        Some("repo") => run_repo_view_command(argv, repo, client, token_present, stdout, stderr),
+        Some("issue") => run_issue_command(argv, repo, client, token_present, stdout, stderr),
+        Some("pr") => run_pr_command(argv, repo, client, token_present, cwd, stdout, stderr),
         Some(other) => Err(ShimError::new(format!(
             "unsupported Forgejo command: {other}"
         ))),
@@ -412,6 +414,7 @@ fn run_pr_command(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -420,11 +423,11 @@ fn run_pr_command(
         return Err(ShimError::new("missing Forgejo PR command"));
     };
     match command {
-        "checks" => run_checks(&argv[2..], repo, client, cwd, stdout),
-        "diff" => run_diff(&argv[2..], repo, client, cwd, stdout),
-        "list" => run_list(&argv[2..], repo, client, stdout),
-        "status" => run_status(&argv[2..], repo, client, cwd, stdout),
-        "view" => run_view(&argv[2..], repo, client, cwd, stdout),
+        "checks" => run_checks(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
+        "diff" => run_diff(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
+        "list" => run_list(&argv[2..], repo, client, token_present, stdout, stderr),
+        "status" => run_status(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
+        "view" => run_view(&argv[2..], repo, client, token_present, cwd, stdout, stderr),
         other => {
             writeln!(
                 stderr,
@@ -439,11 +442,12 @@ fn run_repo_view_command(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     match argv.get(1).map(String::as_str) {
-        Some("view") => run_repo_view(&argv[2..], repo, client, stdout),
+        Some("view") => run_repo_view(&argv[2..], repo, client, token_present, stdout, stderr),
         Some(other) => {
             writeln!(
                 stderr,
@@ -459,6 +463,7 @@ fn run_issue_command(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<i32> {
@@ -466,8 +471,8 @@ fn run_issue_command(
         return Err(ShimError::new("missing Forgejo issue command"));
     };
     match command {
-        "list" | "ls" => run_issue_list(&argv[2..], repo, client, stdout),
-        "view" => run_issue_view(&argv[2..], repo, client, stdout),
+        "list" | "ls" => run_issue_list(&argv[2..], repo, client, token_present, stdout, stderr),
+        "view" => run_issue_view(&argv[2..], repo, client, token_present, stdout, stderr),
         other => {
             writeln!(
                 stderr,
@@ -482,10 +487,15 @@ fn run_list(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_list_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let api_state = if parsed.state == "merged" {
         "closed"
     } else {
@@ -536,11 +546,16 @@ fn run_checks(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checks_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let pull = resolve_pull(&target_repo, client, parsed.number, None, cwd)?;
     let statuses = pull
         .as_ref()
@@ -577,11 +592,16 @@ fn run_diff(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_diff_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let pull = resolve_pull(
         &target_repo,
         client,
@@ -629,11 +649,16 @@ fn run_view(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let pull = if let Some(number) = parsed.number {
         Some(client.get_pull(&target_repo, number)?)
     } else {
@@ -685,11 +710,16 @@ fn run_status(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let branch = parsed.branch.or_else(|| current_branch(cwd));
     let pull = match branch {
         Some(branch) => client
@@ -726,10 +756,15 @@ fn run_repo_view(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_repo_view_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let data = normalize_repo(&client.get_repo(&target_repo)?, &target_repo);
     if parsed.web {
         let url = data.get("url").and_then(Value::as_str).unwrap_or("");
@@ -758,10 +793,15 @@ fn run_issue_list(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_list_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     if parsed.web {
         writeln!(stdout, "{}/issues", target_repo.web_base_url())?;
         return Ok(0);
@@ -798,10 +838,15 @@ fn run_issue_view(
     argv: &[String],
     repo: &ForgejoRepoRef,
     client: &dyn ForgejoApi,
+    token_present: bool,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_view_args(argv)?;
     let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
+        return Ok(code);
+    }
     let number = parsed
         .number
         .ok_or_else(|| ShimError::new("Forgejo issue view requires an issue number or URL"))?;
@@ -1369,6 +1414,18 @@ fn missing_auth_message(host: &str) -> String {
     format!(
         "gh-forgejo-shim: Forgejo auth is not configured for {host}; run gh-forgejo-shim auth login {host} or gh-forgejo-shim auth import {host}"
     )
+}
+
+fn missing_token_exit(
+    token_present: bool,
+    repo: &ForgejoRepoRef,
+    stderr: &mut dyn Write,
+) -> Result<Option<i32>> {
+    if token_present {
+        return Ok(None);
+    }
+    writeln!(stderr, "{}", missing_auth_message(&repo.host))?;
+    Ok(Some(1))
 }
 
 fn target_repo(value: Option<&str>, fallback: &ForgejoRepoRef) -> Result<ForgejoRepoRef> {
@@ -2000,7 +2057,7 @@ mod tests {
                 "number,title,url,headRefName,statusCheckRollup",
             ],
             &client,
-            None,
+            Some("token"),
             None,
         );
 
@@ -2040,7 +2097,7 @@ mod tests {
                 "bucket,description,link,name,workflow",
             ],
             &client,
-            None,
+            Some("token"),
             None,
         );
 
@@ -2059,7 +2116,7 @@ mod tests {
         let (code, stdout, stderr) = run_fake(
             &["pr", "diff", "8", "--name-only", "--exclude", "generated/*"],
             &client,
-            None,
+            Some("token"),
             None,
         );
 
@@ -2074,7 +2131,7 @@ mod tests {
         let (code, stdout, stderr) = run_fake(
             &["pr", "view", "feature", "--json", "number,title"],
             &client,
-            None,
+            Some("token"),
             None,
         );
         assert_eq!(code, 0, "{stderr}");
@@ -2083,7 +2140,7 @@ mod tests {
         let (code, stdout, stderr) = run_fake(
             &["pr", "status", "feature", "--json", "number,title"],
             &client,
-            None,
+            Some("token"),
             None,
         );
         assert_eq!(code, 0, "{stderr}");
@@ -2116,7 +2173,7 @@ mod tests {
                 "nameWithOwner,url,defaultBranchRef,sshUrl",
             ],
             &client,
-            None,
+            Some("token"),
             None,
         );
         assert_eq!(code, 0, "{stderr}");
@@ -2139,7 +2196,7 @@ mod tests {
                 "number,title,body,state,closed",
             ],
             &client,
-            None,
+            Some("token"),
             None,
         );
         assert_eq!(code, 0, "{stderr}");
@@ -2153,5 +2210,30 @@ mod tests {
                 "title": "Fix it",
             }))
         );
+    }
+
+    #[test]
+    fn read_only_repo_commands_require_configured_auth() {
+        let client = FakeApi::default();
+
+        let (code, stdout, stderr) =
+            run_fake(&["repo", "view", "--json", "url"], &client, None, None);
+
+        assert_eq!(code, 1);
+        assert_eq!(stdout, "");
+        assert!(stderr.contains("Forgejo auth is not configured for git.example.com"));
+        assert!(stderr.contains("gh-forgejo-shim auth login git.example.com"));
+    }
+
+    #[test]
+    fn unsupported_mutating_commands_are_not_masked_by_missing_auth() {
+        let client = FakeApi::default();
+
+        let (code, stdout, stderr) = run_fake(&["pr", "create"], &client, None, None);
+
+        assert_eq!(code, 1);
+        assert_eq!(stdout, "");
+        assert!(stderr.contains("unsupported Forgejo PR command: create"));
+        assert!(!stderr.contains("Forgejo auth is not configured"));
     }
 }
