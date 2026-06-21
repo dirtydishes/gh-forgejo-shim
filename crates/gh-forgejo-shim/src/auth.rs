@@ -158,7 +158,7 @@ pub fn write_stored_token(
     }
 
     if use_keychain(platform) && write_keychain_token(&normalized, token).is_ok() {
-        let _ = delete_file_token(&normalized, home);
+        delete_file_token(&normalized, home)?;
         return Ok("macOS Keychain".to_string());
     }
 
@@ -166,13 +166,17 @@ pub fn write_stored_token(
     Ok(auth_file_path(home).display().to_string())
 }
 
-pub fn delete_stored_token(host: &str, home: Option<&Path>, platform: Option<&str>) -> bool {
+pub fn delete_stored_token(
+    host: &str,
+    home: Option<&Path>,
+    platform: Option<&str>,
+) -> Result<bool> {
     let normalized = normalize_host(host);
     let mut deleted = false;
     if use_keychain(platform) {
         deleted = delete_keychain_token(&normalized) || deleted;
     }
-    delete_file_token(&normalized, home) || deleted
+    Ok(delete_file_token(&normalized, home)? || deleted)
 }
 
 pub fn stored_auth_status(host: &str, home: Option<&Path>, platform: Option<&str>) -> AuthStatus {
@@ -422,22 +426,31 @@ fn write_file_token(host: &str, token: &str, home: Option<&Path>) -> Result<()> 
     write_auth_file(&data, home)
 }
 
-fn delete_file_token(host: &str, home: Option<&Path>) -> bool {
+fn delete_file_token(host: &str, home: Option<&Path>) -> Result<bool> {
     let path = auth_file_path(home);
     let mut data = read_auth_file(home);
     let Some(hosts) = data.get_mut("hosts").and_then(Value::as_object_mut) else {
-        return false;
+        return Ok(false);
     };
     if hosts.remove(host).is_none() {
-        return false;
+        return Ok(false);
     }
 
     if hosts.is_empty() {
-        let _ = fs::remove_file(path);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(ShimError::new(format!(
+                    "could not remove {}: {error}",
+                    path.display()
+                )));
+            }
+        }
     } else {
-        let _ = write_auth_file(&data, home);
+        write_auth_file(&data, home)?;
     }
-    true
+    Ok(true)
 }
 
 fn read_auth_file(home: Option<&Path>) -> Value {
@@ -841,11 +854,34 @@ mod tests {
             Some("linux"),
         )?;
 
-        let deleted = delete_stored_token("git.example.com", Some(&home), Some("linux"));
+        let deleted = delete_stored_token("git.example.com", Some(&home), Some("linux"))?;
         let token = discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home));
 
         assert!(deleted);
         assert!(token.is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn delete_stored_token_preserves_other_auth_file_entries() -> Result<()> {
+        let home = temp_root()?;
+        write_stored_token(
+            "git.example.com",
+            "stored-token",
+            Some(&home),
+            Some("linux"),
+        )?;
+        write_stored_token("git.other.test", "other-token", Some(&home), Some("linux"))?;
+
+        let deleted = delete_stored_token("git.example.com", Some(&home), Some("linux"))?;
+
+        assert!(deleted);
+        assert!(discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none());
+        assert_eq!(
+            discover_fj_token(Some("git.other.test"), &EnvMap::new(), Some(&home)).as_deref(),
+            Some("other-token")
+        );
         fs::remove_dir_all(home).ok();
         Ok(())
     }

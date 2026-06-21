@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 
 use crate::shim::is_managed_shim;
 
@@ -25,6 +27,12 @@ pub struct ProgramOutput {
     pub code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRunResult {
+    pub code: i32,
+    pub message: String,
 }
 
 pub fn find_program(
@@ -112,6 +120,76 @@ pub fn git_output(args: &[&str], cwd: Option<&Path>) -> Option<String> {
     }
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+pub fn git_run(args: &[&str], cwd: Option<&Path>) -> GitRunResult {
+    let mut command = Command::new("git");
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            return GitRunResult {
+                code: 127,
+                message: error.to_string(),
+            };
+        }
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    GitRunResult {
+        code: output.status.code().unwrap_or(1),
+        message: if stderr.is_empty() { stdout } else { stderr },
+    }
+}
+
+pub fn open_web_url(url: &str) {
+    #[cfg(test)]
+    {
+        opened_web_urls()
+            .lock()
+            .expect("web url mutex")
+            .push(url.to_string());
+    }
+    #[cfg(not(test))]
+    {
+        let mut command = if cfg!(target_os = "macos") {
+            let mut command = Command::new("open");
+            command.arg(url);
+            command
+        } else if cfg!(target_os = "windows") {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "start", "", url]);
+            command
+        } else {
+            let mut command = Command::new("xdg-open");
+            command.arg(url);
+            command
+        };
+        let _ = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
+#[cfg(test)]
+pub fn take_opened_web_urls() -> Vec<String> {
+    std::mem::take(&mut *opened_web_urls().lock().expect("web url mutex"))
+}
+
+#[cfg(test)]
+fn opened_web_urls() -> &'static Mutex<Vec<String>> {
+    static OPENED_WEB_URLS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    OPENED_WEB_URLS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn command_with_env(

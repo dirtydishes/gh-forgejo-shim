@@ -295,6 +295,7 @@ fn run_forgejo(
         DelegateMode::Inherit => {
             let stdout = io::stdout();
             let stderr = io::stderr();
+            let stdin = io::stdin();
             read_only::run(
                 argv,
                 decision,
@@ -302,10 +303,20 @@ fn run_forgejo(
                 cwd,
                 &mut stdout.lock(),
                 &mut stderr.lock(),
+                &mut stdin.lock(),
             )
         }
         DelegateMode::Capture { stdout, stderr } => {
-            read_only::run(argv, decision, env, cwd, *stdout, *stderr)
+            let stdin = io::stdin();
+            read_only::run(
+                argv,
+                decision,
+                env,
+                cwd,
+                *stdout,
+                *stderr,
+                &mut stdin.lock(),
+            )
         }
     }
 }
