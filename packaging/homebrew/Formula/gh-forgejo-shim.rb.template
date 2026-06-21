@@ -1,0 +1,38 @@
+class GhForgejoShim < Formula
+  desc "GitHub CLI compatibility shim for Forgejo repositories"
+  homepage "https://github.com/dirtydishes/gh-forgejo-shim"
+  version "{{VERSION}}"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/dirtydishes/gh-forgejo-shim/releases/download/v#{version}/gh-forgejo-shim-#{version}-aarch64-apple-darwin.tar.gz"
+      sha256 "{{SHA256_AARCH64_APPLE_DARWIN}}"
+    else
+      url "https://github.com/dirtydishes/gh-forgejo-shim/releases/download/v#{version}/gh-forgejo-shim-#{version}-x86_64-apple-darwin.tar.gz"
+      sha256 "{{SHA256_X86_64_APPLE_DARWIN}}"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/dirtydishes/gh-forgejo-shim/releases/download/v#{version}/gh-forgejo-shim-#{version}-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "{{SHA256_AARCH64_UNKNOWN_LINUX_GNU}}"
+    else
+      url "https://github.com/dirtydishes/gh-forgejo-shim/releases/download/v#{version}/gh-forgejo-shim-#{version}-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "{{SHA256_X86_64_UNKNOWN_LINUX_GNU}}"
+    end
+  end
+
+  depends_on "gh"
+
+  def install
+    bin.install "gh-forgejo-shim"
+    bin.install "gfj"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/gfj --version")
+    assert_match "doctor", shell_output("#{bin}/gh-forgejo-shim --help")
+  end
+end

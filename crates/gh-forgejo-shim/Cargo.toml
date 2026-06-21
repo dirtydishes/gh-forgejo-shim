@@ -1,10 +1,15 @@
 [package]
 name = "gh-forgejo-shim"
-description = "Rust scaffold for the gh-forgejo-shim rewrite."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = false
 
 [lib]

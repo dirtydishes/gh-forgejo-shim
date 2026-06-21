@@ -294,10 +294,12 @@ mod tests {
     #[test]
     fn finds_real_gh_in_fallback_dirs_when_path_is_minimal() -> io::Result<()> {
         let fixture = Fixture::new()?;
+        let minimal_path = fixture.root.join("minimal").join("bin");
+        fs::create_dir_all(&minimal_path)?;
         let fallback = fixture.root.join("homebrew").join("bin");
         let real_gh = fixture.fake_executable(&fallback, "gh", "#!/bin/sh\nexit 0\n")?;
         let env = HashMap::from([
-            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("PATH".to_string(), minimal_path.display().to_string()),
             ("HOME".to_string(), fixture.root.display().to_string()),
         ]);
 

@@ -1,6 +1,6 @@
 # gh-forgejo-shim
 
-`gh-forgejo-shim` is a small, stdlib-only Python CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories.
+`gh-forgejo-shim` is a small CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories. The install path is moving to native Rust binaries; legacy Python code remains in this repository during the rewrite for compatibility testing and migration.
 
 It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository, pull request, issue, and check commands through Forgejo-friendly behavior.
 
@@ -20,11 +20,22 @@ This is not full `gh` emulation. It is compatibility glue for the `gh` calls and
 
 ## Install
 
-Install with `pipx`:
+Install the native Rust binary with Homebrew:
 
 ```sh
-pipx install gh-forgejo-shim
+brew tap dirtydishes/gh-forgejo-shim
+brew install gh-forgejo-shim
+gfj --version
 ```
+
+Phase 09 is moving releases to a Rust-first install path. Existing pipx users
+should follow [Migrate From pipx To The Rust Binary](docs/pipx-to-rust-migration.md)
+when installing a Rust release. PyPI is not intended to remain the long-term
+distribution channel once the Rust binary release path is active.
+
+GitHub release tarballs are also available for macOS and Linux. See
+[docs/installation.md](docs/installation.md) for manual tarball installs,
+checksum verification, rollback, and maintainer release details.
 
 From inside a Forgejo checkout, run:
 
@@ -56,7 +67,7 @@ gfj bootstrap --force
 
 ## Quickstart For GUI Coding Tools
 
-1. Install the package with `pipx`.
+1. Install the native package with Homebrew or a GitHub release tarball.
 2. Open a terminal inside your Forgejo repository.
 3. Run `gfj bootstrap`.
 4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
@@ -558,12 +569,15 @@ FJ_SHIM_HOSTS= gh pr view
 ```
 
 See [docs/rollback.md](docs/rollback.md) for PATH troubleshooting and recovery steps.
+For old pipx installs moving to Rust, see
+[docs/pipx-to-rust-migration.md](docs/pipx-to-rust-migration.md).
 
 ## Development
 
 Run tests with:
 
 ```sh
+cargo test --workspace
 python3 -m unittest
 ```
 
@@ -573,4 +587,5 @@ When running directly from a checkout without installing the package, set `PYTHO
 PYTHONPATH=src python3 -m gh_forgejo_shim --help
 ```
 
-This project intentionally has no runtime dependencies outside the Python standard library.
+The Rust binary is the target runtime. The Python package remains in this
+repository during the rewrite for compatibility testing and migration only.

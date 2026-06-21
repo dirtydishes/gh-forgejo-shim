@@ -13,9 +13,13 @@ python3 -m pip install -e .
 python3 -m unittest
 ```
 
-Until the Rust cutover, installed runtime behavior still comes from the Python package. Python runtime code must stay stdlib-only. Test code should also stay stdlib-only unless the project deliberately changes that policy later.
+Native release installs are Rust-first. The Python package remains in the
+repository for legacy pipx migration and compatibility testing until the Phase
+10 runtime cutover removes it. Python runtime code must stay stdlib-only. Test
+code should also stay stdlib-only unless the project deliberately changes that
+policy later.
 
-The Rust rewrite scaffold is non-installed until cutover. Use these commands when touching Rust code:
+Use these commands when touching Rust code:
 
 ```sh
 cargo fmt --all -- --check
@@ -34,10 +38,16 @@ cargo test --workspace
 
 ## Release Process
 
-1. Update the version in `pyproject.toml` and `src/gh_forgejo_shim/__init__.py`.
-2. Run `python3 -m unittest`.
-3. Review `gh-forgejo-shim doctor` output in a local install.
-4. Build and publish with the standard Python packaging flow for the chosen release environment.
+1. Update the shared Cargo workspace version, `pyproject.toml`, and
+   `src/gh_forgejo_shim/__init__.py` while the legacy Python package remains.
+2. Run Rust fmt, clippy, tests, and the legacy Python unittest/compileall gates.
+3. Build release tarballs with `scripts/package-release.sh` or the tag release
+   workflow.
+4. Verify checksums and smoke `gfj --version` plus `gfj doctor` from the
+   unpacked tarball.
+5. Publish the GitHub release tarballs and update the Homebrew formula. Do not
+   add a PyPI release path except as a separately tracked temporary migration
+   bridge.
 
 ## Beads Workflow
 

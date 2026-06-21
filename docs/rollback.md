@@ -2,6 +2,12 @@
 
 `gh-forgejo-shim` is opt-in. Removing the generated wrapper returns normal `gh` behavior.
 
+If you are migrating from an old pipx install to a Rust release, follow
+[Migrate From pipx To The Rust Binary](pipx-to-rust-migration.md) first. That
+guide covers the order-sensitive part of replacing the pipx-provided `gfj` and
+`gh-forgejo-shim` commands with the Rust binary before uninstalling the pipx
+package.
+
 ## Remove The Wrapper
 
 ```sh
