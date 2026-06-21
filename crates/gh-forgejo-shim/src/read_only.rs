@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::config::EnvMap;
-use crate::external::{git_output, git_run, GitRunResult};
+use crate::external::{git_output, git_run, open_web_url, GitRunResult};
 use crate::forgejo::{
     CreateIssueRequest, CreatePullRequest, ForgejoClient, ForgejoResult, ListIssuesOptions,
     RepoRef as ForgejoRepoRef,
@@ -927,6 +927,7 @@ fn run_comment(
             || format!("{}/pulls/{number}", target_repo.web_base_url()),
             str::to_string,
         );
+        open_web_url(&format!("{url}#new-comment"));
         writeln!(stdout, "{url}#new-comment")?;
         return Ok(0);
     }
@@ -1147,11 +1148,9 @@ fn run_create(
         .unwrap_or_default();
 
     if parsed.web {
-        writeln!(
-            stdout,
-            "{}/compare/{base}...{head}",
-            target_repo.web_base_url()
-        )?;
+        let url = format!("{}/compare/{base}...{head}", target_repo.web_base_url());
+        open_web_url(&url);
+        writeln!(stdout, "{url}")?;
         return Ok(0);
     }
 
@@ -1236,7 +1235,9 @@ fn run_issue_create(
     }
 
     if parsed.web {
-        writeln!(stdout, "{}/issues/new", target_repo.web_base_url())?;
+        let url = format!("{}/issues/new", target_repo.web_base_url());
+        open_web_url(&url);
+        writeln!(stdout, "{url}")?;
         return Ok(0);
     }
 
@@ -3045,6 +3046,31 @@ mod tests {
     }
 
     #[test]
+    fn pr_create_web_opens_and_prints_compare_url() {
+        let client = FakeApi::default();
+        crate::external::take_opened_web_urls();
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr", "create", "--title", "Ship it", "--base", "main", "--head", "feature",
+                "--web",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+
+        let url = "https://git.example.com/owner/repo/compare/main...feature";
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, format!("{url}\n"));
+        assert!(
+            crate::external::take_opened_web_urls().contains(&url.to_string()),
+            "web url should be opened"
+        );
+        assert!(client.created_pulls.borrow().is_empty());
+    }
+
+    #[test]
     fn pr_list_outputs_codex_board_fields_with_status_rollup() {
         let client = FakeApi {
             pulls: vec![json!({
@@ -3392,10 +3418,12 @@ mod tests {
             None,
         );
 
+        let url = "https://git.example.com/owner/repo/pulls/8#new-comment";
         assert_eq!(code, 0, "{stderr}");
-        assert_eq!(
-            stdout,
-            "https://git.example.com/owner/repo/pulls/8#new-comment\n"
+        assert_eq!(stdout, format!("{url}\n"));
+        assert!(
+            crate::external::take_opened_web_urls().contains(&url.to_string()),
+            "web url should be opened"
         );
         assert!(client.comments.borrow().is_empty());
     }
@@ -3461,8 +3489,13 @@ mod tests {
         let (code, stdout, stderr) =
             run_fake(&["issue", "create", "--web"], &client, Some("token"), None);
 
+        let url = "https://git.example.com/owner/repo/issues/new";
         assert_eq!(code, 0, "{stderr}");
-        assert_eq!(stdout, "https://git.example.com/owner/repo/issues/new\n");
+        assert_eq!(stdout, format!("{url}\n"));
+        assert!(
+            crate::external::take_opened_web_urls().contains(&url.to_string()),
+            "web url should be opened"
+        );
         assert!(client.created_issues.borrow().is_empty());
     }
 }
