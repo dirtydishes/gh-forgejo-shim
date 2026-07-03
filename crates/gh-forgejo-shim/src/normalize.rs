@@ -161,30 +161,62 @@ pub fn normalize_pull(pull: &Value) -> Value {
 }
 
 pub fn with_status_check_rollup(pull: &Value, statuses: &[Value]) -> Value {
+    with_status_check_rollup_base(pull, statuses, None)
+}
+
+pub fn with_status_check_rollup_for_repo(
+    pull: &Value,
+    statuses: &[Value],
+    repo: &RepoRef,
+) -> Value {
+    with_status_check_rollup_base(pull, statuses, Some(repo))
+}
+
+fn with_status_check_rollup_base(
+    pull: &Value,
+    statuses: &[Value],
+    repo: Option<&RepoRef>,
+) -> Value {
     let mut enriched = pull.clone();
     if let Some(object) = enriched.as_object_mut() {
         object.insert(
             "statusCheckRollup".to_string(),
-            normalize_status_check_rollup(statuses),
+            normalize_status_check_rollup_base(statuses, repo),
         );
     }
     enriched
 }
 
 pub fn normalize_status_check_rollup(statuses: &[Value]) -> Value {
+    normalize_status_check_rollup_base(statuses, None)
+}
+
+pub fn normalize_status_check_rollup_for_repo(statuses: &[Value], repo: &RepoRef) -> Value {
+    normalize_status_check_rollup_base(statuses, Some(repo))
+}
+
+fn normalize_status_check_rollup_base(statuses: &[Value], repo: Option<&RepoRef>) -> Value {
     Value::Array(
         latest_statuses(statuses)
             .into_iter()
-            .map(|status| status_to_rollup_item(&status))
+            .map(|status| status_to_rollup_item(&status, repo))
             .collect(),
     )
 }
 
 pub fn normalize_pr_checks(statuses: &[Value]) -> Value {
+    normalize_pr_checks_base(statuses, None)
+}
+
+pub fn normalize_pr_checks_for_repo(statuses: &[Value], repo: &RepoRef) -> Value {
+    normalize_pr_checks_base(statuses, Some(repo))
+}
+
+fn normalize_pr_checks_base(statuses: &[Value], repo: Option<&RepoRef>) -> Value {
     Value::Array(
         latest_statuses(statuses)
             .into_iter()
-            .map(|status| status_to_check_item(&status))
+            .map(|status| status_to_check_item(&status, repo))
             .collect(),
     )
 }
@@ -540,9 +572,9 @@ fn latest_statuses(statuses: &[Value]) -> Vec<Value> {
     latest.into_values().collect()
 }
 
-fn status_to_rollup_item(status: &Value) -> Value {
+fn status_to_rollup_item(status: &Value, repo: Option<&RepoRef>) -> Value {
     let state = status_state(status);
-    let target_url = status_url(status);
+    let target_url = status_url(status, repo);
     json!({
         "__typename": "StatusContext",
         "completedAt": status_completed_at(status, &state),
@@ -558,9 +590,9 @@ fn status_to_rollup_item(status: &Value) -> Value {
     })
 }
 
-fn status_to_check_item(status: &Value) -> Value {
+fn status_to_check_item(status: &Value, repo: Option<&RepoRef>) -> Value {
     let state = status_state(status);
-    let target_url = status_url(status);
+    let target_url = status_url(status, repo);
     json!({
         "bucket": status_bucket(&state),
         "completedAt": status_completed_at(status, &state),
@@ -589,7 +621,7 @@ fn status_workflow(status: &Value) -> String {
         .unwrap_or_else(|| status_name(status))
 }
 
-fn status_url(status: &Value) -> Value {
+fn status_url(status: &Value, repo: Option<&RepoRef>) -> Value {
     status
         .get("target_url")
         .and_then(Value::as_str)
@@ -606,8 +638,18 @@ fn status_url(status: &Value) -> Value {
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
         })
-        .map(|value| Value::String(value.to_string()))
+        .map(|value| Value::String(absolutize_status_url(value, repo)))
         .unwrap_or(Value::Null)
+}
+
+fn absolutize_status_url(value: &str, repo: Option<&RepoRef>) -> String {
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return value.to_string();
+    }
+    if let (Some(path), Some(repo)) = (value.strip_prefix('/'), repo) {
+        return format!("https://{}/{}", repo.host, path);
+    }
+    value.to_string()
 }
 
 fn status_timestamp(status: &Value) -> String {
@@ -1096,6 +1138,39 @@ mod tests {
                     "workflowName": "deploy"
                 }
             ])
+        );
+    }
+
+    #[test]
+    fn absolutizes_relative_forgejo_status_urls_when_repo_is_known() {
+        let repo = RepoRef::new("git.example.com", "owner", "repo");
+        let statuses = [json!({
+            "context": "ci/test",
+            "description": "tests passed",
+            "state": "success",
+            "target_url": "/owner/repo/actions/runs/2",
+            "created_at": "2026-06-01T00:02:00Z",
+            "updated_at": "2026-06-01T00:03:00Z"
+        })];
+
+        let rollup = normalize_status_check_rollup_for_repo(&statuses, &repo);
+        let checks = normalize_pr_checks_for_repo(&statuses, &repo);
+
+        assert_eq!(
+            rollup[0]["targetUrl"],
+            "https://git.example.com/owner/repo/actions/runs/2"
+        );
+        assert_eq!(
+            rollup[0]["detailsUrl"],
+            "https://git.example.com/owner/repo/actions/runs/2"
+        );
+        assert_eq!(
+            checks[0]["link"],
+            "https://git.example.com/owner/repo/actions/runs/2"
+        );
+        assert_eq!(
+            checks[0]["detailsUrl"],
+            "https://git.example.com/owner/repo/actions/runs/2"
         );
     }
 
