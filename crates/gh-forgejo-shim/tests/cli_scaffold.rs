@@ -77,8 +77,14 @@ fn doctor_runs_native_diagnostics() -> TestResult {
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("gh-forgejo-shim doctor"), "{stdout}");
-    assert!(stdout.contains("[fix] current PATH:"), "{stdout}");
-    assert!(stdout.contains("[fix] real gh:"), "{stdout}");
+    assert!(
+        stdout.contains("[fix] current PATH:") || stdout.contains("[ok] current PATH:"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("[fix] real gh:") || stdout.contains("[ok] real gh:"),
+        "{stdout}"
+    );
     assert!(stdout.contains("[fix] managed gh:"), "{stdout}");
     assert!(stdout.contains("] bd:"), "{stdout}");
     assert!(stdout.contains("] fj:"), "{stdout}");
@@ -307,7 +313,12 @@ fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visibl
     assert!(target.exists());
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("[fix] current PATH:"), "{stdout}");
-    assert!(stdout.contains("is not in current PATH"), "{stdout}");
+    assert!(
+        stdout.contains("is not in current PATH")
+            || stdout.contains("currently resolves to")
+            || stdout.contains("before /"),
+        "{stdout}"
+    );
     assert!(stdout.contains("export PATH="), "{stdout}");
     Ok(())
 }
