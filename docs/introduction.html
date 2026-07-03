@@ -1,0 +1,1205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gh-forgejo-shim Introduction</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: oklch(13% 0.018 176);
+      --bg-2: oklch(16% 0.021 176);
+      --surface: oklch(19% 0.024 176);
+      --surface-2: oklch(23% 0.027 176);
+      --surface-3: oklch(26% 0.031 176);
+      --ink: oklch(96% 0.012 172);
+      --text: oklch(89% 0.018 172);
+      --muted: oklch(76% 0.028 174);
+      --quiet: oklch(65% 0.031 174);
+      --line: oklch(34% 0.036 176);
+      --line-strong: oklch(45% 0.052 176);
+      --accent: oklch(77% 0.12 178);
+      --accent-strong: oklch(84% 0.13 178);
+      --amber: oklch(82% 0.14 78);
+      --coral: oklch(72% 0.15 28);
+      --violet: oklch(75% 0.11 300);
+      --code-bg: oklch(10.5% 0.014 176);
+      --ok-bg: oklch(24% 0.049 176);
+      --warn-bg: oklch(24% 0.045 72);
+      --danger-bg: oklch(24% 0.048 28);
+      --radius: 10px;
+      --content: 76ch;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.68;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: var(--accent-strong);
+      text-decoration-color: color-mix(in oklch, var(--accent) 55%, transparent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.2em;
+    }
+
+    a:hover {
+      color: var(--ink);
+      text-decoration-color: var(--ink);
+    }
+
+    code,
+    kbd {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--code-bg);
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.93em;
+    }
+
+    code {
+      padding: 0.08rem 0.28rem;
+    }
+
+    kbd {
+      padding: 0.05rem 0.34rem;
+    }
+
+    pre {
+      max-width: 100%;
+      overflow: auto;
+      margin: 1rem 0 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--code-bg);
+      padding: 1rem;
+    }
+
+    pre code {
+      display: block;
+      min-width: max-content;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 0;
+      line-height: 1.55;
+      white-space: pre;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      color: var(--ink);
+      letter-spacing: 0;
+      line-height: 1.14;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 980px;
+      font-size: 3.65rem;
+      font-weight: 760;
+    }
+
+    h2 {
+      margin-top: 4.6rem;
+      font-size: 1.75rem;
+    }
+
+    h3 {
+      margin-top: 2rem;
+      font-size: 1.12rem;
+    }
+
+    p,
+    li,
+    dd {
+      max-width: var(--content);
+      color: var(--text);
+      text-wrap: pretty;
+    }
+
+    p {
+      margin: 0.9rem 0 0;
+    }
+
+    ul,
+    ol {
+      margin: 1rem 0 0;
+      padding-left: 1.25rem;
+    }
+
+    li + li {
+      margin-top: 0.52rem;
+    }
+
+    strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .page {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .topbar {
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in oklch, var(--bg) 92%, black);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 0.86rem 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      min-width: 0;
+      color: var(--ink);
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 1.42rem;
+      height: 1.42rem;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      color: var(--accent-strong);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      line-height: 1;
+    }
+
+    .topbar-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.7rem;
+      font-size: 0.92rem;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: clamp(2rem, 4vw, 4rem);
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 3rem 0 5rem;
+    }
+
+    .toc {
+      position: sticky;
+      top: 1rem;
+      align-self: start;
+      max-height: calc(100vh - 2rem);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg-2);
+      padding: 0.92rem;
+    }
+
+    .toc-title {
+      margin: 0 0 0.5rem;
+      color: var(--quiet);
+      font-size: 0.78rem;
+      font-weight: 720;
+    }
+
+    .toc a {
+      display: block;
+      border-radius: 6px;
+      padding: 0.38rem 0.5rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.92rem;
+      line-height: 1.25;
+    }
+
+    .toc a:hover,
+    .toc a:focus-visible {
+      outline: 0;
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    .content {
+      min-width: 0;
+    }
+
+    .hero {
+      padding-bottom: 2.1rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hero-labels {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-bottom: 1.4rem;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.9rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: 0.25rem 0.68rem;
+      color: var(--muted);
+      font-size: 0.87rem;
+      line-height: 1.15;
+      white-space: nowrap;
+    }
+
+    .tag.accent {
+      border-color: color-mix(in oklch, var(--accent) 62%, var(--line));
+      color: var(--accent-strong);
+    }
+
+    .lead {
+      max-width: 870px;
+      margin-top: 1.2rem;
+      color: var(--muted);
+      font-size: 1.13rem;
+      line-height: 1.74;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      margin-top: 1.4rem;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2.55rem;
+      border-radius: 7px;
+      padding: 0.62rem 0.9rem;
+      color: var(--ink);
+      font-weight: 700;
+      line-height: 1.2;
+      text-decoration: none;
+    }
+
+    .button.primary {
+      border: 1px solid color-mix(in oklch, var(--accent) 80%, var(--line));
+      background: var(--ok-bg);
+    }
+
+    .button.secondary {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+    }
+
+    .button:hover,
+    .button:focus-visible {
+      outline: 2px solid color-mix(in oklch, var(--accent) 75%, transparent);
+      outline-offset: 2px;
+      color: var(--ink);
+    }
+
+    .note {
+      margin-top: 1.2rem;
+      border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--line));
+      border-radius: var(--radius);
+      background: color-mix(in oklch, var(--ok-bg) 72%, var(--bg));
+      padding: 1rem;
+    }
+
+    .note p {
+      margin: 0;
+      color: var(--ink);
+    }
+
+    .warning {
+      border-color: color-mix(in oklch, var(--amber) 42%, var(--line));
+      background: color-mix(in oklch, var(--warn-bg) 78%, var(--bg));
+    }
+
+    .danger {
+      border-color: color-mix(in oklch, var(--coral) 45%, var(--line));
+      background: color-mix(in oklch, var(--danger-bg) 76%, var(--bg));
+    }
+
+    .route-board {
+      margin: 2.2rem 0 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 1rem;
+    }
+
+    .route-board figcaption {
+      max-width: var(--content);
+      margin-top: 0.85rem;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .route-title {
+      margin: 0 0 1rem;
+      color: var(--ink);
+      font-size: 1rem;
+      font-weight: 760;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: minmax(130px, 1fr) 34px minmax(130px, 1fr) 34px minmax(130px, 1fr);
+      gap: 0.7rem;
+      align-items: stretch;
+    }
+
+    .flow-split {
+      display: grid;
+      grid-template-columns: minmax(130px, 1fr) 34px minmax(130px, 1fr);
+      grid-column: 3 / 6;
+      gap: 0.7rem;
+      align-items: stretch;
+    }
+
+    .flow-node {
+      min-height: 7rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg-2);
+      padding: 0.9rem;
+    }
+
+    .flow-node.route {
+      border-color: color-mix(in oklch, var(--accent) 55%, var(--line));
+      background: color-mix(in oklch, var(--ok-bg) 66%, var(--bg-2));
+    }
+
+    .flow-node.delegate {
+      border-color: color-mix(in oklch, var(--amber) 55%, var(--line));
+      background: color-mix(in oklch, var(--warn-bg) 68%, var(--bg-2));
+    }
+
+    .flow-node.normalize {
+      border-color: color-mix(in oklch, var(--coral) 55%, var(--line));
+      background: color-mix(in oklch, var(--danger-bg) 60%, var(--bg-2));
+    }
+
+    .flow-label {
+      display: block;
+      color: var(--quiet);
+      font-size: 0.76rem;
+      font-weight: 780;
+      line-height: 1.1;
+    }
+
+    .flow-node strong {
+      display: block;
+      margin-top: 0.42rem;
+      color: var(--ink);
+      font-size: 1.02rem;
+      line-height: 1.22;
+    }
+
+    .flow-node span:last-child {
+      display: block;
+      margin-top: 0.48rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.43;
+    }
+
+    .connector {
+      display: grid;
+      min-height: 7rem;
+      place-items: center;
+      color: var(--quiet);
+      font-weight: 760;
+    }
+
+    .section-intro {
+      max-width: var(--content);
+      color: var(--muted);
+      font-size: 1.03rem;
+    }
+
+    .definition-list {
+      display: grid;
+      gap: 0.8rem;
+      max-width: var(--content);
+      margin: 1rem 0 0;
+    }
+
+    .definition {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 1rem;
+    }
+
+    .definition dt {
+      color: var(--ink);
+      font-weight: 760;
+    }
+
+    .definition dd {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+    }
+
+    .steps {
+      display: grid;
+      gap: 0.78rem;
+      max-width: 880px;
+      margin-top: 1.1rem;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 2.2rem minmax(0, 1fr);
+      gap: 0.85rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 0.96rem;
+    }
+
+    .step-number {
+      display: grid;
+      width: 2.2rem;
+      height: 2.2rem;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--surface-3);
+      color: var(--accent-strong);
+      font-weight: 780;
+    }
+
+    .step h3 {
+      margin: 0;
+      font-size: 1.02rem;
+    }
+
+    .step p {
+      margin-top: 0.34rem;
+      color: var(--muted);
+    }
+
+    .matrix,
+    .source-map {
+      width: min(100%, 980px);
+      margin-top: 1rem;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    table {
+      width: 100%;
+      min-width: 660px;
+      border-collapse: collapse;
+      font-size: 0.94rem;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 0.78rem 0.86rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--ink);
+      font-size: 0.82rem;
+      font-weight: 760;
+    }
+
+    td {
+      color: var(--muted);
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.55rem;
+      border-radius: 999px;
+      padding: 0.16rem 0.52rem;
+      color: var(--ink);
+      font-size: 0.78rem;
+      font-weight: 760;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+
+    .badge.forgejo {
+      background: color-mix(in oklch, var(--accent) 27%, var(--surface-3));
+    }
+
+    .badge.delegate {
+      background: color-mix(in oklch, var(--amber) 28%, var(--surface-3));
+    }
+
+    .badge.local {
+      background: color-mix(in oklch, var(--violet) 26%, var(--surface-3));
+    }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      max-width: 980px;
+      margin-top: 1rem;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 1rem;
+    }
+
+    .panel h3 {
+      margin-top: 0;
+    }
+
+    .panel p {
+      color: var(--muted);
+    }
+
+    .command-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.52rem;
+      max-width: 940px;
+      margin-top: 1rem;
+    }
+
+    .command-list code {
+      min-height: 1.9rem;
+      padding: 0.28rem 0.48rem;
+    }
+
+    .file-link {
+      color: var(--accent-strong);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.9rem;
+    }
+
+    .footer {
+      margin-top: 5rem;
+      border-top: 1px solid var(--line);
+      padding-top: 1.4rem;
+      color: var(--quiet);
+      font-size: 0.92rem;
+    }
+
+    .footer p {
+      color: var(--quiet);
+    }
+
+    @media (max-width: 920px) {
+      .shell {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1.4rem;
+      }
+
+      .toc {
+        position: static;
+        max-height: none;
+      }
+
+      .toc nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.28rem;
+      }
+
+      .toc a {
+        border: 1px solid var(--line);
+        background: var(--surface);
+      }
+
+      h1 {
+        font-size: 2.65rem;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .topbar-inner,
+      .shell {
+        width: min(100% - 28px, 1180px);
+      }
+
+      .topbar-inner {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      h1 {
+        font-size: 2.18rem;
+      }
+
+      h2 {
+        margin-top: 3.5rem;
+        font-size: 1.48rem;
+      }
+
+      .flow,
+      .flow-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .flow-split {
+        grid-column: auto;
+      }
+
+      .connector {
+        min-height: 1.8rem;
+      }
+
+      .connector::before {
+        content: "then";
+        color: var(--quiet);
+        font-size: 0.82rem;
+      }
+
+      .connector {
+        color: transparent;
+      }
+
+      .two-column {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .step {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand" aria-label="gh-forgejo-shim">
+          <span class="brand-mark" aria-hidden="true">gh</span>
+          <span>gh-forgejo-shim</span>
+        </div>
+        <nav class="topbar-links" aria-label="Project links">
+          <a href="../README.md">README</a>
+          <a href="installation.md">Installation</a>
+          <a href="configuration.md">Configuration</a>
+          <a href="testing/codex-trace.html">Trace workflow</a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="shell">
+      <aside class="toc" aria-label="Page contents">
+        <p class="toc-title">Contents</p>
+        <nav>
+          <a href="#what-is-a-shim">What a shim is</a>
+          <a href="#what-this-project-does">What this project does</a>
+          <a href="#call-flow">Call flow</a>
+          <a href="#codex-and-other-apps">Codex and other apps</a>
+          <a href="#routing-rules">Routing rules</a>
+          <a href="#normalization">Normalization</a>
+          <a href="#implementation-map">Implementation map</a>
+          <a href="#setup-and-safety">Setup and safety</a>
+          <a href="#trace-and-debug">Trace and debug</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="hero" id="top">
+          <div class="hero-labels" aria-label="Summary labels">
+            <span class="tag accent">Forgejo compatibility</span>
+            <span class="tag">GitHub-shaped CLI output</span>
+            <span class="tag">Rust runtime</span>
+            <span class="tag">Codex.app friendly</span>
+          </div>
+          <h1>A beginner's map of the Forgejo shim</h1>
+          <p class="lead">
+            <code>gh-forgejo-shim</code> is a small compatibility layer for tools that know how to ask GitHub-style questions but are running inside Forgejo repositories. It routes the commands it understands to Forgejo, translates the answers into the shapes those tools expect, and delegates everything else to the real GitHub CLI.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#call-flow">See the route</a>
+            <a class="button secondary" href="#implementation-map">Find the source files</a>
+          </div>
+          <div class="note warning">
+            <p><strong>Honest scope:</strong> this is not a complete GitHub CLI clone. It supports the <code>gh</code> calls and repository probes that developer tools commonly use for repository, pull request, issue, check, branch, and auth workflows.</p>
+          </div>
+        </section>
+
+        <section id="what-is-a-shim">
+          <h2>What a shim is</h2>
+          <p class="section-intro">
+            A shim is an adapter that sits between a caller and the tool or service the caller thinks it is using. The caller keeps speaking the same language. The shim decides whether it can translate that request, and either handles it or passes it through.
+          </p>
+
+          <dl class="definition-list">
+            <div class="definition">
+              <dt>The caller</dt>
+              <dd>A human, Codex.app, T3 Code, another editor, or a script runs a command like <code>gh pr status --json number,title,url</code>.</dd>
+            </div>
+            <div class="definition">
+              <dt>The expected language</dt>
+              <dd>Those tools expect GitHub CLI command names, flags, exit codes, text output, and JSON fields.</dd>
+            </div>
+            <div class="definition">
+              <dt>The actual service</dt>
+              <dd>The repository is hosted on Forgejo, whose API and web URLs are similar but not identical to GitHub's.</dd>
+            </div>
+            <div class="definition">
+              <dt>The shim</dt>
+              <dd>This project receives selected <code>gh</code> calls, talks to Forgejo when appropriate, and returns enough GitHub-shaped output for the caller to keep working.</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section id="what-this-project-does">
+          <h2>What this project does</h2>
+          <p class="section-intro">
+            The product has two command names and one optional wrapper. The long command, <code>gh-forgejo-shim</code>, is the management command. The shorter <code>gfj</code> alias is for daily use. The optional managed <code>gh</code> wrapper is what lets GitHub-oriented tools find the shim automatically.
+          </p>
+
+          <div class="two-column">
+            <div class="panel">
+              <h3>Management and setup</h3>
+              <p>Use <code>gfj bootstrap</code>, <code>gfj doctor</code>, <code>gfj auth login</code>, <code>gfj config add-host</code>, and rollback commands to install, verify, and remove shim-owned state.</p>
+            </div>
+            <div class="panel">
+              <h3>GitHub-style compatibility</h3>
+              <p>When the wrapper is first in <code>PATH</code>, a supported <code>gh</code> command in an allowlisted Forgejo repo can be handled by the shim instead of the real GitHub CLI.</p>
+            </div>
+          </div>
+
+          <div class="note">
+            <p><strong>Important guardrail:</strong> known GitHub hosts such as <code>github.com</code> still delegate to the real <code>gh</code>. A Forgejo host must be explicitly allowlisted before routed commands use Forgejo behavior.</p>
+          </div>
+        </section>
+
+        <section id="call-flow">
+          <h2>Call flow</h2>
+          <p class="section-intro">
+            The easiest way to understand the project is to follow a single command from the app to the final output.
+          </p>
+
+          <figure class="route-board" aria-labelledby="route-title">
+            <p class="route-title" id="route-title">A typical routed <code>gh</code> call</p>
+            <div class="flow" role="img" aria-label="Caller runs gh, wrapper invokes the Rust dispatcher, dispatcher chooses delegation or Forgejo routing, Forgejo output is normalized before it returns to the caller.">
+              <div class="flow-node">
+                <span class="flow-label">caller</span>
+                <strong>Codex, an editor, a script, or a person</strong>
+                <span>Runs a normal command such as <code>gh pr view --json title,url</code>.</span>
+              </div>
+              <div class="connector" aria-hidden="true">-&gt;</div>
+              <div class="flow-node route">
+                <span class="flow-label">managed wrapper</span>
+                <strong><code>~/.local/bin/gh</code></strong>
+                <span>The wrapper runs <code>gh-forgejo-shim gh "$@"</code> with the original arguments.</span>
+              </div>
+              <div class="connector" aria-hidden="true">-&gt;</div>
+              <div class="flow-node route">
+                <span class="flow-label">dispatcher</span>
+                <strong>Route decision</strong>
+                <span>Checks the command, repository, host allowlist, environment, and local Git remotes.</span>
+              </div>
+
+              <div class="flow-split">
+                <div class="flow-node delegate">
+                  <span class="flow-label">delegate path</span>
+                  <strong>Real GitHub CLI</strong>
+                  <span>Unsupported commands, GitHub repositories, and non-allowlisted hosts pass through.</span>
+                </div>
+                <div class="connector" aria-hidden="true">or</div>
+                <div class="flow-node normalize">
+                  <span class="flow-label">forgejo path</span>
+                  <strong>Forgejo API plus local Git</strong>
+                  <span>Supported calls fetch Forgejo data, apply local branch facts, then return GitHub-shaped text or JSON.</span>
+                </div>
+              </div>
+            </div>
+            <figcaption>
+              The app does not need to know about Forgejo. It receives the same kind of answer it expected from <code>gh</code>, or it receives a clear error when the shim cannot honestly support the request.
+            </figcaption>
+          </figure>
+        </section>
+
+        <section id="codex-and-other-apps">
+          <h2>How Codex and other apps make calls</h2>
+          <p class="section-intro">
+            GUI coding tools usually do not link to this Rust crate. They launch external commands in a working directory. That means setup, <code>PATH</code>, auth, and local Git shape matter as much as the Forgejo API code.
+          </p>
+
+          <div class="steps">
+            <article class="step">
+              <div class="step-number">1</div>
+              <div>
+                <h3>The app starts in a repository</h3>
+                <p>Codex or another tool opens a checkout and inspects it with commands like <code>git status --short --branch</code>, <code>git remote get-url origin</code>, and <code>git rev-parse --abbrev-ref --symbolic-full-name @{u}</code>.</p>
+              </div>
+            </article>
+            <article class="step">
+              <div class="step-number">2</div>
+              <div>
+                <h3>The app runs GitHub CLI probes</h3>
+                <p>It may call <code>gh --version</code>, <code>gh auth status</code>, <code>gh api user</code>, <code>gh repo view</code>, <code>gh pr status</code>, <code>gh pr list</code>, or <code>gh issue list</code> to decide which UI and workflow features are available.</p>
+              </div>
+            </article>
+            <article class="step">
+              <div class="step-number">3</div>
+              <div>
+                <h3><code>PATH</code> chooses the wrapper</h3>
+                <p>If the managed <code>gh</code> wrapper appears before the real <code>gh</code>, the call enters this shim. On macOS, GUI apps launched from Finder, Dock, Spotlight, Raycast, or Alfred may need <code>gfj install-gui-path</code> so they inherit the same tool paths your shell sees.</p>
+              </div>
+            </article>
+            <article class="step">
+              <div class="step-number">4</div>
+              <div>
+                <h3>The shim routes or delegates</h3>
+                <p>A Forgejo checkout on an allowlisted host routes selected commands through the Forgejo API. A GitHub checkout, unknown command, or non-allowlisted host delegates to the real GitHub CLI.</p>
+              </div>
+            </article>
+            <article class="step">
+              <div class="step-number">5</div>
+              <div>
+                <h3>The app consumes normal-looking output</h3>
+                <p>For JSON calls, the shim filters and names fields the way GitHub CLI callers expect: <code>nameWithOwner</code>, <code>defaultBranchRef</code>, <code>currentBranch</code>, <code>statusCheckRollup</code>, and related fields.</p>
+              </div>
+            </article>
+          </div>
+
+          <div class="note warning">
+            <p><strong>Raw Git is separate:</strong> the shim normally intercepts <code>gh</code>, not <code>git</code>. If an app's branch UI depends on raw Git calls, fix the checkout's <code>origin</code>, <code>origin/HEAD</code>, and branch upstream shape too.</p>
+          </div>
+        </section>
+
+        <section id="routing-rules">
+          <h2>Routing rules</h2>
+          <p class="section-intro">
+            The dispatcher is conservative. It only routes a call when the command is in the supported surface and the repository host is an allowlisted Forgejo host.
+          </p>
+
+          <div class="matrix" role="region" aria-label="Routing decision table" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th>Condition</th>
+                  <th>Result</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>gh pr view</code> in an allowlisted Forgejo repo</td>
+                  <td><span class="badge forgejo">Forgejo route</span></td>
+                  <td>The command is supported and the repository host is configured as Forgejo.</td>
+                </tr>
+                <tr>
+                  <td><code>gh repo view -R git.example.com/owner/repo</code></td>
+                  <td><span class="badge forgejo">Forgejo route</span></td>
+                  <td><code>-R</code> gives the shim an explicit host, owner, and repository.</td>
+                </tr>
+                <tr>
+                  <td><code>gh auth status --hostname git.example.com</code></td>
+                  <td><span class="badge forgejo">Forgejo route</span></td>
+                  <td>Auth probes can route by explicit hostname or by the current repo.</td>
+                </tr>
+                <tr>
+                  <td><code>gh api user</code> with <code>GH_HOST=git.example.com</code></td>
+                  <td><span class="badge forgejo">Forgejo route</span></td>
+                  <td>The shim supports the user probe because apps use it to verify auth.</td>
+                </tr>
+                <tr>
+                  <td><code>gh release list</code></td>
+                  <td><span class="badge delegate">Delegate</span></td>
+                  <td>Release commands are not part of the supported Forgejo compatibility surface.</td>
+                </tr>
+                <tr>
+                  <td><code>gh pr view</code> in a GitHub repo</td>
+                  <td><span class="badge delegate">Delegate</span></td>
+                  <td>Known GitHub hosts are protected so normal GitHub work stays native.</td>
+                </tr>
+                <tr>
+                  <td>Supported command with unsupported Forgejo-only flag handling</td>
+                  <td><span class="badge local">Explicit error</span></td>
+                  <td>Once routed, unsupported flags fail clearly instead of pretending to work.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Repository detection order</h3>
+          <p>The shim looks for repository identity in this order:</p>
+          <ol>
+            <li><code>-R</code> or <code>--repo</code> on the command line.</li>
+            <li>A repository URL passed as a command argument.</li>
+            <li><code>GH_REPO</code>, optionally combined with <code>GH_HOST</code>.</li>
+            <li><code>GH_HOST</code> plus local Git remote owner and repository data.</li>
+            <li>Local Git remotes, starting with <code>origin</code>.</li>
+          </ol>
+
+          <h3>Supported command families</h3>
+          <div class="command-list" aria-label="Supported command families">
+            <code>gh repo view</code>
+            <code>gh pr view</code>
+            <code>gh pr status</code>
+            <code>gh pr list</code>
+            <code>gh pr checks</code>
+            <code>gh pr create</code>
+            <code>gh pr comment</code>
+            <code>gh pr checkout</code>
+            <code>gh pr diff</code>
+            <code>gh issue list</code>
+            <code>gh issue view</code>
+            <code>gh issue create</code>
+            <code>gh auth status</code>
+            <code>gh auth token</code>
+            <code>gh api user</code>
+          </div>
+        </section>
+
+        <section id="normalization">
+          <h2>How normalization works</h2>
+          <p class="section-intro">
+            Normalization is the translation step. Forgejo returns Forgejo-shaped API objects. GitHub-oriented callers ask for GitHub CLI-shaped fields. The shim maps the useful parts, fills safe defaults where GitHub has concepts Forgejo does not expose the same way, and filters the response to the requested <code>--json</code> fields.
+          </p>
+
+          <div class="matrix" role="region" aria-label="Normalization examples" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th>Forgejo source</th>
+                  <th>GitHub-shaped output</th>
+                  <th>What the caller gets</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>html_url</code> or <code>url</code></td>
+                  <td><code>url</code></td>
+                  <td>A web URL field where apps expect to link a PR, issue, or repository.</td>
+                </tr>
+                <tr>
+                  <td><code>created_at</code>, <code>updated_at</code></td>
+                  <td><code>createdAt</code>, <code>updatedAt</code></td>
+                  <td>GitHub-style camelCase timestamps.</td>
+                </tr>
+                <tr>
+                  <td><code>user.login</code>, <code>user.username</code>, or <code>user.full_name</code></td>
+                  <td><code>author.login</code>, <code>author.name</code></td>
+                  <td>A stable author object for list and view displays.</td>
+                </tr>
+                <tr>
+                  <td>Forgejo commit statuses for a PR head SHA</td>
+                  <td><code>statusCheckRollup</code> and <code>gh pr checks</code></td>
+                  <td>Check names, states, conclusions, descriptions, and links in the buckets apps recognize.</td>
+                </tr>
+                <tr>
+                  <td>Repository owner, name, default branch, topics, features, permissions</td>
+                  <td><code>nameWithOwner</code>, <code>defaultBranchRef</code>, <code>viewerPermission</code>, and related repo fields</td>
+                  <td>Enough repository metadata for GitHub-style project detection.</td>
+                </tr>
+                <tr>
+                  <td>No open PR for the current branch</td>
+                  <td><code>{}</code> for <code>pr view --json</code> or <code>"currentBranch": null</code> for <code>pr status --json</code></td>
+                  <td>A successful empty result instead of a broken app state.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="two-column">
+            <div class="panel">
+              <h3>Text output</h3>
+              <p>Human-readable commands print compact lines or URLs that resemble GitHub CLI output closely enough for everyday terminal use.</p>
+            </div>
+            <div class="panel">
+              <h3>JSON output</h3>
+              <p>When <code>--json</code> is present, the shim returns selected fields, supports <code>--jq</code> and templates where implemented, and avoids dumping raw Forgejo payloads.</p>
+            </div>
+          </div>
+
+          <div class="note">
+            <p><strong>Compatibility detail:</strong> created Forgejo PR URLs include a harmless fragment like <code>#codex-pr=/pull/7</code> so apps that look for GitHub-style <code>/pull/7</code> markers can still surface the new PR link.</p>
+          </div>
+        </section>
+
+        <section id="implementation-map">
+          <h2>Implementation map</h2>
+          <p class="section-intro">
+            These are the main source files behind the behavior. Start with the dispatcher, then read the handlers and normalization layer.
+          </p>
+
+          <div class="source-map" role="region" aria-label="Source file map" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Responsibility</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/shim.rs">shim.rs</a></td>
+                  <td>Builds and removes the managed <code>gh</code> wrapper. Refuses to overwrite unrelated files unless <code>--force</code> is used.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/routing.rs">routing.rs</a></td>
+                  <td>Loads config, checks allowlisted hosts, detects supported commands, chooses Forgejo routing or real-<code>gh</code> delegation, and records route traces.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/repo.rs">repo.rs</a></td>
+                  <td>Parses repository specs from flags, URLs, environment variables, and Git remotes.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/auth.rs">auth.rs</a></td>
+                  <td>Finds Forgejo tokens from environment variables, shim storage, macOS Keychain, and common <code>fj</code>, <code>tea</code>, or <code>gitea</code> config files.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/read_only.rs">read_only.rs</a></td>
+                  <td>Implements the routed <code>gh repo</code>, <code>gh pr</code>, <code>gh issue</code>, <code>gh auth</code>, and <code>gh api user</code> command behavior.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/forgejo.rs">forgejo.rs</a></td>
+                  <td>Talks to Forgejo's <code>/api/v1</code> endpoints for repositories, PRs, issues, labels, comments, users, diffs, files, and statuses.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/normalize.rs">normalize.rs</a></td>
+                  <td>Transforms Forgejo objects into GitHub-shaped repository, PR, issue, and check objects.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/create.rs">create.rs</a></td>
+                  <td>Parses PR creation flags, derives default base/head branches, reads body files, and formats created PR URLs for app compatibility.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/bootstrap.rs">bootstrap.rs</a></td>
+                  <td>Runs first-time setup: detects the repo, allowlists the host, installs the wrapper, checks <code>PATH</code>, checks auth, and prints repair commands.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/doctor.rs">doctor.rs</a></td>
+                  <td>Reports setup health for real <code>gh</code>, <code>fj</code>, allowlisted hosts, auth, wrapper order, current repo, and macOS GUI <code>PATH</code>.</td>
+                </tr>
+                <tr>
+                  <td><a class="file-link" href="../crates/gh-forgejo-shim/src/trace.rs">trace.rs</a></td>
+                  <td>Writes redacted JSONL trace records with argv, cwd, route decision, host, repo, duration, and exit code when tracing is enabled.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="setup-and-safety">
+          <h2>Setup and safety model</h2>
+          <p class="section-intro">
+            The project tries to be recoverable. It owns specific files, marks the wrapper it creates, and keeps normal GitHub CLI behavior available.
+          </p>
+
+          <div class="two-column">
+            <div class="panel">
+              <h3>First setup</h3>
+              <pre><code>gfj bootstrap
+gfj auth login git.example.com
+gfj doctor</code></pre>
+              <p><code>bootstrap</code> detects the current repo, allowlists the host when it is not GitHub, installs the wrapper, and prints repair commands for anything it cannot fix.</p>
+            </div>
+            <div class="panel">
+              <h3>Manual setup</h3>
+              <pre><code>gfj config add-host git.example.com
+gfj install-shim
+gfj doctor</code></pre>
+              <p>Manual setup is useful when you want to control exactly when the host allowlist or wrapper path changes.</p>
+            </div>
+          </div>
+
+          <h3>Auth lookup order</h3>
+          <ol>
+            <li>Current-process environment variables: <code>FJ_SHIM_TOKEN</code>, <code>FORGEJO_TOKEN</code>, <code>GITEA_TOKEN</code>, then <code>FJ_TOKEN</code>.</li>
+            <li>Shim-owned token storage: macOS Keychain when available, otherwise <code>~/.config/gh-forgejo-shim/auth.json</code>.</li>
+            <li>Best-effort imports from common <code>fj</code>, <code>tea</code>, and <code>gitea</code> config files.</li>
+          </ol>
+
+          <h3>Rollback</h3>
+          <pre><code>gfj uninstall-shim
+gfj uninstall-gui-path
+gfj auth logout git.example.com</code></pre>
+          <p>These commands remove shim-owned integration points. They do not uninstall the real GitHub CLI, delete your repository, or remove unrelated files.</p>
+        </section>
+
+        <section id="trace-and-debug">
+          <h2>Trace and debug</h2>
+          <p class="section-intro">
+            When an app says GitHub CLI is unavailable, PR status is missing, or branch state is stale, capture the actual commands before changing compatibility code.
+          </p>
+
+          <pre><code>export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"
+export FJ_SHIM_TRACE_BODY=1
+gfj trace smoke
+gfj trace summarize codex-probe-trace.jsonl</code></pre>
+
+          <p>Trace records include the command, working directory, route decision, host, repository, duration, exit code, output sizes, and redacted excerpts when body tracing is enabled. Sensitive token-like values are redacted, and <code>gh auth token</code> output is not exposed in trace excerpts.</p>
+
+          <div class="note danger">
+            <p><strong>Debugging rule:</strong> use traces to prove the failing command shape. Do not add broad compatibility just because a tool says "GitHub CLI unavailable." The fix should match the observed argv, cwd, route decision, and output expectation.</p>
+          </div>
+
+          <h3>When raw Git calls matter</h3>
+          <p>Some app checks never call <code>gh</code>. For one launch session, the project can create a temporary <code>git</code> recorder wrapper that forwards to real Git and appends records to the same trace file.</p>
+          <pre><code>gfj trace git-recorder create "$PWD/codex-probe-trace.jsonl"
+gfj trace git-recorder remove /path/to/printed/wrapper-dir</code></pre>
+        </section>
+
+        <footer class="footer">
+          <p>
+            This page is intentionally practical: it explains the adapter, the route decision, the Forgejo API layer, and the GitHub-shaped normalization without claiming the shim is a complete GitHub CLI replacement.
+          </p>
+        </footer>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
