@@ -1,0 +1,108 @@
+name: Publish Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "scripts/generate-docs-index.mjs"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PAGES_BRANCH: gh-pages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prepare static site payload
+        env:
+          DOCS_SOURCE_BLOB_BASE: https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          rm -rf site
+          mkdir -p site/docs
+          cp -Rf docs/. site/docs/
+          find site -name .DS_Store -delete
+
+          node scripts/generate-docs-index.mjs docs site/docs
+
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <meta http-equiv="refresh" content="0; url=./docs/">
+              <link rel="canonical" href="https://dirtydishes.github.io/gh-forgejo-shim/docs/">
+              <title>gh-forgejo-shim Docs</title>
+            </head>
+            <body>
+              <a href="./docs/">Continue to gh-forgejo-shim docs</a>
+            </body>
+          </html>
+          HTML
+
+          touch site/.nojekyll
+
+      - name: Prepare Pages branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          rm -rf pages
+
+          if git ls-remote --exit-code --heads origin "${PAGES_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "${PAGES_BRANCH}" "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" pages
+          else
+            git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" pages
+            cd pages
+            git checkout --orphan "${PAGES_BRANCH}"
+            git rm -rf . || true
+            cd ..
+          fi
+
+      - name: Mirror docs into Pages branch
+        run: |
+          set -euo pipefail
+
+          find pages -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -Rf site/. pages/
+          touch pages/.nojekyll
+
+      - name: Commit and push Pages branch
+        run: |
+          set -euo pipefail
+
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No docs changes to publish."
+            exit 0
+          fi
+
+          git commit -m "publish docs from ${GITHUB_SHA}"
+          git push origin "HEAD:${PAGES_BRANCH}"
