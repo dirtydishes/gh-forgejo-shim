@@ -1,7 +1,7 @@
 mod support;
 
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::process::Command;
@@ -26,7 +26,12 @@ fn long_binary_prints_help_under_isolated_environment() -> TestResult {
     assert!(stdout.contains("shim lifecycle"), "{stdout}");
     assert!(stdout.contains("install-shim [--bin-dir DIR] [--force]"));
     assert!(stdout.contains("uninstall-shim [--bin-dir DIR]"));
-    assert!(stdout.contains("bootstrap [--bin-dir DIR] [--force]"));
+    assert!(
+        stdout.contains(
+            "bootstrap [--target current|user-local] [--bin-dir DIR] [--force] [--no-gui-path] [--dry-run]"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("doctor"));
     assert!(
         stdout.contains("config <add-host|remove-host|list>"),
@@ -56,20 +61,34 @@ fn doctor_runs_native_diagnostics() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
 
-    let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
+    let restricted_path = std::env::join_paths([
+        fixture.bin().as_os_str(),
+        OsStr::new("/usr/bin"),
+        OsStr::new("/bin"),
+        OsStr::new("/usr/sbin"),
+        OsStr::new("/sbin"),
+    ])?;
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("PATH", restricted_path)
+        .arg("doctor")
+        .output()?;
 
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("gh-forgejo-shim doctor"), "{stdout}");
-    assert!(stdout.contains("[warn] real gh:"), "{stdout}");
+    assert!(stdout.contains("[fix] current PATH:"), "{stdout}");
+    assert!(stdout.contains("[fix] real gh:"), "{stdout}");
+    assert!(stdout.contains("[fix] managed gh:"), "{stdout}");
+    assert!(stdout.contains("] bd:"), "{stdout}");
     assert!(stdout.contains("] fj:"), "{stdout}");
     assert!(
         stdout.contains("[ok] forgejo hosts: git.example.com"),
         "{stdout}"
     );
-    assert!(stdout.contains("[warn] auth token:"), "{stdout}");
+    assert!(stdout.contains("[fix] auth token:"), "{stdout}");
     assert!(stdout.contains("[ok] current repo host:"), "{stdout}");
-    assert!(stdout.contains("[warn] shim path:"), "{stdout}");
+    assert!(stdout.contains("repair commands:"), "{stdout}");
     Ok(())
 }
 
@@ -82,7 +101,7 @@ fn bootstrap_installs_shim_allowlists_repo_and_prints_repairs() -> TestResult {
     let output = fixture
         .command("gfj")?
         .env("FJ_SHIM_TOKEN", "secret-token")
-        .args(["bootstrap", "--bin-dir"])
+        .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
         .output()?;
 
@@ -115,7 +134,7 @@ fn bootstrap_installs_shim_allowlists_repo_and_prints_repairs() -> TestResult {
         "{stdout}"
     );
     assert!(stdout.contains("[ok] shim:"), "{stdout}");
-    assert!(stdout.contains("[ok] PATH:"), "{stdout}");
+    assert!(stdout.contains("[ok] current PATH:"), "{stdout}");
     assert!(
         stdout.contains("[ok] auth: found Forgejo token"),
         "{stdout}"
@@ -211,7 +230,7 @@ fn bootstrap_installs_shim_and_prints_temp_repo_repairs() -> TestResult {
     let output = fixture
         .command("gfj")?
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
-        .args(["bootstrap", "--bin-dir"])
+        .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
         .output()?;
 
@@ -231,6 +250,137 @@ fn bootstrap_installs_shim_and_prints_temp_repo_repairs() -> TestResult {
     assert!(stdout.contains("[ok] auth"), "{stdout}");
     assert!(stdout.contains("repair commands:"), "{stdout}");
     assert!(!stdout.contains("bootstrap-token"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_default_current_target_uses_visible_user_dir() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let cargo_bin = fixture.home().join(".cargo").join("bin");
+    fs::create_dir_all(&cargo_bin)?;
+    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+
+    let output = fixture
+        .command("gfj")?
+        .env("PATH", restricted_path_with(&cargo_bin)?)
+        .env("FJ_SHIM_REAL_GH", &real_gh)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--no-gui-path"])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(cargo_bin.join("gh").exists());
+    assert!(!fixture
+        .home()
+        .join(".local")
+        .join("bin")
+        .join("gh")
+        .exists());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("[ok] real gh:"), "{stdout}");
+    assert!(stdout.contains("[ok] current PATH:"), "{stdout}");
+    assert!(
+        stdout.contains(cargo_bin.to_string_lossy().as_ref()),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visible_dir() -> TestResult
+{
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let target = fixture.home().join(".local").join("bin").join("gh");
+
+    let output = fixture
+        .command("gfj")?
+        .env("PATH", system_path_only()?)
+        .env("FJ_SHIM_REAL_GH", &real_gh)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--no-gui-path"])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(target.exists());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("[fix] current PATH:"), "{stdout}");
+    assert!(stdout.contains("is not in current PATH"), "{stdout}");
+    assert!(stdout.contains("export PATH="), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_dry_run_writes_nothing_and_prints_planned_actions() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let target = fixture.bin().join("gh");
+    let config_path = fixture
+        .home()
+        .join(".config")
+        .join("gh-forgejo-shim")
+        .join("config.toml");
+
+    let output = fixture
+        .command("gfj")?
+        .env("PATH", restricted_path_with(fixture.bin())?)
+        .env("FJ_SHIM_REAL_GH", &real_gh)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--dry-run", "--no-gui-path", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!target.exists());
+    assert!(!config_path.exists());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("[plan] repository:"), "{stdout}");
+    assert!(stdout.contains("[plan] shim:"), "{stdout}");
+    assert!(
+        stdout.contains("dry run: no files were written"),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn bootstrap_refuses_unmanaged_target_until_forced() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let target = fixture.bin().join("gh");
+    fs::write(&target, "unrelated")?;
+
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", &real_gh)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--no-gui-path", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&target)?, "unrelated");
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("[fix] shim:"), "{stdout}");
+    assert!(
+        stdout.contains("is not managed by gh-forgejo-shim"),
+        "{stdout}"
+    );
+
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", &real_gh)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--force", "--no-gui-path", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(fs::read_to_string(&target)?.contains("# managed by gh-forgejo-shim"));
     Ok(())
 }
 
@@ -598,6 +748,27 @@ fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestRes
 
     assert_eq!(first_path, fixture.bin());
     Ok(())
+}
+
+fn restricted_path_with(first: impl AsRef<OsStr>) -> io::Result<OsString> {
+    std::env::join_paths([
+        first.as_ref(),
+        OsStr::new("/usr/bin"),
+        OsStr::new("/bin"),
+        OsStr::new("/usr/sbin"),
+        OsStr::new("/sbin"),
+    ])
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+}
+
+fn system_path_only() -> io::Result<OsString> {
+    std::env::join_paths([
+        OsStr::new("/usr/bin"),
+        OsStr::new("/bin"),
+        OsStr::new("/usr/sbin"),
+        OsStr::new("/sbin"),
+    ])
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 #[test]

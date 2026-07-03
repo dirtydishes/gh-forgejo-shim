@@ -23,8 +23,7 @@ This is not full `gh` emulation. It is compatibility glue for the `gh` calls and
 Install the native Rust binary with Homebrew:
 
 ```sh
-brew tap dirtydishes/gh-forgejo-shim
-brew install gh-forgejo-shim
+brew install dirtydishes/tap/gh-forgejo-shim
 gfj --version
 ```
 
@@ -46,8 +45,9 @@ gfj bootstrap
 
 - Detects the current Forgejo repository from Git remotes.
 - Adds the repository host to the shim allowlist.
-- Installs the user-local `gh` wrapper.
-- Checks whether `PATH` resolves `gh` to the shim.
+- Installs the managed `gh` wrapper into the first safe writable directory already visible to the current process, falling back to `~/.local/bin` when needed.
+- Checks the current process `PATH`, the real GitHub CLI path, and whether managed `gh` is first.
+- On macOS, updates the launchd GUI PATH for newly opened GUI apps unless `--no-gui-path` is passed.
 - Checks whether Forgejo auth can be found from shim storage, env, or supported CLI config files.
 - Checks `origin`, `origin/HEAD`, and current-branch upstream tracking.
 - Prints repair commands for anything it cannot fix automatically.
@@ -64,6 +64,16 @@ If the wrapper path already contains an unrelated `gh`, bootstrap refuses to ove
 gfj bootstrap --force
 ```
 
+To force the older user-local target, preview actions, or skip macOS GUI PATH repair:
+
+```sh
+gfj bootstrap --target user-local
+gfj bootstrap --dry-run
+gfj bootstrap --no-gui-path
+```
+
+When bootstrap changes the macOS GUI PATH, restart already-running GUI apps before expecting them to inherit it.
+
 ## Quickstart For GUI Coding Tools
 
 1. Install the native package with Homebrew or a GitHub release tarball.
@@ -71,7 +81,7 @@ gfj bootstrap --force
 3. Run `gfj bootstrap`.
 4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
 5. Copy and run any repair commands `bootstrap` prints.
-6. On macOS, run `gfj install-gui-path` if your coding tool is launched from Finder, Dock, Spotlight, Raycast, Alfred, or another GUI launcher.
+6. On macOS, restart the GUI tool if `bootstrap` reports that it changed the GUI PATH.
 7. Confirm the setup:
 
 ```sh
@@ -534,11 +544,14 @@ gfj doctor
 
 `doctor` checks:
 
-- Whether the real `gh` can be found.
-- Whether `fj` can be found.
+- Whether the current process `PATH` can resolve bare `gh`.
+- Whether the real GitHub CLI can be found from config, env, current `PATH`, or common install dirs.
+- Whether managed `gh` is installed first and can delegate to real `gh`.
+- Whether duplicate managed wrappers are present.
+- Whether `bd` can be found for repo workflows. This is diagnostic only; `bd` is not part of the GitHub CLI shim.
+- Whether `fj` can be found for legacy auth-import diagnostics. Missing `fj` is not a GitHub CLI readiness failure.
 - Whether at least one Forgejo host is allowlisted.
 - Whether an auth token can be discovered.
-- Whether the managed wrapper exists and is the first `gh` in `PATH`.
 - On macOS, whether the user launchd PATH can expose the shim to new GUI apps.
 
 ## Rollback

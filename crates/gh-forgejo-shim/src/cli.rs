@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, EnvMap};
 use crate::routing;
 use crate::{
-    auth, bootstrap, codex_smoke, doctor, git_recorder, gui_path, shim, trace_summary, Result,
-    ShimError, VERSION,
+    auth, bootstrap, codex_smoke, doctor, git_recorder, gui_path, setup, shim, trace_summary,
+    Result, ShimError, VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +137,7 @@ trait Runtime {
     fn prompt_token(&mut self, prompt: &str) -> Result<String>;
     fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>>;
     fn apply_gui_path(&mut self, path_value: &str) -> (bool, Option<String>);
+    fn current_launchd_path(&self) -> Option<String>;
 }
 
 struct SystemRuntime {
@@ -205,6 +206,10 @@ impl Runtime for SystemRuntime {
     fn apply_gui_path(&mut self, path_value: &str) -> (bool, Option<String>) {
         gui_path::apply_gui_path(path_value)
     }
+
+    fn current_launchd_path(&self) -> Option<String> {
+        gui_path::current_launchd_path()
+    }
 }
 
 fn current_platform() -> &'static str {
@@ -242,7 +247,10 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
         "    {name} install-gui-path [--path PATH] [--no-apply]"
     )?;
     writeln!(stdout, "    {name} uninstall-gui-path")?;
-    writeln!(stdout, "    {name} bootstrap [--bin-dir DIR] [--force]")?;
+    writeln!(
+        stdout,
+        "    {name} bootstrap [--target current|user-local] [--bin-dir DIR] [--force] [--no-gui-path] [--dry-run]"
+    )?;
     writeln!(stdout, "    {name} doctor")?;
     writeln!(stdout, "    {name} trace <summarize|smoke|git-recorder>")?;
     writeln!(stdout, "    {name} config <add-host|remove-host|list>")?;
@@ -572,16 +580,19 @@ fn run_doctor(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) ->
         platform: runtime.platform().to_string(),
     })?;
     writeln!(stdout, "{}", doctor::format_checks(&checks))?;
-    Ok(if checks.iter().all(|check| check.ok) {
-        0
-    } else {
-        1
-    })
+    Ok(if doctor::has_failures(&checks) { 1 } else { 0 })
 }
 
-fn run_bootstrap(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) -> Result<i32> {
+fn run_bootstrap(
+    args: &[String],
+    stdout: &mut dyn Write,
+    runtime: &mut dyn Runtime,
+) -> Result<i32> {
     let mut bin_dir_arg = None;
     let mut force = false;
+    let mut target = setup::TargetMode::Current;
+    let mut no_gui_path = false;
+    let mut dry_run = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -589,10 +600,31 @@ fn run_bootstrap(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime)
                 force = true;
                 index += 1;
             }
+            "--dry-run" => {
+                dry_run = true;
+                index += 1;
+            }
+            "--no-gui-path" => {
+                no_gui_path = true;
+                index += 1;
+            }
+            "--target" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(ShimError::new(
+                        "usage: gh-forgejo-shim bootstrap [--target current|user-local] [--bin-dir DIR] [--force] [--no-gui-path] [--dry-run]",
+                    ));
+                };
+                target = parse_bootstrap_target(value)?;
+                index += 2;
+            }
+            value if value.starts_with("--target=") => {
+                target = parse_bootstrap_target(value.trim_start_matches("--target="))?;
+                index += 1;
+            }
             "--bin-dir" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err(ShimError::new(
-                        "usage: gh-forgejo-shim bootstrap [--bin-dir DIR] [--force]",
+                        "usage: gh-forgejo-shim bootstrap [--target current|user-local] [--bin-dir DIR] [--force] [--no-gui-path] [--dry-run]",
                     ));
                 };
                 bin_dir_arg = Some(value.as_str());
@@ -604,14 +636,14 @@ fn run_bootstrap(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime)
             }
             _ => {
                 return Err(ShimError::new(
-                    "usage: gh-forgejo-shim bootstrap [--bin-dir DIR] [--force]",
+                    "usage: gh-forgejo-shim bootstrap [--target current|user-local] [--bin-dir DIR] [--force] [--no-gui-path] [--dry-run]",
                 ));
             }
         }
     }
 
     let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
-    let result = bootstrap::run_bootstrap(bootstrap::BootstrapOptions {
+    let mut result = bootstrap::run_bootstrap(bootstrap::BootstrapOptions {
         cwd: std::env::current_dir().ok(),
         env: runtime.env().clone(),
         bin_dir,
@@ -619,9 +651,33 @@ fn run_bootstrap(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime)
         force,
         home: runtime.home().map(Path::to_path_buf),
         executable: shim_command_executable(runtime.current_exe()),
+        target,
+        dry_run,
+        no_gui_path,
+        launchd_path: (runtime.platform() == "darwin")
+            .then(|| runtime.current_launchd_path())
+            .flatten(),
+        platform: runtime.platform().to_string(),
+        fallback_dirs: None,
     })?;
+
+    if let Some(path_value) = result.gui_path_to_apply().map(ToOwned::to_owned) {
+        let (applied, apply_error) = runtime.apply_gui_path(&path_value);
+        result.record_gui_path_apply(applied, apply_error);
+    }
+
     writeln!(stdout, "{}", bootstrap::format_bootstrap(&result))?;
     Ok(if result.ok() { 0 } else { 1 })
+}
+
+fn parse_bootstrap_target(value: &str) -> Result<setup::TargetMode> {
+    match value {
+        "current" => Ok(setup::TargetMode::Current),
+        "user-local" => Ok(setup::TargetMode::UserLocal),
+        _ => Err(ShimError::new(
+            "usage: gh-forgejo-shim bootstrap [--target current|user-local] [--bin-dir DIR] [--force] [--no-gui-path] [--dry-run]",
+        )),
+    }
 }
 
 fn shim_command_executable(current_exe: &Path) -> PathBuf {
@@ -1136,6 +1192,10 @@ mod tests {
         fn apply_gui_path(&mut self, path_value: &str) -> (bool, Option<String>) {
             self.gui_path_applied_values.push(path_value.to_string());
             self.gui_path_apply_result.clone()
+        }
+
+        fn current_launchd_path(&self) -> Option<String> {
+            None
         }
     }
 

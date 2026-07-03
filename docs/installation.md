@@ -8,15 +8,14 @@ not part of the supported product runtime.
 On macOS and Linux, the intended native installer is Homebrew:
 
 ```sh
-brew tap dirtydishes/gh-forgejo-shim
-brew install gh-forgejo-shim
+brew install dirtydishes/tap/gh-forgejo-shim
 gfj --version
-gfj doctor
+gfj bootstrap
 ```
 
-`gfj doctor` may print setup warnings on a clean machine before you have
-installed the managed `gh` wrapper, allowlisted a Forgejo host, or imported
-auth. That still verifies the native binary starts without Python.
+Run `gfj bootstrap` from inside the Forgejo checkout you want GUI tools to use.
+It installs the managed `gh` wrapper, repairs macOS GUI PATH for newly opened
+apps, and prints any remaining setup commands.
 
 ## GitHub Release Tarballs
 
@@ -43,7 +42,7 @@ docs/
 Manual install example:
 
 ```sh
-version=0.1.1
+version=0.1.2
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64) target=aarch64-apple-darwin ;;
   Darwin:x86_64) target=x86_64-apple-darwin ;;
@@ -59,7 +58,7 @@ shasum -a 256 -c "gh-forgejo-shim-${version}-${target}.tar.gz.sha256"
 mkdir -p ~/.local/bin
 tar -xzf "gh-forgejo-shim-${version}-${target}.tar.gz" -C ~/.local/bin gh-forgejo-shim gfj
 gfj --version
-gfj doctor
+gfj bootstrap
 ```
 
 On Linux systems without `shasum`, use `sha256sum -c` instead.
@@ -75,7 +74,22 @@ gfj doctor
 
 `bootstrap` installs the managed `gh` wrapper, allowlists the current Forgejo
 host when one is detected, and prints repair commands for PATH, auth, or remote
-shape problems it cannot fix automatically.
+shape problems it cannot fix automatically. By default it targets the first safe
+writable directory that is already visible in the current process `PATH`; if no
+safe visible directory exists, it falls back to `~/.local/bin`.
+
+Useful setup variants:
+
+```sh
+gfj bootstrap --target user-local
+gfj bootstrap --dry-run
+gfj bootstrap --no-gui-path
+gfj doctor
+```
+
+On macOS, restart already-running GUI apps after `bootstrap` reports that it
+changed the GUI PATH. Existing processes cannot inherit a new launchd
+environment in place.
 
 ## Rollback
 

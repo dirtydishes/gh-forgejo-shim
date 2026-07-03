@@ -1,14 +1,23 @@
 //! First-run setup checks for a Forgejo checkout.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, EnvMap};
 use crate::external;
+use crate::gui_path;
 use crate::repo::{self, RepoRef};
+use crate::setup::{self, SetupInspectOptions, TargetMode};
 use crate::shim;
 use crate::Result;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapCheckStatus {
+    Ok,
+    Warn,
+    Fix,
+    Plan,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapCheck {
@@ -16,6 +25,15 @@ pub struct BootstrapCheck {
     pub ok: bool,
     pub detail: String,
     pub repair_commands: Vec<String>,
+    pub status: BootstrapCheckStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapGuiPathApply {
+    pub path_value: String,
+    pub plist_path: PathBuf,
+    pub applied: Option<bool>,
+    pub apply_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +42,8 @@ pub struct BootstrapResult {
     pub config_path: PathBuf,
     pub shim: Option<PathBuf>,
     pub checks: Vec<BootstrapCheck>,
+    pub dry_run: bool,
+    pub gui_path_apply: Option<BootstrapGuiPathApply>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,11 +55,59 @@ pub struct BootstrapOptions {
     pub force: bool,
     pub home: Option<PathBuf>,
     pub executable: PathBuf,
+    pub target: TargetMode,
+    pub dry_run: bool,
+    pub no_gui_path: bool,
+    pub launchd_path: Option<String>,
+    pub platform: String,
+    pub fallback_dirs: Option<Vec<PathBuf>>,
 }
 
 impl BootstrapResult {
     pub fn ok(&self) -> bool {
-        self.checks.iter().all(|check| check.ok)
+        self.checks
+            .iter()
+            .all(|check| check.status != BootstrapCheckStatus::Fix)
+    }
+
+    pub fn gui_path_to_apply(&self) -> Option<&str> {
+        self.gui_path_apply.as_ref().and_then(|action| {
+            action
+                .applied
+                .is_none()
+                .then_some(action.path_value.as_str())
+        })
+    }
+
+    pub fn record_gui_path_apply(&mut self, applied: bool, apply_error: Option<String>) {
+        let Some(action) = self.gui_path_apply.as_mut() else {
+            return;
+        };
+        action.applied = Some(applied);
+        action.apply_error = apply_error.clone();
+        let Some(check) = self
+            .checks
+            .iter_mut()
+            .find(|check| check.name == "macOS GUI PATH")
+        else {
+            return;
+        };
+        if applied {
+            check.status = BootstrapCheckStatus::Ok;
+            check.ok = true;
+            check.detail = format!(
+                "updated launchd PATH via {}; restart existing GUI apps to inherit it",
+                action.plist_path.display()
+            );
+        } else {
+            check.status = BootstrapCheckStatus::Warn;
+            check.ok = true;
+            check.detail = format!(
+                "wrote {} but could not apply launchd PATH immediately: {}; restart existing GUI apps after the next login",
+                action.plist_path.display(),
+                apply_error.as_deref().unwrap_or("unknown error")
+            );
+        }
     }
 }
 
@@ -53,22 +121,34 @@ impl BootstrapOptions {
             force: false,
             home: None,
             executable,
+            target: TargetMode::Current,
+            dry_run: false,
+            no_gui_path: false,
+            launchd_path: None,
+            platform: std::env::consts::OS.to_string(),
+            fallback_dirs: None,
         }
     }
 }
 
 pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
-    let target_bin_dir = match options.bin_dir.clone() {
-        Some(bin_dir) => bin_dir,
-        None => shim::default_bin_dir(options.home.as_deref())?,
-    };
-    let target_shim = shim::shim_path(Some(&target_bin_dir), options.home.as_deref())?;
     let repo = repo::detect_from_git(options.cwd.as_deref());
     let config_path = options
         .config_path
         .clone()
         .unwrap_or_else(|| config::config_path(options.home.as_deref()));
     let mut config = config::load_config_with_env(Some(&config_path), &options.env)?;
+    let setup_model = setup::inspect(SetupInspectOptions {
+        env: options.env.clone(),
+        home: options.home.clone(),
+        config: Some(config.clone()),
+        bin_dir: options.bin_dir.clone(),
+        target: options.target,
+        fallback_dirs: options.fallback_dirs.clone(),
+        launchd_path: options.launchd_path.clone(),
+    })?;
+    let target_bin_dir = setup_model.target_bin_dir.clone();
+    let target_shim = setup_model.target_shim_path.clone();
     let repo_is_github = repo
         .as_ref()
         .is_some_and(|repo| config::is_known_github_host(Some(&repo.host)));
@@ -84,6 +164,14 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                     repo.host, repo.owner, repo.name, repo.host
                 ),
                 Vec::<String>::new(),
+            ));
+        } else if options.dry_run {
+            checks.push(BootstrapCheck::plan(
+                "repository",
+                format!(
+                    "would allowlist {} for {}/{}",
+                    repo.host, repo.owner, repo.name
+                ),
             ));
         } else {
             config = config::add_host(&repo.host, Some(&config_path))?;
@@ -111,36 +199,63 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         ));
     }
 
-    let installed = match shim::install_shim(
-        Some(&target_bin_dir),
-        options.home.as_deref(),
-        &options.executable,
-        options.force,
-    ) {
-        Ok(path) => {
-            checks.push(BootstrapCheck::new(
-                "shim",
-                true,
-                format!("installed {}", path.display()),
-                Vec::<String>::new(),
-            ));
-            Some(path)
-        }
-        Err(error) => {
-            checks.push(BootstrapCheck::new(
-                "shim",
-                false,
-                error.to_string(),
-                [format!(
-                    "gh-forgejo-shim install-shim --bin-dir {} --force",
-                    shell_quote(&target_bin_dir.display().to_string())
-                )],
-            ));
-            None
+    checks.push(real_gh_check(&setup_model, &options.platform));
+
+    let installed = if options.dry_run {
+        dry_run_shim_check(&target_bin_dir, &target_shim, options.force, &mut checks);
+        None
+    } else {
+        match shim::install_shim(
+            Some(&target_bin_dir),
+            options.home.as_deref(),
+            &options.executable,
+            options.force,
+        ) {
+            Ok(path) => {
+                checks.push(BootstrapCheck::new(
+                    "shim",
+                    true,
+                    format!("installed {}", path.display()),
+                    Vec::<String>::new(),
+                ));
+                Some(path)
+            }
+            Err(error) => {
+                checks.push(BootstrapCheck::new(
+                    "shim",
+                    false,
+                    error.to_string(),
+                    [format!(
+                        "gh-forgejo-shim install-shim --bin-dir {} --force",
+                        setup::shell_quote(&target_bin_dir.display().to_string())
+                    )],
+                ));
+                None
+            }
         }
     };
 
-    checks.push(path_check(&target_bin_dir, &target_shim, &options.env));
+    let post_install_model = if options.dry_run {
+        setup_model.clone()
+    } else {
+        setup::inspect(SetupInspectOptions {
+            env: options.env.clone(),
+            home: options.home.clone(),
+            config: Some(config.clone()),
+            bin_dir: Some(target_bin_dir.clone()),
+            target: TargetMode::Current,
+            fallback_dirs: options.fallback_dirs.clone(),
+            launchd_path: options.launchd_path.clone(),
+        })?
+    };
+    checks.push(if options.dry_run {
+        planned_path_check(&setup_model)
+    } else {
+        path_check(&post_install_model)
+    });
+
+    let gui_path_apply = gui_path_action(&setup_model, &options, &mut checks)?;
+
     if repo_is_github {
         checks.push(BootstrapCheck::new(
             "auth",
@@ -162,6 +277,8 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         config_path: config.path,
         shim: installed,
         checks,
+        dry_run: options.dry_run,
+        gui_path_apply,
     })
 }
 
@@ -176,16 +293,28 @@ pub fn format_bootstrap(result: &BootstrapResult) -> String {
 
     let mut repair_commands = Vec::new();
     for check in &result.checks {
-        let mark = if check.ok { "ok" } else { "fix" };
+        let mark = match check.status {
+            BootstrapCheckStatus::Ok => "ok",
+            BootstrapCheckStatus::Warn => "warn",
+            BootstrapCheckStatus::Fix => "fix",
+            BootstrapCheckStatus::Plan => "plan",
+        };
         lines.push(format!("[{mark}] {}: {}", check.name, check.detail));
         repair_commands.extend(check.repair_commands.iter().cloned());
     }
 
     if repair_commands.is_empty() {
         lines.push(String::new());
-        lines.push("setup looks ready".to_string());
+        if result.dry_run {
+            lines.push("dry run: no files were written".to_string());
+        } else {
+            lines.push("setup looks ready".to_string());
+        }
     } else {
         lines.push(String::new());
+        if result.dry_run {
+            lines.push("dry run: no files were written".to_string());
+        }
         lines.push("repair commands:".to_string());
         for command in dedupe(repair_commands) {
             lines.push(format!("  {command}"));
@@ -210,44 +339,236 @@ impl BootstrapCheck {
             ok,
             detail: detail.into(),
             repair_commands: repair_commands.into_iter().map(Into::into).collect(),
+            status: if ok {
+                BootstrapCheckStatus::Ok
+            } else {
+                BootstrapCheckStatus::Fix
+            },
+        }
+    }
+
+    fn warn(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ok: true,
+            detail: detail.into(),
+            repair_commands: Vec::new(),
+            status: BootstrapCheckStatus::Warn,
+        }
+    }
+
+    fn plan(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ok: true,
+            detail: detail.into(),
+            repair_commands: Vec::new(),
+            status: BootstrapCheckStatus::Plan,
         }
     }
 }
 
-fn path_check(bin_dir: &Path, target_shim: &Path, env: &EnvMap) -> BootstrapCheck {
-    let first_gh = first_program("gh", env.get("PATH").map_or("", String::as_str));
-    if first_gh.as_deref().is_some_and(|path| {
-        target_shim.exists() && same_file(path, target_shim) && shim::is_managed_shim(target_shim)
-    }) {
+fn real_gh_check(model: &setup::SetupModel, platform: &str) -> BootstrapCheck {
+    if let Some(real_gh) = model.real_gh.as_ref() {
         return BootstrapCheck::new(
-            "PATH",
+            "real gh",
             true,
-            format!("{} is the first gh in PATH", target_shim.display()),
+            format!("found {} via {}", real_gh.path.display(), real_gh.source),
+            Vec::<String>::new(),
+        );
+    }
+    BootstrapCheck::new(
+        "real gh",
+        false,
+        "could not find the real GitHub CLI from config, env, current PATH, or common install dirs",
+        real_gh_repair_commands(platform),
+    )
+}
+
+fn dry_run_shim_check(
+    target_bin_dir: &Path,
+    target_shim: &Path,
+    force: bool,
+    checks: &mut Vec<BootstrapCheck>,
+) {
+    if target_shim.exists() && !shim::is_managed_shim(target_shim) && !force {
+        checks.push(BootstrapCheck::new(
+            "shim",
+            false,
+            format!(
+                "{} exists and is not managed by gh-forgejo-shim; pass --force to overwrite",
+                target_shim.display()
+            ),
+            [format!(
+                "gh-forgejo-shim bootstrap --bin-dir {} --force",
+                setup::shell_quote(&target_bin_dir.display().to_string())
+            )],
+        ));
+        return;
+    }
+    checks.push(BootstrapCheck::plan(
+        "shim",
+        format!("would install managed gh shim at {}", target_shim.display()),
+    ));
+}
+
+fn planned_path_check(model: &setup::SetupModel) -> BootstrapCheck {
+    if model.target_shim_first_in_current_path {
+        return BootstrapCheck::new(
+            "current PATH",
+            true,
+            format!(
+                "{} is already the first gh in current PATH",
+                model.target_shim_path.display()
+            ),
+            Vec::<String>::new(),
+        );
+    }
+    if !model.target_bin_dir_in_current_path {
+        return BootstrapCheck::new(
+            "current PATH",
+            false,
+            format!("{} is not in current PATH", model.target_bin_dir.display()),
+            path_repair_commands(&model.target_bin_dir),
+        );
+    }
+    if let Some(first_gh) = model.first_current_gh.as_ref() {
+        if !target_dir_precedes_path(model, first_gh) {
+            return BootstrapCheck::new(
+                "current PATH",
+                false,
+                format!(
+                    "gh currently resolves to {} before planned shim {}",
+                    first_gh.display(),
+                    model.target_shim_path.display()
+                ),
+                path_repair_commands(&model.target_bin_dir),
+            );
+        }
+    }
+    BootstrapCheck::plan(
+        "current PATH",
+        format!(
+            "would make {} the first gh in current PATH",
+            model.target_shim_path.display()
+        ),
+    )
+}
+
+fn path_check(model: &setup::SetupModel) -> BootstrapCheck {
+    if model.target_shim_first_in_current_path {
+        return BootstrapCheck::new(
+            "current PATH",
+            true,
+            format!(
+                "{} is the first gh in current PATH",
+                model.target_shim_path.display()
+            ),
             Vec::<String>::new(),
         );
     }
 
-    let export = format!("export PATH=\"{}:$PATH\"", bin_dir.display());
-    let detail = if let Some(first_gh) = first_gh {
+    if model.first_current_gh_is_managed {
+        let first_gh = model.first_current_gh.as_ref().expect("managed gh path");
+        return BootstrapCheck::warn(
+            "current PATH",
+            format!(
+                "managed gh at {} is first before target {}; this works, but duplicate wrappers should be cleaned up later",
+                first_gh.display(),
+                model.target_shim_path.display()
+            ),
+        );
+    }
+
+    let detail = if model.codex_restricted_path {
+        let real_gh = model
+            .real_gh
+            .as_ref()
+            .map(|tool| tool.path.display().to_string())
+            .unwrap_or_else(|| "a common install dir".to_string());
+        format!(
+            "Codex-style restricted PATH cannot resolve bare gh, but real gh exists at {real_gh}"
+        )
+    } else if let Some(first_gh) = model.first_current_gh.as_ref() {
         format!(
             "gh currently resolves to {} before {}",
             first_gh.display(),
-            target_shim.display()
+            model.target_shim_path.display()
         )
-    } else if !path_contains_dir(env.get("PATH").map_or("", String::as_str), bin_dir) {
-        format!("{} is not in PATH", bin_dir.display())
+    } else if !model.target_bin_dir_in_current_path {
+        format!("{} is not in current PATH", model.target_bin_dir.display())
     } else {
         format!(
             "{} exists but gh was not found in PATH",
-            target_shim.display()
+            model.target_shim_path.display()
         )
     };
     BootstrapCheck::new(
-        "PATH",
+        "current PATH",
         false,
         detail,
-        [export, "gh-forgejo-shim doctor".to_string()],
+        path_repair_commands(&model.target_bin_dir),
     )
+}
+
+fn gui_path_action(
+    model: &setup::SetupModel,
+    options: &BootstrapOptions,
+    checks: &mut Vec<BootstrapCheck>,
+) -> Result<Option<BootstrapGuiPathApply>> {
+    if options.platform != "darwin" {
+        return Ok(None);
+    }
+    if options.no_gui_path {
+        checks.push(BootstrapCheck::warn(
+            "macOS GUI PATH",
+            "skipped by --no-gui-path",
+        ));
+        return Ok(None);
+    }
+    if model.launchd_contains_required_dirs {
+        checks.push(BootstrapCheck::new(
+            "macOS GUI PATH",
+            true,
+            "launchd PATH already exposes the shim and common package-manager dirs",
+            Vec::<String>::new(),
+        ));
+        return Ok(None);
+    }
+    if options.dry_run {
+        checks.push(BootstrapCheck::plan(
+            "macOS GUI PATH",
+            format!(
+                "would set launchd PATH to {}; restart existing GUI apps after applying it",
+                model.desired_launchd_path
+            ),
+        ));
+        return Ok(None);
+    }
+
+    let result = gui_path::install_gui_path(
+        Some(&model.desired_launchd_path),
+        None,
+        options.home.as_deref(),
+        &options.env,
+        false,
+        None,
+    )?;
+    checks.push(BootstrapCheck::new(
+        "macOS GUI PATH",
+        true,
+        format!(
+            "wrote {}; applying launchd PATH next; restart existing GUI apps to inherit it",
+            result.plist_path.display()
+        ),
+        Vec::<String>::new(),
+    ));
+    Ok(Some(BootstrapGuiPathApply {
+        path_value: result.path_value,
+        plist_path: result.plist_path,
+        applied: None,
+        apply_error: None,
+    }))
 }
 
 fn auth_check(repo: Option<&RepoRef>, env: &EnvMap, home: Option<&Path>) -> BootstrapCheck {
@@ -366,7 +687,7 @@ fn origin_repair_commands(repo: Option<&RepoRef>) -> [String; 3] {
     if let Some(repo) = repo {
         let url = format!("https://{}/{}/{}.git", repo.host, repo.owner, repo.name);
         return [
-            format!("git remote add origin {}", shell_quote(&url)),
+            format!("git remote add origin {}", setup::shell_quote(&url)),
             "git fetch origin".to_string(),
             "git remote set-head origin -a".to_string(),
         ];
@@ -378,60 +699,43 @@ fn origin_repair_commands(repo: Option<&RepoRef>) -> [String; 3] {
     ]
 }
 
-fn first_program(name: &str, path_value: &str) -> Option<PathBuf> {
-    for directory in std::env::split_paths(path_value) {
-        if directory.as_os_str().is_empty() {
-            continue;
-        }
-        let candidate = directory.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
+fn path_repair_commands(target_bin_dir: &Path) -> Vec<String> {
+    vec![
+        format!("export PATH=\"{}:$PATH\"", target_bin_dir.display()),
+        format!(
+            "gh-forgejo-shim bootstrap --bin-dir {}",
+            setup::shell_quote(&target_bin_dir.display().to_string())
+        ),
+        "gh-forgejo-shim doctor".to_string(),
+    ]
+}
+
+fn real_gh_repair_commands(platform: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    if platform == "darwin" {
+        commands.push("brew install gh".to_string());
     }
-    None
+    commands.push("FJ_SHIM_REAL_GH=/path/to/gh gh-forgejo-shim doctor".to_string());
+    commands
 }
 
-fn path_contains_dir(path_value: &str, bin_dir: &Path) -> bool {
-    std::env::split_paths(path_value).any(|path| path == bin_dir)
-}
-
-fn same_file(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
+fn target_dir_precedes_path(model: &setup::SetupModel, path: &Path) -> bool {
+    let Some(candidate_dir) = path.parent() else {
         return false;
     };
-    metadata.is_file() && is_executable(&metadata.permissions())
+    let target_index = path_dir_index(model, &model.target_bin_dir);
+    let candidate_index = path_dir_index(model, candidate_dir);
+    matches!((target_index, candidate_index), (Some(target), Some(candidate)) if target <= candidate)
 }
 
-#[cfg(unix)]
-fn is_executable(permissions: &fs::Permissions) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    permissions.mode() & 0o111 != 0
-}
-
-#[cfg(not(unix))]
-fn is_executable(_permissions: &fs::Permissions) -> bool {
-    true
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || "@%_+=:,./-".contains(character))
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
+fn path_dir_index(model: &setup::SetupModel, directory: &Path) -> Option<usize> {
+    model
+        .current_path_dirs
+        .iter()
+        .enumerate()
+        .find_map(|(index, path_dir)| {
+            (setup::same_file(path_dir, directory) || path_dir == directory).then_some(index)
+        })
 }
 
 fn dedupe(values: Vec<String>) -> Vec<String> {
