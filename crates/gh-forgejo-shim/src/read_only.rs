@@ -15,8 +15,8 @@ use crate::forgejo::{
 };
 use crate::normalize::{
     filter_check_fields, filter_fields, filter_issue_fields, filter_repo_fields, normalize_issue,
-    normalize_pr_checks, normalize_pull, normalize_repo, render_json_or_jq, render_json_or_jq_list,
-    status_for_current_branch, with_status_check_rollup,
+    normalize_pr_checks_for_repo, normalize_pull, normalize_repo, render_json_or_jq,
+    render_json_or_jq_list, status_for_current_branch, with_status_check_rollup_for_repo,
 };
 use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
 use crate::routing::RouteDecision;
@@ -867,7 +867,7 @@ fn run_checks(
         .map(|pull| pull_statuses(&target_repo, client, pull))
         .transpose()?
         .unwrap_or_default();
-    let checks = normalize_pr_checks(&statuses)
+    let checks = normalize_pr_checks_for_repo(&statuses, &target_repo)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -2186,7 +2186,7 @@ fn enrich_pull_statuses(
         return Ok(pull.clone());
     }
     let statuses = pull_statuses(repo, client, pull)?;
-    Ok(with_status_check_rollup(pull, &statuses))
+    Ok(with_status_check_rollup_for_repo(pull, &statuses, repo))
 }
 
 fn pull_statuses(
@@ -3119,6 +3119,54 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value[0]["statusCheckRollup"][0]["state"].as_str()),
             Some("SUCCESS")
+        );
+    }
+
+    #[test]
+    fn pr_status_outputs_absolute_status_rollup_urls() {
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 8,
+                "title": "Make Codex happy",
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/pulls/8",
+                "head": {"ref": "feature", "sha": "abc123"},
+                "base": {"ref": "main"},
+                "user": {"login": "alice"},
+            })],
+            statuses: vec![json!({
+                "context": "ci/test",
+                "description": "tests passed",
+                "state": "success",
+                "target_url": "/owner/repo/actions/runs/1",
+                "created_at": "2026-06-01T00:00:00Z",
+                "updated_at": "2026-06-01T00:02:00Z"
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr",
+                "status",
+                "feature",
+                "--json",
+                "number,title,url,headRefName,statusCheckRollup",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        let value = serde_json::from_str::<Value>(&stdout).expect("status json");
+        assert_eq!(
+            value["currentBranch"]["statusCheckRollup"][0]["targetUrl"],
+            "https://git.example.com/owner/repo/actions/runs/1"
+        );
+        assert_eq!(
+            value["currentBranch"]["statusCheckRollup"][0]["detailsUrl"],
+            "https://git.example.com/owner/repo/actions/runs/1"
         );
     }
 
