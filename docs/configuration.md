@@ -61,7 +61,8 @@ FJ_SHIM_REAL_GH=/opt/homebrew/bin/gh
 FJ_SHIM_REAL_FJ=/opt/homebrew/bin/fj
 ```
 
-When no explicit path is configured, the shim searches the inherited `PATH` first and then checks common user and package-manager directories such as:
+When no explicit real-`gh` path is configured, the shim searches the inherited
+`PATH` first and then checks common user and package-manager directories such as:
 
 ```text
 ~/.local/bin
@@ -70,7 +71,10 @@ When no explicit path is configured, the shim searches the inherited `PATH` firs
 /opt/local/bin
 ```
 
-This helps GUI-launched tools that inherit a minimal macOS PATH but still execute the shim successfully.
+This lets a managed wrapper in one directory delegate to a real GitHub CLI that
+lives somewhere else, such as Homebrew. `gfj doctor` reports `bd` separately
+because this repository's workflows may need Beads, but `bd` is not installed,
+wrapped, or used for GitHub CLI routing.
 
 ## macOS GUI PATH
 
@@ -82,7 +86,8 @@ Some GUI apps, including Codex.app when launched from Finder, Dock, or Spotlight
 
 That PATH may miss both the generated shim at `~/.local/bin/gh` and the real Homebrew GitHub CLI at `/opt/homebrew/bin/gh`.
 
-Persist a GUI-friendly user launchd PATH with:
+`gfj bootstrap` repairs this by default on macOS. To run only the GUI PATH
+repair, use:
 
 ```sh
 gh-forgejo-shim install-gui-path
@@ -94,7 +99,9 @@ The command writes:
 ~/Library/LaunchAgents/com.gh-forgejo-shim.user-gui-path.plist
 ```
 
-It also runs `launchctl setenv PATH ...` for the current login session. Existing GUI apps need to be restarted before they inherit the new PATH.
+It also runs `launchctl setenv PATH ...` for the current login session. Existing
+GUI apps need to be restarted before they inherit the new PATH; already-running
+processes cannot be repaired in place.
 
 To provide an exact value instead of the default:
 
@@ -102,7 +109,8 @@ To provide an exact value instead of the default:
 gh-forgejo-shim install-gui-path --path "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 ```
 
-`gh-forgejo-shim doctor` reports a `macOS gui PATH` check on macOS so shell and GUI PATH problems are easier to tell apart.
+`gh-forgejo-shim doctor` reports separate checks for current process `PATH` and
+macOS GUI PATH so shell and GUI launcher problems are easier to tell apart.
 
 ## Auth
 

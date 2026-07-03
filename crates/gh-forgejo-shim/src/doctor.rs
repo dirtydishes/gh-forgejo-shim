@@ -1,22 +1,28 @@
 //! Diagnostic checks for shim setup.
 
-use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
-use crate::external;
+use crate::gui_path;
 use crate::repo;
-use crate::shim;
+use crate::setup::{self, SetupInspectOptions, TargetMode};
 use crate::Result;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckStatus {
+    Ok,
+    Warn,
+    Fix,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Check {
     pub name: String,
     pub ok: bool,
     pub detail: String,
+    pub repair_commands: Vec<String>,
+    pub status: CheckStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -66,25 +72,26 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
             config::load_config_with_env(Some(&path), &options.env)?
         }
     };
-    let target_bin_dir = options.bin_dir.clone().unwrap_or_else(|| {
-        shim::default_bin_dir(options.home.as_deref())
-            .unwrap_or_else(|_| PathBuf::from(".local/bin"))
+    let fallback_dirs = options
+        .fallback_dirs
+        .clone()
+        .unwrap_or_else(default_fallback_dirs);
+    let launchd_path = options.launchd_path.clone().or_else(|| {
+        (options.platform == "darwin")
+            .then(gui_path::current_launchd_path)
+            .flatten()
     });
-    let wrapper = shim::shim_path(Some(&target_bin_dir), options.home.as_deref())?;
-    let env_hash = env_hash(&options.env);
-
-    let configured_gh = config.paths.gh.as_deref().map(Path::new);
+    let setup_model = setup::inspect(SetupInspectOptions {
+        env: options.env.clone(),
+        home: options.home.clone(),
+        config: Some(config.clone()),
+        bin_dir: options.bin_dir.clone(),
+        target: TargetMode::Current,
+        fallback_dirs: Some(fallback_dirs.clone()),
+        launchd_path,
+    })?;
     let configured_fj = config.paths.fj.as_deref().map(Path::new);
-    let real_gh = if let Some(fallback_dirs) = options.fallback_dirs.as_deref() {
-        external::find_program_with_fallbacks("gh", configured_gh, &env_hash, fallback_dirs)
-    } else {
-        external::find_program("gh", configured_gh, &env_hash)
-    };
-    let real_fj = if let Some(fallback_dirs) = options.fallback_dirs.as_deref() {
-        external::find_program_with_fallbacks("fj", configured_fj, &env_hash, fallback_dirs)
-    } else {
-        external::find_program("fj", configured_fj, &env_hash)
-    };
+    let real_fj = setup::find_tool("fj", configured_fj, &options.env, &fallback_dirs, false);
     let token = auth::discover_fj_token(
         config.hosts.first().map(String::as_str),
         &options.env,
@@ -92,41 +99,43 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     );
 
     let mut checks = vec![
-        Check::new(
-            "real gh",
-            real_gh.is_some(),
-            real_gh
-                .as_ref()
-                .map(|path| display_path(path))
-                .unwrap_or_else(|| "set FJ_SHIM_REAL_GH or install GitHub CLI".to_string()),
-        ),
-        Check::new(
-            "fj",
-            real_fj.is_some(),
-            real_fj
-                .as_ref()
-                .map(|path| display_path(path))
-                .unwrap_or_else(|| "set FJ_SHIM_REAL_FJ or install fj".to_string()),
-        ),
-        Check::new(
-            "forgejo hosts",
-            !config.hosts.is_empty(),
-            if config.hosts.is_empty() {
-                "add one with gh-forgejo-shim config add-host HOST".to_string()
-            } else {
-                config.hosts.join(", ")
-            },
-        ),
-        Check::new(
-            "auth token",
-            token.is_some(),
-            if token.is_some() {
-                "found".to_string()
-            } else {
-                "run gh-forgejo-shim auth login HOST or set FJ_SHIM_TOKEN".to_string()
-            },
-        ),
+        current_path_check(&setup_model),
+        real_gh_check(&setup_model, &options.platform),
+        managed_gh_check(&setup_model),
     ];
+    if let Some(check) = duplicate_managed_gh_check(&setup_model) {
+        checks.push(check);
+    }
+
+    let should_check_gui_path = options
+        .check_gui_path
+        .unwrap_or_else(|| options.platform == "darwin");
+    if should_check_gui_path {
+        checks.push(gui_path_check(&setup_model));
+    }
+
+    checks.push(bd_check(&setup_model));
+    checks.push(fj_check(real_fj));
+    checks.push(Check::new(
+        "forgejo hosts",
+        !config.hosts.is_empty(),
+        if config.hosts.is_empty() {
+            "add one with gh-forgejo-shim config add-host HOST".to_string()
+        } else {
+            config.hosts.join(", ")
+        },
+        ["gh-forgejo-shim config add-host git.example.com"],
+    ));
+    checks.push(Check::new(
+        "auth token",
+        token.is_some(),
+        if token.is_some() {
+            "found".to_string()
+        } else {
+            "run gh-forgejo-shim auth login HOST or set FJ_SHIM_TOKEN".to_string()
+        },
+        ["gh-forgejo-shim auth login HOST"],
+    ));
 
     if should_check_current_repo {
         if let Some(repo) = repo::detect_from_git(options.cwd.as_deref()) {
@@ -138,6 +147,7 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                         "{} is allowlisted for {}/{}",
                         repo.host, repo.owner, repo.name
                     ),
+                    Vec::<String>::new(),
                 ));
             } else if config::is_known_github_host(Some(&repo.host)) {
                 checks.push(Check::new(
@@ -147,6 +157,7 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                         "{} will delegate to the real GitHub CLI for {}/{}",
                         repo.host, repo.owner, repo.name
                     ),
+                    Vec::<String>::new(),
                 ));
             } else {
                 checks.push(Check::new(
@@ -156,19 +167,10 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                         "{} is not allowlisted; run gh-forgejo-shim config add-host {}",
                         repo.host, repo.host
                     ),
+                    [format!("gh-forgejo-shim config add-host {}", repo.host)],
                 ));
             }
         }
-    }
-
-    checks.push(shim_path_check(&wrapper, &options.env));
-
-    let should_check_gui_path = options
-        .check_gui_path
-        .unwrap_or_else(|| options.platform == "darwin");
-    if should_check_gui_path {
-        let gui_path = options.launchd_path.or_else(current_launchd_path);
-        checks.push(gui_path_check(&target_bin_dir, gui_path.as_deref()));
     }
 
     Ok(checks)
@@ -176,161 +178,448 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
 
 pub fn format_checks(checks: &[Check]) -> String {
     let mut lines = vec!["gh-forgejo-shim doctor".to_string()];
+    let mut repair_commands = Vec::new();
     for check in checks {
-        let mark = if check.ok { "ok" } else { "warn" };
+        let mark = match check.status {
+            CheckStatus::Ok => "ok",
+            CheckStatus::Warn => "warn",
+            CheckStatus::Fix => "fix",
+        };
         lines.push(format!("[{mark}] {}: {}", check.name, check.detail));
+        repair_commands.extend(check.repair_commands.iter().cloned());
+    }
+    let repair_commands = dedupe(repair_commands);
+    if !repair_commands.is_empty() {
+        lines.push(String::new());
+        lines.push("repair commands:".to_string());
+        for command in repair_commands {
+            lines.push(format!("  {command}"));
+        }
     }
     lines.join("\n")
 }
 
+pub fn has_failures(checks: &[Check]) -> bool {
+    checks.iter().any(|check| check.status == CheckStatus::Fix)
+}
+
 impl Check {
-    fn new(name: impl Into<String>, ok: bool, detail: impl Into<String>) -> Self {
+    fn new<I, S>(
+        name: impl Into<String>,
+        ok: bool,
+        detail: impl Into<String>,
+        repair_commands: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         Self {
             name: name.into(),
             ok,
             detail: detail.into(),
+            repair_commands: repair_commands.into_iter().map(Into::into).collect(),
+            status: if ok {
+                CheckStatus::Ok
+            } else {
+                CheckStatus::Fix
+            },
+        }
+    }
+
+    fn warn(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ok: true,
+            detail: detail.into(),
+            repair_commands: Vec::new(),
+            status: CheckStatus::Warn,
         }
     }
 }
 
-fn shim_path_check(wrapper: &Path, env: &EnvMap) -> Check {
-    if wrapper.exists() && shim::is_managed_shim(wrapper) {
-        let first_gh = first_program("gh", env.get("PATH").map_or("", String::as_str));
-        if first_gh
-            .as_deref()
-            .is_some_and(|path| same_file(path, wrapper))
-        {
-            return Check::new(
-                "shim path",
-                true,
-                format!("{} is the first gh in PATH", wrapper.display()),
-            );
-        }
-        if let Some(first_gh) = first_gh {
-            return Check::new(
-                "shim path",
-                false,
-                format!(
-                    "gh resolves to {} before {}",
-                    first_gh.display(),
-                    wrapper.display()
-                ),
-            );
-        }
+fn current_path_check(model: &setup::SetupModel) -> Check {
+    if let Some(first_gh) = model.first_current_gh.as_ref() {
         return Check::new(
-            "shim path",
-            false,
-            format!(
-                "{} exists but no gh executable was found in PATH",
-                wrapper.display()
-            ),
-        );
-    }
-    if wrapper.exists() {
-        return Check::new(
-            "shim path",
-            false,
-            format!(
-                "{} exists but is not managed by gh-forgejo-shim",
-                wrapper.display()
-            ),
-        );
-    }
-    Check::new(
-        "shim path",
-        false,
-        format!("{} is not installed", wrapper.display()),
-    )
-}
-
-fn gui_path_check(bin_dir: &Path, gui_path: Option<&str>) -> Check {
-    if gui_path.is_some_and(|path| path_contains_dir(path, bin_dir)) {
-        return Check::new(
-            "macOS gui PATH",
+            "current PATH",
             true,
-            format!("{} is visible to new GUI apps", bin_dir.display()),
+            format!("bare gh resolves to {}", first_gh.display()),
+            Vec::<String>::new(),
         );
     }
-    if gui_path.is_some() {
+    if model.codex_restricted_path {
+        let real_gh = model
+            .real_gh
+            .as_ref()
+            .map(|tool| tool.path.display().to_string())
+            .unwrap_or_else(|| "a common install dir".to_string());
         return Check::new(
-            "macOS gui PATH",
+            "current PATH",
             false,
             format!(
-                "{} is not in launchd PATH; run gh-forgejo-shim install-gui-path",
-                bin_dir.display()
+                "Codex-style restricted PATH cannot resolve bare gh, but real gh exists at {real_gh}"
             ),
+            path_repair_commands(&model.target_bin_dir),
         );
     }
     Check::new(
-        "macOS gui PATH",
+        "current PATH",
         false,
-        "launchd PATH is unset; run gh-forgejo-shim install-gui-path if GUI apps cannot find gh",
+        "bare gh is missing from the current process PATH",
+        path_repair_commands(&model.target_bin_dir),
     )
 }
 
-fn current_launchd_path() -> Option<String> {
-    let output = Command::new("launchctl")
-        .args(["getenv", "PATH"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
+fn real_gh_check(model: &setup::SetupModel, platform: &str) -> Check {
+    if let Some(real_gh) = model.real_gh.as_ref() {
+        return Check::new(
+            "real gh",
+            true,
+            format!("found {} via {}", real_gh.path.display(), real_gh.source),
+            Vec::<String>::new(),
+        );
+    }
+    Check::new(
+        "real gh",
+        false,
+        "could not find the real GitHub CLI from config, env, current PATH, or common install dirs",
+        real_gh_repair_commands(platform),
+    )
+}
+
+fn managed_gh_check(model: &setup::SetupModel) -> Check {
+    if model.first_current_gh_is_managed {
+        let first_gh = model.first_current_gh.as_ref().expect("managed gh path");
+        if model.real_gh.is_some() {
+            return Check::new(
+                "managed gh",
+                true,
+                format!(
+                    "{} is the first gh and can delegate to real gh",
+                    first_gh.display()
+                ),
+                Vec::<String>::new(),
+            );
+        }
+        return Check::new(
+            "managed gh",
+            false,
+            format!(
+                "{} is first in PATH, but no real gh was found for delegation",
+                first_gh.display()
+            ),
+            real_gh_repair_commands(""),
+        );
+    }
+
+    if let Some(first_gh) = model.first_current_gh.as_ref() {
+        return Check::new(
+            "managed gh",
+            false,
+            format!(
+                "gh resolves to unmanaged {} before the managed wrapper",
+                first_gh.display()
+            ),
+            path_repair_commands(&model.target_bin_dir),
+        );
+    }
+
+    if model.target_shim_path.exists() && crate::shim::is_managed_shim(&model.target_shim_path) {
+        return Check::new(
+            "managed gh",
+            false,
+            format!(
+                "{} exists, but current PATH does not resolve gh to it",
+                model.target_shim_path.display()
+            ),
+            path_repair_commands(&model.target_bin_dir),
+        );
+    }
+
+    Check::new(
+        "managed gh",
+        false,
+        format!("{} is not installed", model.target_shim_path.display()),
+        [format!(
+            "gh-forgejo-shim bootstrap --bin-dir {}",
+            setup::shell_quote(&model.target_bin_dir.display().to_string())
+        )],
+    )
+}
+
+fn duplicate_managed_gh_check(model: &setup::SetupModel) -> Option<Check> {
+    if model.managed_gh_candidates.len() <= 1
+        || !model.first_current_gh_is_managed
+        || model.real_gh.is_none()
+    {
         return None;
     }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then_some(value)
+    Some(Check::warn(
+        "duplicate managed gh",
+        format!(
+            "{} managed wrappers are visible; first one works, but remove older duplicates when convenient",
+            model.managed_gh_candidates.len()
+        ),
+    ))
 }
 
-fn first_program(name: &str, path_value: &str) -> Option<PathBuf> {
-    for directory in std::env::split_paths(path_value) {
-        if directory.as_os_str().is_empty() {
-            continue;
-        }
-        let candidate = directory.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
+fn gui_path_check(model: &setup::SetupModel) -> Check {
+    if model.launchd_contains_required_dirs {
+        return Check::new(
+            "macOS GUI PATH",
+            true,
+            "launchd PATH exposes the shim and common package-manager dirs",
+            Vec::<String>::new(),
+        );
     }
-    None
-}
-
-fn path_contains_dir(path_value: &str, bin_dir: &Path) -> bool {
-    std::env::split_paths(path_value).any(|path| path == bin_dir)
-}
-
-fn same_file(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
+    let detail = if model.launchd_path.is_some() {
+        format!(
+            "launchd PATH is missing {} required dirs for GUI apps",
+            model.launchd_missing_required_dirs.len()
+        )
+    } else {
+        "launchd PATH is unset for GUI apps".to_string()
     };
-    metadata.is_file() && is_executable(&metadata.permissions())
+    Check::new(
+        "macOS GUI PATH",
+        false,
+        detail,
+        [
+            format!(
+                "gh-forgejo-shim install-gui-path --path {}",
+                setup::shell_quote(&model.desired_launchd_path)
+            ),
+            "restart existing GUI apps".to_string(),
+        ],
+    )
 }
 
-#[cfg(unix)]
-fn is_executable(permissions: &fs::Permissions) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    permissions.mode() & 0o111 != 0
+fn bd_check(model: &setup::SetupModel) -> Check {
+    if let Some(bd) = model.bd.as_ref() {
+        return Check::new(
+            "bd",
+            true,
+            format!(
+                "found {} via {}; repo workflows may use it",
+                bd.path.display(),
+                bd.source
+            ),
+            Vec::<String>::new(),
+        );
+    }
+    Check::warn(
+        "bd",
+        "not found; repo workflows may need Beads, but bd is not part of the GitHub CLI shim",
+    )
 }
 
-#[cfg(not(unix))]
-fn is_executable(_permissions: &fs::Permissions) -> bool {
-    true
+fn fj_check(real_fj: Option<setup::ToolPath>) -> Check {
+    if let Some(real_fj) = real_fj {
+        return Check::new(
+            "fj",
+            true,
+            format!("found {} via {}", real_fj.path.display(), real_fj.source),
+            Vec::<String>::new(),
+        );
+    }
+    Check::warn(
+        "fj",
+        "not found; auth import can still use env, shim storage, tea, or gitea configs",
+    )
 }
 
-fn display_path(path: &Path) -> String {
-    path.display().to_string()
+fn path_repair_commands(target_bin_dir: &Path) -> Vec<String> {
+    vec![
+        format!("export PATH=\"{}:$PATH\"", target_bin_dir.display()),
+        format!(
+            "gh-forgejo-shim bootstrap --bin-dir {}",
+            setup::shell_quote(&target_bin_dir.display().to_string())
+        ),
+        "gh-forgejo-shim doctor".to_string(),
+    ]
 }
 
-fn env_hash(env: &EnvMap) -> HashMap<String, String> {
-    env.iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
+fn real_gh_repair_commands(platform: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    if platform == "darwin" {
+        commands.push("brew install gh".to_string());
+    }
+    commands.push("FJ_SHIM_REAL_GH=/path/to/gh gh-forgejo-shim doctor".to_string());
+    commands
+}
+
+fn default_fallback_dirs() -> Vec<PathBuf> {
+    crate::external::DEFAULT_FALLBACK_DIRS
+        .iter()
+        .map(PathBuf::from)
         .collect()
+}
+
+fn dedupe(values: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for value in values {
+        if !result.contains(&value) {
+            result.push(value);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn missing_bd_and_duplicate_wrappers_are_only_warnings_when_managed_gh_works() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let shim_a = fixture.home.join(".local").join("bin");
+        let shim_b = fixture.home.join(".cargo").join("bin");
+        let real_dir = fixture.root.join("real");
+        fs::create_dir_all(&shim_a)?;
+        fs::create_dir_all(&shim_b)?;
+        fs::create_dir_all(&real_dir)?;
+        write_executable(
+            &shim_a.join("gh"),
+            &crate::shim::shim_script(&fixture.root.join("gh-forgejo-shim")),
+        )?;
+        write_executable(
+            &shim_b.join("gh"),
+            &crate::shim::shim_script(&fixture.root.join("gh-forgejo-shim")),
+        )?;
+        write_executable(&real_dir.join("gh"), "#!/bin/sh\nexit 0\n")?;
+
+        let checks = run_checks(CheckOptions {
+            config: Some(Config {
+                hosts: vec!["git.example.com".to_string()],
+                paths: config::PathsConfig { gh: None, fj: None },
+                path: fixture.home.join("config.toml"),
+            }),
+            config_path: None,
+            env: EnvMap::from([
+                ("HOME".to_string(), fixture.home.display().to_string()),
+                (
+                    "PATH".to_string(),
+                    format!("{}:{}", shim_a.display(), shim_b.display()),
+                ),
+                ("FJ_SHIM_TOKEN".to_string(), "token".to_string()),
+            ]),
+            bin_dir: None,
+            home: Some(fixture.home.clone()),
+            cwd: None,
+            fallback_dirs: Some(vec![real_dir]),
+            launchd_path: None,
+            check_gui_path: Some(false),
+            check_current_repo: Some(false),
+            platform: "linux".to_string(),
+        })?;
+
+        let bd = checks
+            .iter()
+            .find(|check| check.name == "bd")
+            .expect("bd check");
+        assert_eq!(bd.status, CheckStatus::Warn);
+        let duplicate = checks
+            .iter()
+            .find(|check| check.name == "duplicate managed gh")
+            .expect("duplicate check");
+        assert_eq!(duplicate.status, CheckStatus::Warn);
+        assert!(!has_failures(&checks), "{checks:#?}");
+        Ok(())
+    }
+
+    #[test]
+    fn homebrew_gh_outside_current_path_is_reported_separately() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let cargo_bin = fixture.home.join(".cargo").join("bin");
+        let homebrew = fixture.root.join("homebrew").join("bin");
+        fs::create_dir_all(&cargo_bin)?;
+        fs::create_dir_all(&homebrew)?;
+        write_executable(&homebrew.join("gh"), "#!/bin/sh\nexit 0\n")?;
+
+        let checks = run_checks(CheckOptions {
+            config: Some(Config {
+                hosts: vec!["git.example.com".to_string()],
+                paths: config::PathsConfig { gh: None, fj: None },
+                path: fixture.home.join("config.toml"),
+            }),
+            config_path: None,
+            env: EnvMap::from([
+                ("HOME".to_string(), fixture.home.display().to_string()),
+                ("PATH".to_string(), cargo_bin.display().to_string()),
+                ("FJ_SHIM_TOKEN".to_string(), "token".to_string()),
+            ]),
+            bin_dir: None,
+            home: Some(fixture.home.clone()),
+            cwd: None,
+            fallback_dirs: Some(vec![homebrew]),
+            launchd_path: None,
+            check_gui_path: Some(false),
+            check_current_repo: Some(false),
+            platform: "linux".to_string(),
+        })?;
+
+        let current_path = checks
+            .iter()
+            .find(|check| check.name == "current PATH")
+            .expect("current PATH check");
+        assert_eq!(current_path.status, CheckStatus::Fix);
+        assert!(current_path.detail.contains("Codex-style restricted PATH"));
+        let real_gh = checks
+            .iter()
+            .find(|check| check.name == "real gh")
+            .expect("real gh check");
+        assert_eq!(real_gh.status, CheckStatus::Ok);
+        assert!(real_gh.detail.contains("common install dirs"));
+        Ok(())
+    }
+
+    struct Fixture {
+        root: PathBuf,
+        home: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> io::Result<Self> {
+            let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "gh-forgejo-shim-doctor-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir(&root)?;
+            let home = root.join("home");
+            fs::create_dir(&home)?;
+            Ok(Self { root, home })
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        fs::write(path, contents)?;
+        make_executable(path)
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) -> io::Result<()> {
+        Ok(())
+    }
 }
