@@ -891,6 +891,11 @@
           <p><strong>Why this seam has leverage:</strong> one Adapter fixes every repository opened through the desktop app. The provider details stay local to the module instead of spreading into wrapper scripts, Git configuration, or each project.</p>
         </div>
 
+        <div class="callout">
+          <span class="label">Product boundary</span>
+          <p><code>git.dirtydishes.dev</code> is a live test fixture, not a built-in service. The Module must work with any user-configured Forgejo host that the execution machine can reach. Host aliases, credentials, API roots, and repository identities stay scoped to that host.</p>
+        </div>
+
         <p class="measure">This deepens the existing design rather than replacing it. The first slice does not need a general GraphQL engine, an HTTP proxy, an MCP server, or a resident daemon. Those would add Interfaces and failure modes before we have evidence that they solve a present need.</p>
       </section>
 
@@ -939,7 +944,9 @@
                 <div>
                   <h4>Build</h4>
                   <ul>
-                    <li>Add a host profile for canonical <code>git.dirtydishes.dev</code> and aliases <code>127.0.0.1</code> and <code>127.0.0.1:2222</code>.</li>
+                    <li>Add a generic host profile with a canonical host, zero or more transport aliases, an API root, and a host-scoped credential identity.</li>
+                    <li>Use <code>git.dirtydishes.dev</code> with aliases <code>127.0.0.1</code> and <code>127.0.0.1:2222</code> as one fixture, never as a default.</li>
+                    <li>Let bootstrap register the Forgejo host found in a user's repository, then require explicit allowlisting and host-specific login or credential import.</li>
                     <li>Normalize aliases before allowlist checks, credential lookup, API construction, and URL output.</li>
                     <li>Read the Linux <code>fj</code> credential store.</li>
                   </ul>
@@ -953,7 +960,7 @@
                   </ul>
                 </div>
               </div>
-              <div class="gate"><strong>Gate:</strong> the original Dirtypages command reaches canonical Forgejo, returns an authoritative empty PR list, and never contacts GitHub.</div>
+              <div class="gate"><strong>Gate:</strong> the original Dirtypages command reaches canonical Forgejo and returns an authoritative empty PR list. A second fixture on an unrelated Forgejo domain discovers, authenticates, and reads its own repository without Dirtydishes configuration. Neither route contacts GitHub.</div>
             </div>
           </li>
 
@@ -1089,6 +1096,7 @@
             <tbody>
               <tr><td>Contract</td><td>Exact build 6720 argv fixtures</td><td>Exit status, stdout keys and shapes, stderr, and deadline match the real <code>gh</code> contract.</td></tr>
               <tr><td>Identity</td><td>Dirtypages <code>127.0.0.1</code> remote</td><td>Normalizes to <code>git.dirtydishes.dev</code>; no request targets loopback HTTPS.</td></tr>
+              <tr><td>Multi-host portability</td><td>Second Forgejo instance on an unrelated domain</td><td>Bootstrap, allowlisting, host-scoped authentication, PR discovery, and output work without Dirtydishes defaults or credentials.</td></tr>
               <tr><td>Safety</td><td>Unsupported Forgejo command</td><td>Fails locally and never invokes the GitHub delegate.</td></tr>
               <tr><td>Rich Forgejo read</td><td>Islandflow PR 36</td><td>All 25 keys, body, commits, two comments, requested review state, and checks render.</td></tr>
               <tr><td>Check freshness</td><td>Islandflow PR 111 or equivalent</td><td>Combined status reports current success instead of stale pending history.</td></tr>
@@ -1152,6 +1160,7 @@
             <tbody>
               <tr><td>A Forgejo request falls through to GitHub.</td><td>Provider-first routing and fail-closed unsupported operations.</td></tr>
               <tr><td>Host aliases produce wrong links or credentials.</td><td>Normalize once into a typed canonical repository identity.</td></tr>
+              <tr><td>Dirtydishes fixture details become product defaults.</td><td>Keep profiles data-driven and require a passing second-host acceptance fixture on an unrelated domain.</td></tr>
               <tr><td>Polling overloads Forgejo.</td><td>Per-command deadlines, pagination bounds, trace timing, then measured caching if needed.</td></tr>
               <tr><td>Projected data looks more certain than it is.</td><td>Typed provenance inside the Adapter and conservative values at unsupported seams.</td></tr>
               <tr><td>A deployment breaks native GitHub support.</td><td>Pinned modern delegate plus a live GitHub control in every release gate.</td></tr>
