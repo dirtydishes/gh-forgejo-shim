@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dirtydishes.dev/dirtyloops/harness-binding.schema.json",
+  "title": "DirtyloopHarnessBinding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target",
+    "adapter_contract",
+    "adapter_policy",
+    "required_capabilities",
+    "optional_capabilities",
+    "unknown_capability_policy"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "target": { "enum": ["codex", "pi"] },
+    "adapter_contract": { "const": "dirtyloops-harness/1" },
+    "adapter_policy": { "const": "certified-only" },
+    "required_capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "optional_capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "unknown_capability_policy": { "const": "reject" }
+  },
+  "$defs": {
+    "capability": {
+      "enum": [
+        "runtime-identification",
+        "explicit-cwd",
+        "symbolic-branch-verification",
+        "structured-completion",
+        "acknowledged-completion",
+        "reasoned-recovery",
+        "coordinator-renewal",
+        "persistent-child-session",
+        "bounded-delegates",
+        "background-completion",
+        "model-selection",
+        "reasoning-selection",
+        "steering",
+        "cancellation",
+        "concurrent-children"
+      ]
+    }
+  }
+}
