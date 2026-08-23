@@ -11,6 +11,38 @@ static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[allow(dead_code)]
+pub struct ScriptedGh {
+    argv_path: PathBuf,
+}
+
+#[allow(dead_code)]
+impl ScriptedGh {
+    pub fn install(
+        fixture: &CliFixture,
+        exit_code: i32,
+        stdout: &str,
+        stderr: &str,
+    ) -> io::Result<Self> {
+        let argv_path = fixture.root().join("scripted-gh-argv.txt");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nprintf '%s' {}\nprintf '%s' {} >&2\nexit {exit_code}\n",
+            shell_quote(&argv_path.to_string_lossy()),
+            shell_quote(stdout),
+            shell_quote(stderr),
+        );
+        fixture.write_executable("gh", &script)?;
+        Ok(Self { argv_path })
+    }
+
+    pub fn argv(&self) -> io::Result<Vec<String>> {
+        Ok(fs::read_to_string(&self.argv_path)?
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+}
+
 pub struct CliFixture {
     root: PathBuf,
     home: PathBuf,
@@ -142,6 +174,10 @@ fn install_git_fixture(bin: &Path) -> io::Result<()> {
 
     fs::copy(source, &target)?;
     make_executable(&target)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 impl Drop for CliFixture {
