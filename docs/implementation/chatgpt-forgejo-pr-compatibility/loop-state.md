@@ -16,15 +16,15 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S1
+Current phase: S2
 
-Current Beads issue: gh-forgejo-shim-c01
+Current Beads issue: gh-forgejo-shim-c02
 
 Current PR: none
 
-Current execution strategy: direct coordinator plus one read-only contract helper
+Current execution strategy: pending S2 live launch-readiness preflight
 
-Last completed phase: S0
+Last completed phase: S1
 
 Blocked: no
 
@@ -44,7 +44,7 @@ Blocked: no
 | Phase | Beads Issue | Status | PR | Turn Doc |
 |---|---|---|---|---|
 | S0 | `gh-forgejo-shim-c00` | closed | none | `turn-docs/00-s0.md` |
-| S1 | `gh-forgejo-shim-c01` | in_progress | none | `turn-docs/01-s1.md` |
+| S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | open | none | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | open | none | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | open | none | `turn-docs/04-c1.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-S1 final repair pass `3/3` keeps the captured repo argv exact, bounds the future-facing fake server, checks request methods and paths, and freezes the GitHub control repository and PR number. Local gates and final independent review remain pending.
+S1 closed after final repair pass `3/3` approval and exact-commit green CI run `32617567969`. Beads reports S2 (`gh-forgejo-shim-c02`) ready; exact boundary and live launch readiness remain to run before S2 mutation.
