@@ -1,0 +1,102 @@
+{
+  "schema": "chatgpt-build-6720-process-contract/v1",
+  "client": {
+    "application": "ChatGPT.app",
+    "version": "26.814.41407",
+    "build": "6720",
+    "bundle_identifier": "com.openai.codex",
+    "bundled_cli": "0.148.0-alpha.15"
+  },
+  "process": {
+    "input": ["cwd", "env", "stdin", "gh argv"],
+    "output": ["exit status", "stdout", "stderr"],
+    "deadline_ms": 5000
+  },
+  "commands": [
+    {
+      "id": "version",
+      "argv": ["--version"],
+      "provenance": "accepted report template; exact ordering confirmed in installed build 6962 source",
+      "failure_effect": "fatal"
+    },
+    {
+      "id": "auth_status",
+      "argv": ["auth", "status", "--active", "--hostname", "{host}"],
+      "provenance": "accepted report template; exact ordering confirmed in installed build 6962 source",
+      "failure_effect": "fatal"
+    },
+    {
+      "id": "pr_list",
+      "argv": [
+        "pr",
+        "list",
+        "--head",
+        "main",
+        "--author",
+        "@me",
+        "--state",
+        "all",
+        "--json",
+        "number,url,state,headRefName",
+        "--repo",
+        "127.0.0.1/dirtydishes/dirtypages"
+      ],
+      "provenance": "exact build 6720 desktop capture",
+      "failure_effect": "fatal"
+    },
+    {
+      "id": "pr_view",
+      "argv": [
+        "pr",
+        "view",
+        "{number}",
+        "--json",
+        "additions,author,autoMergeRequest,baseRefName,comments,createdAt,deletions,headRefName,headRefOid,isDraft,latestReviews,mergedAt,mergedBy,mergeStateStatus,mergeable,number,reviews,reviewDecision,reviewRequests,state,title,updatedAt,url,body,commits",
+        "--repo",
+        "{repo}"
+      ],
+      "provenance": "accepted 25-field report contract; exact ordering confirmed in installed build 6962 source",
+      "failure_effect": "fatal"
+    },
+    {
+      "id": "pr_checks",
+      "argv": [
+        "pr",
+        "checks",
+        "{number}",
+        "--json",
+        "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
+        "--repo",
+        "{repo}"
+      ],
+      "provenance": "accepted checks semantics; exact fields and ordering confirmed in installed build 6962 source",
+      "failure_effect": "nonfatal when no checks are reported"
+    }
+  ],
+  "github_2_96_control": {
+    "repo": "dirtydishes/lyricslab",
+    "pull_request": 31,
+    "view_empty_values": {
+      "autoMergeRequest": null,
+      "comments": [],
+      "commits": [],
+      "latestReviews": [],
+      "mergedAt": null,
+      "mergedBy": null,
+      "reviewDecision": "",
+      "reviewRequests": [],
+      "reviews": []
+    },
+    "no_checks": {
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "no checks reported\n"
+    }
+  },
+  "forgejo_known_gaps": [
+    "alias identity",
+    "@me",
+    "missing fields",
+    "checks"
+  ]
+}

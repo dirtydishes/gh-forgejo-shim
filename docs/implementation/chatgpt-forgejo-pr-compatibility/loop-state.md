@@ -16,13 +16,13 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: none
+Current phase: S1
 
-Current Beads issue: none
+Current Beads issue: gh-forgejo-shim-c01
 
 Current PR: none
 
-Current execution strategy: none
+Current execution strategy: direct coordinator plus one read-only contract helper
 
 Last completed phase: S0
 
@@ -44,7 +44,7 @@ Blocked: no
 | Phase | Beads Issue | Status | PR | Turn Doc |
 |---|---|---|---|---|
 | S0 | `gh-forgejo-shim-c00` | closed | none | `turn-docs/00-s0.md` |
-| S1 | `gh-forgejo-shim-c01` | open | none | `turn-docs/01-s1.md` |
+| S1 | `gh-forgejo-shim-c01` | in_progress | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | open | none | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | open | none | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | open | none | `turn-docs/04-c1.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-S0 closed after separate bug `gh-forgejo-shim-9l1` repaired the pre-existing stable Clippy failure. Exact commit `8e8762b` passed independent review and GitHub Actions run `32615534238`. S1 is ready for launch preflight.
+S1 passed boundary and live launch readiness with findings `[]`, bound generation `95591782f575fb3e9e4d8cdb6b9b8228bc42694fc99c87fe5b18809eda2d256d`, and is claimed for direct test-first execution.
