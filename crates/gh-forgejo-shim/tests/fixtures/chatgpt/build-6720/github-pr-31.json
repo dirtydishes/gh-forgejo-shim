@@ -1,0 +1,1534 @@
+{
+  "additions": 8859867,
+  "author": {
+    "id": "MDQ6VXNlcjM1NDc3ODc0",
+    "is_bot": false,
+    "login": "dirtydishes",
+    "name": "dirtydishes"
+  },
+  "autoMergeRequest": null,
+  "baseRefName": "main",
+  "body": "## summary\n\n- add the initial production rhyme-loop app flow, including the home, settings, and song screens\n- configure expo app metadata, layout, and runtime settings\n- add beads, agent, claude, codex, and repository hooks and configuration\n- add the editor web workspace and its supporting dependencies\n- include initial issue and interaction state for the project\n\n## intended effect for end users\n\nusers can open the first production rhyme-loop experience, move between songs and settings, and begin working in the editor foundation as the product takes shape.\n\n## testing\n\nnot run (not requested)",
+  "comments": [],
+  "commits": [
+    {
+      "authoredDate": "2026-06-29T16:08:54Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:07:37Z",
+      "messageBody": "",
+      "messageHeadline": "feat: add expo mobile workspace foundation",
+      "oid": "37e9359423a291695aaf1d4ee55fb013861aa5a3"
+    },
+    {
+      "authoredDate": "2026-06-29T16:09:56Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:07:37Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 1 pr state",
+      "oid": "473063efb6385a35e7afdf354d37c9561edba385"
+    },
+    {
+      "authoredDate": "2026-06-29T16:18:17Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:07:37Z",
+      "messageBody": "",
+      "messageHeadline": "fix mobile scripts and record phase 1 review",
+      "oid": "6bfef880fb53cbe7b53c6562f047194db1986f24"
+    },
+    {
+      "authoredDate": "2026-06-29T16:19:28Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:07:37Z",
+      "messageBody": "",
+      "messageHeadline": "record final review ci evidence",
+      "oid": "9dddf6e906c8f6d367492506303779554e888a98"
+    },
+    {
+      "authoredDate": "2026-06-29T17:09:03Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:09:03Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record expo rebuild test branch move",
+      "oid": "39d409a12190cac05324f7c446cad78d9594447d"
+    },
+    {
+      "authoredDate": "2026-06-29T17:10:40Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:10:40Z",
+      "messageBody": "",
+      "messageHeadline": "docs: start expo rebuild phase 2",
+      "oid": "8d046759120e063030e283c947468936068bdc64"
+    },
+    {
+      "authoredDate": "2026-06-29T17:21:14Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:21:14Z",
+      "messageBody": "",
+      "messageHeadline": "feat: add song persistence app shell",
+      "oid": "6d2e9af2a3f0d1599f3e4a98930a81d536e2f3c6"
+    },
+    {
+      "authoredDate": "2026-06-29T17:21:54Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:21:54Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 2 pr state",
+      "oid": "7250639f27552e938c906cb5570c442afc5f0501"
+    },
+    {
+      "authoredDate": "2026-06-29T17:23:08Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:23:08Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 2 implementation callback",
+      "oid": "f4adb0b87912d1794d83f3e9ffeee24d861f3915"
+    },
+    {
+      "authoredDate": "2026-06-29T17:30:36Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:30:36Z",
+      "messageBody": "",
+      "messageHeadline": "fix mobile clean install",
+      "oid": "21929c6409b95c85ae50f24bcb22e9f1d34f1d69"
+    },
+    {
+      "authoredDate": "2026-06-29T17:31:10Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:31:10Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 2 review evidence",
+      "oid": "e3f5280f28a2f150d28ae929fe69c2e9cea008c8"
+    },
+    {
+      "authoredDate": "2026-06-29T17:33:26Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:33:26Z",
+      "messageBody": "",
+      "messageHeadline": "merge expo webview rebuild base",
+      "oid": "9f4dca810a29cb980ac107f26dbecab79f0b3bee"
+    },
+    {
+      "authoredDate": "2026-06-29T17:34:17Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:34:17Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record final phase 2 review state",
+      "oid": "390a040ac0c25c35a6c985051b53d60f75dbfbd0"
+    },
+    {
+      "authoredDate": "2026-06-29T17:35:45Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-06-29T17:35:45Z",
+      "messageBody": "…-persistence-app-shell\n\nphase 2: song persistence and app shell",
+      "messageHeadline": "Merge pull request #11 from dirtydishes/lavender/lyricslab-jd5-2-song…",
+      "oid": "8469d4a99dbe3641b0ad39d07f540a01dd695882"
+    },
+    {
+      "authoredDate": "2026-06-29T17:36:31Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:36:31Z",
+      "messageBody": "",
+      "messageHeadline": "docs: close expo rebuild phase 2",
+      "oid": "ce76fd26ab456ebfa1adb1a6efb5465767d87a95"
+    },
+    {
+      "authoredDate": "2026-06-29T17:38:15Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:38:15Z",
+      "messageBody": "",
+      "messageHeadline": "docs: start expo rebuild phase 3",
+      "oid": "b80f0079ed5452707604851df99624a8f5cf1ba0"
+    },
+    {
+      "authoredDate": "2026-06-29T17:47:25Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:47:25Z",
+      "messageBody": "",
+      "messageHeadline": "feat: add tiptap editor web bundle",
+      "oid": "417d037b2a2b43090d63becffcbe3481710261ce"
+    },
+    {
+      "authoredDate": "2026-06-29T17:48:23Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:48:23Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 3 pr closeout",
+      "oid": "ece4e49be8910ab82878440dbdb5e389d6b81d6b"
+    },
+    {
+      "authoredDate": "2026-06-29T17:49:31Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:49:31Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 3 implementation callback",
+      "oid": "ff4d3f091b80a914e09edac2ffade15982c131b0"
+    },
+    {
+      "authoredDate": "2026-06-29T17:55:13Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:55:13Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 3 review evidence",
+      "oid": "2970fcb4739b63727e46e3adfc7284b793d5ebec"
+    },
+    {
+      "authoredDate": "2026-06-29T17:56:18Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:56:18Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 3 final pr state",
+      "oid": "2f701e501adc7ddf791138198d6acb7915387661"
+    },
+    {
+      "authoredDate": "2026-06-29T17:57:32Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-06-29T17:57:32Z",
+      "messageBody": "…ap-editor-web-bundle\n\nfeat: add tiptap editor web bundle",
+      "messageHeadline": "Merge pull request #12 from dirtydishes/lavender/lyricslab-jd5-3-tipt…",
+      "oid": "f86da0e38067a8341057222f88ca632c3301de05"
+    },
+    {
+      "authoredDate": "2026-06-29T17:58:13Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:58:13Z",
+      "messageBody": "",
+      "messageHeadline": "docs: close expo rebuild phase 3",
+      "oid": "35f2d1165ff4e504076c0b245e34ede5a9e776b0"
+    },
+    {
+      "authoredDate": "2026-06-29T17:59:53Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T17:59:53Z",
+      "messageBody": "",
+      "messageHeadline": "docs: start expo rebuild phase 4",
+      "oid": "375f61d97e9a6eec4e03de600a288027575ae3a9"
+    },
+    {
+      "authoredDate": "2026-06-29T18:08:24Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:08:24Z",
+      "messageBody": "",
+      "messageHeadline": "feat: wire webview body persistence",
+      "oid": "f0d308ee2f0f91150d9b7a81143388765fe36845"
+    },
+    {
+      "authoredDate": "2026-06-29T18:09:24Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:09:24Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 4 pr state",
+      "oid": "6e756486499f3db2e5ae5a995e1621e764c3e8e1"
+    },
+    {
+      "authoredDate": "2026-06-29T18:10:32Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:10:32Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 4 implementation callback",
+      "oid": "674673edf49b6714ac2b8fe3bdd5ee246bbfd229"
+    },
+    {
+      "authoredDate": "2026-06-29T18:16:42Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:16:53Z",
+      "messageBody": "",
+      "messageHeadline": "fix stale webview body save ordering",
+      "oid": "3203f5a0cc9de69ecb5b876d2e6799a0f7ad84c8"
+    },
+    {
+      "authoredDate": "2026-06-29T18:19:03Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:19:03Z",
+      "messageBody": "",
+      "messageHeadline": "merge expo webview rebuild base",
+      "oid": "ebe183b97dd53d87047ccb512104dfccbfcdb828"
+    },
+    {
+      "authoredDate": "2026-06-29T18:19:48Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:19:48Z",
+      "messageBody": "",
+      "messageHeadline": "docs record phase 4 review closeout",
+      "oid": "27c199827e4b79ae6e6e3f12361843cad1a2b97b"
+    },
+    {
+      "authoredDate": "2026-06-29T18:20:55Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-06-29T18:20:55Z",
+      "messageBody": "…iew-bridge-body-persistence\n\nphase 4 webview bridge and body persistence",
+      "messageHeadline": "Merge pull request #13 from dirtydishes/lavender/lyricslab-jd5-4-webv…",
+      "oid": "8c5b935c58c4c73c51bc4b43b14e09f406e056e0"
+    },
+    {
+      "authoredDate": "2026-06-29T18:21:36Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:21:36Z",
+      "messageBody": "",
+      "messageHeadline": "docs: close expo rebuild phase 4",
+      "oid": "9bf8eba1e8d3d6787377784a02c8953283c8f33a"
+    },
+    {
+      "authoredDate": "2026-06-29T18:23:09Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:23:09Z",
+      "messageBody": "",
+      "messageHeadline": "docs: start expo rebuild phase 5",
+      "oid": "4435328e113d0036fb10326bdaea19f4e9ac4194"
+    },
+    {
+      "authoredDate": "2026-06-29T18:29:48Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:29:48Z",
+      "messageBody": "",
+      "messageHeadline": "add keyboard suggestion insertion",
+      "oid": "919b02a847d5a3b3de43fc47b1cfd05c12534612"
+    },
+    {
+      "authoredDate": "2026-06-29T18:30:29Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:30:29Z",
+      "messageBody": "",
+      "messageHeadline": "record phase five pr details",
+      "oid": "bb501253449ca995878873bf4490d592f9fd0503"
+    },
+    {
+      "authoredDate": "2026-06-29T18:31:40Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:31:40Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 5 implementation callback",
+      "oid": "4e81184916199e6bb80b810dbb38fa8f955e8de1"
+    },
+    {
+      "authoredDate": "2026-06-29T18:36:09Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:36:09Z",
+      "messageBody": "",
+      "messageHeadline": "tighten suggestion bridge contract",
+      "oid": "31cd47d6bf71309b8e252223887c115fe2a10a6a"
+    },
+    {
+      "authoredDate": "2026-06-29T18:37:11Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:37:11Z",
+      "messageBody": "",
+      "messageHeadline": "merge expo webview rebuild base",
+      "oid": "758641b7385ed1e6a5f5e00fc470c2ba82e1d722"
+    },
+    {
+      "authoredDate": "2026-06-29T18:38:44Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:38:44Z",
+      "messageBody": "",
+      "messageHeadline": "record phase five review evidence",
+      "oid": "9a50dcf094621019132e012ff196e38cf0f20f85"
+    },
+    {
+      "authoredDate": "2026-06-29T18:39:53Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-06-29T18:39:53Z",
+      "messageBody": "…oard-suggestions-insertion\n\nphase 5 keyboard suggestions and insertion",
+      "messageHeadline": "Merge pull request #14 from dirtydishes/lavender/lyricslab-jd5-5-keyb…",
+      "oid": "e5b4f44a4725deab1cb415ba0a5fef1c161d84a6"
+    },
+    {
+      "authoredDate": "2026-06-29T18:40:32Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:40:32Z",
+      "messageBody": "",
+      "messageHeadline": "docs: close expo rebuild phase 5",
+      "oid": "f423ad773bc70401896105ebd1a5c36fc1f2774d"
+    },
+    {
+      "authoredDate": "2026-06-29T18:42:24Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:42:24Z",
+      "messageBody": "",
+      "messageHeadline": "docs: start expo rebuild phase 6",
+      "oid": "3242b97783ea5c4045488f739bc88a5ead5bebb2"
+    },
+    {
+      "authoredDate": "2026-06-29T18:53:14Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:53:14Z",
+      "messageBody": "",
+      "messageHeadline": "add offline editor bundle gate",
+      "oid": "20fda54879eb4391c8858a7eaa1ea6447caba9a1"
+    },
+    {
+      "authoredDate": "2026-06-29T18:54:12Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:54:12Z",
+      "messageBody": "",
+      "messageHeadline": "record phase 6 pr state",
+      "oid": "645c5e842c013fcf55e4f151e4cc54eb576fe5f7"
+    },
+    {
+      "authoredDate": "2026-06-29T18:55:30Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T18:55:30Z",
+      "messageBody": "",
+      "messageHeadline": "docs: record phase 6 implementation callback",
+      "oid": "9852798ab829cca67c6859298ef263b5ef1fb3fa"
+    },
+    {
+      "authoredDate": "2026-06-29T19:04:18Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T19:04:18Z",
+      "messageBody": "",
+      "messageHeadline": "merge phase 6 base and record review evidence",
+      "oid": "49fe8ec688e98a32187fe055085ec81b5fa339fd"
+    },
+    {
+      "authoredDate": "2026-06-29T19:05:29Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-06-29T19:05:29Z",
+      "messageBody": "…ine-bundle-viability-gate\n\nphase 6: offline editor bundle viability gate",
+      "messageHeadline": "Merge pull request #15 from dirtydishes/lavender/lyricslab-jd5-6-offl…",
+      "oid": "b5b8d533ccb540c7ff8bacb74533be33c6039b21"
+    },
+    {
+      "authoredDate": "2026-06-29T19:07:32Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T19:07:32Z",
+      "messageBody": "",
+      "messageHeadline": "docs: close expo rebuild phase 6",
+      "oid": "ca8576a1309326bb7bbdc860985ff1fef4e3d0e0"
+    },
+    {
+      "authoredDate": "2026-06-29T19:08:48Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-06-29T19:08:48Z",
+      "messageBody": "",
+      "messageHeadline": "docs: add expo rebuild storyboard closeout",
+      "oid": "44ef67f8a6b5148dd335dbd59a957a468586061a"
+    },
+    {
+      "authoredDate": "2026-07-07T01:45:08Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-07T01:45:08Z",
+      "messageBody": "",
+      "messageHeadline": "make expo rebuild the root app",
+      "oid": "7787dbaac32291c58f2521bdc336e0729bc235fc"
+    },
+    {
+      "authoredDate": "2026-07-07T02:37:03Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-07T02:37:03Z",
+      "messageBody": "",
+      "messageHeadline": "bd init: initialize beads issue tracking",
+      "oid": "f3a2ea31fae727835d0d5176bec73cd8543d82c8"
+    },
+    {
+      "authoredDate": "2026-07-07T05:28:58Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-07T05:28:58Z",
+      "messageBody": "",
+      "messageHeadline": "Update Beads issue priorities and statuses",
+      "oid": "1ccfa90679ea4202288511b06874aa055db30f36"
+    },
+    {
+      "authoredDate": "2026-07-09T05:03:00Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-09T05:03:00Z",
+      "messageBody": "",
+      "messageHeadline": "update lyricslab expo docs and tests",
+      "oid": "bb06375917c56d0a58d7ddc7a9fbd16341d0277f"
+    },
+    {
+      "authoredDate": "2026-07-09T06:09:46Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:09:46Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme bootstrap phase",
+      "oid": "1ef607b60551199ed1d92706125d8989ea7da7ba"
+    },
+    {
+      "authoredDate": "2026-07-09T06:12:27Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:12:27Z",
+      "messageBody": "",
+      "messageHeadline": "sync offline rhyme phase ledger",
+      "oid": "cd9699aaeadbe5545a0d720462abd41afd6a58ed"
+    },
+    {
+      "authoredDate": "2026-07-09T06:32:02Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:32:02Z",
+      "messageBody": "",
+      "messageHeadline": "lock offline rhyme mvp scope",
+      "oid": "8730a4885f2c6a047cf33ddc26f2a5a52d50655a"
+    },
+    {
+      "authoredDate": "2026-07-09T06:32:52Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:32:52Z",
+      "messageBody": "",
+      "messageHeadline": "record phase one pr details",
+      "oid": "60fed099f505c461c974ac7399d96669862886ec"
+    },
+    {
+      "authoredDate": "2026-07-09T06:36:40Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:36:40Z",
+      "messageBody": "",
+      "messageHeadline": "record phase one review evidence",
+      "oid": "4f0bd951aca9a63f233c71088caca0d4b0d46ecd"
+    },
+    {
+      "authoredDate": "2026-07-09T06:40:35Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:40:35Z",
+      "messageBody": "",
+      "messageHeadline": "record phase one review callback",
+      "oid": "811338f6e5cbdadf545dc0d9199e960a6ea787b9"
+    },
+    {
+      "authoredDate": "2026-07-09T06:41:03Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-09T06:41:03Z",
+      "messageBody": "lock offline rhyme mvp scope",
+      "messageHeadline": "Merge pull request #16 from dirtydishes/lavender/offline-rhyme-phase-01",
+      "oid": "0adefd0a0f12157e24981a70c7f4e0cf358f7b43"
+    },
+    {
+      "authoredDate": "2026-07-09T06:41:57Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:41:57Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme product scope phase",
+      "oid": "e3aed21efdb8c4cdb89177307dad5c257972d0bb"
+    },
+    {
+      "authoredDate": "2026-07-09T06:57:26Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:57:26Z",
+      "messageBody": "",
+      "messageHeadline": "harden editor suggestion baseline",
+      "oid": "1da764f690e1d31496e39f4e291a88d5a4377629"
+    },
+    {
+      "authoredDate": "2026-07-09T06:58:09Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T06:58:09Z",
+      "messageBody": "",
+      "messageHeadline": "record phase 02 pr evidence",
+      "oid": "51a4dc7b0e8ca7b28ad0df5644ef1cb4c5c529f6"
+    },
+    {
+      "authoredDate": "2026-07-09T07:02:49Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:02:49Z",
+      "messageBody": "",
+      "messageHeadline": "record phase two review evidence",
+      "oid": "45f93e18c5686666473287f2b5c8d271c6efe5b7"
+    },
+    {
+      "authoredDate": "2026-07-09T07:07:36Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:07:36Z",
+      "messageBody": "",
+      "messageHeadline": "record phase two review callback",
+      "oid": "c8e064a4847d51a939fb7df74825381819f651cc"
+    },
+    {
+      "authoredDate": "2026-07-09T07:07:52Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-09T07:07:52Z",
+      "messageBody": "harden editor suggestion baseline",
+      "messageHeadline": "Merge pull request #17 from dirtydishes/lavender/offline-rhyme-phase-02",
+      "oid": "fca3a8313d65a3e40091b22ff88c28d942deaf62"
+    },
+    {
+      "authoredDate": "2026-07-09T07:10:30Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:10:30Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme editor baseline phase",
+      "oid": "08f691556eb00d4f6c37c79bdc6666b9ad7e38f8"
+    },
+    {
+      "authoredDate": "2026-07-09T07:30:00Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:31:05Z",
+      "messageBody": "",
+      "messageHeadline": "add pure rhyme core fixtures",
+      "oid": "774b55c765cd10bfee99ef7cea824868642583b1"
+    },
+    {
+      "authoredDate": "2026-07-09T07:37:39Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:37:39Z",
+      "messageBody": "",
+      "messageHeadline": "simplify pure rhyme core review surface",
+      "oid": "e8be8082b14ce3b643ed36fdd1d36c37fc452024"
+    },
+    {
+      "authoredDate": "2026-07-09T07:38:21Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:38:21Z",
+      "messageBody": "",
+      "messageHeadline": "record phase three pr check evidence",
+      "oid": "3b2fd7ca56b65b7856f33c821d25938de54b014b"
+    },
+    {
+      "authoredDate": "2026-07-09T07:40:22Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:40:22Z",
+      "messageBody": "",
+      "messageHeadline": "record phase three review callback",
+      "oid": "bf3ea8396bb8a6b5e14f9159776d4ffb99ffc79e"
+    },
+    {
+      "authoredDate": "2026-07-09T07:40:44Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-09T07:40:44Z",
+      "messageBody": "add pure rhyme core fixtures",
+      "messageHeadline": "Merge pull request #18 from dirtydishes/lavender/offline-rhyme-phase-03",
+      "oid": "8915da340e707eb7cfff8cd99f0a73bdcffb5afb"
+    },
+    {
+      "authoredDate": "2026-07-09T07:44:02Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T07:44:02Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme core phase",
+      "oid": "500be76d0abeaffdd8b08a2bc45dd18ad3e461b0"
+    },
+    {
+      "authoredDate": "2026-07-09T08:06:59Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T08:06:59Z",
+      "messageBody": "",
+      "messageHeadline": "add cmu rhyme artifact pipeline",
+      "oid": "112c0d3bf2404e322ec295d2be7ae0338d8149a5"
+    },
+    {
+      "authoredDate": "2026-07-09T08:08:03Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T08:08:03Z",
+      "messageBody": "",
+      "messageHeadline": "record phase four pr details",
+      "oid": "09d7d23c7324a7a92a0dce3805d1257385d44248"
+    },
+    {
+      "authoredDate": "2026-07-09T08:17:29Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T08:17:29Z",
+      "messageBody": "",
+      "messageHeadline": "tighten phase four artifact smoke evidence",
+      "oid": "ad6db02e5641b3620d0ddfb69bd929c62293528b"
+    },
+    {
+      "authoredDate": "2026-07-09T08:19:29Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T08:19:29Z",
+      "messageBody": "",
+      "messageHeadline": "record phase four review callback",
+      "oid": "c5142ec0babe0036f043254a7dc702ffdabcafc4"
+    },
+    {
+      "authoredDate": "2026-07-09T08:19:49Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-09T08:19:49Z",
+      "messageBody": "add cmu rhyme artifact pipeline",
+      "messageHeadline": "Merge pull request #19 from dirtydishes/lavender/offline-rhyme-phase-04",
+      "oid": "0f717d9856b984f500af6f4c7d1e321a6498d2cb"
+    },
+    {
+      "authoredDate": "2026-07-09T08:24:40Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-09T08:24:40Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme artifact phase",
+      "oid": "4e42bf265c24a6cde2bcb07bf16b9d70c822a894"
+    },
+    {
+      "authoredDate": "2026-07-11T23:06:19Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-11T23:06:19Z",
+      "messageBody": "",
+      "messageHeadline": "wire native rhyme suggestions",
+      "oid": "3fb798254473a7eee4494fbe7b17122e10266dc8"
+    },
+    {
+      "authoredDate": "2026-07-11T23:07:18Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-11T23:07:18Z",
+      "messageBody": "",
+      "messageHeadline": "record phase five pr details",
+      "oid": "a95a0301a0a248517c5063ec694d1e287b67003b"
+    },
+    {
+      "authoredDate": "2026-07-11T23:15:06Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-11T23:15:06Z",
+      "messageBody": "",
+      "messageHeadline": "repair phase five suggestion filtering",
+      "oid": "33d71837b0eda1850571e781e866f3d9c469a721"
+    },
+    {
+      "authoredDate": "2026-07-11T23:16:16Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-11T23:16:16Z",
+      "messageBody": "",
+      "messageHeadline": "record phase five review callback",
+      "oid": "f13d22249abfd87bb89acfd7149616e84642acf2"
+    },
+    {
+      "authoredDate": "2026-07-11T23:16:28Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-11T23:16:28Z",
+      "messageBody": "wire native rhyme suggestions",
+      "messageHeadline": "Merge pull request #20 from dirtydishes/lavender/offline-rhyme-phase-05",
+      "oid": "8443b14581ba8fe0d93479f2b5189c40a4481499"
+    },
+    {
+      "authoredDate": "2026-07-11T23:19:44Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-11T23:19:44Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme suggestion phase",
+      "oid": "6ead294be4cdcea80a4b24444024919d371301fe"
+    },
+    {
+      "authoredDate": "2026-07-12T00:15:56Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T00:15:56Z",
+      "messageBody": "",
+      "messageHeadline": "add slant rhyme ranking guard",
+      "oid": "38fa93465f7c9afdf1af0aa3b2f07b108c375b5a"
+    },
+    {
+      "authoredDate": "2026-07-12T00:17:22Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T00:18:03Z",
+      "messageBody": "",
+      "messageHeadline": "record phase six pr details",
+      "oid": "9da3b20e9c3d233898999b7019b5e7100b8d6b77"
+    },
+    {
+      "authoredDate": "2026-07-12T00:38:31Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T00:38:31Z",
+      "messageBody": "",
+      "messageHeadline": "repair phase six review findings",
+      "oid": "fafbe7bef21083163915898f8cbdeaa09ca24a4b"
+    },
+    {
+      "authoredDate": "2026-07-12T00:39:59Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T00:39:59Z",
+      "messageBody": "",
+      "messageHeadline": "record phase six review evidence",
+      "oid": "dc79ecd14d6899e64f23373841ddc5b154a1fa0e"
+    },
+    {
+      "authoredDate": "2026-07-12T00:41:18Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T00:41:18Z",
+      "messageBody": "",
+      "messageHeadline": "record phase six review callback",
+      "oid": "1aac7fa4911d3f6b6700e2ef491b53f0e71bc8e8"
+    },
+    {
+      "authoredDate": "2026-07-12T00:41:28Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-12T00:41:28Z",
+      "messageBody": "add slant rhyme ranking guard",
+      "messageHeadline": "Merge pull request #21 from dirtydishes/lavender/offline-rhyme-phase-06",
+      "oid": "7b29c77598b8f0060ce80d4f46342eb28d63f3f0"
+    },
+    {
+      "authoredDate": "2026-07-12T00:45:35Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T00:45:35Z",
+      "messageBody": "",
+      "messageHeadline": "close offline rhyme ranking phase",
+      "oid": "2083d22665acc5aadbdd1fe6391036478f454803"
+    },
+    {
+      "authoredDate": "2026-07-12T01:17:04Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T01:17:04Z",
+      "messageBody": "",
+      "messageHeadline": "record offline rhyme phase seven closeout evidence",
+      "oid": "4827dfeee9c5fbad3f70dd39cec09bd248b7c22b"
+    },
+    {
+      "authoredDate": "2026-07-12T01:18:34Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T01:18:34Z",
+      "messageBody": "",
+      "messageHeadline": "record phase seven pr details",
+      "oid": "81befcbef2efd9f9f032fc9fa36454a8dc6f2dd3"
+    },
+    {
+      "authoredDate": "2026-07-12T01:19:27Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T01:19:27Z",
+      "messageBody": "",
+      "messageHeadline": "clarify phase seven pr evidence",
+      "oid": "fab977f142dd12ebf96721488dfd48aea2f063fa"
+    },
+    {
+      "authoredDate": "2026-07-12T01:30:04Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T01:30:04Z",
+      "messageBody": "",
+      "messageHeadline": "repair phase seven storyboard closeout",
+      "oid": "dc7790ea1ee5f1027c100a5e530eb679cb4fd728"
+    },
+    {
+      "authoredDate": "2026-07-12T01:32:23Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T01:32:23Z",
+      "messageBody": "",
+      "messageHeadline": "record phase seven review callback",
+      "oid": "c262f44dc142e88b250aa26bde0d4109dd5bc9e7"
+    },
+    {
+      "authoredDate": "2026-07-12T01:32:34Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "MDQ6VXNlcjM1NDc3ODc0",
+          "login": "dirtydishes",
+          "name": "dirtydishes"
+        }
+      ],
+      "committedDate": "2026-07-12T01:32:34Z",
+      "messageBody": "phase 07: device evidence and closeout",
+      "messageHeadline": "Merge pull request #22 from dirtydishes/lavender/offline-rhyme-phase-07",
+      "oid": "14ac4cf51fb175ab46cce158fe09205813dc1f7a"
+    },
+    {
+      "authoredDate": "2026-07-12T01:39:53Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T01:39:53Z",
+      "messageBody": "",
+      "messageHeadline": "complete offline rhyme suggestions loop",
+      "oid": "7fa9ac1fd4f00c83c39d0ea5d4a065b935869bec"
+    },
+    {
+      "authoredDate": "2026-07-12T02:30:53Z",
+      "authors": [
+        {
+          "email": "<redacted-email>",
+          "id": "",
+          "login": "",
+          "name": "delta"
+        }
+      ],
+      "committedDate": "2026-07-12T02:30:53Z",
+      "messageBody": "",
+      "messageHeadline": "refresh beads issues for production rhyme suggestions phases",
+      "oid": "fdd2f5f6327501c967b7bca9decd6ee24ba5bbd0"
+    }
+  ],
+  "createdAt": "2026-08-20T01:43:20Z",
+  "deletions": 7777,
+  "headRefName": "lavender/production-rhyme-loop-bootstrap",
+  "headRefOid": "cb416a47231194b5e569c154a1a4b028dc2d546f",
+  "isDraft": false,
+  "latestReviews": [],
+  "mergeStateStatus": "CLEAN",
+  "mergeable": "MERGEABLE",
+  "mergedAt": null,
+  "mergedBy": null,
+  "number": 31,
+  "reviewDecision": "",
+  "reviewRequests": [],
+  "reviews": [],
+  "state": "OPEN",
+  "title": "bootstrap the production rhyme loop and editor surfaces",
+  "updatedAt": "2026-08-20T01:43:20Z",
+  "url": "https://github.com/dirtydishes/lyricslab/pull/31"
+}
+

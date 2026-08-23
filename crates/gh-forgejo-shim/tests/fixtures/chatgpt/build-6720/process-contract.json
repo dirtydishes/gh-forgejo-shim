@@ -74,23 +74,20 @@
     }
   ],
   "github_2_96_control": {
+    "binary_version": "gh version 2.96.0 (2026-07-02)",
+    "release_archive": "gh_2.96.0_linux_amd64.tar.gz",
+    "release_archive_sha256": "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60",
+    "captured_at": "2026-08-22",
+    "provenance": "official GitHub CLI 2.96.0 release binary against github.com; email values redacted after capture",
     "repo": "dirtydishes/lyricslab",
     "pull_request": 31,
-    "view_empty_values": {
-      "autoMergeRequest": null,
-      "comments": [],
-      "commits": [],
-      "latestReviews": [],
-      "mergedAt": null,
-      "mergedBy": null,
-      "reviewDecision": "",
-      "reviewRequests": [],
-      "reviews": []
-    },
+    "view_stdout_fixture": "github-pr-31.json",
+    "view_exit_code": 0,
+    "view_stderr": "",
     "no_checks": {
       "exit_code": 1,
       "stdout": "",
-      "stderr": "no checks reported\n"
+      "stderr": "no checks reported on the 'lavender/production-rhyme-loop-bootstrap' branch\n"
     }
   },
   "forgejo_known_gaps": [

@@ -1,15 +1,53 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::{self, JoinHandle};
 
 use serde::Deserialize;
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+#[allow(dead_code)]
+pub fn start_json_server(
+    body: &'static str,
+) -> io::Result<(String, JoinHandle<io::Result<String>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let host = listener.local_addr()?.to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept()?;
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 512];
+        loop {
+            let count = stream.read(&mut scratch)?;
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&scratch[..count]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes())?;
+        stream.flush()?;
+        Ok(String::from_utf8_lossy(&request)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string())
+    });
+    Ok((host, handle))
+}
 
 #[allow(dead_code)]
 pub struct ScriptedGh {
