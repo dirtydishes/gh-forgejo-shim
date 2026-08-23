@@ -411,19 +411,16 @@ pub fn apply_simple_jq(data: &Value, expression: &str) -> Option<Value> {
             continue;
         }
         if let Value::Array(items) = &value {
-            if let Some(key) = part.strip_suffix("[]") {
-                value = Value::Array(
-                    items
-                        .iter()
-                        .filter_map(|item| {
-                            item.as_object()
-                                .map(|object| object.get(key).cloned().unwrap_or(Value::Null))
-                        })
-                        .collect(),
-                );
-            } else {
-                return None;
-            }
+            let key = part.strip_suffix("[]")?;
+            value = Value::Array(
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.as_object()
+                            .map(|object| object.get(key).cloned().unwrap_or(Value::Null))
+                    })
+                    .collect(),
+            );
         } else if let Value::Object(object) = &value {
             value = object.get(part).cloned().unwrap_or(Value::Null);
         } else {
@@ -1284,6 +1281,17 @@ mod tests {
             Some(json!("https://git.example.com/owner/repo/pulls/12"))
         );
         assert_eq!(apply_simple_jq(&data, ".missing // empty"), None);
+
+        let rows = json!([
+            {"name": "alpha"},
+            {"name": "beta"},
+            null
+        ]);
+        assert_eq!(
+            apply_simple_jq(&rows, ".name[]"),
+            Some(json!(["alpha", "beta"]))
+        );
+        assert_eq!(apply_simple_jq(&rows, ".name"), None);
     }
 
     #[test]
