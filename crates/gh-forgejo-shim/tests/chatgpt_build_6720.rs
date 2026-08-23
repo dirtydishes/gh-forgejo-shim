@@ -183,6 +183,8 @@ fn fixture_preserves_the_accepted_process_boundary() -> TestResult {
     assert_eq!(control.view_stdout_fixture, "github-pr-31.json");
     assert_eq!(control.view_exit_code, 0);
     assert_eq!(control.view_stderr, "");
+    assert_eq!(control.repo, "dirtydishes/lyricslab");
+    assert_eq!(control.pull_request, 31);
     assert_eq!(control.no_checks.exit_code, 1);
     assert_eq!(control.no_checks.stdout, "");
     assert_eq!(
@@ -230,7 +232,7 @@ fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
             "add-host",
             "git.dirtydishes.dev",
             "--alias",
-            &host,
+            "127.0.0.1",
             "--api-root",
             &api_root,
             "--credential-host",
@@ -245,19 +247,13 @@ fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
     );
 
     let contract = load_contract()?;
-    let mut argv = command(&contract, "pr_list")?.argv.clone();
-    let repo = format!("{host}/dirtydishes/dirtypages");
-    let repo_index = argv
-        .iter()
-        .position(|arg| arg == "127.0.0.1/dirtydishes/dirtypages")
-        .ok_or_else(|| io::Error::other("pr_list fixture has no captured repo"))?;
-    argv[repo_index] = repo;
+    let argv = &command(&contract, "pr_list")?.argv;
     let output = fixture
         .command("gh-forgejo-shim")?
         .env("FJ_SHIM_TOKEN", "test-token")
         .env_remove("FJ_SHIM_HOSTS")
         .arg("gh")
-        .args(&argv)
+        .args(argv)
         .output()?;
     let request_lines = handle
         .join()
@@ -275,8 +271,11 @@ fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
         }])
     );
     assert_eq!(request_lines.len(), 2);
-    assert!(request_lines[0].contains("/api/v1/user "));
-    assert!(request_lines[1].contains("/api/v1/repos/dirtydishes/dirtypages/pulls?"));
+    assert_request(&request_lines[0], "/api/v1/user")?;
+    assert_request(
+        &request_lines[1],
+        "/api/v1/repos/dirtydishes/dirtypages/pulls",
+    )?;
     Ok(())
 }
 
@@ -436,6 +435,18 @@ fn object_keys(value: &Value) -> ContractResult<BTreeSet<String>> {
 
 fn string_set(values: &[String]) -> BTreeSet<String> {
     values.iter().cloned().collect()
+}
+
+fn assert_request(request_line: &str, expected_path: &str) -> ContractResult<()> {
+    let mut parts = request_line.split_whitespace();
+    assert_eq!(parts.next(), Some("GET"));
+    let path_and_query = parts
+        .next()
+        .ok_or_else(|| io::Error::other("request line has no path"))?;
+    assert_eq!(path_and_query.split('?').next(), Some(expected_path));
+    assert_eq!(parts.next(), Some("HTTP/1.1"));
+    assert_eq!(parts.next(), None);
+    Ok(())
 }
 
 fn render_argv(argv: &[String], number: u64, repo: &str, host: &str) -> Vec<String> {

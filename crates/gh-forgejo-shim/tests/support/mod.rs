@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -18,11 +19,25 @@ pub fn start_json_server(
     bodies: Vec<&'static str>,
 ) -> io::Result<(String, JoinHandle<io::Result<Vec<String>>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
     let host = listener.local_addr()?.to_string();
     let handle = thread::spawn(move || {
         let mut request_lines = Vec::new();
         for body in bodies {
-            let (mut stream, _) = listener.accept()?;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Ok(request_lines);
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(1)))?;
             let mut request = Vec::new();
             let mut scratch = [0_u8; 512];
             loop {
