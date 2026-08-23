@@ -57,20 +57,12 @@ fn short_binary_prints_version_without_python() -> TestResult {
 }
 
 #[test]
-fn doctor_runs_native_diagnostics() -> TestResult {
+fn doctor_ignores_an_installed_system_gh() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
 
-    let restricted_path = std::env::join_paths([
-        fixture.bin().as_os_str(),
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])?;
     let output = fixture
         .command("gh-forgejo-shim")?
-        .env("PATH", restricted_path)
         .arg("doctor")
         .output()?;
 
@@ -89,6 +81,7 @@ fn doctor_runs_native_diagnostics() -> TestResult {
     assert!(stdout.contains("[fix] auth token:"), "{stdout}");
     assert!(stdout.contains("[ok] current repo host:"), "{stdout}");
     assert!(stdout.contains("repair commands:"), "{stdout}");
+    assert!(!stdout.contains("/usr/bin/gh"), "{stdout}");
     Ok(())
 }
 
@@ -297,7 +290,6 @@ fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visibl
 
     let output = fixture
         .command("gfj")?
-        .env("PATH", system_path_only()?)
         .env("FJ_SHIM_REAL_GH", &real_gh)
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
         .args(["bootstrap", "--no-gui-path"])
@@ -753,16 +745,6 @@ fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestRes
 fn restricted_path_with(first: impl AsRef<OsStr>) -> io::Result<OsString> {
     std::env::join_paths([
         first.as_ref(),
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
-}
-
-fn system_path_only() -> io::Result<OsString> {
-    std::env::join_paths([
         OsStr::new("/usr/bin"),
         OsStr::new("/bin"),
         OsStr::new("/usr/sbin"),
