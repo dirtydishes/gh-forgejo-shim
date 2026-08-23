@@ -28,6 +28,7 @@ impl CliFixture {
         fs::create_dir_all(&home)?;
         fs::create_dir_all(&repo)?;
         fs::create_dir_all(&bin)?;
+        install_git_fixture(&bin)?;
 
         Ok(Self {
             root,
@@ -89,11 +90,7 @@ impl CliFixture {
     }
 
     fn fixture_path(&self) -> io::Result<OsString> {
-        let mut paths = vec![self.bin.clone()];
-        if let Some(system_path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&system_path));
-        }
-        std::env::join_paths(paths).map_err(|error| {
+        std::env::join_paths([self.bin.as_os_str()]).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("unable to build fixture PATH: {error}"),
@@ -126,6 +123,25 @@ impl CliFixture {
             )))
         }
     }
+}
+
+fn install_git_fixture(bin: &Path) -> io::Result<()> {
+    let executable = format!("git{}", std::env::consts::EXE_SUFFIX);
+    let source = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .map(|directory| directory.join(&executable))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "git is not available for the test fixture",
+            )
+        })?;
+    let target = bin.join(executable);
+
+    fs::copy(source, &target)?;
+    make_executable(&target)
 }
 
 impl Drop for CliFixture {

@@ -61,10 +61,7 @@ fn doctor_ignores_an_installed_system_gh() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
 
-    let output = fixture
-        .command("gh-forgejo-shim")?
-        .arg("doctor")
-        .output()?;
+    let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
 
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
