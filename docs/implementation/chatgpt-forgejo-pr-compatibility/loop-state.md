@@ -16,17 +16,17 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S0
+Current phase: none
 
-Current Beads issue: `gh-forgejo-shim-c00`
+Current Beads issue: none
 
 Current PR: none
 
-Current execution strategy: direct coordinator implementation with fresh independent review
+Current execution strategy: none
 
-Last completed phase: none
+Last completed phase: S0
 
-Blocked: yes
+Blocked: no
 
 ## Decisions
 
@@ -43,7 +43,7 @@ Blocked: yes
 
 | Phase | Beads Issue | Status | PR | Turn Doc |
 |---|---|---|---|---|
-| S0 | `gh-forgejo-shim-c00` | open | none | `turn-docs/00-s0.md` |
+| S0 | `gh-forgejo-shim-c00` | closed | none | `turn-docs/00-s0.md` |
 | S1 | `gh-forgejo-shim-c01` | open | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | open | none | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | open | none | `turn-docs/03-s3.md` |
@@ -64,4 +64,4 @@ Blocked: yes
 
 ## Last Coordinator Update
 
-S0 source work is locally green and independently approved at `d19461c`, but GitHub Actions run `32615162994` failed on a pre-existing stable Clippy 1.98 warning in out-of-scope `normalize.rs`. Follow-up: `gh-forgejo-shim-9l1`. Stop before S1.
+S0 closed after separate bug `gh-forgejo-shim-9l1` repaired the pre-existing stable Clippy failure. Exact commit `8e8762b` passed independent review and GitHub Actions run `32615534238`. S1 is ready for launch preflight.
