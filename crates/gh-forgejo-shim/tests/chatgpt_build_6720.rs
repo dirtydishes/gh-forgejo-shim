@@ -6,7 +6,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use gh_forgejo_shim::forgejo::{ForgejoClient, RepoRef};
 use gh_forgejo_shim::normalize::{
     filter_check_fields, filter_fields, normalize_pr_checks, normalize_pull,
 };
@@ -83,6 +82,14 @@ fn fixture_preserves_the_accepted_process_boundary() -> TestResult {
     let contract = load_contract()?;
 
     assert_eq!(contract.schema, "chatgpt-build-6720-process-contract/v1");
+    assert_eq!(
+        contract
+            .commands
+            .iter()
+            .map(|command| command.id.as_str())
+            .collect::<Vec<_>>(),
+        ["version", "auth_status", "pr_list", "pr_view", "pr_checks"]
+    );
     assert_eq!(contract.client.application, "ChatGPT.app");
     assert_eq!(contract.client.version, "26.814.41407");
     assert_eq!(contract.client.build, "6720");
@@ -208,32 +215,73 @@ fn forgejo_alias_identity_is_not_yet_canonicalized() -> TestResult {
 }
 
 #[test]
-#[ignore = "red contract probe: @me filtering belongs to S3"]
+#[ignore = "red contract probe: @me filtering belongs to S6"]
 fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
-    let (host, handle) = start_json_server(
-        r#"[{"number":1,"user":{"login":"alice"}},{"number":2,"user":{"login":"bob"}}]"#,
-    )?;
-    let client = ForgejoClient::new(None).with_scheme("http");
-    let pulls = client.list_pulls(&RepoRef::new(host, "owner", "repo"), "all", None)?;
-    let request_line = handle
+    let (host, handle) = start_json_server(vec![
+        r#"{"login":"alice","full_name":"Alice Example"}"#,
+        r#"[{"number":1,"state":"open","html_url":"https://git.dirtydishes.dev/dirtydishes/dirtypages/pulls/1","head":{"ref":"main"},"base":{"ref":"main"},"user":{"login":"alice"}},{"number":2,"state":"open","html_url":"https://git.dirtydishes.dev/dirtydishes/dirtypages/pulls/2","head":{"ref":"main"},"base":{"ref":"main"},"user":{"login":"bob"}}]"#,
+    ])?;
+    let fixture = CliFixture::new()?;
+    let api_root = format!("http://{host}/api/v1");
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            &host,
+            "--api-root",
+            &api_root,
+            "--credential-host",
+            "git.dirtydishes.dev",
+        ])
+        .output()?;
+    assert_eq!(
+        configured.status.code(),
+        Some(0),
+        "future host-profile setup failed: {}",
+        String::from_utf8_lossy(&configured.stderr)
+    );
+
+    let contract = load_contract()?;
+    let mut argv = command(&contract, "pr_list")?.argv.clone();
+    let repo = format!("{host}/dirtydishes/dirtypages");
+    let repo_index = argv
+        .iter()
+        .position(|arg| arg == "127.0.0.1/dirtydishes/dirtypages")
+        .ok_or_else(|| io::Error::other("pr_list fixture has no captured repo"))?;
+    argv[repo_index] = repo;
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_TOKEN", "test-token")
+        .env_remove("FJ_SHIM_HOSTS")
+        .arg("gh")
+        .args(&argv)
+        .output()?;
+    let request_lines = handle
         .join()
         .map_err(|_| io::Error::other("fake server thread panicked"))??;
 
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8(output.stderr)?, "");
     assert_eq!(
-        request_line,
-        "GET /api/v1/repos/owner/repo/pulls?state=all HTTP/1.1"
+        serde_json::from_slice::<Value>(&output.stdout)?,
+        json!([{
+            "headRefName": "main",
+            "number": 1,
+            "state": "OPEN",
+            "url": "https://git.dirtydishes.dev/dirtydishes/dirtypages/pulls/1"
+        }])
     );
-    assert_eq!(
-        pulls.len(),
-        1,
-        "@me must retain only the current user's pull"
-    );
-    assert_eq!(pulls[0]["user"]["login"], "alice");
+    assert_eq!(request_lines.len(), 2);
+    assert!(request_lines[0].contains("/api/v1/user "));
+    assert!(request_lines[1].contains("/api/v1/repos/dirtydishes/dirtypages/pulls?"));
     Ok(())
 }
 
 #[test]
-#[ignore = "red contract probe: the missing pr view fields belong to S5"]
+#[ignore = "red contract probe: the missing pr view fields belong to S7 and S8"]
 fn forgejo_pr_view_does_not_yet_emit_all_25_fields() -> TestResult {
     let contract = load_contract()?;
     let fields = json_fields(command(&contract, "pr_view")?)?;
@@ -253,7 +301,7 @@ fn forgejo_pr_view_does_not_yet_emit_all_25_fields() -> TestResult {
 }
 
 #[test]
-#[ignore = "red contract probe: complete checks output belongs to S6"]
+#[ignore = "red contract probe: complete checks output belongs to S9"]
 fn forgejo_pr_checks_do_not_yet_emit_all_9_fields() -> TestResult {
     let contract = load_contract()?;
     let fields = json_fields(command(&contract, "pr_checks")?)?;
@@ -289,7 +337,7 @@ fn github_2_96_view_control_preserves_argv_status_and_literal_output() -> TestRe
     );
     let stdout = load_fixture(&control.view_stdout_fixture)?;
     let parsed: Value = serde_json::from_str(&stdout)?;
-    assert_eq!(object_keys(&parsed)?.len(), 25);
+    assert_eq!(object_keys(&parsed)?, string_set(&json_fields(view)?));
     let fixture = CliFixture::new()?;
     let scripted = ScriptedGh::install(
         &fixture,
