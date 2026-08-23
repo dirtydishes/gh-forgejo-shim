@@ -3,7 +3,7 @@
   "operation": "install-generated-contract",
   "artifacts": {
     "IMPLEMENT.md": "2ef6271b4a27e88afff492a16641d99ff7f194f3f7f91a2fcb154078072c539e",
-    "prompts/run-loop.md": "1dbfa149a56341d064c03e43ddb876047cfe0f5d5e8f986fad9bd7928929a64e",
+    "prompts/run-loop.md": "4fa29027d6d47ef65dd48e2911e928832dc4f5857ec5b4a86134467d9906ba81",
     "runtime/adapter.json": null,
     "runtime/binding.json": "a67b0b1cce939b29e55c84fcfb775f1dfad6f037c73fa3e7ff38cc91b5f1e7c1",
     "prompts/implementation-thread.md": null,
@@ -13,7 +13,7 @@
     "schemas/execution-summary.schema.json": "b50a896420287355601886b430e2ee3ed982a4b312170e75f7e0104cd27aff22",
     "schemas/harness-binding.schema.json": "edd121eaeff8862419a8813d958cac504cd0dbff2ff1d5b4644c8c3300e0a103",
     "schemas/implementation-callback.schema.json": "322d30677262891d1b62550c69a9ef95fa67235025a8f179bf6cd2495cce0022",
-    "schemas/review-callback.schema.json": "df4271af2e97c04bd6a6f88742fc9e84001514bb5a799304f645bba7175486e5",
+    "schemas/review-callback.schema.json": "255285539cd7b03d15a44510ceea95196d770a3ce93ead48ffa86fadc11ffa33",
     "schemas/runtime-activation.schema.json": "8d13d6c9c1a25f0e8923ffa0c9c90bbabe0642d00199c2d754ecf3747b9cc1b0",
     "schemas/runtime-capabilities.schema.json": "c7de194ed3c780fcf15e3a7dd3d2b988b18345702ad9dc2c37b1fb252b5334ef",
     "schemas/runtime-generation.schema.json": "5247b7b1759d7ec3964638a6ba633c301402a0c2d7e56800ab722061e1745882"
@@ -24,9 +24,9 @@
     "adapter_identity": {
       "target": "codex",
       "path": "codex-source-builder-closure",
-      "sha256": "818f3fa37ef51948448b46e065d3bc0423e5e1a1a7b1b19075dc4bc6d5c10eba"
+      "sha256": "e31f98fad2672ba1b6bbac1b93efe1e0d428fcd5a41bd58339eec12afa9aea8b"
     },
     "execution_readiness": "ready"
   },
-  "generation_id": "95591782f575fb3e9e4d8cdb6b9b8228bc42694fc99c87fe5b18809eda2d256d"
+  "generation_id": "2b17455ec8bbfbafa4687ab7ce2b2b815954db818f44bce215e2913203a99cd7"
 }

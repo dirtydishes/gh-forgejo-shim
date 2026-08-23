@@ -33,7 +33,7 @@ Start from:
 10. Under structured completion, use callbacks as the normal path with no status, sleep, or wait polling. Use reason-required, rate-limited recovery only from adapter-observed missed-heartbeat evidence, unacknowledged delivery, or explicit operator intervention.
 11. After degraded delivery, renew at a verified safe ownership boundary and record Beads, turn-doc, PR, branch, checkout, and fresh activation evidence. Context-pressure renewal is adaptive and sets no fixed lifetime or topology.
 12. Implement within scope. If evidence invalidates accepted intent or phase structure, record a proposed plan amendment instead of silently rewriting the plan.
-13. Obtain every independent review role required by the selected phase. A thermonuclear reviewer must use `thermo-nuclear-code-quality-review`. An adversarial reviewer must not invoke or consult that skill. Keep the roles in separate review contexts and record one role-specific callback per reviewer under the same review-set ID and repair-pass count. When the phase defines a shared repair process, wait for every required callback, combine and deduplicate findings, appoint one repair owner, rerun affected tests and every required reviewer, and count the result as one shared repair pass. Enforce the phase's accepted pass limit. When the limit is exhausted, stop and ask the user instead of starting another repair pass. Resolve CI to an allowed terminal state.
+13. Obtain proportionate independent review using `thermo-nuclear-code-quality-review` when a reviewer agent is used. Resolve CI to an allowed terminal state.
 14. Update the existing turn doc, Beads, export when applicable, and `loop-state.md`.
 15. Continue until complete, blocked, interrupted, unresolved, or explicitly `--once`.
 
