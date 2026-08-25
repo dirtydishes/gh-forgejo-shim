@@ -1,8 +1,10 @@
 //! Canonical Forgejo host profiles and transport-alias resolution.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::config::{is_known_github_host, normalize_host};
 use crate::repo::RepoRef;
-use crate::Result;
+use crate::{Result, ShimError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostProfile {
@@ -32,7 +34,30 @@ pub enum ProviderResolution {
 }
 
 impl HostRegistry {
-    pub fn new(profiles: Vec<HostProfile>) -> Result<Self> {
+    pub fn new(mut profiles: Vec<HostProfile>) -> Result<Self> {
+        let mut assigned = BTreeMap::<String, usize>::new();
+        for (profile_index, profile) in profiles.iter_mut().enumerate() {
+            profile.canonical_host = normalize_host(&profile.canonical_host);
+            profile.aliases = profile
+                .aliases
+                .iter()
+                .map(|alias| normalize_host(alias))
+                .collect();
+
+            let mut local = BTreeSet::new();
+            for transport_host in std::iter::once(&profile.canonical_host).chain(&profile.aliases) {
+                if !local.insert(transport_host.clone()) {
+                    return Err(ShimError::new(format!(
+                        "duplicate transport host: {transport_host}"
+                    )));
+                }
+                if assigned.insert(transport_host.clone(), profile_index).is_some() {
+                    return Err(ShimError::new(format!(
+                        "ambiguous transport host: {transport_host}"
+                    )));
+                }
+            }
+        }
         Ok(Self { profiles })
     }
 
