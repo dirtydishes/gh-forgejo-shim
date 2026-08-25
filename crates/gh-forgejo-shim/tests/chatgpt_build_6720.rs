@@ -302,7 +302,10 @@ fn forgejo_alias_uses_full_configured_api_root() -> TestResult {
 #[test]
 fn forgejo_alias_auth_status_uses_credential_host_without_leaking_tokens() -> TestResult {
     let fixture = CliFixture::new()?;
-    fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\nexit 23\n")?;
+    fixture.write_executable(
+        "gh",
+        "#!/bin/sh\nprintf 'delegated-to-github\\n'\nexit 23\n",
+    )?;
     let configured = fixture
         .command("gfj")?
         .args([
@@ -350,19 +353,16 @@ fn forgejo_alias_auth_status_uses_credential_host_without_leaking_tokens() -> Te
             .env_remove("FJ_SHIM_HOSTS")
             .env_remove("FJ_SHIM_REAL_GH")
             .arg("gh")
-            .args([
-                "auth",
-                "status",
-                "--active",
-                "--hostname",
-                requested_host,
-            ])
+            .args(["auth", "status", "--active", "--hostname", requested_host])
             .output()?;
         let stdout = String::from_utf8(output.stdout)?;
         let stderr = String::from_utf8(output.stderr)?;
 
         assert_eq!(output.status.code(), Some(0), "{requested_host}: {stderr}");
-        assert!(stdout.contains("Logged in to git.dirtydishes.dev"), "{stdout}");
+        assert!(
+            stdout.contains("Logged in to git.dirtydishes.dev"),
+            "{stdout}"
+        );
         assert!(!stdout.contains("linux-secret"), "{stdout}");
         assert!(!stdout.contains("unrelated-secret"), "{stdout}");
         assert!(!stdout.contains("delegated-to-github"), "{stdout}");
@@ -375,13 +375,7 @@ fn forgejo_alias_auth_status_uses_credential_host_without_leaking_tokens() -> Te
         .env_remove("FJ_SHIM_HOSTS")
         .env_remove("FJ_SHIM_REAL_GH")
         .arg("gh")
-        .args([
-            "auth",
-            "status",
-            "--active",
-            "--hostname",
-            "git.other.test",
-        ])
+        .args(["auth", "status", "--active", "--hostname", "git.other.test"])
         .output()?;
     let stdout = String::from_utf8(unrelated.stdout)?;
     let stderr = String::from_utf8(unrelated.stderr)?;

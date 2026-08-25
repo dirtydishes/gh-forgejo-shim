@@ -103,6 +103,10 @@ pub fn discover_token(
             .join("Application Support")
             .join("Cyborus.forgejo-cli")
             .join("keys.json"),
+        base.join(".local")
+            .join("share")
+            .join("forgejo-cli")
+            .join("keys.json"),
         base.join(".config").join("fj").join("config.json"),
         base.join(".config").join("fj").join("config.yml"),
         base.join(".config").join("fj").join("config.yaml"),

@@ -309,6 +309,7 @@ pub fn run(
 ) -> i32 {
     let argv = invocation.canonical_argv();
     let host = target.canonical_host();
+    let credential_host = target.profile().credential_host.as_str();
     let repo = target.repo().map(to_forgejo_repo);
     let api_root = target.profile().api_root.as_str();
     let env_map = env_map(env);
@@ -317,6 +318,7 @@ pub fn run(
     let result = run_with_context(
         argv,
         host,
+        credential_host,
         repo.as_ref(),
         api_root,
         &env_map,
@@ -340,6 +342,7 @@ pub fn run(
 fn run_with_context(
     argv: &[String],
     host: &str,
+    credential_host: &str,
     repo: Option<&ForgejoRepoRef>,
     api_root: &str,
     env: &EnvMap,
@@ -352,8 +355,14 @@ fn run_with_context(
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
     };
-    let token = auth::discover_token(Some(host), env, home, Some(current_platform()), true)
-        .map(|discovery| discovery.token);
+    let token = auth::discover_token(
+        Some(credential_host),
+        env,
+        home,
+        Some(current_platform()),
+        true,
+    )
+    .map(|discovery| discovery.token);
     let client = ForgejoClient::new(token.clone()).with_api_root(api_root)?;
 
     if command == "auth" {
