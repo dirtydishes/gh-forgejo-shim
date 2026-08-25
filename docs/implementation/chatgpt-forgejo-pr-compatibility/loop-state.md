@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-The user approved adding `crates/gh-forgejo-shim/src/forgejo.rs` to S3 repair pass `1/3`. The pass owns both committed red regressions: global `--version` must still delegate in a Forgejo checkout, and `ForgejoClient` must retain the full configured API base path. PR #29 remains the sole external integration PR.
+S3 repair pass `1/3` is green and pushed through `8ca6d0f0ae79a5f034046708de8c4cb9e748b19d` at `0/0` parity. Global `--version` delegates before repository detection, and `ForgejoClient` retains the configured API base path and query. Mutation is frozen for independent pass-1 review; PR #29 remains the sole external integration PR.
