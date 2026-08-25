@@ -642,6 +642,24 @@ mod tests {
     }
 
     #[test]
+    fn configured_api_root_keeps_its_path_and_query() -> TestResult {
+        let (host, handle) = start_fake_server(vec![FakeResponse::json("[]")])?;
+        let api_root = format!("http://{host}/forgejo/api/v1?tenant=blue#profile");
+        let client = ForgejoClient::new(None).with_api_root(&api_root)?;
+        let repo = RepoRef::new("git.example.com", "owner", "repo");
+
+        let pulls = client.list_pulls(&repo, "open", None)?;
+        let requests = finish_fake_server(handle)?;
+
+        assert!(pulls.is_empty());
+        assert_eq!(
+            requests[0].request_line,
+            "GET /forgejo/api/v1/repos/owner/repo/pulls?state=open&tenant=blue HTTP/1.1"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn create_pull_posts_python_compatible_json() -> TestResult {
         let (host, handle) = start_fake_server(vec![FakeResponse::json(
             r#"{"number":7,"title":"Ship it"}"#,

@@ -26,7 +26,7 @@ Current execution strategy: direct implementation in the saved coordinator-owned
 
 Last completed phase: S2
 
-Blocked: yes — S3 review found that full `api_root` ownership belongs in `forgejo.rs`, outside the accepted S3 file boundary; user approval is required before widening the repair surface
+Blocked: no
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: yes — S3 review found that full `api_root` ownership belongs in `forg
 
 ## Last Coordinator Update
 
-S3 review set `s3-abb330b` pass `0/3` requested a combined repair for global `--version` delegation and full `api_root` path ownership. Both regression tests are red. The version fix stays inside S3; the API-root fix should make `ForgejoClient` own the full base URL, which adds `src/forgejo.rs` to S3 and needs a user-approved plan amendment. Production repair and CI are paused; PR #29 remains the sole external integration PR.
+The user approved adding `crates/gh-forgejo-shim/src/forgejo.rs` to S3 repair pass `1/3`. The pass owns both committed red regressions: global `--version` must still delegate in a Forgejo checkout, and `ForgejoClient` must retain the full configured API base path. PR #29 remains the sole external integration PR.
