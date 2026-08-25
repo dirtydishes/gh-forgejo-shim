@@ -16,17 +16,17 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: C1
+Current phase: S4
 
-Current Beads issue: gh-forgejo-shim-c04
+Current Beads issue: gh-forgejo-shim-c05
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator pass-8 repair at the explicit-selector/provider-routing safety boundary after frozen red evidence
+Current execution strategy: exact S4 execution and launch admission before claim
 
-Last completed phase: S3
+Last completed phase: C1
 
-Blocked: no — C1 pass `8/8` is claimed after exact execution and live launch readiness passed with empty findings
+Blocked: no — C1 is accepted and closed; S4 is unblocked but not yet claimed
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Blocked: no — C1 pass `8/8` is claimed after exact execution and live launch r
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | in progress | `#29` | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | closed | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: no — C1 pass `8/8` is claimed after exact execution and live launch r
 
 ## Last Coordinator Update
 
-Pass `8/8` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `414a767ba9aa6c7d66be00c1b33ff875a8762e248443194f75fa5e39da2cd44b`. Both exact readiness gates passed with empty findings before claim. Test-only commit `5aa90e03a0ea7c3b4366af17a01f91de54435dff` now freezes the two URL-suffix and two inherited-help repros: the fourteen prior provider tests pass and all four new tests fail by reaching fake GitHub with exit `23`. Next, repair only those two provider-routing safety paths. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C1 closed after pass `8/8`. The repair head `a63b4f42a549e361515435091139e11b9c1f1108` passed the full locked local gate with 206 active tests, both required independent reviewers approved with `findings: []`, and exact-commit pull-request run `32833793794` plus push run `32833787925` passed both named jobs. Beads and Dolt record the accepted close. Next, run S4's exact execution and live launch gates before claiming it. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
