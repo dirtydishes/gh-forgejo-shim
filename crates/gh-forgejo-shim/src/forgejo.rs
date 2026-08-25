@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use reqwest::Method;
+use reqwest::{Method, Url};
 use serde_json::{json, Value};
 
 use crate::ShimError;
@@ -176,6 +176,7 @@ pub struct ForgejoClient {
     token: Option<String>,
     timeout: Duration,
     scheme: String,
+    api_root: Option<Url>,
     http: Client,
 }
 
@@ -185,6 +186,7 @@ impl ForgejoClient {
             token,
             timeout: Duration::from_secs(30),
             scheme: "https".to_string(),
+            api_root: None,
             http: Client::new(),
         }
     }
@@ -203,12 +205,20 @@ impl ForgejoClient {
         self
     }
 
+    pub fn with_api_root(mut self, api_root: &str) -> ForgejoResult<Self> {
+        let parsed = Url::parse(api_root)
+            .map_err(|_| ForgejoError::new(format!("invalid Forgejo API root: {api_root}")))?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err(ForgejoError::new(format!(
+                "invalid Forgejo API root: {api_root}"
+            )));
+        }
+        self.api_root = Some(parsed);
+        Ok(self)
+    }
+
     pub fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {
-        self.request_json(
-            Method::GET,
-            format!("{}://{}/api/v1/user", self.scheme, host_for_url(host)),
-            None,
-        )
+        self.request_json(Method::GET, self.api_endpoint_url(host, &["user"]), None)
     }
 
     pub fn create_pull(&self, repo: &RepoRef, request: &CreatePullRequest) -> ForgejoResult<Value> {
@@ -410,7 +420,52 @@ impl ForgejoClient {
     }
 
     fn repo_api_base_url(&self, repo: &RepoRef) -> String {
-        repo.api_base_url_with_scheme(&self.scheme)
+        if self.api_root.is_some() {
+            self.api_endpoint_url(&repo.host, &["repos", &repo.owner, &repo.repo])
+        } else {
+            repo.api_base_url_with_scheme(&self.scheme)
+        }
+    }
+
+    fn api_endpoint_url(&self, host: &str, segments: &[&str]) -> String {
+        let Some(api_root) = &self.api_root else {
+            let suffix = segments
+                .iter()
+                .map(|segment| quote_path_segment(segment))
+                .collect::<Vec<_>>()
+                .join("/");
+            return format!("{}://{}/api/v1/{suffix}", self.scheme, host_for_url(host));
+        };
+
+        let mut endpoint = api_root.clone();
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
+        {
+            let mut path = endpoint
+                .path_segments_mut()
+                .expect("HTTP API roots support path segments");
+            path.pop_if_empty();
+            path.extend(segments);
+        }
+        endpoint.into()
+    }
+
+    fn request_url(&self, endpoint: &str) -> ForgejoResult<Url> {
+        let mut request = Url::parse(endpoint)
+            .map_err(|_| ForgejoError::new(format!("invalid Forgejo API URL: {endpoint}")))?;
+        let Some(api_root) = &self.api_root else {
+            return Ok(request);
+        };
+
+        if let Some(root_query) = api_root.query() {
+            let query = request.query().map_or_else(
+                || root_query.to_string(),
+                |value| format!("{value}&{root_query}"),
+            );
+            request.set_query(Some(&query));
+        }
+        request.set_fragment(api_root.fragment());
+        Ok(request)
     }
 
     fn request_json(
@@ -447,7 +502,7 @@ impl ForgejoClient {
     ) -> ForgejoResult<Vec<u8>> {
         let mut request = self
             .http
-            .request(method, &url)
+            .request(method, self.request_url(&url)?)
             .timeout(self.timeout)
             .header(ACCEPT, accept)
             .header(USER_AGENT, USER_AGENT_VALUE);

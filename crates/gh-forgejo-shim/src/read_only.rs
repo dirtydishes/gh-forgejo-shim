@@ -73,45 +73,13 @@ struct RepoCommandContext<'a> {
     cwd: Option<&'a Path>,
 }
 
-struct HttpForgejoApi {
-    client: ForgejoClient,
-    transport_host: String,
-}
-
-impl HttpForgejoApi {
-    fn new(token: Option<String>, api_root: &str) -> Result<Self> {
-        let root = reqwest::Url::parse(api_root)
-            .map_err(|_| ShimError::new(format!("invalid Forgejo API root: {api_root}")))?;
-        let host = root
-            .host_str()
-            .ok_or_else(|| ShimError::new(format!("invalid Forgejo API root: {api_root}")))?;
-        let transport_host = root
-            .port()
-            .map_or_else(|| host.to_string(), |port| format!("{host}:{port}"));
-        let api_path = root.path().trim_end_matches('/');
-        if api_path != "/api/v1" {
-            return Err(ShimError::new(format!(
-                "Forgejo API root must end in /api/v1: {api_root}"
-            )));
-        }
-        Ok(Self {
-            client: ForgejoClient::new(token).with_scheme(root.scheme()),
-            transport_host,
-        })
-    }
-
-    fn transport_repo(&self, repo: &ForgejoRepoRef) -> ForgejoRepoRef {
-        ForgejoRepoRef::new(&self.transport_host, &repo.owner, &repo.repo)
-    }
-}
-
-impl ForgejoApi for HttpForgejoApi {
-    fn get_current_user(&self, _host: &str) -> ForgejoResult<Value> {
-        self.client.get_current_user(&self.transport_host)
+impl ForgejoApi for ForgejoClient {
+    fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {
+        ForgejoClient::get_current_user(self, host)
     }
 
     fn get_repo(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Value> {
-        self.client.get_repo(&self.transport_repo(repo))
+        ForgejoClient::get_repo(self, repo)
     }
 
     fn create_pull(
@@ -119,7 +87,7 @@ impl ForgejoApi for HttpForgejoApi {
         repo: &ForgejoRepoRef,
         request: &CreatePullRequest,
     ) -> ForgejoResult<Value> {
-        self.client.create_pull(&self.transport_repo(repo), request)
+        ForgejoClient::create_pull(self, repo, request)
     }
 
     fn list_pulls(
@@ -128,17 +96,15 @@ impl ForgejoApi for HttpForgejoApi {
         state: &str,
         head: Option<&str>,
     ) -> ForgejoResult<Vec<Value>> {
-        self.client
-            .list_pulls(&self.transport_repo(repo), state, head)
+        ForgejoClient::list_pulls(self, repo, state, head)
     }
 
     fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
-        self.client.get_pull(&self.transport_repo(repo), number)
+        ForgejoClient::get_pull(self, repo, number)
     }
 
     fn list_commit_statuses(&self, repo: &ForgejoRepoRef, sha: &str) -> ForgejoResult<Vec<Value>> {
-        self.client
-            .list_commit_statuses(&self.transport_repo(repo), sha)
+        ForgejoClient::list_commit_statuses(self, repo, sha)
     }
 
     fn get_pull_diff(
@@ -147,13 +113,11 @@ impl ForgejoApi for HttpForgejoApi {
         number: u64,
         patch: bool,
     ) -> ForgejoResult<String> {
-        self.client
-            .get_pull_diff(&self.transport_repo(repo), number, patch)
+        ForgejoClient::get_pull_diff(self, repo, number, patch)
     }
 
     fn list_pull_files(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Vec<Value>> {
-        self.client
-            .list_pull_files(&self.transport_repo(repo), number)
+        ForgejoClient::list_pull_files(self, repo, number)
     }
 
     fn list_issues(
@@ -161,15 +125,15 @@ impl ForgejoApi for HttpForgejoApi {
         repo: &ForgejoRepoRef,
         options: &ListIssuesOptions,
     ) -> ForgejoResult<Vec<Value>> {
-        self.client.list_issues(&self.transport_repo(repo), options)
+        ForgejoClient::list_issues(self, repo, options)
     }
 
     fn get_issue(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
-        self.client.get_issue(&self.transport_repo(repo), number)
+        ForgejoClient::get_issue(self, repo, number)
     }
 
     fn list_labels(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Vec<Value>> {
-        self.client.list_labels(&self.transport_repo(repo))
+        ForgejoClient::list_labels(self, repo)
     }
 
     fn create_issue(
@@ -177,8 +141,7 @@ impl ForgejoApi for HttpForgejoApi {
         repo: &ForgejoRepoRef,
         request: &CreateIssueRequest,
     ) -> ForgejoResult<Value> {
-        self.client
-            .create_issue(&self.transport_repo(repo), request)
+        ForgejoClient::create_issue(self, repo, request)
     }
 
     fn create_issue_comment(
@@ -187,8 +150,7 @@ impl ForgejoApi for HttpForgejoApi {
         number: u64,
         body: &str,
     ) -> ForgejoResult<Value> {
-        self.client
-            .create_issue_comment(&self.transport_repo(repo), number, body)
+        ForgejoClient::create_issue_comment(self, repo, number, body)
     }
 }
 
@@ -406,7 +368,7 @@ fn run_with_context(
         api_root.ok_or_else(|| ShimError::new("could not determine Forgejo API root"))?;
     let token = auth::discover_token(Some(host), env, home, Some(current_platform()), true)
         .map(|discovery| discovery.token);
-    let client = HttpForgejoApi::new(token.clone(), api_root)?;
+    let client = ForgejoClient::new(token.clone()).with_api_root(api_root)?;
 
     if command == "auth" {
         return run_auth(argv, host, token.as_deref(), stdout, stderr);

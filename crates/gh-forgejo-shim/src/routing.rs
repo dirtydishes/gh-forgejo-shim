@@ -115,6 +115,10 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
+    if argv.len() < 2 {
+        return RouteDecision::delegate("unsupported command", None);
+    }
+
     if argv.first().is_some_and(|command| command == "auth") {
         let host =
             hostname_arg(&argv[2..], true).or_else(|| env.get("GH_HOST").map(String::as_str));
@@ -136,7 +140,7 @@ pub fn decide_route(
         return route_resolution(config.registry.resolve(&repo), detection.source);
     }
 
-    if argv.len() < 2 || !is_supported_command(argv) {
+    if !is_supported_command(argv) {
         RouteDecision::delegate("unsupported command", None)
     } else {
         RouteDecision::delegate("no repository detected", None)
