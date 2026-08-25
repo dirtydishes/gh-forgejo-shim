@@ -295,6 +295,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+    use crate::provider::ProviderResolution;
+    use crate::repo::RepoRef;
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -304,6 +306,49 @@ mod tests {
         let config = load_config_with_env(Some(&root.join("config.toml")), &EnvMap::new())?;
 
         assert_eq!(config.hosts, Vec::<String>::new());
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_and_extended_config_load_as_host_profiles() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(&path, "hosts = [\"codeberg.org\"]\n")
+            .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let legacy = load_host_registry_with_env(Some(&path), &EnvMap::new())?;
+        let ProviderResolution::Forgejo { profile, .. } =
+            legacy.resolve(&RepoRef::new("codeberg.org", "forgejo", "forgejo"))
+        else {
+            panic!("legacy canonical host must create a default profile");
+        };
+        assert_eq!(profile.api_root, "https://codeberg.org/api/v1");
+        assert_eq!(profile.credential_host, "codeberg.org");
+        assert!(profile.aliases.is_empty());
+
+        fs::write(
+            &path,
+            r#"hosts = ["git.dirtydishes.dev"]
+
+[[host_profiles]]
+canonical_host = "git.dirtydishes.dev"
+aliases = ["127.0.0.1", "127.0.0.1:2222"]
+api_root = "http://127.0.0.1:3000/api/v1"
+credential_host = "git.dirtydishes.dev"
+"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let extended = load_host_registry_with_env(Some(&path), &EnvMap::new())?;
+        let ProviderResolution::Forgejo { repo, profile } =
+            extended.resolve(&RepoRef::new("127.0.0.1:2222", "dirtydishes", "dirtypages"))
+        else {
+            panic!("configured transport alias must resolve");
+        };
+        assert_eq!(repo.host, "git.dirtydishes.dev");
+        assert_eq!(profile.api_root, "http://127.0.0.1:3000/api/v1");
+        assert_eq!(profile.credential_host, "git.dirtydishes.dev");
         fs::remove_dir_all(root).ok();
         Ok(())
     }
