@@ -198,7 +198,12 @@ mod tests {
 
     #[test]
     fn registry_rejects_github_identity_variants_and_aliases() {
-        for canonical_host in ["github.com:443", "github.com.", "www.github.com:443"] {
+        for canonical_host in [
+            "github.com:443",
+            "github.com:8443",
+            "github.com.",
+            "www.github.com:443",
+        ] {
             let result = HostRegistry::new(vec![HostProfile {
                 canonical_host: canonical_host.to_string(),
                 aliases: Vec::new(),
@@ -208,7 +213,12 @@ mod tests {
             assert!(result.is_err(), "registered canonical {canonical_host}");
         }
 
-        for alias in ["github.com", "github.com:443", "www.github.com."] {
+        for alias in [
+            "github.com",
+            "github.com:443",
+            "www.github.com:22",
+            "www.github.com.",
+        ] {
             let result = HostRegistry::new(vec![HostProfile {
                 canonical_host: "git.example.com".to_string(),
                 aliases: vec![alias.to_string()],
