@@ -133,6 +133,92 @@ fn clustered_pr_flags_run_locally_against_the_selected_repo() -> TestResult {
 }
 
 #[test]
+fn repo_view_repo_flags_run_locally_against_the_selected_repo() -> TestResult {
+    const REPO: &str = r#"{"name":"repo","full_name":"selected/repo","html_url":"https://git.example.com/selected/repo","owner":{"login":"selected"}}"#;
+
+    for (name, repo_args) in [
+        (
+            "short repository selector",
+            &["-R", "git.example.com/selected/repo"][..],
+        ),
+        (
+            "long repository selector",
+            &["--repo=git.example.com/selected/repo"][..],
+        ),
+    ] {
+        let (api_host, handle) = start_json_server(vec![REPO])?;
+        let runner = RouteRunner::new()?;
+        runner.configure_forgejo(&format!("http://{api_host}/api/v1"))?;
+        let mut argv = vec!["repo", "view"];
+        argv.extend_from_slice(repo_args);
+        argv.extend_from_slice(&["--json", "name"]);
+
+        let output = runner.run("GH_REPO", "github.com/base/repo", &argv)?;
+        let requests = handle
+            .join()
+            .map_err(|_| io::Error::other("fake server thread panicked"))??;
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout)?, "{\"name\": \"repo\"}\n");
+        assert_eq!(String::from_utf8(output.stderr)?, "");
+        assert_eq!(
+            requests,
+            ["GET /api/v1/repos/selected/repo HTTP/1.1"],
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_explicit_repo_selectors_never_fall_back_to_context() -> TestResult {
+    let runner = RouteRunner::new()?;
+    let output = runner.run(
+        "GH_REPO",
+        "github.com/base/repo",
+        &["issue", "view", "--repo=", "13"],
+    )?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("invalid repository selector"), "{stderr}");
+    assert!(!stderr.contains("delegated-to-github"), "{stderr}");
+
+    const ISSUE: &str = r#"{"number":13,"title":"Wrong repository","state":"open","html_url":"https://git.example.com/owner/repo/issues/13","user":{"login":"alice"},"body":""}"#;
+    let (api_host, handle) = start_json_server(vec![ISSUE])?;
+    let runner = RouteRunner::new()?;
+    runner.fixture.init_git_repo()?;
+    runner.configure_forgejo(&format!("http://{api_host}/api/v1"))?;
+    let output = runner
+        .fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env_remove("FJ_SHIM_HOSTS")
+        .env("FJ_SHIM_TOKEN", "test-token")
+        .arg("gh")
+        .args(["issue", "view", "--repo", "not-a-repository", "13"])
+        .output()?;
+    let requests = handle
+        .join()
+        .map_err(|_| io::Error::other("fake server thread panicked"))??;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("invalid repository selector"), "{stderr}");
+    assert_eq!(requests, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
 fn ambiguous_unsupported_options_fail_closed_before_provider_delegation() -> TestResult {
     let runner = RouteRunner::new()?;
     let cases = [
