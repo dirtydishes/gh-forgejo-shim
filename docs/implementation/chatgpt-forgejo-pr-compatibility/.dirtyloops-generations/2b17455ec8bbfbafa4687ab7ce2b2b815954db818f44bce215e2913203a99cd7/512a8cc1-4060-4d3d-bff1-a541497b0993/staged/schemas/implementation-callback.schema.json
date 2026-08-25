@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImplementationCallback",
+  "description": "Used when callback delivery is selected by adaptive execution or required by the orchestrator-callback profile.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "orchestrator_thread_id", "source_thread_id", "phase_issue_id", "status", "branch", "pr", "commits", "turn_doc", "local_gates", "changed_files", "execution_summary", "blockers", "context_to_keep"],
+  "properties": {
+    "type": { "const": "implementation-callback" },
+    "orchestrator_thread_id": { "type": "string", "minLength": 1 },
+    "source_thread_id": { "type": "string", "minLength": 1 },
+    "phase_issue_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["pr-ready", "done", "blocked"] },
+    "branch": { "type": ["string", "null"] },
+    "pr": { "type": ["string", "null"] },
+    "commits": { "type": "array", "items": { "type": "string" } },
+    "turn_doc": { "type": "string", "minLength": 1 },
+    "local_gates": { "type": "array", "items": { "type": "string" } },
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "execution_summary": { "$ref": "execution-summary.schema.json" },
+    "blockers": { "type": "array", "items": { "type": "string" } },
+    "context_to_keep": { "type": "array", "maxItems": 5, "items": { "type": "string" } }
+  }
+}

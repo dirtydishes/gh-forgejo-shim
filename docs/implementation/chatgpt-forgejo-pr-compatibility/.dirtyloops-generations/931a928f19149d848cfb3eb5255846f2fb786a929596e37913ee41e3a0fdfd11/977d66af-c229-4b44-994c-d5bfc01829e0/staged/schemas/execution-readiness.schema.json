@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dirtydishes.dev/schemas/dirtyloops/execution-readiness.schema.json",
+  "title": "Dirtyloops Execution Readiness Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "summary", "authored_hashes", "findings", "phases"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "status": { "enum": ["ready", "needs-clarification", "requires-reslice"] },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase_count", "ready", "needs_clarification", "requires_reslice"],
+      "properties": {
+        "phase_count": { "type": "integer", "minimum": 0 },
+        "ready": { "type": "integer", "minimum": 0 },
+        "needs_clarification": { "type": "integer", "minimum": 0 },
+        "requires_reslice": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "authored_hashes": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message", "evidence"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["clarify", "reslice"] },
+          "message": { "type": "string", "minLength": 1 },
+          "evidence": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "status", "boundary", "findings"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["ready", "needs-clarification", "requires-reslice"] },
+          "boundary": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["acceptance", "module_surface", "review"],
+            "properties": {
+              "acceptance": { "type": ["string", "null"] },
+              "module_surface": { "type": ["string", "null"] },
+              "review": { "type": ["string", "null"] }
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "severity", "message", "evidence"],
+              "properties": {
+                "code": { "type": "string", "minLength": 1 },
+                "severity": { "enum": ["clarify", "reslice"] },
+                "message": { "type": "string", "minLength": 1 },
+                "evidence": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

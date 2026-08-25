@@ -1,0 +1,462 @@
+{
+  "status": "refreshed-v2",
+  "runtime_status": "activation-ready",
+  "source_version": 2,
+  "target_version": 2,
+  "doc_root": "docs/implementation/chatgpt-forgejo-pr-compatibility",
+  "blockers": [],
+  "actions": [
+    {
+      "action": "install-generated",
+      "path": "IMPLEMENT.md",
+      "sha256": "2ef6271b4a27e88afff492a16641d99ff7f194f3f7f91a2fcb154078072c539e"
+    },
+    {
+      "action": "install-generated",
+      "path": "prompts/run-loop.md",
+      "sha256": "1dbfa149a56341d064c03e43ddb876047cfe0f5d5e8f986fad9bd7928929a64e"
+    },
+    {
+      "action": "remove-generated",
+      "path": "runtime/adapter.json",
+      "sha256": null
+    },
+    {
+      "action": "install-generated",
+      "path": "runtime/binding.json",
+      "sha256": "a67b0b1cce939b29e55c84fcfb775f1dfad6f037c73fa3e7ff38cc91b5f1e7c1"
+    },
+    {
+      "action": "remove-generated",
+      "path": "prompts/implementation-thread.md",
+      "sha256": null
+    },
+    {
+      "action": "remove-generated",
+      "path": "prompts/review-thread.md",
+      "sha256": null
+    },
+    {
+      "action": "remove-generated",
+      "path": "schemas/swarm-report.schema.json",
+      "sha256": null
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/execution-readiness.schema.json",
+      "sha256": "e6d81b100c44841b98240017a244bf09fa9d0a9b091790a49927d001be9ac5f8"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/execution-summary.schema.json",
+      "sha256": "b50a896420287355601886b430e2ee3ed982a4b312170e75f7e0104cd27aff22"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/harness-binding.schema.json",
+      "sha256": "edd121eaeff8862419a8813d958cac504cd0dbff2ff1d5b4644c8c3300e0a103"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/implementation-callback.schema.json",
+      "sha256": "322d30677262891d1b62550c69a9ef95fa67235025a8f179bf6cd2495cce0022"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/review-callback.schema.json",
+      "sha256": "df4271af2e97c04bd6a6f88742fc9e84001514bb5a799304f645bba7175486e5"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/runtime-activation.schema.json",
+      "sha256": "8d13d6c9c1a25f0e8923ffa0c9c90bbabe0642d00199c2d754ecf3747b9cc1b0"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/runtime-capabilities.schema.json",
+      "sha256": "c7de194ed3c780fcf15e3a7dd3d2b988b18345702ad9dc2c37b1fb252b5334ef"
+    },
+    {
+      "action": "install-generated",
+      "path": "schemas/runtime-generation.schema.json",
+      "sha256": "5247b7b1759d7ec3964638a6ba633c301402a0c2d7e56800ab722061e1745882"
+    },
+    {
+      "action": "install-generated",
+      "path": "runtime/generation.json",
+      "sha256": "30b9119fe949c3b0db80a76facac7f6025b2c01d75a558b885ffd5fcf61b3956"
+    },
+    {
+      "action": "commit-generated-evidence",
+      "path": "loop-state.md"
+    },
+    {
+      "action": "commit-generated-evidence",
+      "path": "migration-v2-report.json"
+    },
+    {
+      "action": "commit-generated-evidence",
+      "path": "runtime/activation.json"
+    }
+  ],
+  "execution_readiness": {
+    "schema_version": 1,
+    "status": "ready",
+    "summary": {
+      "phase_count": 18,
+      "ready": 18,
+      "needs_clarification": 0,
+      "requires_reslice": 0
+    },
+    "authored_hashes": {
+      "00-s0-make-the-test-baseline-deterministic.md": "3a9b1bf1f200fd8476054af88d80d538198a03c9be821b849646952bde09a6b9",
+      "01-s1-freeze-the-chatgpt-build-6720-process-contract.md": "0a87a47bce39b84542eb22790bb53409a2c5d658d2e0f22f7e3b0e58f072564d",
+      "02-s2-add-typed-backward-compatible-host-profiles.md": "8fce4ba8e6aad8df2d7763e696a5045c67d579717c0e633256c2bf3d9ef5324e",
+      "03-s3-resolve-identity-before-routing.md": "fc4fe4559795a6c09fdc5d4ffae02392a5a798d5c1c179b7cf8011759488d155",
+      "04-c1-pass-the-host-identity-and-routing-checkpoint.md": "64cfb6641931b121a4d6219d7dfeb56d2572e72f560787a40cf12c3a28f0adce",
+      "05-s4-make-authentication-use-canonical-host-identity.md": "6a3b159a5088bea1c3141c5b7fe2a3f3925f1e4c31a0c47f88c7bac7f6a68076",
+      "06-s5-enforce-the-command-deadline-and-truthful-tracing.md": "1b216cdd2e3e903301d59d9c6e7492f7dc69c39ce6f8ea2e7b1bb499dbc061c9",
+      "07-s6-make-pr-discovery-honor-me-and-pagination.md": "f7118685bc3029f03f1a2eff06f0b0e7cb52b30c7966524136be64b1671c71d1",
+      "08-c2-pass-the-pr-discovery-checkpoint.md": "369d2d789722f326f4040b20a7295a3d614c324119ec74d04d546ecb853a915e",
+      "09-s7-render-the-pr-header-and-core-fields.md": "989a1f54f4db866f3b69015b8a7acc91e2ab98dff46a8d6dd10c06fafd74e4b3",
+      "10-s8-add-comments-commits-reviews-and-reviewer-requests.md": "b6aa67d1c2174e8ceb92aeed65a1f74ff3de7ac15ff7913af8d341a29a122374",
+      "11-s9-render-current-checks-and-real-no-check-behavior.md": "8909d5e6c3d3c6e3d8afc4d9eec2bb8f88649d5817f9dca8393fc430487e58c4",
+      "12-c3-pass-the-complete-read-contract-checkpoint.md": "49c281c8909ffbe13a264c7df5e0f308623a1623def1dfe8b619c4c6db94ad9b",
+      "13-s10-prove-generic-multi-host-behavior.md": "ab2ab05412eea2c031fbed752fef3ad938eb37fe83911ecf3956879320135fc1",
+      "14-s11-package-and-install-without-disturbing-the-host.md": "66e092c490497c032093640730a89733d2b282e619dad667b5ff0102825b83b9",
+      "15-c4-pass-the-packaging-and-rollback-checkpoint.md": "0148dbcc717c6eeae9479a95f417191e50fb8eba876b614c51ec8456ffe88138",
+      "16-s12-validate-the-native-chatgpt-pr-screen.md": "07fb1b2b674d2eba485f59fd98c33d739c8236bc1b1ab6357aa5706d6cd4f453",
+      "17-c5-accept-the-native-chatgpt-product-result.md": "2dc16f2208180f6d23e13c0cec212a206ed65b2b0ea2fb8260ce49323b6c5650"
+    },
+    "findings": [],
+    "phases": [
+      {
+        "id": "gh-forgejo-shim-c00",
+        "path": "00-s0-make-the-test-baseline-deterministic.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "Contributors get the same test result whether or not the host already has `/usr/bin/gh`.",
+          "module_surface": "CLI test support and the two environment-sensitive scaffold cases",
+          "review": "S0 integration PR diff, named tests, fixtures, command evidence, and review gate: Confirm the fix isolates the environment and does not weaken either existing assertion."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c01",
+        "path": "01-s1-freeze-the-chatgpt-build-6720-process-contract.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "A maintainer can run one suite and see the exact process behavior ChatGPT expects, including native GitHub delegation.",
+          "module_surface": "build-6720 process fixtures, fake-server support, and the real GitHub delegation control",
+          "review": "S1 integration PR diff, named tests, fixtures, command evidence, and review gate: Compare every fixture with the report's captured command and GitHub control. Fixtures describe external behavior, not Rust implementation details."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c02",
+        "path": "02-s2-add-typed-backward-compatible-host-profiles.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "A user can configure one canonical Forgejo host with transport aliases and inspect the result with `gfj config list`.",
+          "module_surface": "HostProfile, HostRegistry, configuration CLI, and configuration docs",
+          "review": "S2 integration PR diff, named tests, fixtures, command evidence, and review gate: C1 later reviews the pattern. Slice review confirms no default Dirtydishes entry, GitHub cannot be registered, URL schemes are restricted to HTTP and HTTPS, and old config remains readable."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c03",
+        "path": "03-s3-resolve-identity-before-routing.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The original `--repo 127.0.0.1/...` command targets canonical Forgejo, while unknown Forgejo operations fail locally.",
+          "module_surface": "repository identity resolution and provider-first command routing",
+          "review": "S3 integration PR diff, named tests, fixtures, command evidence, and review gate: C1 requires both thermonuclear and adversarial review, followed by the combined repair process."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c04",
+        "path": "04-c1-pass-the-host-identity-and-routing-checkpoint.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The host registry, canonical identity, and provider-first routing pattern can support later read behavior without unsafe GitHub fallthrough.",
+          "module_surface": "S2 and S3 integration PR diff, route matrix tests, HostRegistry interface, and routing contract",
+          "review": "C1 integration PR diff, named tests, fixtures, command evidence, and review gate: Thermonuclear review covers module depth and maintainability. Adversarial review covers host isolation, unsafe fallthrough, compatibility, and failure behavior."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c05",
+        "path": "05-s4-make-authentication-use-canonical-host-identity.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "`gh auth status --active --hostname ALIAS` finds the canonical host credential without exposing the token.",
+          "module_surface": "canonical-host authentication lookup and auth-specific tests",
+          "review": "S4 integration PR diff, named tests, fixtures, command evidence, and review gate: Inspect path permissions, host matching, logs, errors, stdout, stderr, and traces for token leakage."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c06",
+        "path": "06-s5-enforce-the-command-deadline-and-truthful-tracing.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "A user gets a bounded result or clear timeout, and the trace states which output it observed.",
+          "module_surface": "shared CommandDeadline, Forgejo and external process I/O, and trace records",
+          "review": "S5 integration PR diff, named tests, fixtures, command evidence, and review gate: Confirm interactive and large existing commands keep inherited streaming and secrets remain redacted."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c07",
+        "path": "07-s6-make-pr-discovery-honor-me-and-pagination.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "ChatGPT can truthfully decide whether the current branch has a pull request.",
+          "module_surface": "pull request discovery, author identity, pagination, and list projection",
+          "review": "S6 integration PR diff, named tests, fixtures, command evidence, and review gate: C2 requires thermonuclear and adversarial review, followed by the combined repair process. Review author semantics, terminal-page detection, the page cap, shared deadline, and empty-result truthfulness."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c08",
+        "path": "08-c2-pass-the-pr-discovery-checkpoint.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The pull request module, test seam, shared deadline, and pagination rules are sound before view projections grow around them.",
+          "module_surface": "S4 through S6 integration PR diff, auth tests, deadline tests, and pull request list contract",
+          "review": "C2 integration PR diff, named tests, fixtures, command evidence, and review gate: Thermonuclear review covers module depth and seams. Adversarial review covers credentials, timeouts, pagination, partial results, and empty-result truthfulness."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c09",
+        "path": "09-s7-render-the-pr-header-and-core-fields.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "`gh pr view` renders title, body, branches, author, merge state, timestamps, counts, and links with GitHub-compatible shapes.",
+          "module_surface": "pull request core-field source and projection modules",
+          "review": "S7 integration PR diff, named tests, fixtures, command evidence, and review gate: Compare every implemented field with its Forgejo source and the GitHub fixture."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c10",
+        "path": "10-s8-add-comments-commits-reviews-and-reviewer-requests.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "ChatGPT's PR activity view shows the complete discussion and review state.",
+          "module_surface": "pull request activity pagination, ordering, and projection",
+          "review": "S8 integration PR diff, named tests, fixtures, command evidence, and review gate: Check pagination, chronological ordering, latest-review derivation, deleted users, empty arrays, and unsupported review-thread semantics."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c11",
+        "path": "11-s9-render-current-checks-and-real-no-check-behavior.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "ChatGPT shows current Forgejo checks, and a PR with no checks produces the same nonfatal warning as real `gh`.",
+          "module_surface": "current check collection, stale-history collapse, and no-check process output",
+          "review": "S9 integration PR diff, named tests, fixtures, command evidence, and review gate: C3 requires adversarial review only. The adversarial reviewer must not invoke the thermonuclear skill. Apply the combined repair process to its findings."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c12",
+        "path": "12-c3-pass-the-complete-read-contract-checkpoint.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The full read contract returns current, truthful PR and check data without leaking Forgejo work to GitHub.",
+          "module_surface": "S7 through S9 integration PR diff, golden projection fixtures, checks tests, and process-output contract",
+          "review": "C3 integration PR diff, named tests, fixtures, command evidence, and review gate: Adversarial review attacks the complete read-contract diff, stale check handling, timeouts, failure output, and GitHub fallthrough."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c13",
+        "path": "13-s10-prove-generic-multi-host-behavior.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The same binary handles two unrelated Forgejo identities without sharing aliases or credentials.",
+          "module_surface": "two-host integration fixtures and one authorized read-only live smoke record",
+          "review": "S10 integration PR diff, named tests, fixtures, command evidence, and review gate: Search product and fixture files for Dirtydishes defaults and hidden single-host assumptions."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c14",
+        "path": "14-s11-package-and-install-without-disturbing-the-host.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "A fresh app-server child resolves the managed wrapper, while GitHub still runs through verified `gh` 2.96.",
+          "module_surface": "managed wrapper packaging, verified real-gh selection, install, doctor, uninstall, CI, and rollback docs",
+          "review": "S11 integration PR diff, named tests, fixtures, command evidence, and review gate: C4 requires thermonuclear and adversarial review, followed by the combined repair process. Inspect every filesystem write, managed-file marker, checksum source, permission, and uninstall path."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c15",
+        "path": "15-c4-pass-the-packaging-and-rollback-checkpoint.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The reviewed integration commit can be packaged, installed, and removed without changing the system GitHub CLI or unrelated host state.",
+          "module_surface": "S10 and S11 integration PR diff, multi-host tests, package archive, install commands, and rollback docs",
+          "review": "C4 integration PR diff, named tests, fixtures, command evidence, and review gate: Thermonuclear review covers code and package module shape. Adversarial review checks host isolation, every filesystem write, checksums, permissions, uninstall, and rollback."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c16",
+        "path": "16-s12-validate-the-native-chatgpt-pr-screen.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "The desktop app opens and keeps the Forgejo PR screen current without harming GitHub repositories.",
+          "module_surface": "the approved managed install, native ChatGPT pull request screen, and redacted process trace",
+          "review": "S12 integration PR diff, named tests, fixtures, command evidence, and review gate: C5 requires adversarial review and manual product review. The adversarial reviewer must not invoke the thermonuclear skill. Compare the UI, process trace, and API truth."
+        },
+        "findings": []
+      },
+      {
+        "id": "gh-forgejo-shim-c17",
+        "path": "17-c5-accept-the-native-chatgpt-product-result.md",
+        "status": "ready",
+        "boundary": {
+          "acceptance": "Independent review and manual product checks confirm the native ChatGPT PR screen works for Forgejo and still works for GitHub.",
+          "module_surface": "S12 commit, native UI screenshots, redacted process trace, API truth, and rollback command evidence",
+          "review": "C5 integration PR diff, named tests, fixtures, command evidence, and review gate: Adversarial review and manual product review inspect the S12 commit, UI screenshots, redacted process trace, API fixtures, and rollback command evidence."
+        },
+        "findings": []
+      }
+    ]
+  },
+  "generation": {
+    "schema_version": 1,
+    "operation": "install-generated-contract",
+    "artifacts": {
+      "IMPLEMENT.md": "2ef6271b4a27e88afff492a16641d99ff7f194f3f7f91a2fcb154078072c539e",
+      "prompts/run-loop.md": "1dbfa149a56341d064c03e43ddb876047cfe0f5d5e8f986fad9bd7928929a64e",
+      "runtime/adapter.json": null,
+      "runtime/binding.json": "a67b0b1cce939b29e55c84fcfb775f1dfad6f037c73fa3e7ff38cc91b5f1e7c1",
+      "prompts/implementation-thread.md": null,
+      "prompts/review-thread.md": null,
+      "schemas/swarm-report.schema.json": null,
+      "schemas/execution-readiness.schema.json": "e6d81b100c44841b98240017a244bf09fa9d0a9b091790a49927d001be9ac5f8",
+      "schemas/execution-summary.schema.json": "b50a896420287355601886b430e2ee3ed982a4b312170e75f7e0104cd27aff22",
+      "schemas/harness-binding.schema.json": "edd121eaeff8862419a8813d958cac504cd0dbff2ff1d5b4644c8c3300e0a103",
+      "schemas/implementation-callback.schema.json": "322d30677262891d1b62550c69a9ef95fa67235025a8f179bf6cd2495cce0022",
+      "schemas/review-callback.schema.json": "df4271af2e97c04bd6a6f88742fc9e84001514bb5a799304f645bba7175486e5",
+      "schemas/runtime-activation.schema.json": "8d13d6c9c1a25f0e8923ffa0c9c90bbabe0642d00199c2d754ecf3747b9cc1b0",
+      "schemas/runtime-capabilities.schema.json": "c7de194ed3c780fcf15e3a7dd3d2b988b18345702ad9dc2c37b1fb252b5334ef",
+      "schemas/runtime-generation.schema.json": "5247b7b1759d7ec3964638a6ba633c301402a0c2d7e56800ab722061e1745882"
+    },
+    "metadata": {
+      "target": "codex",
+      "adapter_contract": "dirtyloops-harness/1",
+      "adapter_identity": {
+        "target": "codex",
+        "path": "codex-source-builder-closure",
+        "sha256": "712c5c2121feb2103cbe2a843e11a1c4e487aa39072fc045c0a00393d52c77d7"
+      },
+      "execution_readiness": "ready"
+    },
+    "generation_id": "931a928f19149d848cfb3eb5255846f2fb786a929596e37913ee41e3a0fdfd11"
+  },
+  "protected_hashes_before": {
+    "00-roadmap.md": "05387983714a539347135e81c6e516411c5eed14ddc5573e5f50bcb2f1f8419f",
+    "00-s0-make-the-test-baseline-deterministic.md": "3a9b1bf1f200fd8476054af88d80d538198a03c9be821b849646952bde09a6b9",
+    "01-s1-freeze-the-chatgpt-build-6720-process-contract.md": "0a87a47bce39b84542eb22790bb53409a2c5d658d2e0f22f7e3b0e58f072564d",
+    "02-s2-add-typed-backward-compatible-host-profiles.md": "8fce4ba8e6aad8df2d7763e696a5045c67d579717c0e633256c2bf3d9ef5324e",
+    "03-s3-resolve-identity-before-routing.md": "fc4fe4559795a6c09fdc5d4ffae02392a5a798d5c1c179b7cf8011759488d155",
+    "04-c1-pass-the-host-identity-and-routing-checkpoint.md": "64cfb6641931b121a4d6219d7dfeb56d2572e72f560787a40cf12c3a28f0adce",
+    "05-s4-make-authentication-use-canonical-host-identity.md": "6a3b159a5088bea1c3141c5b7fe2a3f3925f1e4c31a0c47f88c7bac7f6a68076",
+    "06-s5-enforce-the-command-deadline-and-truthful-tracing.md": "1b216cdd2e3e903301d59d9c6e7492f7dc69c39ce6f8ea2e7b1bb499dbc061c9",
+    "07-s6-make-pr-discovery-honor-me-and-pagination.md": "f7118685bc3029f03f1a2eff06f0b0e7cb52b30c7966524136be64b1671c71d1",
+    "08-c2-pass-the-pr-discovery-checkpoint.md": "369d2d789722f326f4040b20a7295a3d614c324119ec74d04d546ecb853a915e",
+    "09-s7-render-the-pr-header-and-core-fields.md": "989a1f54f4db866f3b69015b8a7acc91e2ab98dff46a8d6dd10c06fafd74e4b3",
+    "10-s8-add-comments-commits-reviews-and-reviewer-requests.md": "b6aa67d1c2174e8ceb92aeed65a1f74ff3de7ac15ff7913af8d341a29a122374",
+    "11-s9-render-current-checks-and-real-no-check-behavior.md": "8909d5e6c3d3c6e3d8afc4d9eec2bb8f88649d5817f9dca8393fc430487e58c4",
+    "12-c3-pass-the-complete-read-contract-checkpoint.md": "49c281c8909ffbe13a264c7df5e0f308623a1623def1dfe8b619c4c6db94ad9b",
+    "13-s10-prove-generic-multi-host-behavior.md": "ab2ab05412eea2c031fbed752fef3ad938eb37fe83911ecf3956879320135fc1",
+    "14-s11-package-and-install-without-disturbing-the-host.md": "66e092c490497c032093640730a89733d2b282e619dad667b5ff0102825b83b9",
+    "15-c4-pass-the-packaging-and-rollback-checkpoint.md": "0148dbcc717c6eeae9479a95f417191e50fb8eba876b614c51ec8456ffe88138",
+    "16-s12-validate-the-native-chatgpt-pr-screen.md": "07fb1b2b674d2eba485f59fd98c33d739c8236bc1b1ab6357aa5706d6cd4f453",
+    "17-c5-accept-the-native-chatgpt-product-result.md": "2dc16f2208180f6d23e13c0cec212a206ed65b2b0ea2fb8260ce49323b6c5650",
+    "turn-docs/00-s0.md": "1ce0b0cb1bcd31d27ddafad36d17b88d277c5c046ab7a31c0874ebb0d104b7a7",
+    "turn-docs/01-s1.md": "1d36d048983ff203dae854797098c848c36393f41df37f2e3a727a42a1404812",
+    "turn-docs/02-s2.md": "bc70b2ce5d2891a3bd92fe263afa5058a123efdc71d5a91f25dbc403e0b6594c",
+    "turn-docs/03-s3.md": "39e85affc1276b1b12082e7d3262529aebcb2cac212df363f57fc1df10bcef41",
+    "turn-docs/04-c1.md": "a53285213d0e63ed786d89203895cd82e11ba174e794228f3ec57532c768b27c",
+    "turn-docs/05-s4.md": "013bea17720d9478ec950b4dbe670e524a035e2db0f34f7721b6532b1ce1cc13",
+    "turn-docs/06-s5.md": "a003d78eb7b82382d80a448977e0fff0e5fc51209699c6b2591a5608a806aac6",
+    "turn-docs/07-s6.md": "750173bf95e88e228f8ff46b501a3a84d8c980850fc69f4de4250f8250c0f60e",
+    "turn-docs/08-c2.md": "784f2e85e90d784e0236da4ac54d23dd4779c0f5c4e9967ee1981edcc00f3173",
+    "turn-docs/09-s7.md": "846db98885157f604ae49eecce9b65616c7fe1daffa94a3b8c37ae590b58fa32",
+    "turn-docs/10-s8.md": "872ba9e0d995850391919fafcaf626efde80a40b0e34ce12df33e0e1929855fe",
+    "turn-docs/11-s9.md": "fc250dd25b80330abc91b7f1fdcbc8f19c54e3d2f84e15c4aa71942237cb18cc",
+    "turn-docs/12-c3.md": "1bf65f44cb1d4cdb7b0042871ca9c9020d0d5fe47e08ecb3ea03f6a6c012c10b",
+    "turn-docs/13-s10.md": "5d05e1142c47b76ed1a681af087273df1b8b58796c48464a12d6b5b99cdd2e9c",
+    "turn-docs/14-s11.md": "a5ae5b82ffa9505501d56dd7979468fccd0a645d764d6b9425748d52b23753ae",
+    "turn-docs/15-c4.md": "f58bcbdbfa73b1553a71d433e83c437e693a9bfe132d03b4990c018039c2bd17",
+    "turn-docs/16-s12.md": "4baab1b022e1b1a3a4b2e9a68ca67690adf2778d6568357c43f66aa95ccfb324",
+    "turn-docs/17-c5.md": "1d2c29bb8342e51edb5bbe10ed2758021f97babefcf0541ff0eb8ff39c0c1fdc"
+  },
+  "protected_hashes_after": {
+    "00-roadmap.md": "05387983714a539347135e81c6e516411c5eed14ddc5573e5f50bcb2f1f8419f",
+    "00-s0-make-the-test-baseline-deterministic.md": "3a9b1bf1f200fd8476054af88d80d538198a03c9be821b849646952bde09a6b9",
+    "01-s1-freeze-the-chatgpt-build-6720-process-contract.md": "0a87a47bce39b84542eb22790bb53409a2c5d658d2e0f22f7e3b0e58f072564d",
+    "02-s2-add-typed-backward-compatible-host-profiles.md": "8fce4ba8e6aad8df2d7763e696a5045c67d579717c0e633256c2bf3d9ef5324e",
+    "03-s3-resolve-identity-before-routing.md": "fc4fe4559795a6c09fdc5d4ffae02392a5a798d5c1c179b7cf8011759488d155",
+    "04-c1-pass-the-host-identity-and-routing-checkpoint.md": "64cfb6641931b121a4d6219d7dfeb56d2572e72f560787a40cf12c3a28f0adce",
+    "05-s4-make-authentication-use-canonical-host-identity.md": "6a3b159a5088bea1c3141c5b7fe2a3f3925f1e4c31a0c47f88c7bac7f6a68076",
+    "06-s5-enforce-the-command-deadline-and-truthful-tracing.md": "1b216cdd2e3e903301d59d9c6e7492f7dc69c39ce6f8ea2e7b1bb499dbc061c9",
+    "07-s6-make-pr-discovery-honor-me-and-pagination.md": "f7118685bc3029f03f1a2eff06f0b0e7cb52b30c7966524136be64b1671c71d1",
+    "08-c2-pass-the-pr-discovery-checkpoint.md": "369d2d789722f326f4040b20a7295a3d614c324119ec74d04d546ecb853a915e",
+    "09-s7-render-the-pr-header-and-core-fields.md": "989a1f54f4db866f3b69015b8a7acc91e2ab98dff46a8d6dd10c06fafd74e4b3",
+    "10-s8-add-comments-commits-reviews-and-reviewer-requests.md": "b6aa67d1c2174e8ceb92aeed65a1f74ff3de7ac15ff7913af8d341a29a122374",
+    "11-s9-render-current-checks-and-real-no-check-behavior.md": "8909d5e6c3d3c6e3d8afc4d9eec2bb8f88649d5817f9dca8393fc430487e58c4",
+    "12-c3-pass-the-complete-read-contract-checkpoint.md": "49c281c8909ffbe13a264c7df5e0f308623a1623def1dfe8b619c4c6db94ad9b",
+    "13-s10-prove-generic-multi-host-behavior.md": "ab2ab05412eea2c031fbed752fef3ad938eb37fe83911ecf3956879320135fc1",
+    "14-s11-package-and-install-without-disturbing-the-host.md": "66e092c490497c032093640730a89733d2b282e619dad667b5ff0102825b83b9",
+    "15-c4-pass-the-packaging-and-rollback-checkpoint.md": "0148dbcc717c6eeae9479a95f417191e50fb8eba876b614c51ec8456ffe88138",
+    "16-s12-validate-the-native-chatgpt-pr-screen.md": "07fb1b2b674d2eba485f59fd98c33d739c8236bc1b1ab6357aa5706d6cd4f453",
+    "17-c5-accept-the-native-chatgpt-product-result.md": "2dc16f2208180f6d23e13c0cec212a206ed65b2b0ea2fb8260ce49323b6c5650",
+    "turn-docs/00-s0.md": "1ce0b0cb1bcd31d27ddafad36d17b88d277c5c046ab7a31c0874ebb0d104b7a7",
+    "turn-docs/01-s1.md": "1d36d048983ff203dae854797098c848c36393f41df37f2e3a727a42a1404812",
+    "turn-docs/02-s2.md": "bc70b2ce5d2891a3bd92fe263afa5058a123efdc71d5a91f25dbc403e0b6594c",
+    "turn-docs/03-s3.md": "39e85affc1276b1b12082e7d3262529aebcb2cac212df363f57fc1df10bcef41",
+    "turn-docs/04-c1.md": "a53285213d0e63ed786d89203895cd82e11ba174e794228f3ec57532c768b27c",
+    "turn-docs/05-s4.md": "013bea17720d9478ec950b4dbe670e524a035e2db0f34f7721b6532b1ce1cc13",
+    "turn-docs/06-s5.md": "a003d78eb7b82382d80a448977e0fff0e5fc51209699c6b2591a5608a806aac6",
+    "turn-docs/07-s6.md": "750173bf95e88e228f8ff46b501a3a84d8c980850fc69f4de4250f8250c0f60e",
+    "turn-docs/08-c2.md": "784f2e85e90d784e0236da4ac54d23dd4779c0f5c4e9967ee1981edcc00f3173",
+    "turn-docs/09-s7.md": "846db98885157f604ae49eecce9b65616c7fe1daffa94a3b8c37ae590b58fa32",
+    "turn-docs/10-s8.md": "872ba9e0d995850391919fafcaf626efde80a40b0e34ce12df33e0e1929855fe",
+    "turn-docs/11-s9.md": "fc250dd25b80330abc91b7f1fdcbc8f19c54e3d2f84e15c4aa71942237cb18cc",
+    "turn-docs/12-c3.md": "1bf65f44cb1d4cdb7b0042871ca9c9020d0d5fe47e08ecb3ea03f6a6c012c10b",
+    "turn-docs/13-s10.md": "5d05e1142c47b76ed1a681af087273df1b8b58796c48464a12d6b5b99cdd2e9c",
+    "turn-docs/14-s11.md": "a5ae5b82ffa9505501d56dd7979468fccd0a645d764d6b9425748d52b23753ae",
+    "turn-docs/15-c4.md": "f58bcbdbfa73b1553a71d433e83c437e693a9bfe132d03b4990c018039c2bd17",
+    "turn-docs/16-s12.md": "4baab1b022e1b1a3a4b2e9a68ca67690adf2778d6568357c43f66aa95ccfb324",
+    "turn-docs/17-c5.md": "1d2c29bb8342e51edb5bbe10ed2758021f97babefcf0541ff0eb8ff39c0c1fdc"
+  },
+  "activation": {
+    "schema_version": 1,
+    "state": "ready",
+    "target": "codex",
+    "generation_id": "931a928f19149d848cfb3eb5255846f2fb786a929596e37913ee41e3a0fdfd11",
+    "adapter_identity": {
+      "target": "codex",
+      "path": "codex-source-builder-closure",
+      "sha256": "712c5c2121feb2103cbe2a843e11a1c4e487aa39072fc045c0a00393d52c77d7"
+    },
+    "source_coordinator_id": "01a02dd9-7c95-74b3-95eb-85614d0ec9b5",
+    "operation": "update-v2",
+    "evidence": {
+      "mode": "first-party-builder-contract",
+      "live_probe_required": false,
+      "capabilities_revalidated_at_run": true,
+      "separate_runtime_adapter_certified": false
+    }
+  }
+}

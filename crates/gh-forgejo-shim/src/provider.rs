@@ -1,0 +1,331 @@
+//! Canonical Forgejo host profiles and transport-alias resolution.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::repo::RepoRef;
+use crate::{Result, ShimError};
+
+pub const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostProfile {
+    pub canonical_host: String,
+    pub aliases: Vec<String>,
+    pub api_root: String,
+    pub credential_host: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRegistry {
+    profiles: Vec<HostProfile>,
+    transport_profiles: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderResolution {
+    Forgejo { repo: RepoRef, profile: HostProfile },
+    GitHub { repo: RepoRef },
+    Unconfigured { repo: RepoRef },
+}
+
+impl HostRegistry {
+    pub fn new(mut profiles: Vec<HostProfile>) -> Result<Self> {
+        let mut assigned = BTreeMap::<String, usize>::new();
+        for (profile_index, profile) in profiles.iter_mut().enumerate() {
+            profile.canonical_host = normalize_transport_host(&profile.canonical_host)?;
+            if is_known_github_host(Some(&profile.canonical_host)) {
+                return Err(ShimError::new(format!(
+                    "GitHub host cannot be registered as Forgejo: {}",
+                    profile.canonical_host
+                )));
+            }
+            let api_root = reqwest::Url::parse(&profile.api_root)
+                .map_err(|_| ShimError::new(format!("invalid API root: {}", profile.api_root)))?;
+            if !matches!(api_root.scheme(), "http" | "https") {
+                return Err(ShimError::new(format!(
+                    "API root must use HTTP or HTTPS: {}",
+                    profile.api_root
+                )));
+            }
+            if api_root.host_str().is_none()
+                || !api_root.username().is_empty()
+                || api_root.password().is_some()
+            {
+                return Err(ShimError::new(format!(
+                    "API root must have a host and no user-info: {}",
+                    profile.api_root
+                )));
+            }
+            profile.credential_host = normalize_transport_host(&profile.credential_host)?;
+            profile.aliases = profile
+                .aliases
+                .iter()
+                .map(|alias| normalize_transport_host(alias))
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut local = BTreeSet::new();
+            for transport_host in std::iter::once(&profile.canonical_host).chain(&profile.aliases) {
+                if is_known_github_host(Some(transport_host)) {
+                    return Err(ShimError::new(format!(
+                        "GitHub host cannot be registered as Forgejo: {transport_host}"
+                    )));
+                }
+                if !local.insert(transport_host.clone()) {
+                    return Err(ShimError::new(format!(
+                        "duplicate transport host: {transport_host}"
+                    )));
+                }
+                if assigned
+                    .insert(transport_host.clone(), profile_index)
+                    .is_some()
+                {
+                    return Err(ShimError::new(format!(
+                        "ambiguous transport host: {transport_host}"
+                    )));
+                }
+            }
+        }
+        Ok(Self {
+            profiles,
+            transport_profiles: assigned,
+        })
+    }
+
+    pub fn profiles(&self) -> &[HostProfile] {
+        &self.profiles
+    }
+
+    pub fn resolve(&self, repo: &RepoRef) -> ProviderResolution {
+        let transport_host = normalize_host(&repo.host);
+        if is_known_github_host(Some(&transport_host)) {
+            return ProviderResolution::GitHub { repo: repo.clone() };
+        }
+
+        if let Some(profile) = self
+            .transport_profiles
+            .get(&transport_host)
+            .and_then(|profile_index| self.profiles.get(*profile_index))
+        {
+            return ProviderResolution::Forgejo {
+                repo: RepoRef::new(&profile.canonical_host, &repo.owner, &repo.name),
+                profile: profile.clone(),
+            };
+        }
+
+        ProviderResolution::Unconfigured { repo: repo.clone() }
+    }
+}
+
+pub fn normalize_host(host: &str) -> String {
+    normalize_transport_host(host).unwrap_or_default()
+}
+
+pub fn is_known_github_host(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    let Ok(normalized) = normalize_transport_host(host) else {
+        return false;
+    };
+    let Ok(url) = reqwest::Url::parse(&format!("https://{normalized}/")) else {
+        return false;
+    };
+    let Some(hostname) = url.host_str() else {
+        return false;
+    };
+    KNOWN_GITHUB_HOSTS.contains(&hostname.trim_end_matches('.'))
+}
+
+pub fn normalize_transport_host(host: &str) -> Result<String> {
+    let value = host.trim();
+    if value.is_empty() {
+        return Err(ShimError::new("transport host cannot be empty"));
+    }
+
+    let parsed = if value.contains("://") {
+        reqwest::Url::parse(value)
+    } else {
+        let authority = value
+            .split_once('/')
+            .map_or(value, |(authority, _)| authority);
+        reqwest::Url::parse(&format!("https://{authority}/"))
+    }
+    .map_err(|_| ShimError::new(format!("invalid transport host: {value}")))?;
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ShimError::new(format!(
+            "transport host must not contain user-info: {value}"
+        )));
+    }
+    let hostname = parsed
+        .host_str()
+        .filter(|hostname| !hostname.is_empty())
+        .ok_or_else(|| ShimError::new(format!("invalid transport host: {value}")))?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let authority = parsed
+        .port()
+        .map_or(hostname.clone(), |port| format!("{hostname}:{port}"));
+    Ok(authority)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::repo::RepoRef;
+    use crate::Result;
+
+    use super::{HostProfile, HostRegistry, ProviderResolution};
+
+    #[test]
+    fn registry_resolves_transport_aliases_to_the_canonical_profile() -> Result<()> {
+        let registry = HostRegistry::new(vec![HostProfile {
+            canonical_host: "git.dirtydishes.dev".to_string(),
+            aliases: vec!["127.0.0.1".to_string(), "127.0.0.1:2222".to_string()],
+            api_root: "https://git.dirtydishes.dev/api/v1".to_string(),
+            credential_host: "git.dirtydishes.dev".to_string(),
+        }])?;
+
+        for alias in ["127.0.0.1", "127.0.0.1:2222"] {
+            let resolution = registry.resolve(&RepoRef::new(alias, "dirtydishes", "dirtypages"));
+            let ProviderResolution::Forgejo { repo, profile } = resolution else {
+                panic!("expected {alias} to resolve as Forgejo");
+            };
+            assert_eq!(repo.host, "git.dirtydishes.dev");
+            assert_eq!(repo.owner, "dirtydishes");
+            assert_eq!(repo.name, "dirtypages");
+            assert_eq!(profile.canonical_host, "git.dirtydishes.dev");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_and_ambiguous_transport_names() {
+        let duplicate = HostRegistry::new(vec![HostProfile {
+            canonical_host: "git.example.com".to_string(),
+            aliases: vec!["git.local".to_string(), "GIT.LOCAL".to_string()],
+            api_root: "https://git.example.com/api/v1".to_string(),
+            credential_host: "git.example.com".to_string(),
+        }]);
+        let Err(error) = duplicate else {
+            panic!("duplicate aliases in one profile must fail");
+        };
+        assert_eq!(error.message(), "duplicate transport host: git.local");
+
+        let ambiguous = HostRegistry::new(vec![
+            HostProfile {
+                canonical_host: "git.one.example".to_string(),
+                aliases: vec!["git.local".to_string()],
+                api_root: "https://git.one.example/api/v1".to_string(),
+                credential_host: "git.one.example".to_string(),
+            },
+            HostProfile {
+                canonical_host: "git.two.example".to_string(),
+                aliases: vec!["git.local".to_string()],
+                api_root: "https://git.two.example/api/v1".to_string(),
+                credential_host: "git.two.example".to_string(),
+            },
+        ]);
+        let Err(error) = ambiguous else {
+            panic!("one alias assigned to two profiles must fail");
+        };
+        assert_eq!(error.message(), "ambiguous transport host: git.local");
+    }
+
+    #[test]
+    fn registry_rejects_github_and_non_http_api_roots() {
+        let github = HostRegistry::new(vec![HostProfile {
+            canonical_host: "github.com".to_string(),
+            aliases: Vec::new(),
+            api_root: "https://api.github.com".to_string(),
+            credential_host: "github.com".to_string(),
+        }]);
+        let Err(error) = github else {
+            panic!("GitHub must not be registered as Forgejo");
+        };
+        assert_eq!(
+            error.message(),
+            "GitHub host cannot be registered as Forgejo: github.com"
+        );
+
+        let non_http = HostRegistry::new(vec![HostProfile {
+            canonical_host: "git.example.com".to_string(),
+            aliases: Vec::new(),
+            api_root: "ssh://git.example.com/api/v1".to_string(),
+            credential_host: "git.example.com".to_string(),
+        }]);
+        let Err(error) = non_http else {
+            panic!("non-HTTP API roots must fail");
+        };
+        assert_eq!(
+            error.message(),
+            "API root must use HTTP or HTTPS: ssh://git.example.com/api/v1"
+        );
+    }
+
+    #[test]
+    fn registry_rejects_github_identity_variants_and_aliases() {
+        for canonical_host in [
+            "github.com:443",
+            "github.com:8443",
+            "github.com.",
+            "www.github.com:443",
+        ] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: canonical_host.to_string(),
+                aliases: Vec::new(),
+                api_root: "https://github.com/api/v3".to_string(),
+                credential_host: canonical_host.to_string(),
+            }]);
+            assert!(result.is_err(), "registered canonical {canonical_host}");
+        }
+
+        for alias in [
+            "github.com",
+            "github.com:443",
+            "www.github.com:22",
+            "www.github.com.",
+        ] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: "git.example.com".to_string(),
+                aliases: vec![alias.to_string()],
+                api_root: "https://git.example.com/api/v1".to_string(),
+                credential_host: "git.example.com".to_string(),
+            }]);
+            assert!(result.is_err(), "registered GitHub alias {alias}");
+        }
+    }
+
+    #[test]
+    fn registry_rejects_transport_user_info() {
+        for canonical_host in [
+            "https://user@github.com/path",
+            "https://user:password@github.com/path",
+            "user@github.com",
+        ] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: canonical_host.to_string(),
+                aliases: Vec::new(),
+                api_root: "https://github.com/api/v3".to_string(),
+                credential_host: canonical_host.to_string(),
+            }]);
+            assert!(
+                result.is_err(),
+                "registered user-info host {canonical_host}"
+            );
+        }
+
+        for alias in [
+            "https://user@github.com/path",
+            "https://user:password@github.com/path",
+            "user@github.com",
+        ] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: "git.example.com".to_string(),
+                aliases: vec![alias.to_string()],
+                api_root: "https://git.example.com/api/v1".to_string(),
+                credential_host: "git.example.com".to_string(),
+            }]);
+            assert!(result.is_err(), "registered user-info alias {alias}");
+        }
+    }
+}

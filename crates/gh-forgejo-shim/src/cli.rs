@@ -254,6 +254,10 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "    {name} doctor")?;
     writeln!(stdout, "    {name} trace <summarize|smoke|git-recorder>")?;
     writeln!(stdout, "    {name} config <add-host|remove-host|list>")?;
+    writeln!(
+        stdout,
+        "    {name} config add-host HOST [--alias HOST]... [--api-root URL] [--credential-host HOST]"
+    )?;
     writeln!(stdout, "    {name} auth <login|import|status|logout>")?;
     writeln!(stdout)?;
     writeln!(stdout, "STATUS:")?;
@@ -528,36 +532,106 @@ fn expand_user_path(value: &str, home: Option<&Path>) -> Result<PathBuf> {
 fn run_config(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) -> Result<i32> {
     let path = config::config_path(runtime.home());
     match args {
-        [command, host] if command == "add-host" => {
-            let config = config::add_host(host, Some(&path))?;
-            writeln!(stdout, "added Forgejo host: {host}")?;
-            print_hosts(&config.hosts, stdout)?;
+        [command, values @ ..] if command == "add-host" && !values.is_empty() => {
+            let options = parse_add_host_options(values)?;
+            let registry = if options.aliases.is_empty()
+                && options.api_root.is_none()
+                && options.credential_host.is_none()
+            {
+                config::add_host(&options.host, Some(&path))?;
+                config::load_host_registry_with_env(Some(&path), &EnvMap::new())?
+            } else {
+                config::add_host_profile(
+                    &options.host,
+                    options.aliases,
+                    options.api_root.as_deref(),
+                    options.credential_host.as_deref(),
+                    Some(&path),
+                )?
+            };
+            writeln!(stdout, "added Forgejo host: {}", options.host)?;
+            print_profiles(registry.profiles(), stdout)?;
             Ok(0)
         }
         [command, host] if command == "remove-host" => {
-            let config = config::remove_host(host, Some(&path))?;
+            config::remove_host(host, Some(&path))?;
+            let registry = config::load_host_registry_with_env(Some(&path), &EnvMap::new())?;
             writeln!(stdout, "removed Forgejo host: {host}")?;
-            print_hosts(&config.hosts, stdout)?;
+            print_profiles(registry.profiles(), stdout)?;
             Ok(0)
         }
         [command] if command == "list" => {
-            let config = config::load_config_with_env(Some(&path), runtime.env())?;
-            print_hosts(&config.hosts, stdout)?;
+            let registry = config::load_host_registry_with_env(Some(&path), runtime.env())?;
+            print_profiles(registry.profiles(), stdout)?;
             Ok(0)
         }
         _ => Err(ShimError::new(
-            "usage: gh-forgejo-shim config <add-host HOST|remove-host HOST|list>",
+            "usage: gh-forgejo-shim config <add-host HOST [--alias HOST] [--api-root URL] [--credential-host HOST]|remove-host HOST|list>",
         )),
     }
 }
 
-fn print_hosts(hosts: &[String], stdout: &mut dyn Write) -> Result<()> {
-    if hosts.is_empty() {
+struct AddHostOptions {
+    host: String,
+    aliases: Vec<String>,
+    api_root: Option<String>,
+    credential_host: Option<String>,
+}
+
+fn parse_add_host_options(values: &[String]) -> Result<AddHostOptions> {
+    let Some(host) = values.first() else {
+        return Err(ShimError::new("Forgejo host is required"));
+    };
+    let mut options = AddHostOptions {
+        host: host.clone(),
+        aliases: Vec::new(),
+        api_root: None,
+        credential_host: None,
+    };
+    let mut index = 1;
+    while index < values.len() {
+        let flag = values[index].as_str();
+        let value = values
+            .get(index + 1)
+            .ok_or_else(|| ShimError::new(format!("{flag} requires a value")))?;
+        match flag {
+            "--alias" => options.aliases.push(value.clone()),
+            "--api-root" if options.api_root.is_none() => options.api_root = Some(value.clone()),
+            "--credential-host" if options.credential_host.is_none() => {
+                options.credential_host = Some(value.clone());
+            }
+            "--api-root" | "--credential-host" => {
+                return Err(ShimError::new(format!("{flag} may be supplied once")));
+            }
+            _ => {
+                return Err(ShimError::new(format!(
+                    "unknown config add-host flag: {flag}"
+                )))
+            }
+        }
+        index += 2;
+    }
+    Ok(options)
+}
+
+fn print_profiles(profiles: &[crate::provider::HostProfile], stdout: &mut dyn Write) -> Result<()> {
+    if profiles.is_empty() {
         writeln!(stdout, "no Forgejo hosts configured")?;
         return Ok(());
     }
-    for host in hosts {
-        writeln!(stdout, "{host}")?;
+    for profile in profiles {
+        writeln!(stdout, "{}", profile.canonical_host)?;
+        let default_api_root = format!("https://{}/api/v1", profile.canonical_host);
+        let extended = !profile.aliases.is_empty()
+            || profile.api_root != default_api_root
+            || profile.credential_host != profile.canonical_host;
+        if extended {
+            if !profile.aliases.is_empty() {
+                writeln!(stdout, "  aliases: {}", profile.aliases.join(", "))?;
+            }
+            writeln!(stdout, "  api root: {}", profile.api_root)?;
+            writeln!(stdout, "  credential host: {}", profile.credential_host)?;
+        }
     }
     Ok(())
 }
@@ -1197,6 +1271,94 @@ mod tests {
         fn current_launchd_path(&self) -> Option<String> {
             None
         }
+    }
+
+    #[test]
+    fn config_host_profile_round_trips_through_the_cli() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args([
+                "config",
+                "add-host",
+                "git.dirtydishes.dev",
+                "--alias",
+                "127.0.0.1",
+                "--alias",
+                "127.0.0.1:2222",
+                "--api-root",
+                "http://127.0.0.1:3000/api/v1",
+                "--credential-host",
+                "git.dirtydishes.dev",
+            ]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(
+            fs::read_to_string(config::config_path(Some(&home)))?,
+            r#"hosts = ["git.dirtydishes.dev"]
+
+[[host_profiles]]
+canonical_host = "git.dirtydishes.dev"
+aliases = ["127.0.0.1", "127.0.0.1:2222"]
+api_root = "http://127.0.0.1:3000/api/v1"
+credential_host = "git.dirtydishes.dev"
+"#
+        );
+        stdout.clear();
+        stderr.clear();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["config", "list"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(
+            String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?,
+            "git.dirtydishes.dev\n  aliases: 127.0.0.1, 127.0.0.1:2222\n  api root: http://127.0.0.1:3000/api/v1\n  credential host: git.dirtydishes.dev\n"
+        );
+        stdout = Vec::new();
+        stderr.clear();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args([
+                "config",
+                "add-host",
+                "git.dirtydishes.dev",
+                "--alias",
+                "10.0.0.1",
+            ]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(
+            fs::read_to_string(config::config_path(Some(&home)))?,
+            r#"hosts = ["git.dirtydishes.dev"]
+
+[[host_profiles]]
+canonical_host = "git.dirtydishes.dev"
+aliases = ["127.0.0.1", "127.0.0.1:2222", "10.0.0.1"]
+api_root = "http://127.0.0.1:3000/api/v1"
+credential_host = "git.dirtydishes.dev"
+"#
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
     }
 
     #[test]

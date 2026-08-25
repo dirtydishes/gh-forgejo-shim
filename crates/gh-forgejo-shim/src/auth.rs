@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
+use crate::auth_config::{find_token, find_token_in_text, parse_json};
 use crate::config::{current_env, normalize_host, EnvMap};
 use crate::{Result, ShimError};
 
@@ -102,6 +103,10 @@ pub fn discover_token(
         base.join("Library")
             .join("Application Support")
             .join("Cyborus.forgejo-cli")
+            .join("keys.json"),
+        base.join(".local")
+            .join("share")
+            .join("forgejo-cli")
             .join("keys.json"),
         base.join(".config").join("fj").join("config.json"),
         base.join(".config").join("fj").join("config.yml"),
@@ -262,134 +267,11 @@ fn read_token_file(path: &Path, host: Option<&str>) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
 
     if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
-        let data = serde_json::from_str::<Value>(&text).ok()?;
+        let data = parse_json(&text)?;
         return find_token(&data, host);
     }
 
     find_token_in_text(&text, host)
-}
-
-fn find_token(data: &Value, host: Option<&str>) -> Option<String> {
-    match data {
-        Value::Object(object) => {
-            if let Some(host) = host {
-                for (key, value) in object {
-                    if normalize_host(key) == host {
-                        if let Some(found) = find_token(value, None) {
-                            return Some(found);
-                        }
-                    }
-                }
-                if dict_matches_host(object, host) {
-                    if let Some(found) = token_from_object(object) {
-                        return Some(found);
-                    }
-                }
-                for value in object.values() {
-                    if let Some(found) = find_token(value, Some(host)) {
-                        return Some(found);
-                    }
-                }
-                None
-            } else {
-                if let Some(found) = token_from_object(object) {
-                    return Some(found);
-                }
-                for value in object.values() {
-                    if let Some(found) = find_token(value, None) {
-                        return Some(found);
-                    }
-                }
-                None
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                if let Some(found) = find_token(item, host) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn token_from_object(object: &Map<String, Value>) -> Option<String> {
-    for key in ["token", "access_token"] {
-        if let Some(value) = object
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn dict_matches_host(object: &Map<String, Value>, host: &str) -> bool {
-    for key in [
-        "host",
-        "hostname",
-        "url",
-        "server",
-        "server_url",
-        "base_url",
-    ] {
-        if object
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|value| normalize_host(value) == host)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn find_token_in_text(text: &str, host: Option<&str>) -> Option<String> {
-    if let Some(host) = host {
-        let lower_text = text.to_ascii_lowercase();
-        let lower_host = host.to_ascii_lowercase();
-        let host_index = lower_text.find(&lower_host)?;
-        let nearby = text[host_index..].chars().take(2000).collect::<String>();
-        return token_line(&nearby);
-    }
-    token_line(text)
-}
-
-fn token_line(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let lower = trimmed.to_ascii_lowercase();
-        for key in ["token", "access_token"] {
-            if lower.starts_with(key) {
-                if let Some(token) = parse_token_tail(&trimmed[key.len()..]) {
-                    return Some(token);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn parse_token_tail(value: &str) -> Option<String> {
-    let value = value.trim_start();
-    let value = value
-        .strip_prefix(':')
-        .or_else(|| value.strip_prefix('='))?
-        .trim_start();
-    let value = value
-        .strip_prefix('"')
-        .or_else(|| value.strip_prefix('\''))
-        .unwrap_or(value);
-    let token = value
-        .chars()
-        .take_while(|character| !matches!(character, '"' | '\'' | '#' | ' ' | '\t' | '\r' | '\n'))
-        .collect::<String>();
-    (!token.is_empty()).then_some(token)
 }
 
 fn read_file_token(host: &str, home: Option<&Path>) -> Option<String> {
@@ -701,6 +583,82 @@ mod tests {
     }
 
     #[test]
+    fn discovers_linux_fj_keys_json_only_for_matching_credential_host() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join(".local").join("share").join("forgejo-cli");
+        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
+        fs::write(
+            path.join("keys.json"),
+            r#"{"hosts":{"auth.dirtydishes.dev":{"token":"linux-secret"},"auth.other.test":{"token":"other-secret"}}}"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let matching = discover_token(
+            Some("auth.dirtydishes.dev"),
+            &EnvMap::new(),
+            Some(&home),
+            Some("linux"),
+            true,
+        );
+        let unrelated = discover_token(
+            Some("auth.missing.test"),
+            &EnvMap::new(),
+            Some(&home),
+            Some("linux"),
+            true,
+        );
+
+        assert_eq!(
+            matching.as_ref().map(|value| value.token.as_str()),
+            Some("linux-secret")
+        );
+        assert_eq!(
+            matching.as_ref().map(|value| value.source.as_str()),
+            Some(path.join("keys.json").to_string_lossy().as_ref())
+        );
+        assert!(unrelated.is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn stored_shim_auth_precedes_linux_fj_keys_json() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join(".local").join("share").join("forgejo-cli");
+        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
+        fs::write(
+            path.join("keys.json"),
+            r#"{"hosts":{"auth.dirtydishes.dev":{"token":"linux-secret"}}}"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+        write_stored_token(
+            "auth.dirtydishes.dev",
+            "stored-secret",
+            Some(&home),
+            Some("linux"),
+        )?;
+
+        let discovery = discover_token(
+            Some("auth.dirtydishes.dev"),
+            &EnvMap::new(),
+            Some(&home),
+            Some("linux"),
+            true,
+        );
+
+        assert_eq!(
+            discovery.as_ref().map(|value| value.token.as_str()),
+            Some("stored-secret")
+        );
+        assert_eq!(
+            discovery.as_ref().map(|value| value.source.as_str()),
+            Some(auth_file_path(Some(&home)).to_string_lossy().as_ref())
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
     fn discovers_yaml_token_for_matching_host() -> Result<()> {
         let home = temp_root()?;
         let path = home.join(".config").join("tea");
@@ -884,14 +842,6 @@ mod tests {
         );
         fs::remove_dir_all(home).ok();
         Ok(())
-    }
-
-    #[test]
-    fn text_token_scan_handles_utf8_near_scan_boundary() {
-        let padding = "a".repeat(2000 - "git.example.com".len() - 1);
-        let text = format!("git.example.com{padding}é\ntoken: secret");
-
-        assert_eq!(find_token_in_text(&text, Some("git.example.com")), None);
     }
 
     #[cfg(unix)]

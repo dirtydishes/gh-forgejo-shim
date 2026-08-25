@@ -1,7 +1,7 @@
 //! External command discovery and delegation helpers.
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(test)]
@@ -27,6 +27,33 @@ pub struct ProgramOutput {
     pub code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+pub struct CountingWriter<'a, W: Write + ?Sized> {
+    inner: &'a mut W,
+    bytes: usize,
+}
+
+impl<'a, W: Write + ?Sized> CountingWriter<'a, W> {
+    pub fn new(inner: &'a mut W) -> Self {
+        Self { inner, bytes: 0 }
+    }
+
+    pub const fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+impl<W: Write + ?Sized> Write for CountingWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.bytes += written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

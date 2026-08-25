@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dirtydishes.dev/schemas/dirtyloops/runtime-generation.schema.json",
+  "title": "Dirtyloops Runtime Generation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operation", "artifacts", "metadata", "generation_id"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "operation": { "const": "install-generated-contract" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "null"],
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "adapter_contract", "adapter_identity", "execution_readiness"],
+      "properties": {
+        "target": { "enum": ["codex", "pi"] },
+        "adapter_contract": { "const": "dirtyloops-harness/1" },
+        "adapter_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target", "path", "sha256"],
+          "properties": {
+            "target": { "enum": ["codex", "pi"] },
+            "path": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        },
+        "execution_readiness": { "enum": ["ready", "needs-clarification", "requires-reslice"] }
+      }
+    },
+    "generation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

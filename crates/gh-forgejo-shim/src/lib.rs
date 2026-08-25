@@ -6,17 +6,23 @@
 #![recursion_limit = "256"]
 
 pub mod auth;
+mod auth_config;
 pub mod bootstrap;
 pub mod cli;
 pub mod codex_smoke;
 pub mod config;
 pub mod create;
+pub mod deadline;
 pub mod doctor;
 pub mod external;
 pub mod forgejo;
 pub mod git_recorder;
 pub mod gui_path;
+pub mod invocation;
 pub mod normalize;
+mod observation;
+pub mod provider;
+mod pull_requests;
 pub mod read_only;
 pub mod repo;
 pub mod routing;

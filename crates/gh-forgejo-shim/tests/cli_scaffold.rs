@@ -7,7 +7,7 @@ use std::io;
 use std::process::Command;
 
 use gh_forgejo_shim::VERSION;
-use serde_json::Value;
+use serde_json::{json, Value};
 use support::{load_contract, CliFixture, TestResult};
 
 #[test]
@@ -57,22 +57,11 @@ fn short_binary_prints_version_without_python() -> TestResult {
 }
 
 #[test]
-fn doctor_runs_native_diagnostics() -> TestResult {
+fn doctor_ignores_an_installed_system_gh() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
 
-    let restricted_path = std::env::join_paths([
-        fixture.bin().as_os_str(),
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])?;
-    let output = fixture
-        .command("gh-forgejo-shim")?
-        .env("PATH", restricted_path)
-        .arg("doctor")
-        .output()?;
+    let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
 
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
@@ -89,6 +78,7 @@ fn doctor_runs_native_diagnostics() -> TestResult {
     assert!(stdout.contains("[fix] auth token:"), "{stdout}");
     assert!(stdout.contains("[ok] current repo host:"), "{stdout}");
     assert!(stdout.contains("repair commands:"), "{stdout}");
+    assert!(!stdout.contains("/usr/bin/gh"), "{stdout}");
     Ok(())
 }
 
@@ -297,7 +287,6 @@ fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visibl
 
     let output = fixture
         .command("gfj")?
-        .env("PATH", system_path_only()?)
         .env("FJ_SHIM_REAL_GH", &real_gh)
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
         .args(["bootstrap", "--no-gui-path"])
@@ -387,6 +376,7 @@ fn bootstrap_refuses_unmanaged_target_until_forced() -> TestResult {
 #[test]
 fn managed_gh_version_delegates_to_real_gh() -> TestResult {
     let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
     fixture.write_executable("gh", "#!/bin/sh\necho 'gh version 9.9.9 (fake)'\n")?;
 
     let output = fixture
@@ -399,6 +389,57 @@ fn managed_gh_version_delegates_to_real_gh() -> TestResult {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
     assert_eq!(stdout, "gh version 9.9.9 (fake)\n");
+    Ok(())
+}
+
+#[test]
+fn managed_gh_unknown_single_token_forgejo_command_fails_locally() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .arg("gh")
+        .arg("browse")
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        "gh-forgejo-shim: unsupported Forgejo command: browse\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn managed_gh_safe_global_help_delegates_in_forgejo_checkout() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    for args in [
+        &[][..],
+        &["--help"][..],
+        &["-h"][..],
+        &["help", "pr"][..],
+        &["pr", "view", "--help"][..],
+        &["issue", "list", "-h"][..],
+        &["auth", "status", "--help"][..],
+    ] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env_remove("FJ_SHIM_REAL_GH")
+            .arg("gh")
+            .args(args)
+            .output()?;
+
+        assert!(output.status.success(), "global help failed for {args:?}");
+        assert_eq!(String::from_utf8(output.stdout)?, "delegated\n");
+        assert_eq!(String::from_utf8(output.stderr)?, "");
+    }
     Ok(())
 }
 
@@ -471,6 +512,63 @@ fn managed_gh_github_repo_delegates_even_when_allowlisted() -> TestResult {
 }
 
 #[test]
+fn managed_gh_unknown_forgejo_alias_command_fails_locally() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            "127.0.0.1",
+        ])
+        .output()?;
+    assert_eq!(configured.status.code(), Some(0));
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_HOSTS")
+        .arg("gh")
+        .args([
+            "workflow",
+            "run",
+            "--repo",
+            "127.0.0.1/dirtydishes/dirtypages",
+        ])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        "gh-forgejo-shim: unsupported Forgejo command: workflow\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn managed_gh_malformed_canonical_config_fails_closed() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("FJ_SHIM_HOSTS", "https://user@git.example.com/path")
+        .env("GH_HOST", "https://user@git.example.com/path")
+        .arg("gh")
+        .args(["workflow", "run"])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert!(String::from_utf8(output.stderr)?.contains("transport host must not contain user-info"));
+    Ok(())
+}
+
+#[test]
 fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\necho traced\n")?;
@@ -481,9 +579,9 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
         .env_remove("FJ_SHIM_REAL_GH")
         .env("FJ_SHIM_TRACE", &trace_path)
         .arg("gh")
-        .arg("--version")
-        .arg("--token")
-        .arg("secret-token")
+        .args(["api", "--hostname", "github.com", "--header"])
+        .arg("Authorization: Bearer secret-token")
+        .arg("user")
         .output()?;
 
     assert!(output.status.success());
@@ -491,9 +589,16 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
     let record: Value = serde_json::from_str(trace.trim())?;
     assert_eq!(record["kind"], "gh");
     assert_eq!(record["route"]["kind"], "delegate");
-    assert_eq!(record["route"]["reason"], "unsupported command");
-    assert_eq!(record["argv"][2], "<redacted>");
-    assert_eq!(record["stdout"]["bytes"], Value::Null);
+    assert_eq!(
+        record["route"]["reason"],
+        "host github.com is not allowlisted"
+    );
+    assert_eq!(record["argv"][4], "Authorization: Bearer <redacted>");
+    assert_eq!(record["provider"], "github");
+    assert_eq!(record["command_class"], "api");
+    assert_eq!(record["stdout"], json!({"state": "unknown", "bytes": null}));
+    assert_eq!(record["stderr"], json!({"state": "unknown", "bytes": null}));
+    assert_eq!(String::from_utf8(output.stdout)?, "traced\n");
     Ok(())
 }
 
@@ -522,6 +627,20 @@ fn managed_gh_forgejo_auth_status_records_trace() -> TestResult {
     assert_eq!(record["host"], "git.example.com");
     assert_eq!(record["repo"]["full_name"], "owner/repo");
     assert_eq!(record["exit_code"], 0);
+    assert_eq!(record["provider"], "forgejo");
+    assert_eq!(record["command_class"], "auth-status");
+    let expected_stdout = concat!(
+        "git.example.com\n",
+        "  [ok] Logged in to git.example.com using gh-forgejo-shim\n",
+        "  - Active account: true\n",
+        "  - Token source: gh-forgejo-shim\n",
+    );
+    assert_eq!(String::from_utf8(output.stdout)?, expected_stdout);
+    assert_eq!(
+        record["stdout"],
+        json!({"state": "observed", "bytes": expected_stdout.len()})
+    );
+    assert_eq!(record["stderr"], json!({"state": "observed", "bytes": 0}));
     assert!(!trace.contains("secret-token"));
     Ok(())
 }
@@ -545,6 +664,11 @@ fn managed_gh_trace_can_use_local_path() -> TestResult {
     let record: Value = serde_json::from_str(trace.trim())?;
     assert_eq!(record["kind"], "gh");
     assert_eq!(record["route"]["kind"], "delegate");
+    assert_eq!(record["provider"], "github");
+    assert_eq!(record["command_class"], "version");
+    assert_eq!(String::from_utf8(output.stdout)?, "traced\n");
+    assert_eq!(record["stdout"], json!({"state": "observed", "bytes": 7}));
+    assert_eq!(record["stderr"], json!({"state": "observed", "bytes": 0}));
     Ok(())
 }
 
@@ -753,16 +877,6 @@ fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestRes
 fn restricted_path_with(first: impl AsRef<OsStr>) -> io::Result<OsString> {
     std::env::join_paths([
         first.as_ref(),
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
-}
-
-fn system_path_only() -> io::Result<OsString> {
-    std::env::join_paths([
         OsStr::new("/usr/bin"),
         OsStr::new("/bin"),
         OsStr::new("/usr/sbin"),

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dirtydishes.dev/schemas/dirtyloops/runtime-activation.schema.json",
+  "title": "Dirtyloops Runtime Activation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "state", "target", "generation_id", "adapter_identity", "source_coordinator_id", "operation"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "state": { "enum": ["required", "probing", "ready", "failed", "unsupported"] },
+    "target": { "enum": ["codex", "pi"] },
+    "generation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "adapter_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "path", "sha256"],
+      "properties": {
+        "target": { "enum": ["codex", "pi"] },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "source_coordinator_id": { "type": "string", "minLength": 8 },
+    "operation": { "type": "string", "minLength": 1 },
+    "attempted_coordinator_id": { "type": "string", "minLength": 8 },
+    "ready_coordinator_id": { "type": "string", "minLength": 8 },
+    "probe": { "type": "object" },
+    "evidence": { "type": "object" },
+    "degradation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "state", "reason", "handles", "events", "recorded_at"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "state": { "const": "active" },
+        "reason": { "const": "delivery-recovery" },
+        "handles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "events": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+        "recorded_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "renewal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason",
+        "phase_issue_id",
+        "turn_doc",
+        "pr",
+        "source_coordinator_id",
+        "requested_at",
+        "safe_boundary",
+        "checkout",
+        "context_usage",
+        "recovery"
+      ],
+      "properties": {
+        "state": { "enum": ["requested", "completed"] },
+        "reason": { "enum": ["degraded-delivery", "context-pressure", "operator-request"] },
+        "phase_issue_id": { "type": "string", "minLength": 3 },
+        "turn_doc": { "type": "string", "minLength": 1 },
+        "pr": { "type": "string" },
+        "source_coordinator_id": { "type": "string", "minLength": 8 },
+        "requested_at": { "type": "string", "format": "date-time" },
+        "safe_boundary": { "const": true },
+        "checkout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["branch", "head", "dirty"],
+          "properties": {
+            "branch": { "type": "string", "minLength": 1 },
+            "head": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            "dirty": { "type": "boolean" }
+          }
+        },
+        "context_usage": { "type": ["object", "null"] },
+        "recovery": { "type": ["object", "null"] },
+        "detail": { "type": "string" },
+        "destination_coordinator_id": { "type": "string", "minLength": 8 },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "activation_evidence": { "type": "object" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary", "message"],
+      "properties": {
+        "boundary": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

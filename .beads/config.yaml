@@ -55,3 +55,5 @@
 # - github.token    → use GITHUB_TOKEN env var instead
 
 sync.remote: "http://dolt.deltaisland.io/gh_forgejo_shim"
+
+no-git-ops: false

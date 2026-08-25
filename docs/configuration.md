@@ -15,10 +15,21 @@ Example:
 ```toml
 hosts = ["git.example.com"]
 
+[[host_profiles]]
+canonical_host = "git.example.com"
+aliases = ["git.internal", "127.0.0.1:2222"]
+api_root = "https://git.example.com/api/v1"
+credential_host = "git.example.com"
+
 [paths]
 gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
 ```
+
+The `hosts` list remains the allowlist and keeps the file readable by older
+versions. A `host_profiles` table adds transport aliases, a REST API root, and
+the host name used for credentials. A profile table does not enable a host that
+is absent from `hosts`.
 
 ## Host Allowlist
 
@@ -27,6 +38,21 @@ Add a host:
 ```sh
 gh-forgejo-shim config add-host git.example.com
 ```
+
+Add aliases or override the default API and credential hosts:
+
+```sh
+gfj config add-host git.example.com \
+  --alias git.internal \
+  --alias 127.0.0.1:2222 \
+  --api-root https://git.example.com/api/v1 \
+  --credential-host git.example.com
+```
+
+`--alias` may appear more than once. API roots must use HTTP or HTTPS. The
+default API root is `https://HOST/api/v1`, and the default credential host is
+the canonical host. The command rejects duplicate aliases, aliases assigned to
+more than one profile, and attempts to register `github.com` as Forgejo.
 
 Remove a host:
 
@@ -38,6 +64,15 @@ List configured hosts:
 
 ```sh
 gh-forgejo-shim config list
+```
+
+Profiles with custom values show their details:
+
+```text
+git.example.com
+  aliases: git.internal, 127.0.0.1:2222
+  api root: https://git.example.com/api/v1
+  credential host: git.example.com
 ```
 
 The shim routes Forgejo commands only when the detected repository host is in the allowlist.
@@ -53,6 +88,9 @@ prevents a stale or accidental `github.com` entry from being treated as Forgejo.
 ```sh
 FJ_SHIM_HOSTS=git.example.com,code.example.org gh pr view
 ```
+
+Hosts from this environment variable use default profiles for that process.
+Stored aliases, API roots, and credential hosts do not carry into the override.
 
 `FJ_SHIM_REAL_GH` and `FJ_SHIM_REAL_FJ` override configured executable paths:
 

@@ -3,9 +3,11 @@ use std::time::Duration;
 
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use reqwest::Method;
+use reqwest::{Method, Url};
 use serde_json::{json, Value};
 
+use crate::deadline::CommandDeadline;
+use crate::pull_requests::list::matches_head;
 use crate::ShimError;
 
 const USER_AGENT_VALUE: &str = "gh-forgejo-shim";
@@ -174,8 +176,9 @@ impl ListIssuesOptions {
 #[derive(Clone)]
 pub struct ForgejoClient {
     token: Option<String>,
-    timeout: Duration,
+    deadline: CommandDeadline,
     scheme: String,
+    api_root: Option<Url>,
     http: Client,
 }
 
@@ -183,8 +186,9 @@ impl ForgejoClient {
     pub fn new(token: Option<String>) -> Self {
         Self {
             token,
-            timeout: Duration::from_secs(30),
+            deadline: CommandDeadline::after(Duration::from_secs(30)),
             scheme: "https".to_string(),
+            api_root: None,
             http: Client::new(),
         }
     }
@@ -194,7 +198,12 @@ impl ForgejoClient {
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.deadline = CommandDeadline::after(timeout);
+        self
+    }
+
+    pub fn with_deadline(mut self, deadline: CommandDeadline) -> Self {
+        self.deadline = deadline;
         self
     }
 
@@ -203,12 +212,20 @@ impl ForgejoClient {
         self
     }
 
+    pub fn with_api_root(mut self, api_root: &str) -> ForgejoResult<Self> {
+        let parsed = Url::parse(api_root)
+            .map_err(|_| ForgejoError::new(format!("invalid Forgejo API root: {api_root}")))?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err(ForgejoError::new(format!(
+                "invalid Forgejo API root: {api_root}"
+            )));
+        }
+        self.api_root = Some(parsed);
+        Ok(self)
+    }
+
     pub fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {
-        self.request_json(
-            Method::GET,
-            format!("{}://{}/api/v1/user", self.scheme, host_for_url(host)),
-            None,
-        )
+        self.request_json(Method::GET, self.api_endpoint_url(host, &["user"]), None)
     }
 
     pub fn create_pull(&self, repo: &RepoRef, request: &CreatePullRequest) -> ForgejoResult<Value> {
@@ -400,17 +417,85 @@ impl ForgejoClient {
             None,
         )?;
         let pulls = list_of_objects(pulls);
-        let Some(head) = head else {
+        if head.is_none() {
             return Ok(pulls);
-        };
+        }
         Ok(pulls
             .into_iter()
-            .filter(|pull| head_matches(pull, head))
+            .filter(|pull| matches_head(pull, head))
             .collect())
     }
 
+    pub(crate) fn pull_page_json(
+        &self,
+        repo: &RepoRef,
+        state: &str,
+        page: usize,
+        page_size: usize,
+    ) -> ForgejoResult<Value> {
+        let params = [
+            ("state".to_string(), state.to_string()),
+            ("limit".to_string(), page_size.to_string()),
+            ("page".to_string(), page.to_string()),
+        ];
+        self.request_json(
+            Method::GET,
+            format!(
+                "{}/pulls?{}",
+                self.repo_api_base_url(repo),
+                form_urlencode(&params)
+            ),
+            None,
+        )
+    }
+
     fn repo_api_base_url(&self, repo: &RepoRef) -> String {
-        repo.api_base_url_with_scheme(&self.scheme)
+        if self.api_root.is_some() {
+            self.api_endpoint_url(&repo.host, &["repos", &repo.owner, &repo.repo])
+        } else {
+            repo.api_base_url_with_scheme(&self.scheme)
+        }
+    }
+
+    fn api_endpoint_url(&self, host: &str, segments: &[&str]) -> String {
+        let Some(api_root) = &self.api_root else {
+            let suffix = segments
+                .iter()
+                .map(|segment| quote_path_segment(segment))
+                .collect::<Vec<_>>()
+                .join("/");
+            return format!("{}://{}/api/v1/{suffix}", self.scheme, host_for_url(host));
+        };
+
+        let mut endpoint = api_root.clone();
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
+        {
+            let mut path = endpoint
+                .path_segments_mut()
+                .expect("HTTP API roots support path segments");
+            path.pop_if_empty();
+            path.extend(segments);
+        }
+        endpoint.into()
+    }
+
+    fn request_url(&self, endpoint: &str) -> ForgejoResult<Url> {
+        let mut request = Url::parse(endpoint)
+            .map_err(|_| ForgejoError::new(format!("invalid Forgejo API URL: {endpoint}")))?;
+        let Some(api_root) = &self.api_root else {
+            return Ok(request);
+        };
+
+        if let Some(root_query) = api_root.query() {
+            let query = request.query().map_or_else(
+                || root_query.to_string(),
+                |value| format!("{value}&{root_query}"),
+            );
+            request.set_query(Some(&query));
+        }
+        request.set_fragment(api_root.fragment());
+        Ok(request)
     }
 
     fn request_json(
@@ -445,10 +530,14 @@ impl ForgejoClient {
         payload: Option<Value>,
         accept: &str,
     ) -> ForgejoResult<Vec<u8>> {
+        let remaining = self
+            .deadline
+            .remaining()
+            .ok_or_else(|| ForgejoError::new("Forgejo command deadline exceeded"))?;
         let mut request = self
             .http
-            .request(method, &url)
-            .timeout(self.timeout)
+            .request(method, self.request_url(&url)?)
+            .timeout(remaining)
             .header(ACCEPT, accept)
             .header(USER_AGENT, USER_AGENT_VALUE);
 
@@ -463,13 +552,9 @@ impl ForgejoClient {
             request = request.header(CONTENT_TYPE, "application/json").body(body);
         }
 
-        let response = request
-            .send()
-            .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
+        let response = request.send().map_err(request_error)?;
         let status = response.status();
-        let response_data = response
-            .bytes()
-            .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
+        let response_data = response.bytes().map_err(request_error)?;
         let response_data = response_data.to_vec();
 
         if !status.is_success() {
@@ -481,6 +566,14 @@ impl ForgejoClient {
         }
 
         Ok(response_data)
+    }
+}
+
+fn request_error(error: reqwest::Error) -> ForgejoError {
+    if error.is_timeout() {
+        ForgejoError::new("Forgejo command deadline exceeded")
+    } else {
+        ForgejoError::new(format!("Forgejo API request failed: {error}"))
     }
 }
 
@@ -498,17 +591,6 @@ fn host_for_url(host: &str) -> String {
         return rest[..end].to_string();
     }
     trimmed.to_string()
-}
-
-fn head_matches(item: &Value, head: &str) -> bool {
-    let Some(head_data) = item.get("head").and_then(Value::as_object) else {
-        return false;
-    };
-    let ref_name = head_data.get("ref").and_then(Value::as_str);
-    let label = head_data.get("label").and_then(Value::as_str);
-    ref_name == Some(head)
-        || label == Some(head)
-        || label.is_some_and(|value| value.ends_with(&format!(":{head}")))
 }
 
 fn quote_path_segment(value: &str) -> String {
@@ -642,6 +724,24 @@ mod tests {
     }
 
     #[test]
+    fn configured_api_root_keeps_its_path_and_query() -> TestResult {
+        let (host, handle) = start_fake_server(vec![FakeResponse::json("[]")])?;
+        let api_root = format!("http://{host}/forgejo/api/v1?tenant=blue#profile");
+        let client = ForgejoClient::new(None).with_api_root(&api_root)?;
+        let repo = RepoRef::new("git.example.com", "owner", "repo");
+
+        let pulls = client.list_pulls(&repo, "open", None)?;
+        let requests = finish_fake_server(handle)?;
+
+        assert!(pulls.is_empty());
+        assert_eq!(
+            requests[0].request_line,
+            "GET /forgejo/api/v1/repos/owner/repo/pulls?state=open&tenant=blue HTTP/1.1"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn create_pull_posts_python_compatible_json() -> TestResult {
         let (host, handle) = start_fake_server(vec![FakeResponse::json(
             r#"{"number":7,"title":"Ship it"}"#,
@@ -703,33 +803,6 @@ mod tests {
         assert_eq!(
             requests[0].request_line,
             "GET /api/v1/repos/owner/repo/issues?state=closed&type=issues&labels=bug%2Chelp+wanted&q=needs+work&milestones=v1&created_by=alice&mentioned_by=bob&limit=10 HTTP/1.1"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn list_pulls_filters_head_by_ref_or_label_suffix() -> TestResult {
-        let (host, handle) = start_fake_server(vec![FakeResponse::json(
-            r#"[
-                {"number":1,"head":{"ref":"feature"}},
-                {"number":2,"head":{"label":"alice:feature"}},
-                {"number":3,"head":{"ref":"other"}}
-            ]"#,
-        )])?;
-        let client = ForgejoClient::new(None).with_scheme("http");
-        let repo = RepoRef::new(host, "owner", "repo");
-
-        let pulls = client.list_pulls(&repo, "open", Some("feature"))?;
-        let requests = finish_fake_server(handle)?;
-
-        let numbers = pulls
-            .iter()
-            .filter_map(|pull| pull.get("number").and_then(Value::as_i64))
-            .collect::<Vec<_>>();
-        assert_eq!(numbers, vec![1, 2]);
-        assert_eq!(
-            requests[0].request_line,
-            "GET /api/v1/repos/owner/repo/pulls?state=open HTTP/1.1"
         );
         Ok(())
     }

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "target": "codex",
+  "adapter_contract": "dirtyloops-harness/1",
+  "adapter_policy": "certified-only",
+  "required_capabilities": [
+    "runtime-identification",
+    "symbolic-branch-verification"
+  ],
+  "optional_capabilities": [
+    "explicit-cwd",
+    "structured-completion",
+    "persistent-child-session",
+    "bounded-delegates",
+    "background-completion",
+    "model-selection",
+    "reasoning-selection",
+    "steering",
+    "cancellation",
+    "concurrent-children"
+  ],
+  "unknown_capability_policy": "reject"
+}

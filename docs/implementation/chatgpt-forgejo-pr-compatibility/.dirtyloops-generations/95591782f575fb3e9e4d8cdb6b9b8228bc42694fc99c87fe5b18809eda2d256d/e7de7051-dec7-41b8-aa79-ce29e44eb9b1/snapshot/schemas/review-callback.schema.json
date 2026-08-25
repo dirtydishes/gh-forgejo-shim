@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewCallback",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "orchestrator_thread_id", "source_thread_id", "phase_issue_id", "status", "pr", "ci_state", "review_skill", "repairs", "findings_remaining", "turn_doc", "context_to_keep"],
+  "properties": {
+    "type": { "const": "review-callback" },
+    "orchestrator_thread_id": { "type": "string", "minLength": 1 },
+    "source_thread_id": { "type": "string", "minLength": 1 },
+    "phase_issue_id": { "type": "string" },
+    "status": { "enum": ["approved", "repaired", "blocked"] },
+    "pr": { "type": ["string", "null"] },
+    "ci_state": {
+      "enum": ["ci-green", "ci-repaired-and-green", "ci-unavailable-with-evidence", "ci-blocked-with-cause"]
+    },
+    "review_skill": {
+      "const": "thermo-nuclear-code-quality-review"
+    },
+    "repairs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "findings_remaining": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "turn_doc": { "type": "string" },
+    "context_to_keep": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "type": "string" }
+    }
+  }
+}

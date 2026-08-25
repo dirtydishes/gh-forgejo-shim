@@ -8,22 +8,25 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::config::EnvMap;
+use crate::deadline::CommandDeadline;
 use crate::external::{git_output, git_run, open_web_url, GitRunResult};
 use crate::forgejo::{
     CreateIssueRequest, CreatePullRequest, ForgejoClient, ForgejoResult, ListIssuesOptions,
     RepoRef as ForgejoRepoRef,
 };
+use crate::invocation::ParsedInvocation;
 use crate::normalize::{
     filter_check_fields, filter_fields, filter_issue_fields, filter_repo_fields, normalize_issue,
     normalize_pr_checks_for_repo, normalize_pull, normalize_repo, render_json_or_jq,
     render_json_or_jq_list, status_for_current_branch, with_status_check_rollup_for_repo,
 };
-use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
-use crate::routing::RouteDecision;
+use crate::pull_requests::list::{self as pull_request_list, PullRequestQuery, PullRequestSource};
+use crate::repo::RepoRef as DetectedRepoRef;
+use crate::routing::ForgejoTarget;
 use crate::{auth, create};
 use crate::{Result, ShimError};
 
-trait ForgejoApi {
+trait ForgejoApi: PullRequestSource {
     fn get_current_user(&self, host: &str) -> ForgejoResult<Value>;
     fn get_repo(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Value>;
     fn create_pull(
@@ -164,7 +167,6 @@ struct OutputArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ViewStatusArgs {
     output: OutputArgs,
-    repo: Option<String>,
     web: bool,
     number: Option<u64>,
     branch: Option<String>,
@@ -173,22 +175,24 @@ struct ViewStatusArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ListArgs {
     output: OutputArgs,
-    repo: Option<String>,
     state: String,
     limit: Option<usize>,
     head: Option<String>,
+    author: Option<String>,
     base: Option<String>,
+    draft_only: bool,
 }
 
 impl Default for ListArgs {
     fn default() -> Self {
         Self {
             output: OutputArgs::default(),
-            repo: None,
             state: "open".to_string(),
             limit: None,
             head: None,
+            author: None,
             base: None,
+            draft_only: false,
         }
     }
 }
@@ -196,21 +200,18 @@ impl Default for ListArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RepoViewArgs {
     output: OutputArgs,
-    repo: Option<String>,
     web: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ChecksArgs {
     json_fields: Vec<String>,
-    repo: Option<String>,
     jq: Option<String>,
     number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DiffArgs {
-    repo: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     web: bool,
@@ -221,7 +222,6 @@ struct DiffArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CommentArgs {
-    repo: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     body: Option<String>,
@@ -230,7 +230,6 @@ struct CommentArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CheckoutArgs {
-    repo: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     local_branch: Option<String>,
@@ -242,7 +241,6 @@ struct CheckoutArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IssueListArgs {
     output: OutputArgs,
-    repo: Option<String>,
     state: String,
     limit: Option<usize>,
     labels: Vec<String>,
@@ -258,7 +256,6 @@ impl Default for IssueListArgs {
     fn default() -> Self {
         Self {
             output: OutputArgs::default(),
-            repo: None,
             state: "open".to_string(),
             limit: Some(30),
             labels: Vec::new(),
@@ -275,7 +272,6 @@ impl Default for IssueListArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct IssueViewArgs {
     output: OutputArgs,
-    repo: Option<String>,
     number: Option<u64>,
     web: bool,
     comments: bool,
@@ -285,7 +281,6 @@ struct IssueViewArgs {
 struct IssueCreateArgs {
     title: Option<String>,
     body: Option<String>,
-    repo: Option<String>,
     web: bool,
     assignees: Vec<String>,
     labels: Vec<String>,
@@ -307,24 +302,32 @@ struct ApiArgs {
     silent: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
-    argv: &[String],
-    decision: &RouteDecision,
+    invocation: &ParsedInvocation,
+    target: &ForgejoTarget,
+    deadline: Option<&CommandDeadline>,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
 ) -> i32 {
-    let host = decision.trace_host().map(ToOwned::to_owned);
-    let repo = decision.repo.as_ref().map(to_forgejo_repo);
+    let argv = invocation.canonical_argv();
+    let host = target.canonical_host();
+    let credential_host = target.profile().credential_host.as_str();
+    let repo = target.repo().map(to_forgejo_repo);
+    let api_root = target.profile().api_root.as_str();
     let env_map = env_map(env);
     let home = home_path(env);
 
     let result = run_with_context(
         argv,
-        host.as_deref(),
+        host,
+        credential_host,
         repo.as_ref(),
+        api_root,
+        deadline,
         &env_map,
         home.as_deref(),
         cwd,
@@ -345,8 +348,11 @@ pub fn run(
 #[allow(clippy::too_many_arguments)]
 fn run_with_context(
     argv: &[String],
-    host: Option<&str>,
+    host: &str,
+    credential_host: &str,
     repo: Option<&ForgejoRepoRef>,
+    api_root: &str,
+    deadline: Option<&CommandDeadline>,
     env: &EnvMap,
     home: Option<&Path>,
     cwd: Option<&Path>,
@@ -357,9 +363,18 @@ fn run_with_context(
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
     };
-    let host = host.ok_or_else(|| ShimError::new("could not determine Forgejo host"))?;
-    let token = auth::discover_token(Some(host), env, home, Some(current_platform()), true)
-        .map(|discovery| discovery.token);
+    let token = auth::discover_token(
+        Some(credential_host),
+        env,
+        home,
+        Some(current_platform()),
+        true,
+    )
+    .map(|discovery| discovery.token);
+    let mut client = ForgejoClient::new(token.clone()).with_api_root(api_root)?;
+    if let Some(deadline) = deadline {
+        client = client.with_deadline(deadline.clone());
+    }
 
     if command == "auth" {
         return run_auth(argv, host, token.as_deref(), stdout, stderr);
@@ -370,12 +385,10 @@ fn run_with_context(
             writeln!(stderr, "{}", missing_auth_message(host))?;
             return Ok(1);
         }
-        let client = ForgejoClient::new(token);
         return run_api(argv, host, &client, stdout);
     }
 
     let token_present = token.is_some();
-    let client = ForgejoClient::new(token);
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
     let context = RepoCommandContext {
         repo,
@@ -389,7 +402,7 @@ fn run_with_context(
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn run_with_client(
-    argv: &[String],
+    invocation: &ParsedInvocation,
     host: Option<&str>,
     repo: Option<&ForgejoRepoRef>,
     token: Option<&str>,
@@ -399,6 +412,7 @@ fn run_with_client(
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
 ) -> Result<i32> {
+    let argv = invocation.canonical_argv();
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
     };
@@ -685,29 +699,22 @@ fn run_list(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_list_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
-    let api_state = if parsed.state == "merged" {
-        "closed"
-    } else {
-        parsed.state.as_str()
-    };
-    let mut pulls = client.list_pulls(&target_repo, api_state, parsed.head.as_deref())?;
-    if parsed.state == "merged" {
-        pulls.retain(|pull| normalize_pull(pull).get("state") == Some(&json!("MERGED")));
-    }
-    if let Some(base) = parsed.base.as_deref() {
-        pulls.retain(|pull| {
-            pull.get("base")
-                .and_then(Value::as_object)
-                .and_then(|base| base.get("ref"))
-                .and_then(Value::as_str)
-                == Some(base)
-        });
-    }
-    truncate_to_limit(&mut pulls, parsed.limit);
+    let pulls = pull_request_list::discover(
+        client,
+        &target_repo,
+        &PullRequestQuery {
+            state: &parsed.state,
+            head: parsed.head.as_deref(),
+            author: parsed.author.as_deref(),
+            base: parsed.base.as_deref(),
+            draft_only: parsed.draft_only,
+            limit: parsed.limit,
+        },
+    )?;
 
     let normalized = pulls
         .iter()
@@ -745,7 +752,7 @@ fn run_checkout(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checkout_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -857,7 +864,7 @@ fn run_checks(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checks_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -905,7 +912,7 @@ fn run_comment(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = parse_comment_args(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -949,7 +956,7 @@ fn run_diff(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_diff_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1006,7 +1013,7 @@ fn run_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1067,7 +1074,7 @@ fn run_status(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1115,7 +1122,7 @@ fn run_create(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = create::parse_create_args_with_reader(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1191,7 +1198,7 @@ fn run_repo_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_repo_view_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1229,7 +1236,7 @@ fn run_issue_create(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = parse_issue_create_args(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1276,7 +1283,7 @@ fn run_issue_list(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_list_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1321,7 +1328,7 @@ fn run_issue_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_view_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1465,10 +1472,8 @@ fn parse_list_args(argv: &[String]) -> Result<ListArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--state" | "-s") {
             parsed.state = normalize_pr_state(required_value(argv, index, arg)?)?;
@@ -1494,15 +1499,20 @@ fn parse_list_args(argv: &[String]) -> Result<ListArgs> {
         } else if let Some(value) = flag_value_any(arg, &["--base", "-B"]) {
             parsed.base = Some(value.to_string());
             index += 1;
-        } else if matches!(
-            arg,
-            "--author" | "--app" | "--assignee" | "--label" | "--search"
-        ) {
+        } else if arg == "--author" {
+            parsed.author = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value(arg, "--author") {
+            parsed.author = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--app" | "--assignee" | "--label" | "--search") {
             index = skip_value(argv, index, arg)?;
-        } else if has_value_prefix(
-            arg,
-            &["--author", "--app", "--assignee", "--label", "--search"],
-        ) {
+        } else if has_value_prefix(arg, &["--app", "--assignee", "--label", "--search"]) {
+            index += 1;
+        } else if arg == "--draft" {
+            parsed.draft_only = true;
+            index += 1;
+        } else if arg == "--web" {
             index += 1;
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
@@ -1521,10 +1531,8 @@ fn parse_checkout_args(argv: &[String]) -> Result<CheckoutArgs> {
     while index < argv.len() {
         let arg = argv[index].as_str();
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--branch" | "-b") {
             parsed.local_branch = Some(required_value(argv, index, arg)?.to_string());
@@ -1567,10 +1575,8 @@ fn parse_checks_args(argv: &[String]) -> Result<ChecksArgs> {
             parsed.json_fields = split_fields(value);
             index += 1;
         } else if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--jq" | "-q") {
             parsed.jq = Some(required_value(argv, index, arg)?.to_string());
@@ -1607,10 +1613,8 @@ fn parse_diff_args(argv: &[String]) -> Result<DiffArgs> {
     while index < argv.len() {
         let arg = argv[index].as_str();
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1653,10 +1657,8 @@ fn parse_comment_args(argv: &[String], stdin: &mut dyn Read) -> Result<CommentAr
     while index < argv.len() {
         let arg = argv[index].as_str();
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--body" | "-b") {
             parsed.body = Some(required_value(argv, index, arg)?.to_string());
@@ -1696,13 +1698,13 @@ fn parse_view_status_args(argv: &[String]) -> Result<ViewStatusArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
+            index += 1;
+        } else if arg == "--conflict-status" {
             index += 1;
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
@@ -1727,10 +1729,8 @@ fn parse_repo_view_args(argv: &[String]) -> Result<RepoViewArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1744,7 +1744,6 @@ fn parse_repo_view_args(argv: &[String]) -> Result<RepoViewArgs> {
                 "unsupported Forgejo repo view flag: {arg}"
             )));
         } else {
-            parsed.repo = Some(arg.to_string());
             index += 1;
         }
     }
@@ -1760,10 +1759,8 @@ fn parse_issue_list_args(argv: &[String]) -> Result<IssueListArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--state" | "-s") {
             parsed.state = normalize_issue_state(required_value(argv, index, arg)?)?;
@@ -1842,10 +1839,8 @@ fn parse_issue_view_args(argv: &[String]) -> Result<IssueViewArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1890,10 +1885,8 @@ fn parse_issue_create_args(argv: &[String], stdin: &mut dyn Read) -> Result<Issu
             parsed.body = Some(body_from_file(value, stdin)?);
             index += 1;
         } else if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -2064,15 +2057,6 @@ fn missing_token_exit(
     }
     writeln!(stderr, "{}", missing_auth_message(&repo.host))?;
     Ok(Some(1))
-}
-
-fn target_repo(value: Option<&str>, fallback: &ForgejoRepoRef) -> Result<ForgejoRepoRef> {
-    match value {
-        Some(value) => parse_repo_spec(value, Some(&fallback.host))
-            .map(|repo| ForgejoRepoRef::new(repo.host, repo.owner, repo.name))
-            .ok_or_else(|| ShimError::new("could not parse --repo value")),
-        None => Ok(fallback.clone()),
-    }
 }
 
 fn body_from_file(path_value: &str, stdin: &mut dyn Read) -> Result<String> {
@@ -2404,7 +2388,7 @@ fn parse_number_or_branch(value: &str, kind: &str) -> (Option<u64>, Option<Strin
 fn number_from_url(value: &str, kind: &str) -> Option<u64> {
     let scheme_end = value.find("://")?;
     let scheme = &value[..scheme_end];
-    if !matches!(scheme, "http" | "https") {
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
         return None;
     }
     let rest = &value[scheme_end + 3..];
@@ -2522,6 +2506,7 @@ fn to_forgejo_repo(repo: &DetectedRepoRef) -> ForgejoRepoRef {
 mod tests {
     use super::*;
     use crate::forgejo::ForgejoError;
+    use crate::repo::parse_repo_spec;
     use std::cell::RefCell;
     use std::ffi::OsStr;
     use std::process::{Command, Stdio};
@@ -2584,6 +2569,26 @@ mod tests {
                 created_issues: RefCell::new(Vec::new()),
                 comments: RefCell::new(Vec::new()),
             }
+        }
+    }
+
+    impl PullRequestSource for FakeApi {
+        fn current_user_login(&self, _host: &str) -> ForgejoResult<String> {
+            self.user
+                .get("login")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| ForgejoError::new("Forgejo API user response has no login"))
+        }
+
+        fn pull_request_page(
+            &self,
+            _repo: &ForgejoRepoRef,
+            _state: &str,
+            _page: usize,
+            _page_size: usize,
+        ) -> ForgejoResult<Vec<Value>> {
+            Ok(self.pulls.clone())
         }
     }
 
@@ -2749,10 +2754,20 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin = std::io::Cursor::new(stdin_text.as_bytes());
+        let argv = argv(args);
+        let invocation = ParsedInvocation::parse(&argv);
+        let fallback_repo = repo();
+        let fallback_host = fallback_repo.host.clone();
+        let routed_repo = invocation
+            .provider_target()
+            .repo_spec()
+            .and_then(|value| parse_repo_spec(value, Some(&fallback_repo.host)))
+            .map(|repo| ForgejoRepoRef::new(fallback_host, repo.owner, repo.name))
+            .unwrap_or(fallback_repo);
         let code = run_with_client(
-            &argv(args),
+            &invocation,
             Some("git.example.com"),
-            Some(&repo()),
+            Some(&routed_repo),
             token,
             client,
             cwd,
@@ -3321,6 +3336,65 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&stdout).ok(),
             Some(json!({"createdBy": [], "currentBranch": null, "needsReview": []}))
+        );
+    }
+
+    #[test]
+    fn uppercase_http_targets_preserve_pull_and_issue_numbers() {
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 7,
+                "title": "Uppercase pull",
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/pulls/7",
+                "head": {"ref": "feature", "sha": "abc123"},
+                "base": {"ref": "main"},
+                "user": {"login": "alice"}
+            })],
+            issues: vec![json!({
+                "number": 13,
+                "title": "Uppercase issue",
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/issues/13",
+                "user": {"login": "alice"}
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr",
+                "view",
+                "HTTPS://git.example.com/owner/repo/pulls/7",
+                "--json",
+                "number",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).ok(),
+            Some(json!({"number": 7}))
+        );
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "issue",
+                "view",
+                "HTTP://git.example.com/owner/repo/issues/13",
+                "--json",
+                "number",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).ok(),
+            Some(json!({"number": 13}))
         );
     }
 

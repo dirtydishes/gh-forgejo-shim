@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "state": "ready",
+  "target": "codex",
+  "generation_id": "95591782f575fb3e9e4d8cdb6b9b8228bc42694fc99c87fe5b18809eda2d256d",
+  "adapter_identity": {
+    "target": "codex",
+    "path": "codex-source-builder-closure",
+    "sha256": "818f3fa37ef51948448b46e065d3bc0423e5e1a1a7b1b19075dc4bc6d5c10eba"
+  },
+  "source_coordinator_id": "01a02b71-2ee7-7e42-8f7b-8493c1c2d42f",
+  "operation": "update-v2",
+  "evidence": {
+    "mode": "first-party-builder-contract",
+    "live_probe_required": false,
+    "capabilities_revalidated_at_run": true,
+    "separate_runtime_adapter_certified": false
+  }
+}

@@ -1,15 +1,106 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+#[allow(dead_code)]
+pub fn start_json_server(
+    bodies: Vec<&'static str>,
+) -> io::Result<(String, JoinHandle<io::Result<Vec<String>>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let host = listener.local_addr()?.to_string();
+    let handle = thread::spawn(move || {
+        let mut request_lines = Vec::new();
+        for body in bodies {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Ok(request_lines);
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+            let mut request = Vec::new();
+            let mut scratch = [0_u8; 512];
+            loop {
+                let count = stream.read(&mut scratch)?;
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&scratch[..count]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes())?;
+            stream.flush()?;
+            request_lines.push(
+                String::from_utf8_lossy(&request)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+        Ok(request_lines)
+    });
+    Ok((host, handle))
+}
+
+#[allow(dead_code)]
+pub struct ScriptedGh {
+    argv_path: PathBuf,
+}
+
+#[allow(dead_code)]
+impl ScriptedGh {
+    pub fn install(
+        fixture: &CliFixture,
+        exit_code: i32,
+        stdout: &str,
+        stderr: &str,
+    ) -> io::Result<Self> {
+        let argv_path = fixture.root().join("scripted-gh-argv.txt");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nprintf '%s' {}\nprintf '%s' {} >&2\nexit {exit_code}\n",
+            shell_quote(&argv_path.to_string_lossy()),
+            shell_quote(stdout),
+            shell_quote(stderr),
+        );
+        fixture.write_executable("gh", &script)?;
+        Ok(Self { argv_path })
+    }
+
+    pub fn argv(&self) -> io::Result<Vec<String>> {
+        Ok(fs::read_to_string(&self.argv_path)?
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+}
 
 pub struct CliFixture {
     root: PathBuf,
@@ -28,6 +119,7 @@ impl CliFixture {
         fs::create_dir_all(&home)?;
         fs::create_dir_all(&repo)?;
         fs::create_dir_all(&bin)?;
+        install_git_fixture(&bin)?;
 
         Ok(Self {
             root,
@@ -89,11 +181,7 @@ impl CliFixture {
     }
 
     fn fixture_path(&self) -> io::Result<OsString> {
-        let mut paths = vec![self.bin.clone()];
-        if let Some(system_path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&system_path));
-        }
-        std::env::join_paths(paths).map_err(|error| {
+        std::env::join_paths([self.bin.as_os_str()]).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("unable to build fixture PATH: {error}"),
@@ -126,6 +214,29 @@ impl CliFixture {
             )))
         }
     }
+}
+
+fn install_git_fixture(bin: &Path) -> io::Result<()> {
+    let executable = format!("git{}", std::env::consts::EXE_SUFFIX);
+    let source = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .map(|directory| directory.join(&executable))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "git is not available for the test fixture",
+            )
+        })?;
+    let target = bin.join(executable);
+
+    fs::copy(source, &target)?;
+    make_executable(&target)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 impl Drop for CliFixture {
