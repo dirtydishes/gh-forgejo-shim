@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator pass-8 repair at the explicit-selector/provider-routing safety boundary
+Current execution strategy: direct coordinator pass-8 repair at the explicit-selector/provider-routing safety boundary after frozen red evidence
 
 Last completed phase: S3
 
@@ -64,4 +64,4 @@ Blocked: no — C1 pass `8/8` is claimed after exact execution and live launch r
 
 ## Last Coordinator Update
 
-Pass `8/8` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `414a767ba9aa6c7d66be00c1b33ff875a8762e248443194f75fa5e39da2cd44b`. Exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. C1 was claimed only after both gates passed at clean pushed head `e3c984e10ce73a330974040b7a1eec16303355e7`. Next, freeze the exact URL-suffix and inherited-help process repros before production mutation. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+Pass `8/8` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `414a767ba9aa6c7d66be00c1b33ff875a8762e248443194f75fa5e39da2cd44b`. Both exact readiness gates passed with empty findings before claim. Test-only commit `5aa90e03a0ea7c3b4366af17a01f91de54435dff` now freezes the two URL-suffix and two inherited-help repros: the fourteen prior provider tests pass and all four new tests fail by reaching fake GitHub with exit `23`. Next, repair only those two provider-routing safety paths. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
