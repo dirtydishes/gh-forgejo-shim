@@ -460,6 +460,43 @@ fn managed_gh_github_repo_delegates_even_when_allowlisted() -> TestResult {
 }
 
 #[test]
+fn managed_gh_unknown_forgejo_alias_command_fails_locally() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            "127.0.0.1",
+        ])
+        .output()?;
+    assert_eq!(configured.status.code(), Some(0));
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_HOSTS")
+        .arg("gh")
+        .args([
+            "workflow",
+            "run",
+            "--repo",
+            "127.0.0.1/dirtydishes/dirtypages",
+        ])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        "gh-forgejo-shim: unsupported Forgejo command: workflow\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\necho traced\n")?;
