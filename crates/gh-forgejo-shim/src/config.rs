@@ -534,6 +534,32 @@ aliases = ["git.local"]
     }
 
     #[test]
+    fn profile_table_without_legacy_allowlist_entry_stays_inert() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            r#"hosts = []
+
+[[host_profiles]]
+canonical_host = "git.example.com"
+aliases = ["git.local"]
+"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let registry = load_host_registry_with_env(Some(&path), &EnvMap::new())?;
+
+        assert!(registry.profiles().is_empty());
+        assert!(matches!(
+            registry.resolve(&RepoRef::new("git.local", "owner", "repo")),
+            ProviderResolution::Unconfigured { .. }
+        ));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn env_hosts_replace_config_hosts() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");
