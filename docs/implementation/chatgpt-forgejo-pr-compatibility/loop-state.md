@@ -16,17 +16,17 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S5 admission
+Current phase: S5
 
 Current Beads issue: gh-forgejo-shim-c06
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: inspect S5 canonical scope and run exact readiness gates
+Current execution strategy: direct coordinator TDD for shared deadline and truthful tracing
 
 Last completed phase: S4
 
-Blocked: no — S4 is accepted; S5 admission is next
+Blocked: no — S5 passed both readiness gates and is claimed
 
 ## Decisions
 
@@ -49,7 +49,7 @@ Blocked: no — S4 is accepted; S5 admission is next
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | closed | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | closed | `#29` | `turn-docs/05-s4.md` |
-| S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
+| S5 | `gh-forgejo-shim-c06` | in progress | `#29` | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
 | C2 | `gh-forgejo-shim-c08` | open | none | `turn-docs/08-c2.md` |
 | S7 | `gh-forgejo-shim-c09` | open | none | `turn-docs/09-s7.md` |
@@ -64,4 +64,4 @@ Blocked: no — S4 is accepted; S5 admission is next
 
 ## Last Coordinator Update
 
-S4 is accepted and closed at frozen repair head `2a12a64dc0c631f4a8bfc8245ff784279de56af6`. The final review approved with `findings: []`; 215 active local tests passed with 3 authorized future probes ignored; exact pull-request run `32838058693` and push run `32838053551` passed both named jobs. S5 admission is next. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S5 exact execution readiness returned `ready` with `findings: []`; live launch returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The phase was claimed at clean pushed head `e70717faef0202e766e84dc4e9eca6adf3245cb4` with `0/0` parity. Direct coordinator TDD now owns the shared deadline and truthful trace boundary. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
