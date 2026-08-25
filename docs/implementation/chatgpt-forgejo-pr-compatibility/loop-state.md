@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: pending C1 execution-readiness, launch-readiness, and orchestration brief
+Current execution strategy: two separate read-only C1 checkpoint reviewers on one frozen S2-S3 range; coordinator is the sole repair owner if the combined set returns findings
 
 Last completed phase: S3
 
@@ -47,7 +47,7 @@ Blocked: no
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | open | none | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | in progress | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-S3 closed after independent review set `s3-abb330b` approved pass `3/3` with `findings: []` and exact-commit CI run `32815484485` passed. Reviewed HEAD `cb11effde24669cd5be4e50661f71068a49bd684` was clean and at `0/0` parity. C1 is the next ready Beads leaf; PR #29 remains the sole external integration PR.
+C1 execution readiness is `ready`; launch readiness is `launchable`; both have `findings: []`. The checkpoint is claimed and locally green. Its thermonuclear and adversarial pass-0 reviewers will inspect one frozen S2-S3 range before any combined repair decision. PR #29 remains the sole external integration PR.
