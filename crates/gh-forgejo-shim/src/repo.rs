@@ -225,7 +225,11 @@ fn parse_scp_repo(value: &str) -> Option<RepoRef> {
 fn explicit_selector_has_empty_path_segment(spec: &str) -> bool {
     let value = spec.trim();
     let path = if let Some((_, rest)) = value.split_once("://") {
-        rest.split_once('/').map_or("", |(_, path)| path)
+        let path_with_suffix = rest.split_once('/').map_or("", |(_, path)| path);
+        path_with_suffix
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(path_with_suffix)
     } else if let Some((prefix, path)) = value.split_once(':') {
         if !prefix.contains('/') && !prefix.chars().any(char::is_whitespace) {
             path

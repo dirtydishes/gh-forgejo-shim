@@ -179,7 +179,7 @@ fn decide_parsed_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    if invocation.command() == Command::GlobalDelegate || invocation.help_requested() {
+    if invocation.command() == Command::GlobalDelegate {
         return RouteDecision::delegate("unsupported command", None);
     }
 
@@ -188,6 +188,14 @@ fn decide_parsed_route(
     }
 
     let command_target = invocation.provider_target();
+    if invocation.help_requested() {
+        if command_target.repo_spec().is_some() {
+            if let Err(error) = detect_repo_for_target(command_target, env, cwd) {
+                return RouteDecision::reject(error.to_string());
+            }
+        }
+        return RouteDecision::delegate("unsupported command", None);
+    }
 
     if matches!(
         invocation.command(),
