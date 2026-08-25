@@ -1,4 +1,7 @@
-use serde_json::{Map, Value};
+use std::fmt;
+
+use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde_json::{Map, Number, Value};
 
 use crate::config::normalize_host;
 
@@ -10,6 +13,107 @@ const HOST_FIELDS: &[&str] = &[
     "server_url",
     "base_url",
 ];
+
+pub(crate) fn parse_json(text: &str) -> Option<Value> {
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let value = UniqueValue::deserialize(&mut deserializer).ok()?.0;
+    deserializer.end().ok()?;
+    Some(value)
+}
+
+struct UniqueValue(Value);
+
+impl<'de> Deserialize<'de> for UniqueValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueValueVisitor)
+    }
+}
+
+struct UniqueValueVisitor;
+
+impl<'de> Visitor<'de> for UniqueValueVisitor {
+    type Value = UniqueValue;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("JSON without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Number::from_f64(value)
+            .map(Value::Number)
+            .map(UniqueValue)
+            .ok_or_else(|| E::custom("non-finite JSON number"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value.to_string())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        UniqueValue::deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut items = Vec::new();
+        while let Some(UniqueValue(value)) = sequence.next_element()? {
+            items.push(value);
+        }
+        Ok(UniqueValue(Value::Array(items)))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut object = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key: {key}"
+                )));
+            }
+            let UniqueValue(value) = map.next_value()?;
+            object.insert(key, value);
+        }
+        Ok(UniqueValue(Value::Object(object)))
+    }
+}
 
 pub(crate) fn find_token(data: &Value, host: Option<&str>) -> Option<String> {
     let host = host.map(normalize_host);

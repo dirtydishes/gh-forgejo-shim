@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use crate::auth_config::{find_token, find_token_in_text};
+use crate::auth_config::{find_token, find_token_in_text, parse_json};
 use crate::config::{current_env, normalize_host, EnvMap};
 use crate::{Result, ShimError};
 
@@ -267,7 +267,7 @@ fn read_token_file(path: &Path, host: Option<&str>) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
 
     if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
-        let data = serde_json::from_str::<Value>(&text).ok()?;
+        let data = parse_json(&text)?;
         return find_token(&data, host);
     }
 
