@@ -742,4 +742,90 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn command_target_grammar_covers_real_gh_flags_and_attached_short_values() {
+        let issue_url = "https://git.example.com/owner/repo/issues/13";
+        let pull_url = "https://git.example.com/owner/repo/pulls/7";
+        let repo = "git.example.com/owner/repo";
+        let repo_cases = vec![
+            (argv(&["issue", "view", "-q.number", issue_url]), issue_url),
+            (
+                argv(&["issue", "view", "-t{{.number}}", issue_url]),
+                issue_url,
+            ),
+            (argv(&["pr", "view", "--comments", pull_url]), pull_url),
+            (argv(&["pr", "view", "-c", pull_url]), pull_url),
+            (argv(&["pr", "checks", "-i10", pull_url]), pull_url),
+            (argv(&["pr", "checkout", "-blocal", pull_url]), pull_url),
+            (argv(&["pr", "comment", "--editor", pull_url]), pull_url),
+            (argv(&["pr", "comment", "-e", pull_url]), pull_url),
+            (argv(&["pr", "comment", "--edit-last", pull_url]), pull_url),
+            (
+                argv(&["pr", "list", "--draft", "--repo", repo]),
+                repo,
+            ),
+            (argv(&["pr", "list", "-d", "--repo", repo]), repo),
+            (argv(&["pr", "list", "--web", "--repo", repo]), repo),
+            (argv(&["pr", "list", "-w", "--repo", repo]), repo),
+            (argv(&["pr", "list", "-Ame", "--repo", repo]), repo),
+            (argv(&["pr", "list", "-aapp", "--repo", repo]), repo),
+            (argv(&["pr", "list", "-lbug", "--repo", repo]), repo),
+            (argv(&["pr", "list", "-Sdraft", "--repo", repo]), repo),
+            (
+                argv(&["pr", "create", "--dry-run", "--repo", repo]),
+                repo,
+            ),
+            (argv(&["pr", "create", "-f", "--repo", repo]), repo),
+            (
+                argv(&["pr", "status", "--conflict-status", "--repo", repo]),
+                repo,
+            ),
+            (argv(&["pr", "status", "-c", "--repo", repo]), repo),
+            (argv(&["issue", "view", "-Rgit.example.com/owner/repo", "13"]), repo),
+            (
+                argv(&["workflow", "run", "build.yml", "--ref", "main", "--repo", repo]),
+                repo,
+            ),
+            (
+                argv(&["release", "view", "v1", "--json", "name", "--repo", repo]),
+                repo,
+            ),
+        ];
+
+        for (argv, expected) in repo_cases {
+            assert_eq!(
+                command_provider_target(&argv).repo_spec(),
+                Some(expected),
+                "argv: {argv:?}"
+            );
+        }
+
+        let host_cases = vec![
+            argv(&["auth", "status", "-hgit.example.com"]),
+            argv(&["api", "-i", "--hostname", "git.example.com", "user"]),
+            argv(&[
+                "api",
+                "--paginate",
+                "--hostname",
+                "git.example.com",
+                "repos/owner/repo/issues",
+            ]),
+            argv(&[
+                "api",
+                "--verbose",
+                "--hostname",
+                "git.example.com",
+                "user",
+            ]),
+        ];
+
+        for argv in host_cases {
+            assert_eq!(
+                command_provider_target(&argv).host(),
+                Some("git.example.com"),
+                "argv: {argv:?}"
+            );
+        }
+    }
 }
