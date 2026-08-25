@@ -393,6 +393,28 @@ fn managed_gh_version_delegates_to_real_gh() -> TestResult {
 }
 
 #[test]
+fn managed_gh_unknown_single_token_forgejo_command_fails_locally() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .arg("gh")
+        .arg("browse")
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        "gh-forgejo-shim: unsupported Forgejo command: browse\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn managed_gh_missing_real_gh_preserves_error_shape() -> TestResult {
     let fixture = CliFixture::new()?;
 
