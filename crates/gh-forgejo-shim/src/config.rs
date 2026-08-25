@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+pub use crate::provider::{is_known_github_host, normalize_host};
 use crate::provider::{HostProfile, HostRegistry};
 use crate::{Result, ShimError};
 
 pub type EnvMap = BTreeMap<String, String>;
-
-pub const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathsConfig {
@@ -24,6 +23,12 @@ pub struct Config {
     pub hosts: Vec<String>,
     pub paths: PathsConfig,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedConfig {
+    pub config: Config,
+    pub registry: HostRegistry,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -87,6 +92,14 @@ pub fn load_config_at(path: &Path) -> Result<Config> {
 }
 
 pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config> {
+    Ok(load_runtime_config_with_env(path, env)?.config)
+}
+
+pub fn load_host_registry_with_env(path: Option<&Path>, env: &EnvMap) -> Result<HostRegistry> {
+    Ok(load_runtime_config_with_env(path, env)?.registry)
+}
+
+pub fn load_runtime_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<LoadedConfig> {
     let config_path = path
         .map(Path::to_path_buf)
         .unwrap_or_else(|| config_path(None));
@@ -128,40 +141,25 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         fj = Some(value);
     }
 
-    Ok(Config {
+    let config = Config {
         hosts: dedupe(hosts),
         paths: PathsConfig { gh, fj },
         path: config_path,
-    })
-}
+    };
 
-pub fn load_host_registry_with_env(path: Option<&Path>, env: &EnvMap) -> Result<HostRegistry> {
-    let config_path = path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| config_path(None));
-    let raw = read_raw_config(&config_path)?;
-
-    if let Some(value) = env.get("FJ_SHIM_HOSTS") {
-        let hosts = split_hosts(value)
-            .into_iter()
-            .filter_map(|host| normalized_forgejo_host(&host))
-            .collect::<Vec<_>>();
-        let profiles = dedupe(hosts)
-            .into_iter()
+    let profiles = if env.contains_key("FJ_SHIM_HOSTS") {
+        config
+            .hosts
+            .iter()
+            .cloned()
             .map(default_host_profile)
-            .collect();
-        return HostRegistry::new(profiles);
-    }
+            .collect()
+    } else {
+        effective_profiles(&config.hosts, explicit_profiles(raw.host_profiles))
+    };
+    let registry = HostRegistry::new(profiles)?;
 
-    let profiles = explicit_profiles(raw.host_profiles);
-    let hosts = dedupe(
-        raw.hosts
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|host| normalized_forgejo_host(&host))
-            .collect::<Vec<_>>(),
-    );
-    HostRegistry::new(effective_profiles(&hosts, profiles))
+    Ok(LoadedConfig { config, registry })
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
@@ -318,30 +316,6 @@ fn write_config_data(config: &Config, profiles: &[HostProfile]) -> Result<()> {
             config.path.display()
         ))
     })
-}
-
-pub fn normalize_host(host: &str) -> String {
-    let mut value = host.trim();
-    if let Some((_, rest)) = value.split_once("://") {
-        value = rest;
-    }
-    if let Some((host, _)) = value.split_once('/') {
-        value = host;
-    }
-    value.to_ascii_lowercase()
-}
-
-pub fn is_known_github_host(host: Option<&str>) -> bool {
-    let Some(host) = host else {
-        return false;
-    };
-    let normalized = normalize_host(host);
-    let authority = normalized.trim_end_matches('.');
-    let hostname = authority
-        .split_once(':')
-        .map_or(authority, |(hostname, _)| hostname)
-        .trim_end_matches('.');
-    KNOWN_GITHUB_HOSTS.contains(&hostname)
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {

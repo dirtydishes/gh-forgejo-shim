@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::config::normalize_host;
 use crate::external::git_output;
+use crate::provider::normalize_host;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
@@ -146,14 +146,24 @@ pub fn extract_repo_arg(argv: &[String]) -> Option<&str> {
 }
 
 pub fn extract_repo_url_arg(argv: &[String]) -> Option<&str> {
-    argv.iter()
-        .map(String::as_str)
-        .find(|arg| matches!(url_scheme(arg), Some("http" | "https" | "ssh" | "git")))
+    let accepts_url_target = matches!(
+        argv.get(0..2)
+            .map(|parts| (parts[0].as_str(), parts[1].as_str())),
+        Some((
+            "pr",
+            "checks" | "checkout" | "co" | "comment" | "diff" | "view"
+        )) | Some(("issue", "view"))
+            | Some(("repo", "view"))
+    );
+    accepts_url_target.then(|| positional_url_target(&argv[2..]))?
 }
 
 fn parse_url_repo(value: &str) -> Option<RepoRef> {
     let (scheme, rest) = value.split_once("://")?;
-    if !matches!(scheme, "http" | "https" | "ssh" | "git") {
+    if !matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ssh" | "git"
+    ) {
         return None;
     }
 
@@ -202,9 +212,84 @@ fn parse_scp_repo(value: &str) -> Option<RepoRef> {
     None
 }
 
-fn url_scheme(value: &str) -> Option<&str> {
-    let (scheme, _) = value.split_once("://")?;
-    Some(scheme)
+fn positional_url_target(argv: &[String]) -> Option<&str> {
+    const VALUE_OPTIONS: &[&str] = &[
+        "-R",
+        "--repo",
+        "--json",
+        "-q",
+        "--jq",
+        "-t",
+        "--template",
+        "-b",
+        "--branch",
+        "--interval",
+        "--body",
+        "-F",
+        "--body-file",
+        "--color",
+    ];
+    const FLAG_OPTIONS: &[&str] = &[
+        "--comments",
+        "--web",
+        "-w",
+        "--detach",
+        "--force",
+        "-f",
+        "--recurse-submodules",
+        "--fail-fast",
+        "--required",
+        "--watch",
+        "--create-if-none",
+        "--delete-last",
+        "--edit-last",
+        "--editor",
+        "--name-only",
+        "--patch",
+    ];
+
+    let mut index = 0;
+    while index < argv.len() {
+        let arg = argv[index].as_str();
+        if arg == "--" {
+            return argv
+                .get(index + 1)
+                .map(String::as_str)
+                .filter(|arg| is_repo_url(arg));
+        }
+        if VALUE_OPTIONS.contains(&arg) {
+            index += 2;
+            continue;
+        }
+        if FLAG_OPTIONS.contains(&arg)
+            || VALUE_OPTIONS.iter().any(|option| {
+                arg.strip_prefix(option).is_some_and(|suffix| {
+                    suffix.starts_with('=')
+                        || (!suffix.is_empty()
+                            && option.starts_with('-')
+                            && !option.starts_with("--"))
+                })
+            })
+        {
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            return None;
+        }
+        return is_repo_url(arg).then_some(arg);
+    }
+    None
+}
+
+fn is_repo_url(value: &str) -> bool {
+    let Some((scheme, _)) = value.split_once("://") else {
+        return false;
+    };
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ssh" | "git"
+    )
 }
 
 fn path_parts(path: &str) -> Vec<&str> {

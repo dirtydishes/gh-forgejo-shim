@@ -19,7 +19,7 @@ use crate::normalize::{
     render_json_or_jq_list, status_for_current_branch, with_status_check_rollup_for_repo,
 };
 use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
-use crate::routing::RouteDecision;
+use crate::routing::ForgejoTarget;
 use crate::{auth, create};
 use crate::{Result, ShimError};
 
@@ -309,25 +309,22 @@ struct ApiArgs {
 
 pub fn run(
     argv: &[String],
-    decision: &RouteDecision,
+    target: &ForgejoTarget,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
 ) -> i32 {
-    let host = decision.trace_host().map(ToOwned::to_owned);
-    let repo = decision.repo.as_ref().map(to_forgejo_repo);
-    let api_root = decision
-        .profile
-        .as_ref()
-        .map(|profile| profile.api_root.as_str());
+    let host = target.canonical_host();
+    let repo = target.repo().map(to_forgejo_repo);
+    let api_root = target.profile().api_root.as_str();
     let env_map = env_map(env);
     let home = home_path(env);
 
     let result = run_with_context(
         argv,
-        host.as_deref(),
+        host,
         repo.as_ref(),
         api_root,
         &env_map,
@@ -350,9 +347,9 @@ pub fn run(
 #[allow(clippy::too_many_arguments)]
 fn run_with_context(
     argv: &[String],
-    host: Option<&str>,
+    host: &str,
     repo: Option<&ForgejoRepoRef>,
-    api_root: Option<&str>,
+    api_root: &str,
     env: &EnvMap,
     home: Option<&Path>,
     cwd: Option<&Path>,
@@ -363,9 +360,6 @@ fn run_with_context(
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
     };
-    let host = host.ok_or_else(|| ShimError::new("could not determine Forgejo host"))?;
-    let api_root =
-        api_root.ok_or_else(|| ShimError::new("could not determine Forgejo API root"))?;
     let token = auth::discover_token(Some(host), env, home, Some(current_platform()), true)
         .map(|discovery| discovery.token);
     let client = ForgejoClient::new(token.clone()).with_api_root(api_root)?;

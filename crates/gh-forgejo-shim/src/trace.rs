@@ -52,14 +52,14 @@ fn build_gh_record(
     let route = decision
         .map(|decision| {
             json!({
-                "kind": decision.kind.as_str(),
-                "reason": decision.reason,
+                "kind": decision.kind().as_str(),
+                "reason": decision.reason(),
             })
         })
         .unwrap_or_else(|| json!({"kind": "unknown"}));
 
     let host = decision.and_then(RouteDecision::trace_host);
-    let repo = decision.and_then(|decision| decision.repo.as_ref());
+    let repo = decision.and_then(RouteDecision::repo);
 
     json!({
         "kind": "gh",

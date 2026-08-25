@@ -26,7 +26,7 @@ pub struct DispatcherConfig {
     pub real_gh: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteKind {
     Delegate,
     Forgejo,
@@ -42,39 +42,83 @@ impl RouteKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteDecision {
-    pub kind: RouteKind,
-    pub reason: String,
-    pub repo: Option<RepoRef>,
-    pub host: Option<String>,
-    pub profile: Option<HostProfile>,
+pub struct ForgejoTarget {
+    profile: HostProfile,
+    repo: Option<RepoRef>,
+}
+
+impl ForgejoTarget {
+    pub fn profile(&self) -> &HostProfile {
+        &self.profile
+    }
+
+    pub fn repo(&self) -> Option<&RepoRef> {
+        self.repo.as_ref()
+    }
+
+    pub fn canonical_host(&self) -> &str {
+        &self.profile.canonical_host
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteDecision {
+    Delegate {
+        reason: String,
+        repo: Option<RepoRef>,
+    },
+    Forgejo {
+        reason: String,
+        target: ForgejoTarget,
+    },
 }
 
 impl RouteDecision {
     fn delegate(reason: impl Into<String>, repo: Option<RepoRef>) -> Self {
-        Self {
-            kind: RouteKind::Delegate,
+        Self::Delegate {
             reason: reason.into(),
             repo,
-            host: None,
-            profile: None,
         }
     }
 
     fn forgejo(reason: impl Into<String>, repo: Option<RepoRef>, profile: HostProfile) -> Self {
-        Self {
-            kind: RouteKind::Forgejo,
+        Self::Forgejo {
             reason: reason.into(),
-            repo,
-            host: Some(profile.canonical_host.clone()),
-            profile: Some(profile),
+            target: ForgejoTarget { profile, repo },
+        }
+    }
+
+    pub const fn kind(&self) -> RouteKind {
+        match self {
+            Self::Delegate { .. } => RouteKind::Delegate,
+            Self::Forgejo { .. } => RouteKind::Forgejo,
+        }
+    }
+
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Delegate { reason, .. } | Self::Forgejo { reason, .. } => reason,
+        }
+    }
+
+    pub fn repo(&self) -> Option<&RepoRef> {
+        match self {
+            Self::Delegate { repo, .. } => repo.as_ref(),
+            Self::Forgejo { target, .. } => target.repo(),
+        }
+    }
+
+    pub fn forgejo_target(&self) -> Option<&ForgejoTarget> {
+        match self {
+            Self::Delegate { .. } => None,
+            Self::Forgejo { target, .. } => Some(target),
         }
     }
 
     pub fn trace_host(&self) -> Option<&str> {
-        self.host
-            .as_deref()
-            .or_else(|| self.repo.as_ref().map(|repo| repo.host.as_str()))
+        self.forgejo_target()
+            .map(ForgejoTarget::canonical_host)
+            .or_else(|| self.repo().map(|repo| repo.host.as_str()))
     }
 }
 
@@ -140,6 +184,12 @@ pub fn decide_route(
         return route_resolution(config.registry.resolve(&repo), detection.source);
     }
 
+    if let Some(decision) =
+        decide_explicit_host_route(config, env.get("GH_HOST").map(String::as_str))
+    {
+        return decision;
+    }
+
     if !is_supported_command(argv) {
         RouteDecision::delegate("unsupported command", None)
     } else {
@@ -153,11 +203,10 @@ pub fn load_dispatcher_config(env: &HashMap<String, String>) -> Result<Dispatche
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<EnvMap>();
     let path = config_path(env).unwrap_or_default();
-    let loaded = config::load_config_with_env(Some(&path), &env_map)?;
-    let registry = config::load_host_registry_with_env(Some(&path), &env_map)?;
+    let loaded = config::load_runtime_config_with_env(Some(&path), &env_map)?;
     Ok(DispatcherConfig {
-        registry,
-        real_gh: loaded.paths.gh.map(PathBuf::from),
+        registry: loaded.registry,
+        real_gh: loaded.config.paths.gh.map(PathBuf::from),
     })
 }
 
@@ -178,9 +227,9 @@ fn run_gh(
     let decision = decide_route(&argv, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
-    let exit_code = match decision.kind {
-        RouteKind::Delegate => run_delegate(&argv, &env, cwd, &config, &mut mode),
-        RouteKind::Forgejo => run_forgejo(&argv, &env, cwd, &decision, &mut mode),
+    let exit_code = match &decision {
+        RouteDecision::Delegate { .. } => run_delegate(&argv, &env, cwd, &config, &mut mode),
+        RouteDecision::Forgejo { target, .. } => run_forgejo(&argv, &env, cwd, target, &mut mode),
     };
 
     if trace_enabled {
@@ -240,7 +289,7 @@ fn run_forgejo(
     argv: &[String],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
-    decision: &RouteDecision,
+    target: &ForgejoTarget,
     mode: &mut DelegateMode<'_>,
 ) -> i32 {
     match mode {
@@ -250,7 +299,7 @@ fn run_forgejo(
             let stdin = io::stdin();
             read_only::run(
                 argv,
-                decision,
+                target,
                 env,
                 cwd,
                 &mut stdout.lock(),
@@ -260,15 +309,7 @@ fn run_forgejo(
         }
         DelegateMode::Capture { stdout, stderr } => {
             let stdin = io::stdin();
-            read_only::run(
-                argv,
-                decision,
-                env,
-                cwd,
-                *stdout,
-                *stderr,
-                &mut stdin.lock(),
-            )
+            read_only::run(argv, target, env, cwd, *stdout, *stderr, &mut stdin.lock())
         }
     }
 }
@@ -456,8 +497,8 @@ mod tests {
             Some(&cwd),
         );
 
-        assert_eq!(decision.kind, RouteKind::Delegate);
-        assert_eq!(decision.reason, "unsupported command");
+        assert_eq!(decision.kind(), RouteKind::Delegate);
+        assert_eq!(decision.reason(), "unsupported command");
     }
 
     #[test]
@@ -469,8 +510,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(decision.kind, RouteKind::Forgejo);
-        assert_eq!(decision.host.as_deref(), Some("git.example.com"));
+        assert_eq!(decision.kind(), RouteKind::Forgejo);
+        assert_eq!(decision.trace_host(), Some("git.example.com"));
     }
 
     #[test]
@@ -479,6 +520,7 @@ mod tests {
             &argv(&[
                 "issue",
                 "view",
+                "--comments",
                 "https://git.example.com/owner/repo/issues/13",
             ]),
             &config(&["git.example.com"]),
@@ -486,10 +528,12 @@ mod tests {
             None,
         );
 
-        assert_eq!(decision.kind, RouteKind::Forgejo);
+        assert_eq!(decision.kind(), RouteKind::Forgejo);
         assert_eq!(
-            decision.repo.map(|repo| (repo.owner, repo.name)),
-            Some(("owner".to_string(), "repo".to_string()))
+            decision
+                .repo()
+                .map(|repo| (repo.owner.as_str(), repo.name.as_str())),
+            Some(("owner", "repo"))
         );
     }
 
@@ -502,8 +546,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(decision.kind, RouteKind::Delegate);
-        assert_eq!(decision.reason, "host github.com is not allowlisted");
+        assert_eq!(decision.kind(), RouteKind::Delegate);
+        assert_eq!(decision.reason(), "host github.com is not allowlisted");
     }
 
     #[test]
@@ -515,8 +559,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(decision.kind, RouteKind::Delegate);
-        assert_eq!(decision.reason, "host github.com is not allowlisted");
+        assert_eq!(decision.kind(), RouteKind::Delegate);
+        assert_eq!(decision.reason(), "host github.com is not allowlisted");
     }
 
     #[test]
@@ -531,8 +575,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(decision.kind, RouteKind::Forgejo);
-        assert_eq!(decision.reason, "GH_REPO");
+        assert_eq!(decision.kind(), RouteKind::Forgejo);
+        assert_eq!(decision.reason(), "GH_REPO");
     }
 
     #[test]
@@ -550,8 +594,22 @@ mod tests {
             &env(&[("GH_REPO", "git.example.com/owner/repo")]),
             None,
         );
-        assert_eq!(forgejo.kind, RouteKind::Forgejo);
-        assert_eq!(forgejo.reason, "GH_REPO");
+        assert_eq!(forgejo.kind(), RouteKind::Forgejo);
+        assert_eq!(forgejo.reason(), "GH_REPO");
+
+        let forgejo_view = decide_route(
+            &argv(&[
+                "pr",
+                "view",
+                "--template",
+                "https://github.com/other/project",
+            ]),
+            &config(&["git.example.com"]),
+            &env(&[("GH_REPO", "git.example.com/owner/repo")]),
+            None,
+        );
+        assert_eq!(forgejo_view.kind(), RouteKind::Forgejo);
+        assert_eq!(forgejo_view.reason(), "GH_REPO");
 
         let github = decide_route(
             &argv(&[
@@ -566,8 +624,8 @@ mod tests {
             &env(&[("GH_REPO", "github.com/owner/repo")]),
             None,
         );
-        assert_eq!(github.kind, RouteKind::Delegate);
-        assert_eq!(github.reason, "host github.com is not allowlisted");
+        assert_eq!(github.kind(), RouteKind::Delegate);
+        assert_eq!(github.reason(), "host github.com is not allowlisted");
     }
 
     #[test]
@@ -579,10 +637,10 @@ mod tests {
             Some(std::env::temp_dir().as_path()),
         );
 
-        assert_eq!(decision.kind, RouteKind::Forgejo);
-        assert_eq!(decision.reason, "host");
+        assert_eq!(decision.kind(), RouteKind::Forgejo);
+        assert_eq!(decision.reason(), "host");
         assert_eq!(decision.trace_host(), Some("git.example.com"));
-        assert!(decision.repo.is_none());
+        assert!(decision.repo().is_none());
     }
 
     #[test]
@@ -685,8 +743,8 @@ mod tests {
 
         for (name, argv, env, cwd, expected) in cases {
             let decision = decide_route(&argv, &config, &env, cwd);
-            assert_eq!(decision.kind, expected, "route matrix case: {name}");
-            if decision.kind == RouteKind::Forgejo {
+            assert_eq!(decision.kind(), expected, "route matrix case: {name}");
+            if decision.kind() == RouteKind::Forgejo {
                 assert_eq!(
                     decision.trace_host(),
                     Some("git.dirtydishes.dev"),

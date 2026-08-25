@@ -2,9 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{is_known_github_host, normalize_host};
 use crate::repo::RepoRef;
 use crate::{Result, ShimError};
+
+pub const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostProfile {
@@ -17,6 +18,7 @@ pub struct HostProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostRegistry {
     profiles: Vec<HostProfile>,
+    transport_profiles: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +32,7 @@ impl HostRegistry {
     pub fn new(mut profiles: Vec<HostProfile>) -> Result<Self> {
         let mut assigned = BTreeMap::<String, usize>::new();
         for (profile_index, profile) in profiles.iter_mut().enumerate() {
-            profile.canonical_host = normalize_host(&profile.canonical_host);
+            profile.canonical_host = normalize_transport_host(&profile.canonical_host)?;
             if is_known_github_host(Some(&profile.canonical_host)) {
                 return Err(ShimError::new(format!(
                     "GitHub host cannot be registered as Forgejo: {}",
@@ -45,11 +47,21 @@ impl HostRegistry {
                     profile.api_root
                 )));
             }
+            if api_root.host_str().is_none()
+                || !api_root.username().is_empty()
+                || api_root.password().is_some()
+            {
+                return Err(ShimError::new(format!(
+                    "API root must have a host and no user-info: {}",
+                    profile.api_root
+                )));
+            }
+            profile.credential_host = normalize_transport_host(&profile.credential_host)?;
             profile.aliases = profile
                 .aliases
                 .iter()
-                .map(|alias| normalize_host(alias))
-                .collect();
+                .map(|alias| normalize_transport_host(alias))
+                .collect::<Result<Vec<_>>>()?;
 
             let mut local = BTreeSet::new();
             for transport_host in std::iter::once(&profile.canonical_host).chain(&profile.aliases) {
@@ -73,7 +85,10 @@ impl HostRegistry {
                 }
             }
         }
-        Ok(Self { profiles })
+        Ok(Self {
+            profiles,
+            transport_profiles: assigned,
+        })
     }
 
     pub fn profiles(&self) -> &[HostProfile] {
@@ -86,13 +101,11 @@ impl HostRegistry {
             return ProviderResolution::GitHub { repo: repo.clone() };
         }
 
-        if let Some(profile) = self.profiles.iter().find(|profile| {
-            normalize_host(&profile.canonical_host) == transport_host
-                || profile
-                    .aliases
-                    .iter()
-                    .any(|alias| normalize_host(alias) == transport_host)
-        }) {
+        if let Some(profile) = self
+            .transport_profiles
+            .get(&transport_host)
+            .and_then(|profile_index| self.profiles.get(*profile_index))
+        {
             return ProviderResolution::Forgejo {
                 repo: RepoRef::new(&profile.canonical_host, &repo.owner, &repo.name),
                 profile: profile.clone(),
@@ -101,6 +114,59 @@ impl HostRegistry {
 
         ProviderResolution::Unconfigured { repo: repo.clone() }
     }
+}
+
+pub fn normalize_host(host: &str) -> String {
+    normalize_transport_host(host).unwrap_or_default()
+}
+
+pub fn is_known_github_host(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    let Ok(normalized) = normalize_transport_host(host) else {
+        return false;
+    };
+    let Ok(url) = reqwest::Url::parse(&format!("https://{normalized}/")) else {
+        return false;
+    };
+    let Some(hostname) = url.host_str() else {
+        return false;
+    };
+    KNOWN_GITHUB_HOSTS.contains(&hostname.trim_end_matches('.'))
+}
+
+fn normalize_transport_host(host: &str) -> Result<String> {
+    let value = host.trim();
+    if value.is_empty() {
+        return Err(ShimError::new("transport host cannot be empty"));
+    }
+
+    let parsed = if value.contains("://") {
+        reqwest::Url::parse(value)
+    } else {
+        let authority = value
+            .split_once('/')
+            .map_or(value, |(authority, _)| authority);
+        reqwest::Url::parse(&format!("https://{authority}/"))
+    }
+    .map_err(|_| ShimError::new(format!("invalid transport host: {value}")))?;
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ShimError::new(format!(
+            "transport host must not contain user-info: {value}"
+        )));
+    }
+    let hostname = parsed
+        .host_str()
+        .filter(|hostname| !hostname.is_empty())
+        .ok_or_else(|| ShimError::new(format!("invalid transport host: {value}")))?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let authority = parsed
+        .port()
+        .map_or(hostname.clone(), |port| format!("{hostname}:{port}"));
+    Ok(authority)
 }
 
 #[cfg(test)]
