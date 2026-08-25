@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c05
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator S4 repair pass 1/3 at the text-config host-isolation seam
+Current execution strategy: direct coordinator S4 repair pass 2/3 at the whole-entry text-config seam
 
 Last completed phase: C1
 
@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4 repair pass `1/3` red commit `afc5a6a8043b98c73270d7cd8db61cddca95d685` is pushed at `0/0`. Its two tests prove that the broad YAML/text scan returns a later host's token and a longer hostname's token. Production now owns only exact normalized host-entry binding before the same independent review set reruns. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 repair pass `1/3` head `1cf4412d1e06f3cfa3d7616ef0c47bf71eeb40cd` passed the full locked gate and exact pull-request and push CI. Independent review retained one finding: a later YAML list item can put `token` before `host` and inherit the prior entry match. Repair pass `2/3` owns one exact red repro and whole-entry binding independent of key order. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
