@@ -6,6 +6,7 @@
 #![recursion_limit = "256"]
 
 pub mod auth;
+mod auth_config;
 pub mod bootstrap;
 pub mod cli;
 pub mod codex_smoke;

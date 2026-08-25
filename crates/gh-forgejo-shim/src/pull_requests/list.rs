@@ -36,7 +36,16 @@ impl PullRequestSource for ForgejoClient {
         page: usize,
         page_size: usize,
     ) -> ForgejoResult<Vec<Value>> {
-        self.list_pull_page(repo, state, page, page_size)
+        decode_pull_page(self.pull_page_json(repo, state, page, page_size)?)
+    }
+}
+
+fn decode_pull_page(value: Value) -> ForgejoResult<Vec<Value>> {
+    match value {
+        Value::Array(items) if items.iter().all(Value::is_object) => Ok(items),
+        _ => Err(ForgejoError::new(
+            "Forgejo API returned an invalid pull request page",
+        )),
     }
 }
 
@@ -105,7 +114,7 @@ fn matches_query(pull: &Value, query: &PullRequestQuery<'_>, author: Option<&str
             || normalize_pull(pull).get("state") == Some(&Value::String("MERGED".to_string())))
 }
 
-fn matches_head(pull: &Value, expected: Option<&str>) -> bool {
+pub(crate) fn matches_head(pull: &Value, expected: Option<&str>) -> bool {
     let Some(expected) = expected else {
         return true;
     };

@@ -7,6 +7,7 @@ use reqwest::{Method, Url};
 use serde_json::{json, Value};
 
 use crate::deadline::CommandDeadline;
+use crate::pull_requests::list::matches_head;
 use crate::ShimError;
 
 const USER_AGENT_VALUE: &str = "gh-forgejo-shim";
@@ -416,22 +417,22 @@ impl ForgejoClient {
             None,
         )?;
         let pulls = list_of_objects(pulls);
-        let Some(head) = head else {
+        if head.is_none() {
             return Ok(pulls);
-        };
+        }
         Ok(pulls
             .into_iter()
-            .filter(|pull| head_matches(pull, head))
+            .filter(|pull| matches_head(pull, head))
             .collect())
     }
 
-    pub(crate) fn list_pull_page(
+    pub(crate) fn pull_page_json(
         &self,
         repo: &RepoRef,
         state: &str,
         page: usize,
         page_size: usize,
-    ) -> ForgejoResult<Vec<Value>> {
+    ) -> ForgejoResult<Value> {
         let params = [
             ("state".to_string(), state.to_string()),
             ("limit".to_string(), page_size.to_string()),
@@ -446,7 +447,6 @@ impl ForgejoClient {
             ),
             None,
         )
-        .map(list_of_objects)
     }
 
     fn repo_api_base_url(&self, repo: &RepoRef) -> String {
@@ -591,17 +591,6 @@ fn host_for_url(host: &str) -> String {
         return rest[..end].to_string();
     }
     trimmed.to_string()
-}
-
-fn head_matches(item: &Value, head: &str) -> bool {
-    let Some(head_data) = item.get("head").and_then(Value::as_object) else {
-        return false;
-    };
-    let ref_name = head_data.get("ref").and_then(Value::as_str);
-    let label = head_data.get("label").and_then(Value::as_str);
-    ref_name == Some(head)
-        || label == Some(head)
-        || label.is_some_and(|value| value.ends_with(&format!(":{head}")))
 }
 
 fn quote_path_segment(value: &str) -> String {
