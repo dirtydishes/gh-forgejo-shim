@@ -15,10 +15,6 @@ use crate::routing::RouteDecision;
 pub const TRACE_ENV: &str = "FJ_SHIM_TRACE";
 
 const FALSE_VALUES: &[&str] = &["", "0", "false", "no", "off"];
-const PR_CHECKS_FIELDS: &str =
-    "bucket,completedAt,description,event,link,name,startedAt,state,workflow";
-const PR_LIST_FIELDS: &str = "number,url,state,headRefName";
-const PR_VIEW_FIELDS: &str = "additions,author,autoMergeRequest,baseRefName,comments,createdAt,deletions,headRefName,headRefOid,isDraft,latestReviews,mergedAt,mergedBy,mergeStateStatus,mergeable,number,reviews,reviewDecision,reviewRequests,state,title,updatedAt,url,body,commits";
 const REDACTED: &str = "<redacted>";
 const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", "--token"];
 const SENSITIVE_KEY_PARTS: &[&str] = &["credential", "password", "secret", "token"];
@@ -61,71 +57,6 @@ impl OutputObservation {
             Self::Unknown => json!({"state": "unknown", "bytes": null}),
         }
     }
-}
-
-pub fn observes_output(argv: &[String], command: Command) -> bool {
-    match command {
-        Command::GlobalDelegate => argv == ["--version"],
-        Command::AuthStatus => matches_observed_shape(
-            argv,
-            &[
-                Some("auth"),
-                Some("status"),
-                Some("--active"),
-                Some("--hostname"),
-                None,
-            ],
-        ),
-        Command::PrList => matches_observed_shape(
-            argv,
-            &[
-                Some("pr"),
-                Some("list"),
-                Some("--head"),
-                None,
-                Some("--author"),
-                Some("@me"),
-                Some("--state"),
-                Some("all"),
-                Some("--json"),
-                Some(PR_LIST_FIELDS),
-                Some("--repo"),
-                None,
-            ],
-        ),
-        Command::PrView => matches_observed_shape(
-            argv,
-            &[
-                Some("pr"),
-                Some("view"),
-                None,
-                Some("--json"),
-                Some(PR_VIEW_FIELDS),
-                Some("--repo"),
-                None,
-            ],
-        ),
-        Command::PrChecks => matches_observed_shape(
-            argv,
-            &[
-                Some("pr"),
-                Some("checks"),
-                None,
-                Some("--json"),
-                Some(PR_CHECKS_FIELDS),
-                Some("--repo"),
-                None,
-            ],
-        ),
-        _ => false,
-    }
-}
-
-fn matches_observed_shape(argv: &[String], shape: &[Option<&str>]) -> bool {
-    argv.len() == shape.len()
-        && argv.iter().zip(shape).all(|(argument, expected)| {
-            expected.map_or_else(|| !argument.is_empty(), |literal| argument == literal)
-        })
 }
 
 pub fn command_class(argv: &[String], command: Command) -> &'static str {
@@ -562,96 +493,6 @@ fn timestamp_unix_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn observes_only_the_five_build_6720_process_shapes() {
-        let observed = [
-            (vec!["--version"], Command::GlobalDelegate),
-            (
-                vec![
-                    "auth",
-                    "status",
-                    "--active",
-                    "--hostname",
-                    "git.example.com",
-                ],
-                Command::AuthStatus,
-            ),
-            (
-                vec![
-                    "pr",
-                    "list",
-                    "--head",
-                    "main",
-                    "--author",
-                    "@me",
-                    "--state",
-                    "all",
-                    "--json",
-                    PR_LIST_FIELDS,
-                    "--repo",
-                    "git.example.com/owner/repo",
-                ],
-                Command::PrList,
-            ),
-            (
-                vec![
-                    "pr",
-                    "view",
-                    "13",
-                    "--json",
-                    PR_VIEW_FIELDS,
-                    "--repo",
-                    "git.example.com/owner/repo",
-                ],
-                Command::PrView,
-            ),
-            (
-                vec![
-                    "pr",
-                    "checks",
-                    "13",
-                    "--json",
-                    PR_CHECKS_FIELDS,
-                    "--repo",
-                    "git.example.com/owner/repo",
-                ],
-                Command::PrChecks,
-            ),
-        ];
-
-        for (argv, command) in observed {
-            let argv = argv.into_iter().map(str::to_string).collect::<Vec<_>>();
-            assert!(observes_output(&argv, command), "not observed: {argv:?}");
-        }
-
-        for (argv, command) in [
-            (
-                vec![
-                    "pr",
-                    "checks",
-                    "13",
-                    "--watch",
-                    "--repo",
-                    "git.example.com/owner/repo",
-                ],
-                Command::PrChecks,
-            ),
-            (
-                vec![
-                    "pr",
-                    "view",
-                    "--repo",
-                    "git.example.com/owner/repo",
-                    "--help",
-                ],
-                Command::PrView,
-            ),
-        ] {
-            let argv = argv.into_iter().map(str::to_string).collect::<Vec<_>>();
-            assert!(!observes_output(&argv, command), "observed: {argv:?}");
-        }
-    }
 
     #[test]
     fn redacts_sensitive_flag_values() {

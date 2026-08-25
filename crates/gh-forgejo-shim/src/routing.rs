@@ -12,6 +12,7 @@ use crate::external::{
     find_program, run_program_capture, run_program_inherit, CountingWriter, ProgramOutput,
 };
 use crate::invocation::{Command, ParsedInvocation};
+use crate::observation::observes_build_6720_output;
 use crate::provider::{HostProfile, HostRegistry, ProviderResolution};
 use crate::read_only;
 use crate::repo::{detect_repo_for_target, RepoRef};
@@ -273,6 +274,7 @@ fn run_gh(
     let invocation = ParsedInvocation::parse(&argv);
     let decision = decide_parsed_route(&invocation, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
+    let observes_output = observes_build_6720_output(&invocation);
 
     let result = match &decision {
         RouteDecision::Delegate { .. } => run_delegate(
@@ -281,7 +283,7 @@ fn run_gh(
             cwd,
             &config,
             trace_enabled,
-            trace::observes_output(&argv, invocation.command()),
+            observes_output,
             &mut mode,
         ),
         RouteDecision::Forgejo { target, .. } => run_forgejo(
@@ -289,7 +291,7 @@ fn run_gh(
             &env,
             cwd,
             target,
-            trace::observes_output(&argv, invocation.command()).then_some(&deadline),
+            observes_output.then_some(&deadline),
             &mut mode,
         ),
         RouteDecision::Reject { reason } => command_error(

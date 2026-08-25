@@ -19,6 +19,7 @@ pub mod git_recorder;
 pub mod gui_path;
 pub mod invocation;
 pub mod normalize;
+mod observation;
 pub mod provider;
 pub mod read_only;
 pub mod repo;
