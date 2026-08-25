@@ -163,10 +163,7 @@ fn parse_url_repo(value: &str) -> Option<RepoRef> {
     }
     let host = authority
         .rsplit_once('@')
-        .map_or(authority, |(_, host)| host)
-        .split(':')
-        .next()
-        .unwrap_or(authority);
+        .map_or(authority, |(_, host)| host);
     if host.is_empty() {
         return None;
     }
