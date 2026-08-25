@@ -299,6 +299,7 @@ struct ApiArgs {
     silent: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     invocation: &ParsedInvocation,
     target: &ForgejoTarget,
