@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::external::git_output;
 use crate::invocation::{ParsedInvocation, ProviderTarget};
 use crate::provider::normalize_host;
+use crate::{Result, ShimError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
@@ -77,7 +78,7 @@ pub fn detect_repo(
     argv: &[String],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
-) -> Detection {
+) -> Result<Detection> {
     let invocation = ParsedInvocation::parse(argv);
     detect_repo_for_target(invocation.provider_target(), env, cwd)
 }
@@ -86,39 +87,47 @@ pub fn detect_repo_for_target(
     command_target: &ProviderTarget,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
-) -> Detection {
+) -> Result<Detection> {
     if let Some(repo_arg) = command_target.repo_spec() {
-        if let Some(repo) = parse_repo_spec(repo_arg, env.get("GH_HOST").map(String::as_str)) {
-            let source = if command_target.repo_is_flag() {
-                "-R/--repo"
-            } else {
-                "command target"
-            };
-            return Detection::found(repo, source);
-        }
+        let default_host = env
+            .get("GH_HOST")
+            .map(String::as_str)
+            .filter(|host| !host.trim().is_empty())
+            .or(Some("github.com"));
+        let source = if command_target.repo_is_flag() {
+            "-R/--repo"
+        } else {
+            "command target"
+        };
+        let repo = parse_repo_spec(repo_arg, default_host).ok_or_else(|| {
+            ShimError::new(format!(
+                "invalid repository selector from {source}: {repo_arg:?}"
+            ))
+        })?;
+        return Ok(Detection::found(repo, source));
     }
 
     if let Some(gh_repo) = env.get("GH_REPO").filter(|value| !value.trim().is_empty()) {
         if let Some(repo) = parse_repo_spec(gh_repo, env.get("GH_HOST").map(String::as_str)) {
-            return Detection::found(repo, "GH_REPO");
+            return Ok(Detection::found(repo, "GH_REPO"));
         }
     }
 
     let remote_repo = detect_from_git(cwd);
     if let (Some(host), Some(remote)) = (env.get("GH_HOST"), remote_repo.as_ref()) {
         if !host.trim().is_empty() {
-            return Detection::found(
+            return Ok(Detection::found(
                 RepoRef::new(host.as_str(), remote.owner.as_str(), remote.name.as_str()),
                 "GH_HOST",
-            );
+            ));
         }
     }
 
     if let Some(repo) = remote_repo {
-        return Detection::found(repo, "git remote");
+        return Ok(Detection::found(repo, "git remote"));
     }
 
-    Detection::unknown()
+    Ok(Detection::unknown())
 }
 
 pub fn detect_from_git(cwd: Option<&Path>) -> Option<RepoRef> {

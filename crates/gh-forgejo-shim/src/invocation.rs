@@ -607,7 +607,8 @@ const fn uses_output(command: Command) -> bool {
 const fn uses_repo(command: Command) -> bool {
     matches!(
         command,
-        Command::PrChecks
+        Command::RepoView
+            | Command::PrChecks
             | Command::PrCheckout
             | Command::PrComment
             | Command::PrCreate

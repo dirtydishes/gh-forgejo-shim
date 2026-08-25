@@ -210,7 +210,10 @@ fn decide_parsed_route(
         }
     }
 
-    let detection = detect_repo_for_target(command_target, env, cwd);
+    let detection = match detect_repo_for_target(command_target, env, cwd) {
+        Ok(detection) => detection,
+        Err(error) => return RouteDecision::reject(error.to_string()),
+    };
     if let Some(repo) = detection.repo {
         return route_resolution(config.registry.resolve(&repo), detection.source);
     }
