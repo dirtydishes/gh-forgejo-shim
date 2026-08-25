@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4 repair pass `1/3` head `1cf4412d1e06f3cfa3d7616ef0c47bf71eeb40cd` passed the full locked gate and exact pull-request and push CI. Independent review retained one finding: a later YAML list item can put `token` before `host` and inherit the prior entry match. Repair pass `2/3` owns one exact red repro and whole-entry binding independent of key order. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 repair pass `2/3` red commit `b740a1fa9248aae1e606d59fc2e0136d239f664a` is pushed at `0/0`. The exact reviewer YAML returns `other-secret` from a later list item whose token precedes its host. Production now owns whole-entry token and exact-host binding independent of key order before the same review set reruns. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
