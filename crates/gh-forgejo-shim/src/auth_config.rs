@@ -131,14 +131,6 @@ fn find_json_token(data: &Value, host: Option<&str>) -> Option<String> {
                 });
             };
 
-            for (key, value) in object {
-                if normalize_host(key) == host {
-                    if let Some(token) = token_from_keyed_value(value, host) {
-                        return Some(token);
-                    }
-                }
-            }
-
             let contains_record_field = object
                 .keys()
                 .any(|key| is_host_field(key) || is_token_field(key));
@@ -149,6 +141,14 @@ fn find_json_token(data: &Value, host: Option<&str>) -> Option<String> {
                     host,
                     false,
                 );
+            }
+
+            let mut matching_entries = object.iter().filter(|(key, _)| normalize_host(key) == host);
+            if let Some((_, value)) = matching_entries.next() {
+                if matching_entries.next().is_some() {
+                    return None;
+                }
+                return token_from_keyed_value(value, host);
             }
 
             object
