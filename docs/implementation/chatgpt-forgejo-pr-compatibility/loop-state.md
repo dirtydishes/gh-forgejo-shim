@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-C1 execution readiness is `ready`; launch readiness is `launchable`; both have `findings: []`. The checkpoint is claimed and locally green. Its thermonuclear and adversarial pass-0 reviewers will inspect one frozen S2-S3 range before any combined repair decision. PR #29 remains the sole external integration PR.
+C1 review set `c1-host-routing` pass `0/3` returned six combined findings across both required roles: two structural identity/route ownership defects and four observable isolation/fallthrough failures. Combined repair pass `1/3` is red for payload URL precedence, configured `GH_HOST` without a repo, transport user-info, and uppercase URL schemes. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.

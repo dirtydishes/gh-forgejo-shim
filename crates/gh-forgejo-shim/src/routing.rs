@@ -536,6 +536,56 @@ mod tests {
     }
 
     #[test]
+    fn option_payload_urls_do_not_override_repository_identity() {
+        let forgejo = decide_route(
+            &argv(&[
+                "pr",
+                "create",
+                "--title",
+                "test",
+                "--body",
+                "https://github.com/other/project",
+            ]),
+            &config(&["git.example.com"]),
+            &env(&[("GH_REPO", "git.example.com/owner/repo")]),
+            None,
+        );
+        assert_eq!(forgejo.kind, RouteKind::Forgejo);
+        assert_eq!(forgejo.reason, "GH_REPO");
+
+        let github = decide_route(
+            &argv(&[
+                "pr",
+                "create",
+                "--title",
+                "test",
+                "--body",
+                "https://git.example.com/other/project",
+            ]),
+            &config(&["git.example.com"]),
+            &env(&[("GH_REPO", "github.com/owner/repo")]),
+            None,
+        );
+        assert_eq!(github.kind, RouteKind::Delegate);
+        assert_eq!(github.reason, "host github.com is not allowlisted");
+    }
+
+    #[test]
+    fn configured_gh_host_stays_local_without_repository_context() {
+        let decision = decide_route(
+            &argv(&["workflow", "run"]),
+            &config(&["git.example.com"]),
+            &env(&[("GH_HOST", "git.example.com")]),
+            Some(std::env::temp_dir().as_path()),
+        );
+
+        assert_eq!(decision.kind, RouteKind::Forgejo);
+        assert_eq!(decision.reason, "host");
+        assert_eq!(decision.trace_host(), Some("git.example.com"));
+        assert!(decision.repo.is_none());
+    }
+
+    #[test]
     fn parses_dispatcher_config_hosts_and_paths() {
         let parsed = load_dispatcher_config(&env(&[
             ("FJ_SHIM_HOSTS", "git.example.com,github.com"),

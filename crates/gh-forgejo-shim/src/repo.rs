@@ -242,6 +242,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_url_schemes_case_insensitively() {
+        for spec in [
+            "HTTP://git.example.com/owner/repo.git",
+            "HTTPS://git.example.com/owner/repo.git",
+            "SSH://git@git.example.com/owner/repo.git",
+            "GIT://git.example.com/owner/repo.git",
+        ] {
+            assert_eq!(
+                repo_tuple(parse_repo_spec(spec, None)),
+                Some(("git.example.com".into(), "owner".into(), "repo".into())),
+                "URL scheme case for {spec}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_ssh_url() {
         assert_eq!(
             repo_tuple(parse_repo_spec(

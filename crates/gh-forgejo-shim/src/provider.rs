@@ -228,4 +228,38 @@ mod tests {
             assert!(result.is_err(), "registered GitHub alias {alias}");
         }
     }
+
+    #[test]
+    fn registry_rejects_transport_user_info() {
+        for canonical_host in [
+            "https://user@github.com/path",
+            "https://user:password@github.com/path",
+            "user@github.com",
+        ] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: canonical_host.to_string(),
+                aliases: Vec::new(),
+                api_root: "https://github.com/api/v3".to_string(),
+                credential_host: canonical_host.to_string(),
+            }]);
+            assert!(
+                result.is_err(),
+                "registered user-info host {canonical_host}"
+            );
+        }
+
+        for alias in [
+            "https://user@github.com/path",
+            "https://user:password@github.com/path",
+            "user@github.com",
+        ] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: "git.example.com".to_string(),
+                aliases: vec![alias.to_string()],
+                api_root: "https://git.example.com/api/v1".to_string(),
+                credential_host: "git.example.com".to_string(),
+            }]);
+            assert!(result.is_err(), "registered user-info alias {alias}");
+        }
+    }
 }
