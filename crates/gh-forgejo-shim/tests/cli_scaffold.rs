@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
 use std::process::Command;
 
 use gh_forgejo_shim::VERSION;
