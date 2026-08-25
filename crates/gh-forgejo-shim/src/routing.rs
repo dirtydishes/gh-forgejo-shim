@@ -387,10 +387,7 @@ mod tests {
         DispatcherConfig {
             registry: HostRegistry::new(vec![HostProfile {
                 canonical_host: "git.dirtydishes.dev".to_string(),
-                aliases: vec![
-                    "127.0.0.1".to_string(),
-                    "127.0.0.2:2222".to_string(),
-                ],
+                aliases: vec!["127.0.0.1".to_string(), "127.0.0.2:2222".to_string()],
                 api_root: "https://git.dirtydishes.dev/api/v1".to_string(),
                 credential_host: "git.dirtydishes.dev".to_string(),
             }])
@@ -404,10 +401,8 @@ mod tests {
     impl TempGitRepo {
         fn with_remote(url: &str) -> Self {
             let id = NEXT_ROUTE_REPO_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "gh-forgejo-shim-route-{}-{id}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("gh-forgejo-shim-route-{}-{id}", std::process::id()));
             fs::create_dir_all(&path).expect("route fixture directory should be created");
             let init = Command::new("git")
                 .args(["init", "-q"])
@@ -551,9 +546,7 @@ mod tests {
     #[test]
     fn provider_first_route_matrix_covers_every_repository_source() {
         let config = profile_config();
-        let remote = TempGitRepo::with_remote(
-            "https://127.0.0.2:2222/dirtydishes/dirtypages.git",
-        );
+        let remote = TempGitRepo::with_remote("https://127.0.0.2:2222/dirtydishes/dirtypages.git");
         let cases = [
             (
                 "canonical Forgejo",
@@ -569,12 +562,7 @@ mod tests {
             ),
             (
                 "alias Forgejo",
-                argv(&[
-                    "pr",
-                    "list",
-                    "--repo",
-                    "127.0.0.1/dirtydishes/dirtypages",
-                ]),
+                argv(&["pr", "list", "--repo", "127.0.0.1/dirtydishes/dirtypages"]),
                 env(&[]),
                 None,
                 RouteKind::Forgejo,
@@ -605,12 +593,7 @@ mod tests {
             ),
             (
                 "GitHub",
-                argv(&[
-                    "pr",
-                    "list",
-                    "--repo",
-                    "github.com/dirtydishes/dirtypages",
-                ]),
+                argv(&["pr", "list", "--repo", "github.com/dirtydishes/dirtypages"]),
                 env(&[]),
                 None,
                 RouteKind::Delegate,
@@ -618,10 +601,7 @@ mod tests {
             (
                 "GH_REPO",
                 argv(&["pr", "list"]),
-                env(&[(
-                    "GH_REPO",
-                    "127.0.0.1/dirtydishes/dirtypages",
-                )]),
+                env(&[("GH_REPO", "127.0.0.1/dirtydishes/dirtypages")]),
                 None,
                 RouteKind::Forgejo,
             ),
