@@ -26,7 +26,7 @@ Current execution strategy: direct coordinator TDD for shared deadline and truth
 
 Last completed phase: S4
 
-Blocked: no — S5 passed both refreshed readiness gates and is being reclaimed
+Blocked: no — S5 shared repair pass 1/3 is active after one required independent-review finding
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S5 passed both refreshed readiness gates and is being reclaimed
 
 ## Last Coordinator Update
 
-S5 added one narrow ownership adjustment before red tests. `deadline.rs` and its `lib.rs` export keep the shared clock outside the 975-line Forgejo transport module, while `tests/cli_scaffold.rs` proves trace truth at the managed-`gh` process seam. The installed helper refreshed only S5's execution attestation to Beads projection `3507aa60b352ea8ad54679c59938774ad9c14e2ea10dbc12d57b645c06e733f5`. Exact execution readiness returned `ready` with `findings: []`; live launch returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S5 froze source head `190bb4f0acd48aa2e92b0a3bfa8c1cda5cd46f81`, passed the full locked local gate, and passed exact-commit pull-request run `32840663644` plus push run `32840659593`. Review set `s5-deadline-observability` pass `0/3` returned one required finding: the broad trace capture predicate can buffer inherited `--watch`, help, and other non-contract forms. Shared repair pass `1/3` owns a five-probe build-6720 allowlist and process evidence that all other forms retain inherited streaming with unknown byte counts. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
