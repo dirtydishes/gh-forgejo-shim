@@ -322,7 +322,11 @@ fn is_supported_command(argv: &[String]) -> bool {
 }
 
 fn is_global_delegate_command(argv: &[String]) -> bool {
-    matches!(argv, [command] if matches!(command.as_str(), "--version" | "version"))
+    match argv {
+        [] => true,
+        [command] if matches!(command.as_str(), "--version" | "version") => true,
+        [command, ..] => matches!(command.as_str(), "--help" | "-h" | "help"),
+    }
 }
 
 fn hostname_arg(argv: &[String], allow_short: bool) -> Option<&str> {
