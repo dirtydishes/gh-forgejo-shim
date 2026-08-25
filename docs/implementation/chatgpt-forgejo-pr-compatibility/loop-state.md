@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4 repair head `bfa6a2c51d4afb68cd135acafc44aaa63f644c3f` passed the full local gate and exact pull-request and push CI. Independent review pass `0/3` found one required host-isolation defect: text/YAML lookup can scan from a requested host substring into a later unrelated token. Repair pass `1/3` is admitted for exact normalized host-entry binding and the two negative repro classes. Freeze those red tests before the narrow repair. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 repair pass `1/3` red commit `afc5a6a8043b98c73270d7cd8db61cddca95d685` is pushed at `0/0`. Its two tests prove that the broad YAML/text scan returns a later host's token and a longer hostname's token. Production now owns only exact normalized host-entry binding before the same independent review set reruns. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
