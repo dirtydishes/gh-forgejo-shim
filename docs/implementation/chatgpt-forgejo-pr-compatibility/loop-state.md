@@ -16,17 +16,17 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S4
+Current phase: S5 admission
 
-Current Beads issue: gh-forgejo-shim-c05
+Current Beads issue: gh-forgejo-shim-c06
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator TDD for final S4 repair pass 3/3 at the text-entry boundary
+Current execution strategy: inspect S5 canonical scope and run exact readiness gates
 
-Last completed phase: C1
+Last completed phase: S4
 
-Blocked: no — S4 passed both readiness gates and is claimed
+Blocked: no — S4 is accepted; S5 admission is next
 
 ## Decisions
 
@@ -48,7 +48,7 @@ Blocked: no — S4 passed both readiness gates and is claimed
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | closed | `#29` | `turn-docs/04-c1.md` |
-| S4 | `gh-forgejo-shim-c05` | in progress | `#29` | `turn-docs/05-s4.md` |
+| S4 | `gh-forgejo-shim-c05` | closed | `#29` | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
 | C2 | `gh-forgejo-shim-c08` | open | none | `turn-docs/08-c2.md` |
@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4 final repair pass `3/3` red commit `4b4529b964e4b24970d67c69d40072ced3804360` is pushed at `0/0`. Two focused tests freeze four reviewer cases: nested child token, later top-level token, quoted conflicting host, and empty host followed by a valid URL. Production now owns only indentation-aware direct-field binding and authoritative validation of every recognized host occurrence. Any required finding after this pass exhausts the S4 limit. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 is accepted and closed at frozen repair head `2a12a64dc0c631f4a8bfc8245ff784279de56af6`. The final review approved with `findings: []`; 215 active local tests passed with 3 authorized future probes ignored; exact pull-request run `32838058693` and push run `32838053551` passed both named jobs. S5 admission is next. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
