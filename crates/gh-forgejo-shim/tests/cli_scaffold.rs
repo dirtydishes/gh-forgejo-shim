@@ -376,6 +376,7 @@ fn bootstrap_refuses_unmanaged_target_until_forced() -> TestResult {
 #[test]
 fn managed_gh_version_delegates_to_real_gh() -> TestResult {
     let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
     fixture.write_executable("gh", "#!/bin/sh\necho 'gh version 9.9.9 (fake)'\n")?;
 
     let output = fixture

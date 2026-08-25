@@ -250,6 +250,56 @@ fn forgejo_alias_identity_routes_to_canonical_api_root() -> TestResult {
 }
 
 #[test]
+fn forgejo_alias_uses_full_configured_api_root() -> TestResult {
+    let (host, handle) = start_json_server(vec![r#"[]"#])?;
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
+    let api_root = format!("http://{host}/forgejo/api/v1");
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            "127.0.0.1",
+            "--api-root",
+            &api_root,
+        ])
+        .output()?;
+    assert_eq!(configured.status.code(), Some(0));
+    let contract = load_contract()?;
+    let pr_list = command(&contract, "pr_list")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_TOKEN", "test-token")
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env_remove("FJ_SHIM_HOSTS")
+        .arg("gh")
+        .args(&pr_list.argv)
+        .output()?;
+    let request_lines = handle
+        .join()
+        .map_err(|_| io::Error::other("fake server thread panicked"))??;
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "custom API-root command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout)?, "[]\n");
+    assert_eq!(String::from_utf8(output.stderr)?, "");
+    assert_eq!(request_lines.len(), 1);
+    assert_request(
+        &request_lines[0],
+        "/forgejo/api/v1/repos/dirtydishes/dirtypages/pulls",
+    )?;
+    Ok(())
+}
+
+#[test]
 #[ignore = "red contract probe: @me filtering belongs to S6"]
 fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
     let (host, handle) = start_json_server(vec![
