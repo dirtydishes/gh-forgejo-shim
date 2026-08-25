@@ -369,12 +369,16 @@ fn explicit_profiles(profiles: Vec<RawHostProfile>) -> Vec<HostProfile> {
 }
 
 fn effective_profiles(hosts: &[String], mut explicit: Vec<HostProfile>) -> Vec<HostProfile> {
+    let allowed_hosts = hosts
+        .iter()
+        .map(|host| normalize_host(host))
+        .collect::<Vec<_>>();
+    explicit.retain(|profile| allowed_hosts.contains(&normalize_host(&profile.canonical_host)));
     let explicit_hosts = explicit
         .iter()
         .map(|profile| normalize_host(&profile.canonical_host))
         .collect::<Vec<_>>();
-    for host in hosts {
-        let host = normalize_host(host);
+    for host in allowed_hosts {
         if !explicit_hosts.contains(&host) {
             explicit.push(default_host_profile(host));
         }
