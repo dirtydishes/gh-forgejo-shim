@@ -387,8 +387,7 @@ fn forgejo_alias_auth_status_uses_credential_host_without_leaking_tokens() -> Te
 }
 
 #[test]
-#[ignore = "red contract probe: @me filtering belongs to S6"]
-fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
+fn forgejo_pr_list_resolves_author_me() -> TestResult {
     let (host, handle) = start_json_server(vec![
         r#"{"login":"alice","full_name":"Alice Example"}"#,
         r#"[{"number":1,"state":"open","html_url":"https://git.dirtydishes.dev/dirtydishes/dirtypages/pulls/1","head":{"ref":"main"},"base":{"ref":"main"},"user":{"login":"alice"}},{"number":2,"state":"open","html_url":"https://git.dirtydishes.dev/dirtydishes/dirtypages/pulls/2","head":{"ref":"main"},"base":{"ref":"main"},"user":{"login":"bob"}}]"#,
