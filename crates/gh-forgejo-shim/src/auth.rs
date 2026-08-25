@@ -1066,6 +1066,26 @@ mod tests {
     }
 
     #[test]
+    fn text_token_discovery_rejects_tokens_outside_the_direct_list_entry() {
+        for text in [
+            "servers:\n  - host: https://auth.target.test\n    name: target\n    credentials:\n      - name: nested\n        token: nested-secret\n",
+            "servers:\n  - host: https://auth.target.test\n    name: target\nmetadata:\n  token: later-secret\n",
+        ] {
+            assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
+        }
+    }
+
+    #[test]
+    fn text_token_discovery_rejects_every_invalid_host_occurrence() {
+        for text in [
+            "servers:\n  - host: https://auth.target.test\n    \"host\": https://auth.other.test\n    token: other-secret\n",
+            "servers:\n  - host:\n    url: https://auth.target.test\n    token: target-secret\n",
+        ] {
+            assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
+        }
+    }
+
+    #[test]
     fn text_token_discovery_matches_the_whole_normalized_host() {
         let text =
             "servers:\n  - host: https://auth.target.test.evil\n    token: substring-secret\n";
