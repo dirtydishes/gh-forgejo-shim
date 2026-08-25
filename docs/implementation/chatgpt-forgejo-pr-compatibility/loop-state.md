@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c08
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: C2 combined repair pass 2/3, coordinator-owned TDD
+Current execution strategy: C2 final combined repair pass 3/3, coordinator-owned TDD
 
 Last completed phase: S6
 
-Blocked: no — C2 repair pass 2/3 is locally green and awaiting frozen-head review and CI
+Blocked: no — C2 pass-2 review produced one combined JSON traversal finding for final pass 3/3
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — C2 repair pass 2/3 is locally green and awaiting frozen-head rev
 
 ## Last Coordinator Update
 
-C2 repair pass `2/3` froze public-command red head `aef0c0a2adf4b2901ee34c0e9ee9d4bb2eebf3d7`, then pushed production head `9d4146a9404357aa42d5ea0d5eebb3a131d93813` at `0/0` parity. Credential JSON now rejects duplicate object keys before `Value` construction, so earlier host evidence cannot be overwritten. The exact repro and all prior auth/discovery tests pass; the full locked gate has 232 active tests, with two later probes ignored. Both required reviewers and exact-commit PR/push CI remain. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 review pass `2/3` inspected frozen head `0e7e7584064b1b3549cd263f97094cb40aa848b5`; both required reviewers returned the same remaining high finding. A host-keyed child is accepted before recognized record fields in its current object, and first-match lookup can hide ambiguous normalized host keys. Exact PR run `32849677595` and push run `32849673246` passed both named jobs. Final pass `3/3` owns only record-before-container classification and validation of the complete matching-key set, with public-command and focused red cases first. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
