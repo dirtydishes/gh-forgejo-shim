@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c08
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: frozen-head thermonuclear and adversarial C2 review
+Current execution strategy: C2 combined repair pass 1/3, coordinator-owned TDD
 
 Last completed phase: S6
 
-Blocked: no — C2 passed both readiness gates and is claimed
+Blocked: no — C2 pass-0 findings are combined into repair pass 1/3
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — C2 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-C2 exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The checkout, origin, and PR #29 matched `b9da700917aa1135998383d3aa767cefbd12a307` at clean `0/0` parity. C2 was claimed and Dolt was pushed. The next commit freezes one SHA for the required thermonuclear and adversarial reviewers plus exact CI. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 pass-0 thermonuclear and adversarial reviewers inspected `fa4d1f5..b8071ef` and both requested changes. Repair pass `1/3` groups four findings into two seams: one focused auth-config module with authoritative JSON/text host fields and `auth.rs` below 1,000 lines; strict PR page decoding plus one shared head predicate. Exact checkpoint local and CI gates are otherwise green. Red behavior tests must freeze before production repair. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
