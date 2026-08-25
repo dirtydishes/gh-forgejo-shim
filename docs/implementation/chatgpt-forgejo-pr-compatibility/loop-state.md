@@ -26,7 +26,7 @@ Current execution strategy: C2 combined repair pass 2/3, coordinator-owned TDD
 
 Last completed phase: S6
 
-Blocked: no — C2 pass-1 review produced one bounded duplicate-key finding for repair pass 2/3
+Blocked: no — C2 repair pass 2/3 is locally green and awaiting frozen-head review and CI
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — C2 pass-1 review produced one bounded duplicate-key finding for 
 
 ## Last Coordinator Update
 
-C2 review pass `1/3` inspected frozen head `cdc3c6a03edb43f38e652e6d184a65553e95f9f7`. Thermonuclear approved with no findings; adversarial found one high duplicate-key bypass because `serde_json::Value` drops earlier object-key occurrences before host validation. Exact PR run `32848785208` and push run `32848778814` passed both named jobs. Repair pass `2/3` owns only duplicate-key rejection at the credential JSON boundary and the exact isolated `gfj auth status` process repro. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 repair pass `2/3` froze public-command red head `aef0c0a2adf4b2901ee34c0e9ee9d4bb2eebf3d7`, then pushed production head `9d4146a9404357aa42d5ea0d5eebb3a131d93813` at `0/0` parity. Credential JSON now rejects duplicate object keys before `Value` construction, so earlier host evidence cannot be overwritten. The exact repro and all prior auth/discovery tests pass; the full locked gate has 232 active tests, with two later probes ignored. Both required reviewers and exact-commit PR/push CI remain. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
