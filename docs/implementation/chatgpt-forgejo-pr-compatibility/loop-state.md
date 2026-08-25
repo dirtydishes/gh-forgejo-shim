@@ -64,4 +64,4 @@ Blocked: no — C2 pass-0 findings are combined into repair pass 1/3
 
 ## Last Coordinator Update
 
-C2 pass-0 thermonuclear and adversarial reviewers inspected `fa4d1f5..b8071ef` and both requested changes. Repair pass `1/3` groups four findings into two seams: one focused auth-config module with authoritative JSON/text host fields and `auth.rs` below 1,000 lines; strict PR page decoding plus one shared head predicate. Exact checkpoint local and CI gates are otherwise green. Red behavior tests must freeze before production repair. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 repair pass `1/3` red commit `a2705ba9b8c8b00e469eaace4550b7bc8fcc0951` is pushed at `0/0` parity. Four exact failures prove conflicting/invalid JSON host fields can authorize `other-secret` and malformed PR page shapes can return false success or partial data. Production now owns the focused auth-config extraction and shared host rule, strict page decoding, and one canonical head predicate. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
