@@ -16,17 +16,17 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S6
+Current phase: C2
 
-Current Beads issue: gh-forgejo-shim-c07
+Current Beads issue: gh-forgejo-shim-c08
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator TDD for PR discovery, `@me`, and pagination
+Current execution strategy: checkpoint-review admission pending
 
-Last completed phase: S5
+Last completed phase: S6
 
-Blocked: no — S6 passed the full local gate and is freezing its independent-review head
+Blocked: no — S6 is closed and C2 readiness is next
 
 ## Decisions
 
@@ -50,7 +50,7 @@ Blocked: no — S6 passed the full local gate and is freezing its independent-re
 | C1 | `gh-forgejo-shim-c04` | closed | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | closed | `#29` | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | closed | `#29` | `turn-docs/06-s5.md` |
-| S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
+| S6 | `gh-forgejo-shim-c07` | closed | `#29` | `turn-docs/07-s6.md` |
 | C2 | `gh-forgejo-shim-c08` | open | none | `turn-docs/08-c2.md` |
 | S7 | `gh-forgejo-shim-c09` | open | none | `turn-docs/09-s7.md` |
 | S8 | `gh-forgejo-shim-c10` | open | none | `turn-docs/10-s8.md` |
@@ -64,4 +64,4 @@ Blocked: no — S6 passed the full local gate and is freezing its independent-re
 
 ## Last Coordinator Update
 
-S6 passed its refreshed ownership gates and was reclaimed before the one-line provider-routing fixture update. The final locked local gate passes format, all-target Clippy with warnings denied, and 226 active workspace tests; two future build-6720 probes remain ignored. The redacted live Dirtypages replay also passes. The next commit freezes the exact S6 independent-review and CI candidate. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S6 frozen head `1533e138ec3c89b0ba87eb828399f78e547ebfa1` passed 226 active local tests, redacted live Dirtypages replay, fresh independent review with `findings: []`, and exact pull-request/push CI. Local HEAD, origin, and PR #29 matched at clean `0/0` parity; Beads S6 is closed and Dolt is pushed. C2 readiness is next. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
