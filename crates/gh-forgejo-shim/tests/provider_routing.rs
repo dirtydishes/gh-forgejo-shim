@@ -218,6 +218,70 @@ fn malformed_explicit_repo_selectors_never_fall_back_to_context() -> TestResult 
     Ok(())
 }
 
+fn assert_selector_rejected(argv: &[&str], expected_error: &str) -> TestResult {
+    let runner = RouteRunner::new()?;
+    let output = runner.run("GH_REPO", "github.com/base/repo", argv)?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains(expected_error), "{stderr}");
+    assert!(!stderr.contains("delegated-to-github"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn malformed_repo_flag_cannot_be_overwritten_by_a_later_valid_flag() -> TestResult {
+    assert_selector_rejected(
+        &[
+            "issue",
+            "view",
+            "--repo=not-a-repository",
+            "--repo=github.com/good/repo",
+            "13",
+        ],
+        "invalid repository selector",
+    )
+}
+
+#[test]
+fn malformed_repo_view_target_cannot_be_overwritten_by_a_valid_flag() -> TestResult {
+    assert_selector_rejected(
+        &[
+            "repo",
+            "view",
+            "not-a-repository",
+            "--repo=github.com/good/repo",
+            "--json",
+            "name",
+        ],
+        "invalid repository selector",
+    )
+}
+
+#[test]
+fn attached_empty_short_repo_selector_does_not_consume_the_next_token() -> TestResult {
+    assert_selector_rejected(
+        &["issue", "view", "-R=", "github.com/good/repo", "13"],
+        "invalid repository selector",
+    )
+}
+
+#[test]
+fn conflicting_valid_repo_selectors_fail_closed() -> TestResult {
+    assert_selector_rejected(
+        &[
+            "issue",
+            "view",
+            "--repo=git.example.com/first/repo",
+            "--repo=github.com/good/repo",
+            "13",
+        ],
+        "conflicting repository selectors",
+    )
+}
+
 #[test]
 fn ambiguous_unsupported_options_fail_closed_before_provider_delegation() -> TestResult {
     let runner = RouteRunner::new()?;
