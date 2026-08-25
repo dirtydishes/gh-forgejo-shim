@@ -195,7 +195,7 @@ fn fixture_preserves_the_accepted_process_boundary() -> TestResult {
 }
 
 #[test]
-fn forgejo_alias_identity_is_not_yet_canonicalized() -> TestResult {
+fn forgejo_alias_identity_routes_to_canonical_api_root() -> TestResult {
     let (host, handle) = start_json_server(vec![r#"[]"#])?;
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
@@ -223,6 +223,7 @@ fn forgejo_alias_identity_is_not_yet_canonicalized() -> TestResult {
 
     let output = fixture
         .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_TOKEN", "test-token")
         .env_remove("FJ_SHIM_REAL_GH")
         .env_remove("FJ_SHIM_HOSTS")
         .arg("gh")
@@ -232,13 +233,18 @@ fn forgejo_alias_identity_is_not_yet_canonicalized() -> TestResult {
         .join()
         .map_err(|_| io::Error::other("fake server thread panicked"))??;
 
-    assert!(output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "alias command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(String::from_utf8(output.stdout)?, "[]\n");
     assert_eq!(String::from_utf8(output.stderr)?, "");
     assert_eq!(request_lines.len(), 1);
     assert_request(
         &request_lines[0],
-        "/api/v1/repos/dirtydishes/dirtypages/pulls?state=all",
+        "/api/v1/repos/dirtydishes/dirtypages/pulls",
     )?;
     Ok(())
 }

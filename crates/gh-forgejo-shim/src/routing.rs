@@ -2,59 +2,28 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::config::{self, EnvMap};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
+use crate::provider::{HostProfile, HostRegistry, ProviderResolution};
 use crate::read_only;
 use crate::repo::{detect_repo, RepoRef};
 use crate::trace;
+use crate::Result;
 
 const SUPPORTED_PR_COMMANDS: &[&str] = &[
     "checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view",
 ];
 const SUPPORTED_ISSUE_COMMANDS: &[&str] = &["create", "list", "ls", "new", "view"];
 const SUPPORTED_REPO_COMMANDS: &[&str] = &["view"];
-const SUPPORTED_AUTH_COMMANDS: &[&str] = &["status", "token"];
-const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com"];
-
-const API_FLAGS_WITH_VALUES: &[&str] = &[
-    "--cache",
-    "-F",
-    "--field",
-    "-H",
-    "--header",
-    "--hostname",
-    "--input",
-    "--method",
-    "-X",
-    "--preview",
-    "-p",
-    "-f",
-    "--raw-field",
-];
-const API_FLAGS_WITH_OPTIONAL_VALUES: &[&str] = &["--jq", "-q", "--template", "-t"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatcherConfig {
-    pub hosts: Vec<String>,
+    pub registry: HostRegistry,
     pub real_gh: Option<PathBuf>,
-}
-
-impl DispatcherConfig {
-    pub fn is_forgejo_host(&self, host: Option<&str>) -> bool {
-        let Some(host) = host else {
-            return false;
-        };
-        let normalized = normalize_host(host);
-        !is_known_github_host(Some(normalized.as_str()))
-            && self
-                .hosts
-                .iter()
-                .any(|candidate| normalize_host(candidate) == normalized)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +47,7 @@ pub struct RouteDecision {
     pub reason: String,
     pub repo: Option<RepoRef>,
     pub host: Option<String>,
+    pub profile: Option<HostProfile>,
 }
 
 impl RouteDecision {
@@ -87,15 +57,17 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host: None,
+            profile: None,
         }
     }
 
-    fn forgejo(reason: impl Into<String>, repo: Option<RepoRef>, host: Option<String>) -> Self {
+    fn forgejo(reason: impl Into<String>, repo: Option<RepoRef>, profile: HostProfile) -> Self {
         Self {
             kind: RouteKind::Forgejo,
             reason: reason.into(),
             repo,
-            host,
+            host: Some(profile.canonical_host.clone()),
+            profile: Some(profile),
         }
     }
 
@@ -143,76 +115,46 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    if is_supported_auth_command(argv) {
+    if argv.first().is_some_and(|command| command == "auth") {
         let host =
             hostname_arg(&argv[2..], true).or_else(|| env.get("GH_HOST").map(String::as_str));
-        return decide_host_route(argv, config, env, cwd, host);
+        if let Some(decision) = decide_explicit_host_route(config, host) {
+            return decision;
+        }
     }
 
-    if is_supported_api_command(argv) {
+    if argv.first().is_some_and(|command| command == "api") {
         let host =
             hostname_arg(&argv[1..], false).or_else(|| env.get("GH_HOST").map(String::as_str));
-        return decide_host_route(argv, config, env, cwd, host);
-    }
-
-    if argv.len() < 2 || !is_supported_command(argv) {
-        return RouteDecision::delegate("unsupported command", None);
+        if let Some(decision) = decide_explicit_host_route(config, host) {
+            return decision;
+        }
     }
 
     let detection = detect_repo(argv, env, cwd);
-    let Some(repo) = detection.repo else {
-        return RouteDecision::delegate("no repository detected", None);
-    };
-    if !config.is_forgejo_host(Some(repo.host.as_str())) {
-        return RouteDecision::delegate(
-            format!("host {} is not allowlisted", repo.host),
-            Some(repo),
-        );
+    if let Some(repo) = detection.repo {
+        return route_resolution(config.registry.resolve(&repo), detection.source);
     }
 
-    let host = repo.host.clone();
-    RouteDecision::forgejo(detection.source, Some(repo), Some(host))
-}
-
-pub fn load_dispatcher_config(env: &HashMap<String, String>) -> DispatcherConfig {
-    let mut config = load_dispatcher_config_file(env).unwrap_or_else(|| DispatcherConfig {
-        hosts: Vec::new(),
-        real_gh: None,
-    });
-
-    if let Some(hosts) = env.get("FJ_SHIM_HOSTS") {
-        config.hosts = split_hosts(hosts)
-            .into_iter()
-            .filter(|host| !is_known_github_host(Some(host.as_str())))
-            .collect();
+    if argv.len() < 2 || !is_supported_command(argv) {
+        RouteDecision::delegate("unsupported command", None)
+    } else {
+        RouteDecision::delegate("no repository detected", None)
     }
-
-    if let Some(real_gh) = optional_env(env, "FJ_SHIM_REAL_GH") {
-        config.real_gh = Some(PathBuf::from(real_gh));
-    }
-
-    config.hosts = dedupe_hosts(config.hosts);
-    config
 }
 
-pub fn normalize_host(host: &str) -> String {
-    let without_scheme = host
-        .trim()
-        .split_once("://")
-        .map_or(host.trim(), |(_, rest)| rest);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or(without_scheme)
-        .to_ascii_lowercase()
-}
-
-pub fn is_known_github_host(host: Option<&str>) -> bool {
-    host.map(|host| {
-        let normalized = normalize_host(host);
-        KNOWN_GITHUB_HOSTS.contains(&normalized.as_str())
+pub fn load_dispatcher_config(env: &HashMap<String, String>) -> Result<DispatcherConfig> {
+    let env_map = env
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<EnvMap>();
+    let path = config_path(env).unwrap_or_default();
+    let loaded = config::load_config_with_env(Some(&path), &env_map)?;
+    let registry = config::load_host_registry_with_env(Some(&path), &env_map)?;
+    Ok(DispatcherConfig {
+        registry,
+        real_gh: loaded.paths.gh.map(PathBuf::from),
     })
-    .unwrap_or(false)
 }
 
 fn run_gh(
@@ -222,7 +164,13 @@ fn run_gh(
     mut mode: DelegateMode<'_>,
 ) -> i32 {
     let started = Instant::now();
-    let config = load_dispatcher_config(&env);
+    let config = match load_dispatcher_config(&env) {
+        Ok(config) => config,
+        Err(error) => {
+            write_error(&mut mode, &format!("gh-forgejo-shim: {error}"));
+            return 1;
+        }
+    };
     let decision = decide_route(&argv, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
@@ -330,34 +278,31 @@ fn write_error(mode: &mut DelegateMode<'_>, message: &str) {
     }
 }
 
-fn decide_host_route(
-    argv: &[String],
+fn decide_explicit_host_route(
     config: &DispatcherConfig,
-    env: &HashMap<String, String>,
-    cwd: Option<&Path>,
     host: Option<&str>,
-) -> RouteDecision {
-    if let Some(host) = host.filter(|host| !host.trim().is_empty()) {
-        let normalized = normalize_host(host);
-        if config.is_forgejo_host(Some(normalized.as_str())) {
-            return RouteDecision::forgejo("host", None, Some(normalized));
+) -> Option<RouteDecision> {
+    let host = host.filter(|host| !host.trim().is_empty())?;
+    let probe = RepoRef::new(host, "_", "_");
+    Some(match config.registry.resolve(&probe) {
+        ProviderResolution::Forgejo { profile, .. } => {
+            RouteDecision::forgejo("host", None, profile)
         }
-        return RouteDecision::delegate(format!("host {normalized} is not allowlisted"), None);
-    }
+        ProviderResolution::GitHub { repo } | ProviderResolution::Unconfigured { repo } => {
+            RouteDecision::delegate(format!("host {} is not allowlisted", repo.host), None)
+        }
+    })
+}
 
-    let detection = detect_repo(argv, env, cwd);
-    let Some(repo) = detection.repo else {
-        return RouteDecision::delegate("no repository detected", None);
-    };
-    if !config.is_forgejo_host(Some(repo.host.as_str())) {
-        return RouteDecision::delegate(
-            format!("host {} is not allowlisted", repo.host),
-            Some(repo),
-        );
+fn route_resolution(resolution: ProviderResolution, source: String) -> RouteDecision {
+    match resolution {
+        ProviderResolution::Forgejo { repo, profile } => {
+            RouteDecision::forgejo(source, Some(repo), profile)
+        }
+        ProviderResolution::GitHub { repo } | ProviderResolution::Unconfigured { repo } => {
+            RouteDecision::delegate(format!("host {} is not allowlisted", repo.host), Some(repo))
+        }
     }
-
-    let host = repo.host.clone();
-    RouteDecision::forgejo(detection.source, Some(repo), Some(host))
 }
 
 fn is_supported_command(argv: &[String]) -> bool {
@@ -370,16 +315,6 @@ fn is_supported_command(argv: &[String]) -> bool {
         "repo" => SUPPORTED_REPO_COMMANDS.contains(&argv[1].as_str()),
         _ => false,
     }
-}
-
-fn is_supported_auth_command(argv: &[String]) -> bool {
-    argv.len() >= 2 && argv[0] == "auth" && SUPPORTED_AUTH_COMMANDS.contains(&argv[1].as_str())
-}
-
-fn is_supported_api_command(argv: &[String]) -> bool {
-    argv.len() >= 2
-        && argv[0] == "api"
-        && matches!(api_endpoint(&argv[1..]).as_deref(), Some("user" | "/user"))
 }
 
 fn hostname_arg(argv: &[String], allow_short: bool) -> Option<&str> {
@@ -402,41 +337,6 @@ fn hostname_arg(argv: &[String], allow_short: bool) -> Option<&str> {
     None
 }
 
-fn api_endpoint(argv: &[String]) -> Option<String> {
-    let mut index = 0;
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if arg == "--" {
-            return argv.get(index + 1).cloned();
-        }
-        if API_FLAGS_WITH_VALUES.contains(&arg) || API_FLAGS_WITH_OPTIONAL_VALUES.contains(&arg) {
-            index += 2;
-        } else if has_flag_value_prefix(arg, API_FLAGS_WITH_VALUES)
-            || has_flag_value_prefix(arg, API_FLAGS_WITH_OPTIONAL_VALUES)
-            || arg.starts_with('-')
-        {
-            index += 1;
-        } else {
-            return Some(arg.to_string());
-        }
-    }
-    None
-}
-
-fn has_flag_value_prefix(arg: &str, flags: &[&str]) -> bool {
-    flags.iter().any(|flag| {
-        arg.strip_prefix(flag)
-            .and_then(|rest| rest.strip_prefix('='))
-            .is_some()
-    })
-}
-
-fn load_dispatcher_config_file(env: &HashMap<String, String>) -> Option<DispatcherConfig> {
-    let path = config_path(env)?;
-    let text = fs::read_to_string(path).ok()?;
-    Some(parse_config_text(&text))
-}
-
 fn config_path(env: &HashMap<String, String>) -> Option<PathBuf> {
     env.get("HOME")
         .filter(|home| !home.trim().is_empty())
@@ -446,119 +346,6 @@ fn config_path(env: &HashMap<String, String>) -> Option<PathBuf> {
                 .join("gh-forgejo-shim")
                 .join("config.toml")
         })
-}
-
-fn parse_config_text(text: &str) -> DispatcherConfig {
-    let mut table = "";
-    let mut hosts = Vec::new();
-    let mut real_gh = None;
-
-    for raw_line in text.lines() {
-        let line = raw_line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            table = line.trim_matches(&['[', ']'][..]).trim();
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if table.is_empty() && key == "hosts" {
-            hosts = parse_host_list(value);
-        } else if table == "paths" && key == "gh" {
-            real_gh = parse_toml_string(value).map(PathBuf::from);
-        }
-    }
-
-    DispatcherConfig {
-        hosts: hosts
-            .into_iter()
-            .filter(|host| !is_known_github_host(Some(host.as_str())))
-            .collect(),
-        real_gh,
-    }
-}
-
-fn parse_host_list(value: &str) -> Vec<String> {
-    let trimmed = value.trim();
-    let Some(inner) = trimmed
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-    else {
-        return Vec::new();
-    };
-    inner
-        .split(',')
-        .filter_map(parse_toml_string)
-        .map(|host| normalize_host(&host))
-        .filter(|host| !host.is_empty())
-        .collect()
-}
-
-fn parse_toml_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    let quote = trimmed.chars().next()?;
-    if !matches!(quote, '"' | '\'') || !trimmed.ends_with(quote) || trimmed.len() < 2 {
-        return None;
-    }
-    let inner = &trimmed[1..trimmed.len() - 1];
-    if quote == '\'' {
-        return Some(inner.to_string());
-    }
-    Some(unescape_basic_toml_string(inner))
-}
-
-fn unescape_basic_toml_string(value: &str) -> String {
-    let mut result = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            result.push(character);
-            continue;
-        }
-        match chars.next() {
-            Some('"') => result.push('"'),
-            Some('\\') => result.push('\\'),
-            Some('n') => result.push('\n'),
-            Some('t') => result.push('\t'),
-            Some(other) => {
-                result.push('\\');
-                result.push(other);
-            }
-            None => result.push('\\'),
-        }
-    }
-    result
-}
-
-fn split_hosts(value: &str) -> Vec<String> {
-    value
-        .replace([';', ' '], ",")
-        .split(',')
-        .map(normalize_host)
-        .filter(|host| !host.is_empty())
-        .collect()
-}
-
-fn optional_env<'a>(env: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
-    env.get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn dedupe_hosts(hosts: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::new();
-    for host in hosts {
-        if !deduped.contains(&host) {
-            deduped.push(host);
-        }
-    }
-    deduped
 }
 
 #[cfg(test)]
@@ -574,7 +361,18 @@ mod tests {
 
     fn config(hosts: &[&str]) -> DispatcherConfig {
         DispatcherConfig {
-            hosts: hosts.iter().map(|host| (*host).to_string()).collect(),
+            registry: HostRegistry::new(
+                hosts
+                    .iter()
+                    .map(|host| HostProfile {
+                        canonical_host: (*host).to_string(),
+                        aliases: Vec::new(),
+                        api_root: format!("https://{host}/api/v1"),
+                        credential_host: (*host).to_string(),
+                    })
+                    .collect(),
+            )
+            .expect("test host registry should be valid"),
             real_gh: None,
         }
     }
@@ -585,11 +383,12 @@ mod tests {
 
     #[test]
     fn delegates_unsupported_command() {
+        let cwd = std::env::temp_dir();
         let decision = decide_route(
             &argv(&["api", "repos/owner/repo"]),
             &config(&["git.example.com"]),
             &env(&[]),
-            None,
+            Some(&cwd),
         );
 
         assert_eq!(decision.kind, RouteKind::Delegate);
@@ -643,10 +442,10 @@ mod tests {
     }
 
     #[test]
-    fn delegates_github_even_when_accidentally_allowlisted() {
+    fn delegates_github_when_forgejo_profiles_exist() {
         let decision = decide_route(
             &argv(&["pr", "view", "-R", "github.com/owner/repo"]),
-            &config(&["github.com", "git.example.com"]),
+            &config(&["git.example.com"]),
             &env(&[]),
             None,
         );
@@ -673,16 +472,21 @@ mod tests {
 
     #[test]
     fn parses_dispatcher_config_hosts_and_paths() {
-        let parsed = parse_config_text(
-            r#"
-            hosts = ["git.example.com", "github.com"]
+        let parsed = load_dispatcher_config(&env(&[
+            ("FJ_SHIM_HOSTS", "git.example.com,github.com"),
+            ("FJ_SHIM_REAL_GH", "/opt/homebrew/bin/gh"),
+        ]))
+        .expect("environment dispatcher config should load");
 
-            [paths]
-            gh = "/opt/homebrew/bin/gh"
-            "#,
+        assert_eq!(
+            parsed
+                .registry
+                .profiles()
+                .iter()
+                .map(|profile| profile.canonical_host.as_str())
+                .collect::<Vec<_>>(),
+            ["git.example.com"]
         );
-
-        assert_eq!(parsed.hosts, vec!["git.example.com"]);
         assert_eq!(parsed.real_gh, Some(PathBuf::from("/opt/homebrew/bin/gh")));
     }
 }

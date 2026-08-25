@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::config::normalize_host;
 use crate::external::git_output;
-use crate::routing::normalize_host;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
