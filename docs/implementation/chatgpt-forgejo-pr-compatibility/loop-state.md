@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c05
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: exact S4 execution and launch admission before claim
+Current execution strategy: direct coordinator S4 TDD at the credential-host lookup seam
 
 Last completed phase: C1
 
-Blocked: no — C1 is accepted and closed; S4 is unblocked but not yet claimed
+Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Decisions
 
@@ -48,7 +48,7 @@ Blocked: no — C1 is accepted and closed; S4 is unblocked but not yet claimed
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | closed | `#29` | `turn-docs/04-c1.md` |
-| S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
+| S4 | `gh-forgejo-shim-c05` | in progress | `#29` | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
 | C2 | `gh-forgejo-shim-c08` | open | none | `turn-docs/08-c2.md` |
@@ -64,4 +64,4 @@ Blocked: no — C1 is accepted and closed; S4 is unblocked but not yet claimed
 
 ## Last Coordinator Update
 
-C1 closed after pass `8/8`. The repair head `a63b4f42a549e361515435091139e11b9c1f1108` passed the full locked local gate with 206 active tests, both required independent reviewers approved with `findings: []`, and exact-commit pull-request run `32833793794` plus push run `32833787925` passed both named jobs. Beads and Dolt record the accepted close. Next, run S4's exact execution and live launch gates before claiming it. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 passed exact execution and live launch readiness with empty findings at pushed head `fa4d1f5fca25ddb864928b08f05350a7f3b3a763`, then was claimed and pushed in Beads. The narrow S4 surface adds `read_only.rs` because only the resolved `HostProfile` can supply `credential_host` to `auth.rs`; this preserves canonical display and API identity. Refresh that amended projection's attestation before freezing red tests. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
