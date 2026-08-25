@@ -88,3 +88,4 @@
 {"id":"int-b98be8aa5914f6df4c2af6f329d7eb65","kind":"field_change","created_at":"2026-08-25T09:24:24.802041219Z","actor":"dirtydishes","issue_id":"gh-forgejo-shim-c04","extra":{"field":"status","new_value":"blocked","old_value":"in_progress"}}
 {"id":"int-2249fef6617a801706b0818b7e7aa5c7","kind":"field_change","created_at":"2026-08-25T09:27:01.629897389Z","actor":"dirtydishes","issue_id":"gh-forgejo-shim-c04","extra":{"field":"status","new_value":"open","old_value":"blocked"}}
 {"id":"int-541b16b15280121e2391dcb36a569db4","kind":"field_change","created_at":"2026-08-25T09:38:28.309502913Z","actor":"dirtydishes","issue_id":"gh-forgejo-shim-c04","extra":{"field":"status","new_value":"blocked","old_value":"in_progress"}}
+{"id":"int-47737caaa73030aa09472d4244f12399","kind":"field_change","created_at":"2026-08-25T09:40:49.040448373Z","actor":"dirtydishes","issue_id":"gh-forgejo-shim-c04","extra":{"field":"status","new_value":"open","old_value":"blocked"}}
