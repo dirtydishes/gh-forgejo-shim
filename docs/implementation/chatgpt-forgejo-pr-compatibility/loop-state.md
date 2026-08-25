@@ -26,7 +26,7 @@ Current execution strategy: direct coordinator TDD for PR discovery, `@me`, and 
 
 Last completed phase: S5
 
-Blocked: no — S6 is refreshing exact ownership for one stale provider-routing assertion
+Blocked: no — S6 passed the full local gate and is freezing its independent-review head
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S6 is refreshing exact ownership for one stale provider-routing 
 
 ## Last Coordinator Update
 
-S6 green pagination commit `acdf0885e72046ed65f4ada3ba4779de5c5c0202` passes its focused tests and redacted live replay. The first full gate passed format and all-target Clippy, then found one stale provider-routing request assertion: routing still selected the right repository, while the expected URL lacked S6's `limit=50&page=1`. Beads now adds only `tests/provider_routing.rs` to exact ownership. Production and test mutation wait for refreshed execution and launch gates. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S6 passed its refreshed ownership gates and was reclaimed before the one-line provider-routing fixture update. The final locked local gate passes format, all-target Clippy with warnings denied, and 226 active workspace tests; two future build-6720 probes remain ignored. The redacted live Dirtypages replay also passes. The next commit freezes the exact S6 independent-review and CI candidate. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.

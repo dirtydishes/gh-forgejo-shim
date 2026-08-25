@@ -127,7 +127,7 @@ fn clustered_pr_flags_run_locally_against_the_selected_repo() -> TestResult {
     assert_eq!(String::from_utf8(output.stderr)?, "");
     assert_eq!(
         requests,
-        ["GET /api/v1/repos/selected/repo/pulls?state=open HTTP/1.1"]
+        ["GET /api/v1/repos/selected/repo/pulls?state=open&limit=50&page=1 HTTP/1.1"]
     );
     Ok(())
 }
