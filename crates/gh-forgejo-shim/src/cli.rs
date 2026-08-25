@@ -1328,6 +1328,35 @@ credential_host = "git.dirtydishes.dev"
             String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?,
             "git.dirtydishes.dev\n  aliases: 127.0.0.1, 127.0.0.1:2222\n  api root: http://127.0.0.1:3000/api/v1\n  credential host: git.dirtydishes.dev\n"
         );
+        stdout = Vec::new();
+        stderr.clear();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args([
+                "config",
+                "add-host",
+                "git.dirtydishes.dev",
+                "--alias",
+                "10.0.0.1",
+            ]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(
+            fs::read_to_string(config::config_path(Some(&home)))?,
+            r#"hosts = ["git.dirtydishes.dev"]
+
+[[host_profiles]]
+canonical_host = "git.dirtydishes.dev"
+aliases = ["127.0.0.1", "127.0.0.1:2222", "10.0.0.1"]
+api_root = "http://127.0.0.1:3000/api/v1"
+credential_host = "git.dirtydishes.dev"
+"#
+        );
         fs::remove_dir_all(home).ok();
         Ok(())
     }

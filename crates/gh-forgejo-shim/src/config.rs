@@ -563,6 +563,24 @@ aliases = ["git.local"]
     }
 
     #[test]
+    fn duplicate_legacy_host_spellings_create_one_default_profile() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\"Git.Example.com\", \"https://git.example.com/path\"]\n",
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let registry = load_host_registry_with_env(Some(&path), &EnvMap::new())?;
+
+        assert_eq!(registry.profiles().len(), 1);
+        assert_eq!(registry.profiles()[0].canonical_host, "git.example.com");
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn env_hosts_replace_config_hosts() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");

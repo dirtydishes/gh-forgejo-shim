@@ -190,4 +190,27 @@ mod tests {
             "API root must use HTTP or HTTPS: ssh://git.example.com/api/v1"
         );
     }
+
+    #[test]
+    fn registry_rejects_github_identity_variants_and_aliases() {
+        for canonical_host in ["github.com:443", "github.com.", "www.github.com:443"] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: canonical_host.to_string(),
+                aliases: Vec::new(),
+                api_root: "https://github.com/api/v3".to_string(),
+                credential_host: canonical_host.to_string(),
+            }]);
+            assert!(result.is_err(), "registered canonical {canonical_host}");
+        }
+
+        for alias in ["github.com", "github.com:443", "www.github.com."] {
+            let result = HostRegistry::new(vec![HostProfile {
+                canonical_host: "git.example.com".to_string(),
+                aliases: vec![alias.to_string()],
+                api_root: "https://git.example.com/api/v1".to_string(),
+                credential_host: "git.example.com".to_string(),
+            }]);
+            assert!(result.is_err(), "registered GitHub alias {alias}");
+        }
+    }
 }
