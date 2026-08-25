@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-C1 review set `c1-host-routing` pass `0/3` returned six combined findings across both required roles: two structural identity/route ownership defects and four observable isolation/fallthrough failures. Combined repair pass `1/3` is red for payload URL precedence, configured `GH_HOST` without a repo, transport user-info, and uppercase URL schemes. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
+C1 combined repair pass `1/3` is pushed at `341592f009717b9d67e7c2303be0f9cac20e89b5` with `0/0` parity. All four red probes and the full locked local gate pass; provider identity, retained lookup state, one-snapshot config loading, and typed Forgejo routing resolve the two structural findings. Both independent roles must rerun the exact range before CI admission. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
