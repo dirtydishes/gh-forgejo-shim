@@ -254,6 +254,10 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "    {name} doctor")?;
     writeln!(stdout, "    {name} trace <summarize|smoke|git-recorder>")?;
     writeln!(stdout, "    {name} config <add-host|remove-host|list>")?;
+    writeln!(
+        stdout,
+        "    {name} config add-host HOST [--alias HOST]... [--api-root URL] [--credential-host HOST]"
+    )?;
     writeln!(stdout, "    {name} auth <login|import|status|logout>")?;
     writeln!(stdout)?;
     writeln!(stdout, "STATUS:")?;
@@ -587,9 +591,9 @@ fn parse_add_host_options(values: &[String]) -> Result<AddHostOptions> {
     let mut index = 1;
     while index < values.len() {
         let flag = values[index].as_str();
-        let value = values.get(index + 1).ok_or_else(|| {
-            ShimError::new(format!("{flag} requires a value"))
-        })?;
+        let value = values
+            .get(index + 1)
+            .ok_or_else(|| ShimError::new(format!("{flag} requires a value")))?;
         match flag {
             "--alias" => options.aliases.push(value.clone()),
             "--api-root" if options.api_root.is_none() => options.api_root = Some(value.clone()),
@@ -599,17 +603,18 @@ fn parse_add_host_options(values: &[String]) -> Result<AddHostOptions> {
             "--api-root" | "--credential-host" => {
                 return Err(ShimError::new(format!("{flag} may be supplied once")));
             }
-            _ => return Err(ShimError::new(format!("unknown config add-host flag: {flag}"))),
+            _ => {
+                return Err(ShimError::new(format!(
+                    "unknown config add-host flag: {flag}"
+                )))
+            }
         }
         index += 2;
     }
     Ok(options)
 }
 
-fn print_profiles(
-    profiles: &[crate::provider::HostProfile],
-    stdout: &mut dyn Write,
-) -> Result<()> {
+fn print_profiles(profiles: &[crate::provider::HostProfile], stdout: &mut dyn Write) -> Result<()> {
     if profiles.is_empty() {
         writeln!(stdout, "no Forgejo hosts configured")?;
         return Ok(());

@@ -396,9 +396,8 @@ fn read_raw_config(path: &Path) -> Result<RawConfig> {
     }
     let text = fs::read_to_string(path)
         .map_err(|error| ShimError::new(format!("could not read {}: {error}", path.display())))?;
-    toml::from_str(&text).map_err(|error| {
-        ShimError::new(format!("could not parse {}: {error}", path.display()))
-    })
+    toml::from_str(&text)
+        .map_err(|error| ShimError::new(format!("could not parse {}: {error}", path.display())))
 }
 
 fn dedupe(values: Vec<String>) -> Vec<String> {

@@ -21,16 +21,9 @@ pub struct HostRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderResolution {
-    Forgejo {
-        repo: RepoRef,
-        profile: HostProfile,
-    },
-    GitHub {
-        repo: RepoRef,
-    },
-    Unconfigured {
-        repo: RepoRef,
-    },
+    Forgejo { repo: RepoRef, profile: HostProfile },
+    GitHub { repo: RepoRef },
+    Unconfigured { repo: RepoRef },
 }
 
 impl HostRegistry {
@@ -44,9 +37,8 @@ impl HostRegistry {
                     profile.canonical_host
                 )));
             }
-            let api_root = reqwest::Url::parse(&profile.api_root).map_err(|_| {
-                ShimError::new(format!("invalid API root: {}", profile.api_root))
-            })?;
+            let api_root = reqwest::Url::parse(&profile.api_root)
+                .map_err(|_| ShimError::new(format!("invalid API root: {}", profile.api_root)))?;
             if !matches!(api_root.scheme(), "http" | "https") {
                 return Err(ShimError::new(format!(
                     "API root must use HTTP or HTTPS: {}",
@@ -66,7 +58,10 @@ impl HostRegistry {
                         "duplicate transport host: {transport_host}"
                     )));
                 }
-                if assigned.insert(transport_host.clone(), profile_index).is_some() {
+                if assigned
+                    .insert(transport_host.clone(), profile_index)
+                    .is_some()
+                {
                     return Err(ShimError::new(format!(
                         "ambiguous transport host: {transport_host}"
                     )));
