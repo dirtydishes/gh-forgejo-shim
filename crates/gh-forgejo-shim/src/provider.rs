@@ -87,4 +87,37 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn registry_rejects_duplicate_and_ambiguous_transport_names() {
+        let duplicate = HostRegistry::new(vec![HostProfile {
+            canonical_host: "git.example.com".to_string(),
+            aliases: vec!["git.local".to_string(), "GIT.LOCAL".to_string()],
+            api_root: "https://git.example.com/api/v1".to_string(),
+            credential_host: "git.example.com".to_string(),
+        }]);
+        let Err(error) = duplicate else {
+            panic!("duplicate aliases in one profile must fail");
+        };
+        assert_eq!(error.message(), "duplicate transport host: git.local");
+
+        let ambiguous = HostRegistry::new(vec![
+            HostProfile {
+                canonical_host: "git.one.example".to_string(),
+                aliases: vec!["git.local".to_string()],
+                api_root: "https://git.one.example/api/v1".to_string(),
+                credential_host: "git.one.example".to_string(),
+            },
+            HostProfile {
+                canonical_host: "git.two.example".to_string(),
+                aliases: vec!["git.local".to_string()],
+                api_root: "https://git.two.example/api/v1".to_string(),
+                credential_host: "git.two.example".to_string(),
+            },
+        ]);
+        let Err(error) = ambiguous else {
+            panic!("one alias assigned to two profiles must fail");
+        };
+        assert_eq!(error.message(), "ambiguous transport host: git.local");
+    }
 }
