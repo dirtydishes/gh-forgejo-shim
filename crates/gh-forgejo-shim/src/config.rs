@@ -150,40 +150,19 @@ pub fn load_host_registry_with_env(path: Option<&Path>, env: &EnvMap) -> Result<
         return HostRegistry::new(profiles);
     }
 
-    let mut profiles = raw
-        .host_profiles
-        .into_iter()
-        .map(|profile| {
-            let canonical_host = normalize_host(&profile.canonical_host);
-            HostProfile {
-                api_root: optional_string(profile.api_root.as_deref())
-                    .unwrap_or_else(|| default_api_root(&canonical_host)),
-                credential_host: optional_string(profile.credential_host.as_deref())
-                    .map_or_else(|| canonical_host.clone(), |host| normalize_host(&host)),
-                canonical_host,
-                aliases: profile.aliases,
-            }
-        })
-        .collect::<Vec<_>>();
-    let explicit_hosts = profiles
-        .iter()
-        .map(|profile| profile.canonical_host.clone())
-        .collect::<Vec<_>>();
-    for host in raw
+    let profiles = explicit_profiles(raw.host_profiles);
+    let hosts = raw
         .hosts
         .unwrap_or_default()
         .into_iter()
         .filter_map(|host| normalized_forgejo_host(&host))
-    {
-        if !explicit_hosts.contains(&host) {
-            profiles.push(default_host_profile(host));
-        }
-    }
-    HostRegistry::new(profiles)
+        .collect::<Vec<_>>();
+    HostRegistry::new(effective_profiles(&hosts, profiles))
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
     let config = load_config_with_env(path, &EnvMap::new())?;
+    let explicit = explicit_profiles(read_raw_config(&config.path)?.host_profiles);
     let mut hosts = config.hosts;
     if let Some(normalized) = normalized_forgejo_host(host) {
         if !hosts.iter().any(|configured| configured == &normalized) {
@@ -197,13 +176,52 @@ pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
         paths: config.paths,
         path: config.path,
     };
-    write_config(&updated)?;
+    HostRegistry::new(effective_profiles(&updated.hosts, explicit.clone()))?;
+    write_config_data(&updated, &explicit)?;
     Ok(updated)
+}
+
+pub fn add_host_profile(
+    host: &str,
+    aliases: Vec<String>,
+    api_root: Option<&str>,
+    credential_host: Option<&str>,
+    path: Option<&Path>,
+) -> Result<HostRegistry> {
+    let config = load_config_with_env(path, &EnvMap::new())?;
+    let mut explicit = explicit_profiles(read_raw_config(&config.path)?.host_profiles);
+    let canonical_host = normalize_host(host);
+    let profile = HostProfile {
+        api_root: optional_string(api_root).unwrap_or_else(|| default_api_root(&canonical_host)),
+        credential_host: optional_string(credential_host)
+            .map_or_else(|| canonical_host.clone(), |value| normalize_host(&value)),
+        canonical_host: canonical_host.clone(),
+        aliases,
+    };
+    explicit.retain(|existing| normalize_host(&existing.canonical_host) != canonical_host);
+    explicit.push(profile);
+    explicit.sort_by(|left, right| left.canonical_host.cmp(&right.canonical_host));
+
+    let mut hosts = config.hosts;
+    if !hosts.contains(&canonical_host) {
+        hosts.push(canonical_host);
+    }
+    hosts.sort();
+    let updated = Config {
+        hosts,
+        paths: config.paths,
+        path: config.path,
+    };
+    let registry = HostRegistry::new(effective_profiles(&updated.hosts, explicit.clone()))?;
+    write_config_data(&updated, &explicit)?;
+    Ok(registry)
 }
 
 pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
     let config = load_config_with_env(path, &EnvMap::new())?;
     let normalized = normalize_host(host);
+    let mut explicit = explicit_profiles(read_raw_config(&config.path)?.host_profiles);
+    explicit.retain(|profile| normalize_host(&profile.canonical_host) != normalized);
     let hosts = config
         .hosts
         .into_iter()
@@ -214,11 +232,18 @@ pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
         paths: config.paths,
         path: config.path,
     };
-    write_config(&updated)?;
+    HostRegistry::new(effective_profiles(&updated.hosts, explicit.clone()))?;
+    write_config_data(&updated, &explicit)?;
     Ok(updated)
 }
 
 pub fn write_config(config: &Config) -> Result<()> {
+    let explicit = explicit_profiles(read_raw_config(&config.path)?.host_profiles);
+    HostRegistry::new(effective_profiles(&config.hosts, explicit.clone()))?;
+    write_config_data(config, &explicit)
+}
+
+fn write_config_data(config: &Config, profiles: &[HostProfile]) -> Result<()> {
     let parent = config.path.parent().ok_or_else(|| {
         ShimError::new(format!(
             "could not determine parent directory for {}",
@@ -237,6 +262,26 @@ pub fn write_config(config: &Config) -> Result<()> {
         .collect::<Vec<_>>()
         .join(", ");
     lines.push(format!("hosts = [{hosts}]"));
+    for profile in profiles {
+        lines.push(String::new());
+        lines.push("[[host_profiles]]".to_string());
+        lines.push(format!(
+            "canonical_host = {}",
+            toml_string(&profile.canonical_host)
+        ));
+        let aliases = profile
+            .aliases
+            .iter()
+            .map(|alias| toml_string(alias))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("aliases = [{aliases}]"));
+        lines.push(format!("api_root = {}", toml_string(&profile.api_root)));
+        lines.push(format!(
+            "credential_host = {}",
+            toml_string(&profile.credential_host)
+        ));
+    }
     if config.paths.gh.is_some() || config.paths.fj.is_some() {
         lines.push(String::new());
         lines.push("[paths]".to_string());
@@ -301,6 +346,37 @@ fn default_host_profile(canonical_host: String) -> HostProfile {
         canonical_host,
         aliases: Vec::new(),
     }
+}
+
+fn explicit_profiles(profiles: Vec<RawHostProfile>) -> Vec<HostProfile> {
+    profiles
+        .into_iter()
+        .map(|profile| {
+            let canonical_host = normalize_host(&profile.canonical_host);
+            HostProfile {
+                api_root: optional_string(profile.api_root.as_deref())
+                    .unwrap_or_else(|| default_api_root(&canonical_host)),
+                credential_host: optional_string(profile.credential_host.as_deref())
+                    .map_or_else(|| canonical_host.clone(), |host| normalize_host(&host)),
+                canonical_host,
+                aliases: profile.aliases,
+            }
+        })
+        .collect()
+}
+
+fn effective_profiles(hosts: &[String], mut explicit: Vec<HostProfile>) -> Vec<HostProfile> {
+    let explicit_hosts = explicit
+        .iter()
+        .map(|profile| normalize_host(&profile.canonical_host))
+        .collect::<Vec<_>>();
+    for host in hosts {
+        let host = normalize_host(host);
+        if !explicit_hosts.contains(&host) {
+            explicit.push(default_host_profile(host));
+        }
+    }
+    explicit
 }
 
 fn default_api_root(canonical_host: &str) -> String {

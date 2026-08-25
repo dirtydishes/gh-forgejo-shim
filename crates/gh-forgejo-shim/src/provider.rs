@@ -76,6 +76,10 @@ impl HostRegistry {
         Ok(Self { profiles })
     }
 
+    pub fn profiles(&self) -> &[HostProfile] {
+        &self.profiles
+    }
+
     pub fn resolve(&self, repo: &RepoRef) -> ProviderResolution {
         let transport_host = normalize_host(&repo.host);
         if is_known_github_host(Some(&transport_host)) {
