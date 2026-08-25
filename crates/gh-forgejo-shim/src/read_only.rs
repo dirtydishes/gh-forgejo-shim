@@ -18,7 +18,7 @@ use crate::normalize::{
     normalize_pr_checks_for_repo, normalize_pull, normalize_repo, render_json_or_jq,
     render_json_or_jq_list, status_for_current_branch, with_status_check_rollup_for_repo,
 };
-use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
+use crate::repo::RepoRef as DetectedRepoRef;
 use crate::routing::ForgejoTarget;
 use crate::{auth, create};
 use crate::{Result, ShimError};
@@ -164,7 +164,6 @@ struct OutputArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ViewStatusArgs {
     output: OutputArgs,
-    repo: Option<String>,
     web: bool,
     number: Option<u64>,
     branch: Option<String>,
@@ -173,7 +172,6 @@ struct ViewStatusArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ListArgs {
     output: OutputArgs,
-    repo: Option<String>,
     state: String,
     limit: Option<usize>,
     head: Option<String>,
@@ -184,7 +182,6 @@ impl Default for ListArgs {
     fn default() -> Self {
         Self {
             output: OutputArgs::default(),
-            repo: None,
             state: "open".to_string(),
             limit: None,
             head: None,
@@ -196,21 +193,18 @@ impl Default for ListArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RepoViewArgs {
     output: OutputArgs,
-    repo: Option<String>,
     web: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ChecksArgs {
     json_fields: Vec<String>,
-    repo: Option<String>,
     jq: Option<String>,
     number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DiffArgs {
-    repo: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     web: bool,
@@ -221,7 +215,6 @@ struct DiffArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CommentArgs {
-    repo: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     body: Option<String>,
@@ -230,7 +223,6 @@ struct CommentArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CheckoutArgs {
-    repo: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     local_branch: Option<String>,
@@ -242,7 +234,6 @@ struct CheckoutArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IssueListArgs {
     output: OutputArgs,
-    repo: Option<String>,
     state: String,
     limit: Option<usize>,
     labels: Vec<String>,
@@ -258,7 +249,6 @@ impl Default for IssueListArgs {
     fn default() -> Self {
         Self {
             output: OutputArgs::default(),
-            repo: None,
             state: "open".to_string(),
             limit: Some(30),
             labels: Vec::new(),
@@ -275,7 +265,6 @@ impl Default for IssueListArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct IssueViewArgs {
     output: OutputArgs,
-    repo: Option<String>,
     number: Option<u64>,
     web: bool,
     comments: bool,
@@ -285,7 +274,6 @@ struct IssueViewArgs {
 struct IssueCreateArgs {
     title: Option<String>,
     body: Option<String>,
-    repo: Option<String>,
     web: bool,
     assignees: Vec<String>,
     labels: Vec<String>,
@@ -686,7 +674,7 @@ fn run_list(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_list_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -746,7 +734,7 @@ fn run_checkout(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checkout_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -858,7 +846,7 @@ fn run_checks(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checks_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -906,7 +894,7 @@ fn run_comment(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = parse_comment_args(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -950,7 +938,7 @@ fn run_diff(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_diff_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1007,7 +995,7 @@ fn run_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1068,7 +1056,7 @@ fn run_status(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1116,7 +1104,7 @@ fn run_create(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = create::parse_create_args_with_reader(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1192,7 +1180,7 @@ fn run_repo_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_repo_view_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1230,7 +1218,7 @@ fn run_issue_create(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = parse_issue_create_args(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1277,7 +1265,7 @@ fn run_issue_list(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_list_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1322,7 +1310,7 @@ fn run_issue_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_view_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = repo.clone();
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1466,10 +1454,8 @@ fn parse_list_args(argv: &[String]) -> Result<ListArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--state" | "-s") {
             parsed.state = normalize_pr_state(required_value(argv, index, arg)?)?;
@@ -1522,10 +1508,8 @@ fn parse_checkout_args(argv: &[String]) -> Result<CheckoutArgs> {
     while index < argv.len() {
         let arg = argv[index].as_str();
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--branch" | "-b") {
             parsed.local_branch = Some(required_value(argv, index, arg)?.to_string());
@@ -1568,10 +1552,8 @@ fn parse_checks_args(argv: &[String]) -> Result<ChecksArgs> {
             parsed.json_fields = split_fields(value);
             index += 1;
         } else if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--jq" | "-q") {
             parsed.jq = Some(required_value(argv, index, arg)?.to_string());
@@ -1608,10 +1590,8 @@ fn parse_diff_args(argv: &[String]) -> Result<DiffArgs> {
     while index < argv.len() {
         let arg = argv[index].as_str();
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1654,10 +1634,8 @@ fn parse_comment_args(argv: &[String], stdin: &mut dyn Read) -> Result<CommentAr
     while index < argv.len() {
         let arg = argv[index].as_str();
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--body" | "-b") {
             parsed.body = Some(required_value(argv, index, arg)?.to_string());
@@ -1697,10 +1675,8 @@ fn parse_view_status_args(argv: &[String]) -> Result<ViewStatusArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1728,10 +1704,8 @@ fn parse_repo_view_args(argv: &[String]) -> Result<RepoViewArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1745,7 +1719,6 @@ fn parse_repo_view_args(argv: &[String]) -> Result<RepoViewArgs> {
                 "unsupported Forgejo repo view flag: {arg}"
             )));
         } else {
-            parsed.repo = Some(arg.to_string());
             index += 1;
         }
     }
@@ -1761,10 +1734,8 @@ fn parse_issue_list_args(argv: &[String]) -> Result<IssueListArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--state" | "-s") {
             parsed.state = normalize_issue_state(required_value(argv, index, arg)?)?;
@@ -1843,10 +1814,8 @@ fn parse_issue_view_args(argv: &[String]) -> Result<IssueViewArgs> {
             continue;
         }
         if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -1891,10 +1860,8 @@ fn parse_issue_create_args(argv: &[String], stdin: &mut dyn Read) -> Result<Issu
             parsed.body = Some(body_from_file(value, stdin)?);
             index += 1;
         } else if matches!(arg, "-R" | "--repo") {
-            parsed.repo = Some(required_value(argv, index, arg)?.to_string());
-            index += 2;
-        } else if let Some(value) = flag_value(arg, "--repo") {
-            parsed.repo = Some(value.to_string());
+            index = skip_value(argv, index, arg)?;
+        } else if flag_value(arg, "--repo").is_some() {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
@@ -2065,15 +2032,6 @@ fn missing_token_exit(
     }
     writeln!(stderr, "{}", missing_auth_message(&repo.host))?;
     Ok(Some(1))
-}
-
-fn target_repo(value: Option<&str>, fallback: &ForgejoRepoRef) -> Result<ForgejoRepoRef> {
-    match value {
-        Some(value) => parse_repo_spec(value, Some(&fallback.host))
-            .map(|repo| ForgejoRepoRef::new(&fallback.host, repo.owner, repo.name))
-            .ok_or_else(|| ShimError::new("could not parse --repo value")),
-        None => Ok(fallback.clone()),
-    }
 }
 
 fn body_from_file(path_value: &str, stdin: &mut dyn Read) -> Result<String> {
@@ -2405,7 +2363,7 @@ fn parse_number_or_branch(value: &str, kind: &str) -> (Option<u64>, Option<Strin
 fn number_from_url(value: &str, kind: &str) -> Option<u64> {
     let scheme_end = value.find("://")?;
     let scheme = &value[..scheme_end];
-    if !matches!(scheme, "http" | "https") {
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
         return None;
     }
     let rest = &value[scheme_end + 3..];
@@ -2523,6 +2481,7 @@ fn to_forgejo_repo(repo: &DetectedRepoRef) -> ForgejoRepoRef {
 mod tests {
     use super::*;
     use crate::forgejo::ForgejoError;
+    use crate::repo::{command_provider_target, parse_repo_spec};
     use std::cell::RefCell;
     use std::ffi::OsStr;
     use std::process::{Command, Stdio};
@@ -2750,10 +2709,18 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin = std::io::Cursor::new(stdin_text.as_bytes());
+        let argv = argv(args);
+        let fallback_repo = repo();
+        let fallback_host = fallback_repo.host.clone();
+        let routed_repo = command_provider_target(&argv)
+            .repo_spec()
+            .and_then(|value| parse_repo_spec(value, Some(&fallback_repo.host)))
+            .map(|repo| ForgejoRepoRef::new(fallback_host, repo.owner, repo.name))
+            .unwrap_or(fallback_repo);
         let code = run_with_client(
-            &argv(args),
+            &argv,
             Some("git.example.com"),
-            Some(&repo()),
+            Some(&routed_repo),
             token,
             client,
             cwd,

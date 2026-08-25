@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub use crate::provider::{is_known_github_host, normalize_host};
-use crate::provider::{HostProfile, HostRegistry};
+use crate::provider::{normalize_transport_host, HostProfile, HostRegistry};
 use crate::{Result, ShimError};
 
 pub type EnvMap = BTreeMap<String, String>;
@@ -110,7 +110,10 @@ pub fn load_runtime_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result
         .hosts
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|host| normalized_forgejo_host(&host))
+        .map(|host| normalized_forgejo_host(&host))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
 
     let mut gh = raw
@@ -125,7 +128,10 @@ pub fn load_runtime_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result
     if let Some(value) = env.get("FJ_SHIM_HOSTS") {
         hosts = split_hosts(value)
             .into_iter()
-            .filter_map(|host| normalized_forgejo_host(&host))
+            .map(|host| normalized_forgejo_host(&host))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect();
     }
     if let Some(value) = env
@@ -166,7 +172,7 @@ pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
     let config = load_config_with_env(path, &EnvMap::new())?;
     let explicit = explicit_profiles(read_raw_config(&config.path)?.host_profiles);
     let mut hosts = config.hosts;
-    if let Some(normalized) = normalized_forgejo_host(host) {
+    if let Some(normalized) = normalized_forgejo_host(host)? {
         if !hosts.iter().any(|configured| configured == &normalized) {
             hosts.push(normalized);
         }
@@ -327,12 +333,12 @@ pub fn split_hosts(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn normalized_forgejo_host(host: &str) -> Option<String> {
-    let normalized = normalize_host(host);
-    if normalized.is_empty() || is_known_github_host(Some(&normalized)) {
-        None
+fn normalized_forgejo_host(host: &str) -> Result<Option<String>> {
+    let normalized = normalize_transport_host(host)?;
+    if is_known_github_host(Some(&normalized)) {
+        Ok(None)
     } else {
-        Some(normalized)
+        Ok(Some(normalized))
     }
 }
 

@@ -136,7 +136,7 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
     KNOWN_GITHUB_HOSTS.contains(&hostname.trim_end_matches('.'))
 }
 
-fn normalize_transport_host(host: &str) -> Result<String> {
+pub fn normalize_transport_host(host: &str) -> Result<String> {
     let value = host.trim();
     if value.is_empty() {
         return Err(ShimError::new("transport host cannot be empty"));

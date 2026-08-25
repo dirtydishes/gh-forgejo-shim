@@ -10,7 +10,7 @@ use crate::config::{self, EnvMap};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::provider::{HostProfile, HostRegistry, ProviderResolution};
 use crate::read_only;
-use crate::repo::{detect_repo, RepoRef};
+use crate::repo::{command_provider_target, detect_repo, RepoRef};
 use crate::trace;
 use crate::Result;
 
@@ -163,17 +163,21 @@ pub fn decide_route(
         return RouteDecision::delegate("unsupported command", None);
     }
 
+    let command_target = command_provider_target(argv);
+
     if argv.first().is_some_and(|command| command == "auth") {
-        let host =
-            hostname_arg(&argv[2..], true).or_else(|| env.get("GH_HOST").map(String::as_str));
+        let host = command_target
+            .host()
+            .or_else(|| env.get("GH_HOST").map(String::as_str));
         if let Some(decision) = decide_explicit_host_route(config, host) {
             return decision;
         }
     }
 
     if argv.first().is_some_and(|command| command == "api") {
-        let host =
-            hostname_arg(&argv[1..], false).or_else(|| env.get("GH_HOST").map(String::as_str));
+        let host = command_target
+            .host()
+            .or_else(|| env.get("GH_HOST").map(String::as_str));
         if let Some(decision) = decide_explicit_host_route(config, host) {
             return decision;
         }
@@ -368,26 +372,6 @@ fn is_global_delegate_command(argv: &[String]) -> bool {
         [command] if matches!(command.as_str(), "--version" | "version") => true,
         [command, ..] => matches!(command.as_str(), "--help" | "-h" | "help"),
     }
-}
-
-fn hostname_arg(argv: &[String], allow_short: bool) -> Option<&str> {
-    let mut index = 0;
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if (arg == "--hostname" || (allow_short && arg == "-h")) && index + 1 < argv.len() {
-            return Some(argv[index + 1].as_str());
-        }
-        if let Some(value) = arg.strip_prefix("--hostname=") {
-            return Some(value);
-        }
-        if allow_short {
-            if let Some(value) = arg.strip_prefix("-h=") {
-                return Some(value);
-            }
-        }
-        index += 1;
-    }
-    None
 }
 
 fn config_path(env: &HashMap<String, String>) -> Option<PathBuf> {

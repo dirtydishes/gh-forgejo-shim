@@ -541,6 +541,143 @@ fn managed_gh_unknown_forgejo_alias_command_fails_locally() -> TestResult {
 }
 
 #[test]
+fn managed_gh_command_targets_never_cross_provider() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    let cases = vec![
+        (
+            "Forgejo issue URL after -c",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "issue",
+                "view",
+                "-c",
+                "https://git.example.com/owner/repo/issues/13",
+            ],
+            false,
+        ),
+        (
+            "Forgejo pull URL after -i",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "checks",
+                "-i",
+                "10",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "Forgejo pull URL after --exclude",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "diff",
+                "--exclude",
+                "generated",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "plain Forgejo repo target",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec!["repo", "view", "git.example.com/owner/repo"],
+            false,
+        ),
+        (
+            "plain GitHub repo target",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec!["repo", "view", "github.com/owner/repo"],
+            true,
+        ),
+        (
+            "repo-shaped body value in Forgejo context",
+            "GH_REPO",
+            "git.example.com/owner/repo",
+            vec![
+                "pr",
+                "create",
+                "--title",
+                "test",
+                "--body",
+                "--repo=https://github.com/other/project",
+            ],
+            false,
+        ),
+        (
+            "repo-shaped body value in GitHub context",
+            "GH_REPO",
+            "github.com/owner/repo",
+            vec![
+                "pr",
+                "create",
+                "--title",
+                "test",
+                "--body",
+                "--repo=https://git.example.com/other/project",
+            ],
+            true,
+        ),
+        (
+            "hostname-shaped API field in Forgejo context",
+            "GH_HOST",
+            "git.example.com",
+            vec!["api", "user", "-f", "--hostname=github.com"],
+            false,
+        ),
+        (
+            "hostname-shaped API field in GitHub context",
+            "GH_HOST",
+            "github.com",
+            vec!["api", "user", "-f", "--hostname=git.example.com"],
+            true,
+        ),
+    ];
+
+    for (name, env_key, env_value, args, delegates) in cases {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env_remove("FJ_SHIM_REAL_GH")
+            .env(env_key, env_value)
+            .arg("gh")
+            .args(args)
+            .output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+        assert_eq!(output.status.success(), delegates, "{name}: {stdout}");
+        assert_eq!(stdout.contains("delegated"), delegates, "{name}: {stdout}");
+    }
+    Ok(())
+}
+
+#[test]
+fn managed_gh_malformed_canonical_config_fails_closed() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("FJ_SHIM_HOSTS", "https://user@git.example.com/path")
+        .env("GH_HOST", "https://user@git.example.com/path")
+        .arg("gh")
+        .args(["workflow", "run"])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout)?, "");
+    assert!(String::from_utf8(output.stderr)?.contains("transport host must not contain user-info"));
+    Ok(())
+}
+
+#[test]
 fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\necho traced\n")?;
