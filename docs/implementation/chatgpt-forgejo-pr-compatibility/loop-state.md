@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c05
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator S4 repair pass 2/3 at the whole-entry text-config seam
+Current execution strategy: direct coordinator TDD for final S4 repair pass 3/3 at the text-entry boundary
 
 Last completed phase: C1
 
@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4 repair pass `2/3` red commit `b740a1fa9248aae1e606d59fc2e0136d239f664a` is pushed at `0/0`. The exact reviewer YAML returns `other-secret` from a later list item whose token precedes its host. Production now owns whole-entry token and exact-host binding independent of key order before the same review set reruns. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 repair pass `2/3` at `83ad87d7eb97d48af4054ab8a7bce05472c7fc02` passed 213 active local tests and both exact push/PR CI events, but independent review found two required text-entry leaks: nested or later mappings can contribute a token, and ignored quoted, duplicate, or malformed host fields can let another selector win. Final pass `3/3` is admitted for indentation-aware direct-field binding plus authoritative validation of every recognized host occurrence. Any required finding after this pass exhausts the S4 limit. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
