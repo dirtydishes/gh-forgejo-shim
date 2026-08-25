@@ -26,7 +26,7 @@ Current execution strategy: direct coordinator TDD for shared deadline and truth
 
 Last completed phase: S4
 
-Blocked: no — S5 shared repair pass 1/3 is active after one required independent-review finding
+Blocked: no — S5 shared repair pass 2/3 is active after one required independent-review finding
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S5 shared repair pass 1/3 is active after one required independe
 
 ## Last Coordinator Update
 
-S5 review pass `0/3` found broad trace capture could buffer inherited output. Red commit `01788808edba3743b7b993fed1180a6be4c6e15b` freezes the watch and help failures; `f33cf4d102f85163026b5e17328057ef22d4d68c` isolates the three S5 tests without changing the repro; source repair `27ef56d5f810b9cbdd335333f9d48f5dc448fc90` limits capture to the five exact build-6720 shapes. The full locked local gate passes with 219 active tests and 3 planned ignored. Shared repair pass `1/3` now awaits one frozen-head independent review and exact-commit pull-request plus push CI. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S5 pass `1/3` head `e518223132fb2f0ca887f84398fce84d10cd2127` passed the full locked local gate and exact-head pull-request run `32842071549` plus push run `32842067065`. Independent review found one required typed-slot escape: `--watch` or `--help` can occupy the nonempty PR-number wildcard and still trigger capture. Shared repair pass `2/3` owns parsed-invocation-derived capture/deadline policy, numeric PR-selector validation, and exact process proof that both adversarial forms retain inherited streaming with unknown counts. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
