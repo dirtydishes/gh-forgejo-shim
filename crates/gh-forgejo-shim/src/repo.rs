@@ -175,20 +175,21 @@ pub fn command_provider_target(argv: &[String]) -> CommandProviderTarget<'_> {
                 continue;
             }
         }
-        if syntax
+        if let Some(consumed) = syntax
             .value_options
             .iter()
-            .any(|option| option_matches(arg, option))
+            .find_map(|option| value_option_consumed(arg, option))
         {
-            index += usize::from(!arg.contains('=')) + 1;
+            index += consumed;
             continue;
         }
-        if syntax.flag_options.contains(&arg) {
+        if flag_option_matches(arg, syntax.flag_options) {
             index += 1;
             continue;
         }
         if arg.starts_with('-') {
-            break;
+            index += generic_option_consumed(arg, argv.get(index + 1));
+            continue;
         }
         if !positional_seen {
             record_positional_target(&mut target, syntax.positional, arg);
@@ -320,6 +321,7 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
     ];
     const PR_CREATE_FLAGS: &[&str] = &[
         "--fill",
+        "-f",
         "--fill-first",
         "--fill-verbose",
         "--web",
@@ -329,6 +331,7 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
         "--maintainer-can-modify",
         "--no-maintainer-edit",
         "--no-maintainer-can-modify",
+        "--dry-run",
     ];
     const PR_LIST_VALUES: &[&str] = &[
         "--json",
@@ -345,11 +348,16 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
         "--base",
         "-B",
         "--author",
+        "-A",
         "--app",
         "--assignee",
+        "-a",
         "--label",
+        "-l",
         "--search",
+        "-S",
     ];
+    const PR_LIST_FLAGS: &[&str] = &["--draft", "-d", "--web", "-w"];
     const PR_CHECKS_VALUES: &[&str] = &[
         "--json",
         "--jq",
@@ -363,9 +371,12 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
     const PR_CHECKOUT_VALUES: &[&str] = &["--branch", "-b"];
     const PR_CHECKOUT_FLAGS: &[&str] = &["--detach", "--force", "-f", "--recurse-submodules"];
     const PR_COMMENT_VALUES: &[&str] = &["--body", "-b", "--body-file", "-F"];
+    const PR_COMMENT_FLAGS: &[&str] = &["--editor", "-e", "--edit-last", "--web", "-w"];
     const PR_DIFF_VALUES: &[&str] = &["--color", "--exclude", "-e"];
     const PR_DIFF_FLAGS: &[&str] = &["--web", "-w", "--name-only", "--patch"];
     const VIEW_FLAGS: &[&str] = &["--web", "-w"];
+    const PR_VIEW_FLAGS: &[&str] = &["--comments", "-c", "--web", "-w"];
+    const PR_STATUS_FLAGS: &[&str] = &["--conflict-status", "-c"];
     const REPO_VIEW_VALUES: &[&str] =
         &["--json", "--jq", "-q", "--template", "-t", "--branch", "-b"];
     const ISSUE_VIEW_FLAGS: &[&str] = &["--web", "-w", "--comments", "-c"];
@@ -432,7 +443,7 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
         "--template",
         "-t",
     ];
-    const API_FLAGS: &[&str] = &["--silent"];
+    const API_FLAGS: &[&str] = &["--silent", "--include", "-i", "--paginate", "--verbose"];
 
     let command = argv.first().map(String::as_str);
     let subcommand = argv.get(1).map(String::as_str);
@@ -445,7 +456,13 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
             false,
             2,
         ),
-        (Some("pr"), Some("list")) => (PR_LIST_VALUES, &[][..], PositionalTarget::None, false, 2),
+        (Some("pr"), Some("list")) => (
+            PR_LIST_VALUES,
+            PR_LIST_FLAGS,
+            PositionalTarget::None,
+            false,
+            2,
+        ),
         (Some("pr"), Some("checks")) => (
             PR_CHECKS_VALUES,
             PR_CHECKS_FLAGS,
@@ -462,7 +479,7 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
         ),
         (Some("pr"), Some("comment")) => (
             PR_COMMENT_VALUES,
-            VIEW_FLAGS,
+            PR_COMMENT_FLAGS,
             PositionalTarget::Url,
             false,
             2,
@@ -474,10 +491,20 @@ fn command_syntax(argv: &[String]) -> CommandSyntax {
             false,
             2,
         ),
-        (Some("pr"), Some("view")) => (OUTPUT_VALUES, VIEW_FLAGS, PositionalTarget::Url, false, 2),
-        (Some("pr"), Some("status")) => {
-            (OUTPUT_VALUES, VIEW_FLAGS, PositionalTarget::None, false, 2)
-        }
+        (Some("pr"), Some("view")) => (
+            OUTPUT_VALUES,
+            PR_VIEW_FLAGS,
+            PositionalTarget::Url,
+            false,
+            2,
+        ),
+        (Some("pr"), Some("status")) => (
+            OUTPUT_VALUES,
+            PR_STATUS_FLAGS,
+            PositionalTarget::None,
+            false,
+            2,
+        ),
         (Some("issue"), Some("view")) => (
             OUTPUT_VALUES,
             ISSUE_VIEW_FLAGS,
@@ -531,18 +558,65 @@ fn option_value<'a>(
             consumed: 2,
         });
     }
-    [long, short].into_iter().find_map(|option| {
-        arg.strip_prefix(option)
-            .and_then(|suffix| suffix.strip_prefix('='))
-            .map(|value| OptionValue { value, consumed: 1 })
+    if let Some(value) = arg
+        .strip_prefix(long)
+        .and_then(|suffix| suffix.strip_prefix('='))
+    {
+        return Some(OptionValue { value, consumed: 1 });
+    }
+    arg.strip_prefix(short)
+        .filter(|suffix| !suffix.is_empty())
+        .map(|suffix| OptionValue {
+            value: suffix.strip_prefix('=').unwrap_or(suffix),
+            consumed: 1,
+        })
+}
+
+fn value_option_consumed(arg: &str, option: &str) -> Option<usize> {
+    if arg == option {
+        return Some(2);
+    }
+    let suffix = arg.strip_prefix(option)?;
+    if option.starts_with("--") {
+        suffix.starts_with('=').then_some(1)
+    } else if option.len() == 2 && !suffix.is_empty() {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn flag_option_matches(arg: &str, options: &[&str]) -> bool {
+    if options.contains(&arg) {
+        return true;
+    }
+    let Some(cluster) = arg
+        .strip_prefix('-')
+        .filter(|value| !value.is_empty() && !value.starts_with('-') && value.chars().count() > 1)
+    else {
+        return false;
+    };
+    cluster.chars().all(|flag| {
+        options
+            .iter()
+            .any(|option| option.len() == 2 && option.ends_with(flag))
     })
 }
 
-fn option_matches(arg: &str, option: &str) -> bool {
-    arg == option
-        || arg
-            .strip_prefix(option)
-            .is_some_and(|suffix| suffix.starts_with('='))
+fn generic_option_consumed(arg: &str, next: Option<&String>) -> usize {
+    if arg.contains('=') || is_attached_short_option(arg) {
+        return 1;
+    }
+    if next.is_some_and(|value| !value.starts_with('-')) {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_attached_short_option(arg: &str) -> bool {
+    arg.strip_prefix('-')
+        .is_some_and(|value| !value.starts_with('-') && value.chars().count() > 1)
 }
 
 fn record_positional_target<'a>(
@@ -761,10 +835,7 @@ mod tests {
             (argv(&["pr", "comment", "--editor", pull_url]), pull_url),
             (argv(&["pr", "comment", "-e", pull_url]), pull_url),
             (argv(&["pr", "comment", "--edit-last", pull_url]), pull_url),
-            (
-                argv(&["pr", "list", "--draft", "--repo", repo]),
-                repo,
-            ),
+            (argv(&["pr", "list", "--draft", "--repo", repo]), repo),
             (argv(&["pr", "list", "-d", "--repo", repo]), repo),
             (argv(&["pr", "list", "--web", "--repo", repo]), repo),
             (argv(&["pr", "list", "-w", "--repo", repo]), repo),
@@ -772,19 +843,27 @@ mod tests {
             (argv(&["pr", "list", "-aapp", "--repo", repo]), repo),
             (argv(&["pr", "list", "-lbug", "--repo", repo]), repo),
             (argv(&["pr", "list", "-Sdraft", "--repo", repo]), repo),
-            (
-                argv(&["pr", "create", "--dry-run", "--repo", repo]),
-                repo,
-            ),
+            (argv(&["pr", "create", "--dry-run", "--repo", repo]), repo),
             (argv(&["pr", "create", "-f", "--repo", repo]), repo),
             (
                 argv(&["pr", "status", "--conflict-status", "--repo", repo]),
                 repo,
             ),
             (argv(&["pr", "status", "-c", "--repo", repo]), repo),
-            (argv(&["issue", "view", "-Rgit.example.com/owner/repo", "13"]), repo),
             (
-                argv(&["workflow", "run", "build.yml", "--ref", "main", "--repo", repo]),
+                argv(&["issue", "view", "-Rgit.example.com/owner/repo", "13"]),
+                repo,
+            ),
+            (
+                argv(&[
+                    "workflow",
+                    "run",
+                    "build.yml",
+                    "--ref",
+                    "main",
+                    "--repo",
+                    repo,
+                ]),
                 repo,
             ),
             (
@@ -811,13 +890,7 @@ mod tests {
                 "git.example.com",
                 "repos/owner/repo/issues",
             ]),
-            argv(&[
-                "api",
-                "--verbose",
-                "--hostname",
-                "git.example.com",
-                "user",
-            ]),
+            argv(&["api", "--verbose", "--hostname", "git.example.com", "user"]),
         ];
 
         for argv in host_cases {
