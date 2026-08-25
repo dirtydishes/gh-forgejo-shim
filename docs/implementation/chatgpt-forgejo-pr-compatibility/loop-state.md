@@ -26,7 +26,7 @@ Current execution strategy: C2 combined repair pass 1/3, coordinator-owned TDD
 
 Last completed phase: S6
 
-Blocked: no — C2 pass-0 findings are combined into repair pass 1/3
+Blocked: no — C2 repair pass 1/3 is locally green and awaiting frozen-head review and CI
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — C2 pass-0 findings are combined into repair pass 1/3
 
 ## Last Coordinator Update
 
-C2 repair pass `1/3` red commit `a2705ba9b8c8b00e469eaace4550b7bc8fcc0951` is pushed at `0/0` parity. Four exact failures prove conflicting/invalid JSON host fields can authorize `other-secret` and malformed PR page shapes can return false success or partial data. Production now owns the focused auth-config extraction and shared host rule, strict page decoding, and one canonical head predicate. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 repair pass `1/3` production head `302bbeae7b379c7282e2cc842d534ed97d4a1be1` is pushed at `0/0` parity after the frozen red commit. The focused auth-config module applies one authoritative host/token record rule, `auth.rs` is 883 lines, malformed PR pages fail before output, and both pull-list paths reuse one head predicate. Format, all-target locked Clippy, and 231 active workspace tests pass; two later probes remain ignored. Both required reviewers and exact-commit PR/push CI remain. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
