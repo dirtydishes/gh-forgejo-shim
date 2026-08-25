@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c08
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: C2 combined repair pass 1/3, coordinator-owned TDD
+Current execution strategy: C2 combined repair pass 2/3, coordinator-owned TDD
 
 Last completed phase: S6
 
-Blocked: no — C2 repair pass 1/3 is locally green and awaiting frozen-head review and CI
+Blocked: no — C2 pass-1 review produced one bounded duplicate-key finding for repair pass 2/3
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — C2 repair pass 1/3 is locally green and awaiting frozen-head rev
 
 ## Last Coordinator Update
 
-C2 repair pass `1/3` production head `302bbeae7b379c7282e2cc842d534ed97d4a1be1` is pushed at `0/0` parity after the frozen red commit. The focused auth-config module applies one authoritative host/token record rule, `auth.rs` is 883 lines, malformed PR pages fail before output, and both pull-list paths reuse one head predicate. Format, all-target locked Clippy, and 231 active workspace tests pass; two later probes remain ignored. Both required reviewers and exact-commit PR/push CI remain. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 review pass `1/3` inspected frozen head `cdc3c6a03edb43f38e652e6d184a65553e95f9f7`. Thermonuclear approved with no findings; adversarial found one high duplicate-key bypass because `serde_json::Value` drops earlier object-key occurrences before host validation. Exact PR run `32848785208` and push run `32848778814` passed both named jobs. Repair pass `2/3` owns only duplicate-key rejection at the credential JSON boundary and the exact isolated `gfj auth status` process repro. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
