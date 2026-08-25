@@ -499,6 +499,38 @@ credential_host = "git.dirtydishes.dev"
     }
 
     #[test]
+    fn env_hosts_replace_profiles_and_dedupe_after_normalization() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            r#"hosts = ["git.example.com"]
+
+[[host_profiles]]
+canonical_host = "git.example.com"
+aliases = ["git.local"]
+"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+        let env = env([("FJ_SHIM_HOSTS", "ENV.EXAMPLE.COM,env.example.com")]);
+
+        let registry = load_host_registry_with_env(Some(&path), &env)?;
+
+        assert_eq!(registry.profiles().len(), 1);
+        assert_eq!(registry.profiles()[0].canonical_host, "env.example.com");
+        assert!(matches!(
+            registry.resolve(&RepoRef::new("git.local", "owner", "repo")),
+            ProviderResolution::Unconfigured { .. }
+        ));
+        assert!(matches!(
+            registry.resolve(&RepoRef::new("env.example.com", "owner", "repo")),
+            ProviderResolution::Forgejo { .. }
+        ));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn env_hosts_replace_config_hosts() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");
