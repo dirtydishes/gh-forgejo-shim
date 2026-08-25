@@ -154,12 +154,13 @@ pub fn load_host_registry_with_env(path: Option<&Path>, env: &EnvMap) -> Result<
     }
 
     let profiles = explicit_profiles(raw.host_profiles);
-    let hosts = raw
-        .hosts
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|host| normalized_forgejo_host(&host))
-        .collect::<Vec<_>>();
+    let hosts = dedupe(
+        raw.hosts
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|host| normalized_forgejo_host(&host))
+            .collect::<Vec<_>>(),
+    );
     HostRegistry::new(effective_profiles(&hosts, profiles))
 }
 
@@ -194,13 +195,27 @@ pub fn add_host_profile(
     let config = load_config_with_env(path, &EnvMap::new())?;
     let mut explicit = explicit_profiles(read_raw_config(&config.path)?.host_profiles);
     let canonical_host = normalize_host(host);
-    let profile = HostProfile {
-        api_root: optional_string(api_root).unwrap_or_else(|| default_api_root(&canonical_host)),
-        credential_host: optional_string(credential_host)
-            .map_or_else(|| canonical_host.clone(), |value| normalize_host(&value)),
-        canonical_host: canonical_host.clone(),
-        aliases,
-    };
+    let mut profile = explicit
+        .iter()
+        .find(|existing| normalize_host(&existing.canonical_host) == canonical_host)
+        .cloned()
+        .unwrap_or_else(|| default_host_profile(canonical_host.clone()));
+    for alias in aliases {
+        let alias = normalize_host(&alias);
+        if !profile
+            .aliases
+            .iter()
+            .any(|existing| normalize_host(existing) == alias)
+        {
+            profile.aliases.push(alias);
+        }
+    }
+    if let Some(value) = optional_string(api_root) {
+        profile.api_root = value;
+    }
+    if let Some(value) = optional_string(credential_host) {
+        profile.credential_host = normalize_host(&value);
+    }
     explicit.retain(|existing| normalize_host(&existing.canonical_host) != canonical_host);
     explicit.push(profile);
     explicit.sort_by(|left, right| left.canonical_host.cmp(&right.canonical_host));
@@ -321,7 +336,13 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
         return false;
     };
     let normalized = normalize_host(host);
-    KNOWN_GITHUB_HOSTS.contains(&normalized.as_str())
+    let normalized = normalized.trim_end_matches('.');
+    let normalized = normalized
+        .strip_suffix(":443")
+        .or_else(|| normalized.strip_suffix(":80"))
+        .unwrap_or(normalized)
+        .trim_end_matches('.');
+    KNOWN_GITHUB_HOSTS.contains(&normalized)
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {

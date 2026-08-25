@@ -53,6 +53,11 @@ impl HostRegistry {
 
             let mut local = BTreeSet::new();
             for transport_host in std::iter::once(&profile.canonical_host).chain(&profile.aliases) {
+                if is_known_github_host(Some(transport_host)) {
+                    return Err(ShimError::new(format!(
+                        "GitHub host cannot be registered as Forgejo: {transport_host}"
+                    )));
+                }
                 if !local.insert(transport_host.clone()) {
                     return Err(ShimError::new(format!(
                         "duplicate transport host: {transport_host}"
