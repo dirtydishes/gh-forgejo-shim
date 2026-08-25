@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-C1 review set `c1-host-routing` pass `1/3` returned three combined repair surfaces: shared command-aware provider targets, fallible canonical config ingestion, and case-insensitive downstream issue/PR numbers. Combined repair pass `2/3` has focused process and handler regressions ready for a red gate. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
+C1 combined repair pass `2/3` is pushed at `b34c5bb1f37b66e100586c3d1a858379e5f46a0f` with `0/0` parity. The command-aware target boundary, fallible config ingestion, uppercase number handling, 51-case grammar table, nine-case process isolation table, and full locked local gate are green. Both independent roles must rerun the exact range before CI admission. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
