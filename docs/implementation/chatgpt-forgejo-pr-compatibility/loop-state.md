@@ -4,7 +4,7 @@ Canonical tracker: Beads epic `gh-forgejo-shim-6y9`
 
 This file is a compact resume aid only. If this file disagrees with Beads, Beads wins.
 
-Status: blocked
+Status: pass-7 admission pending
 
 Stream: `chatgpt-forgejo-pr-compatibility`
 
@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: stopped after the required adversarial reviewer retained one malformed-selector finding on frozen pass `6/6`
+Current execution strategy: direct coordinator repair at the explicit CLI repository-selector validation boundary after fresh pass-7 admission
 
 Last completed phase: S3
 
-Blocked: yes — C1 pass `6/6` retains one required adversarial finding and the amended repair limit is exhausted
+Blocked: yes — pass `7/7` is authorized, but C1 remains unclaimed until its refreshed execution and launch readiness gates pass
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Blocked: yes — C1 pass `6/6` retains one required adversarial finding and the 
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | blocked | `#29` | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | admission pending | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: yes — C1 pass `6/6` retains one required adversarial finding and the 
 
 ## Last Coordinator Update
 
-Final C1 pass `6/6` froze red evidence at `37f7e8ec2fe342e0aa3243e5e58b52d287a7864a` and the source repair at `1745b6e451d43a2d89e94b09c630b751975103c8`. The full locked local gate and exact-commit CI passed; pull-request run `32831141032` and push run `32831136188` both passed `rust` and `release package smoke`. The thermonuclear reviewer approved with `findings: []`. The adversarial reviewer found one required defect: permissive path normalization removes empty segments from malformed explicit selectors such as `git.example.com/owner/`, allowing the value to become a different valid repository and delegate across providers. The amended six-pass limit is exhausted. Beads C1 is `blocked`; do not close it, claim S4, or mutate later phases without a new explicit amendment. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+The user authorized one narrow C1 pass `7/7` after the pass-6 adversarial finding. It owns only explicit CLI repository selectors with leading, trailing, or repeated empty path segments; they must fail closed before provider selection or delegation without changing broader normalization or permissive git-remote parsing. The Beads amendment is canonical and pushed. C1 stays blocked and unclaimed until the coordinator refreshes only its execution-readiness attestation and both exact readiness gates pass. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
