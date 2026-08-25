@@ -88,22 +88,32 @@ pub fn detect_repo_for_target(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> Result<Detection> {
-    if let Some(repo_arg) = command_target.repo_spec() {
+    let mut explicit_repo = None;
+    let mut explicit_source = None;
+    for (repo_arg, selector_source) in command_target.repo_selectors() {
         let default_host = env
             .get("GH_HOST")
             .map(String::as_str)
             .filter(|host| !host.trim().is_empty())
             .or(Some("github.com"));
-        let source = if command_target.repo_is_flag() {
-            "-R/--repo"
-        } else {
-            "command target"
-        };
+        let source = selector_source.description();
         let repo = parse_repo_spec(repo_arg, default_host).ok_or_else(|| {
             ShimError::new(format!(
                 "invalid repository selector from {source}: {repo_arg:?}"
             ))
         })?;
+        if let Some(previous) = explicit_repo.as_ref() {
+            if previous != &repo {
+                return Err(ShimError::new(format!(
+                    "conflicting repository selectors: {previous:?} and {repo:?}"
+                )));
+            }
+        } else {
+            explicit_repo = Some(repo);
+            explicit_source = Some(source);
+        }
+    }
+    if let (Some(repo), Some(source)) = (explicit_repo, explicit_source) {
         return Ok(Detection::found(repo, source));
     }
 

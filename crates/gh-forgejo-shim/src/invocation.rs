@@ -74,22 +74,46 @@ impl ParsedArg {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderTarget {
-    repo: Option<String>,
-    positional_repo: Option<String>,
+    repo_selectors: Vec<RepoSelector>,
     host: Option<String>,
 }
 
 impl ProviderTarget {
     pub fn repo_spec(&self) -> Option<&str> {
-        self.repo.as_deref().or(self.positional_repo.as_deref())
+        self.repo_selectors
+            .first()
+            .map(|selector| selector.value.as_str())
     }
 
     pub fn host(&self) -> Option<&str> {
         self.host.as_deref()
     }
 
-    pub fn repo_is_flag(&self) -> bool {
-        self.repo.is_some()
+    pub fn repo_selectors(&self) -> impl Iterator<Item = (&str, RepoSelectorSource)> {
+        self.repo_selectors
+            .iter()
+            .map(|selector| (selector.value.as_str(), selector.source))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepoSelector {
+    value: String,
+    source: RepoSelectorSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepoSelectorSource {
+    Flag,
+    CommandTarget,
+}
+
+impl RepoSelectorSource {
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Flag => "-R/--repo",
+            Self::CommandTarget => "command target",
+        }
     }
 }
 
@@ -195,10 +219,10 @@ impl ParsedInvocation {
                 continue;
             }
             if token.starts_with('-') && token != "-" {
-                if !self.parse_short_token(token, argv.get(index + 1)) {
+                let Some(consumes_next) = self.parse_short_token(token, argv.get(index + 1)) else {
                     return;
-                }
-                if short_token_consumes_next(self.command, token) {
+                };
+                if consumes_next {
                     index += 1;
                 }
                 index += 1;
@@ -209,34 +233,34 @@ impl ParsedInvocation {
         }
     }
 
-    fn parse_short_token(&mut self, token: &str, next: Option<&String>) -> bool {
+    fn parse_short_token(&mut self, token: &str, next: Option<&String>) -> Option<bool> {
         let cluster = &token[1..];
         for (offset, short) in cluster.char_indices() {
             let Some(spec) = option_by_short(self.command, short) else {
                 self.mark_ambiguous(token);
-                return false;
+                return None;
             };
             match spec.arity {
                 Arity::Flag => self.push_flag(spec),
                 Arity::Value => {
                     let suffix_start = offset + short.len_utf8();
-                    let suffix = cluster[suffix_start..]
-                        .strip_prefix('=')
-                        .unwrap_or(&cluster[suffix_start..]);
-                    let value = if !suffix.is_empty() {
-                        suffix
+                    let suffix = &cluster[suffix_start..];
+                    let (value, consumes_next) = if let Some(attached) = suffix.strip_prefix('=') {
+                        (attached, false)
+                    } else if !suffix.is_empty() {
+                        (suffix, false)
                     } else if let Some(value) = next {
-                        value.as_str()
+                        (value.as_str(), true)
                     } else {
                         self.mark_ambiguous(token);
-                        return false;
+                        return None;
                     };
                     self.push_value(spec, value);
-                    return true;
+                    return Some(consumes_next);
                 }
             }
         }
-        true
+        Some(false)
     }
 
     fn push_flag(&mut self, spec: OptionSpec) {
@@ -248,7 +272,10 @@ impl ParsedInvocation {
 
     fn push_value(&mut self, spec: OptionSpec, value: &str) {
         match spec.role {
-            Role::Repo => self.provider.repo = Some(value.to_string()),
+            Role::Repo => self.provider.repo_selectors.push(RepoSelector {
+                value: value.to_string(),
+                source: RepoSelectorSource::Flag,
+            }),
             Role::Host => self.provider.host = Some(value.to_string()),
             Role::Ordinary | Role::Help => {}
         }
@@ -261,11 +288,15 @@ impl ParsedInvocation {
     fn record_positional(&mut self, value: &str, seen: &mut bool) {
         if !*seen {
             match self.command.positional_kind() {
-                PositionalKind::Repository => {
-                    self.provider.positional_repo = Some(value.to_string())
-                }
+                PositionalKind::Repository => self.provider.repo_selectors.push(RepoSelector {
+                    value: value.to_string(),
+                    source: RepoSelectorSource::CommandTarget,
+                }),
                 PositionalKind::Url if is_repo_url(value) => {
-                    self.provider.positional_repo = Some(value.to_string())
+                    self.provider.repo_selectors.push(RepoSelector {
+                        value: value.to_string(),
+                        source: RepoSelectorSource::CommandTarget,
+                    })
                 }
                 PositionalKind::None | PositionalKind::Url => {}
             }
@@ -629,21 +660,6 @@ const fn host_option(command: Command) -> Option<OptionSpec> {
         Command::Api => Some(OptionSpec::host(None)),
         _ => None,
     }
-}
-
-fn short_token_consumes_next(command: Command, token: &str) -> bool {
-    let cluster = token.strip_prefix('-').unwrap_or(token);
-    for (offset, short) in cluster.char_indices() {
-        let Some(spec) = option_by_short(command, short) else {
-            return false;
-        };
-        if spec.arity == Arity::Value {
-            return cluster[offset + short.len_utf8()..]
-                .trim_start_matches('=')
-                .is_empty();
-        }
-    }
-    false
 }
 
 fn is_repo_url(value: &str) -> bool {
