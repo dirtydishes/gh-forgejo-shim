@@ -13,6 +13,7 @@ use crate::forgejo::{
     CreateIssueRequest, CreatePullRequest, ForgejoClient, ForgejoResult, ListIssuesOptions,
     RepoRef as ForgejoRepoRef,
 };
+use crate::invocation::ParsedInvocation;
 use crate::normalize::{
     filter_check_fields, filter_fields, filter_issue_fields, filter_repo_fields, normalize_issue,
     normalize_pr_checks_for_repo, normalize_pull, normalize_repo, render_json_or_jq,
@@ -176,6 +177,7 @@ struct ListArgs {
     limit: Option<usize>,
     head: Option<String>,
     base: Option<String>,
+    draft_only: bool,
 }
 
 impl Default for ListArgs {
@@ -186,6 +188,7 @@ impl Default for ListArgs {
             limit: None,
             head: None,
             base: None,
+            draft_only: false,
         }
     }
 }
@@ -296,7 +299,7 @@ struct ApiArgs {
 }
 
 pub fn run(
-    argv: &[String],
+    invocation: &ParsedInvocation,
     target: &ForgejoTarget,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
@@ -304,6 +307,7 @@ pub fn run(
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
 ) -> i32 {
+    let argv = invocation.canonical_argv();
     let host = target.canonical_host();
     let repo = target.repo().map(to_forgejo_repo);
     let api_root = target.profile().api_root.as_str();
@@ -378,7 +382,7 @@ fn run_with_context(
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn run_with_client(
-    argv: &[String],
+    invocation: &ParsedInvocation,
     host: Option<&str>,
     repo: Option<&ForgejoRepoRef>,
     token: Option<&str>,
@@ -388,6 +392,7 @@ fn run_with_client(
     stderr: &mut dyn Write,
     stdin: &mut dyn Read,
 ) -> Result<i32> {
+    let argv = invocation.canonical_argv();
     let Some(command) = argv.first().map(String::as_str) else {
         return Err(ShimError::new("unsupported empty Forgejo command"));
     };
@@ -695,6 +700,9 @@ fn run_list(
                 .and_then(Value::as_str)
                 == Some(base)
         });
+    }
+    if parsed.draft_only {
+        pulls.retain(|pull| pull.get("draft").and_then(Value::as_bool) == Some(true));
     }
     truncate_to_limit(&mut pulls, parsed.limit);
 
@@ -1491,6 +1499,11 @@ fn parse_list_args(argv: &[String]) -> Result<ListArgs> {
             &["--author", "--app", "--assignee", "--label", "--search"],
         ) {
             index += 1;
+        } else if arg == "--draft" {
+            parsed.draft_only = true;
+            index += 1;
+        } else if arg == "--web" {
+            index += 1;
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
                 "unsupported Forgejo PR list flag: {arg}"
@@ -1680,6 +1693,8 @@ fn parse_view_status_args(argv: &[String]) -> Result<ViewStatusArgs> {
             index += 1;
         } else if matches!(arg, "--web" | "-w") {
             parsed.web = true;
+            index += 1;
+        } else if arg == "--conflict-status" {
             index += 1;
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
@@ -2481,7 +2496,7 @@ fn to_forgejo_repo(repo: &DetectedRepoRef) -> ForgejoRepoRef {
 mod tests {
     use super::*;
     use crate::forgejo::ForgejoError;
-    use crate::repo::{command_provider_target, parse_repo_spec};
+    use crate::repo::parse_repo_spec;
     use std::cell::RefCell;
     use std::ffi::OsStr;
     use std::process::{Command, Stdio};
@@ -2710,15 +2725,17 @@ mod tests {
         let mut stderr = Vec::new();
         let mut stdin = std::io::Cursor::new(stdin_text.as_bytes());
         let argv = argv(args);
+        let invocation = ParsedInvocation::parse(&argv);
         let fallback_repo = repo();
         let fallback_host = fallback_repo.host.clone();
-        let routed_repo = command_provider_target(&argv)
+        let routed_repo = invocation
+            .provider_target()
             .repo_spec()
             .and_then(|value| parse_repo_spec(value, Some(&fallback_repo.host)))
             .map(|repo| ForgejoRepoRef::new(fallback_host, repo.owner, repo.name))
             .unwrap_or(fallback_repo);
         let code = run_with_client(
-            &argv,
+            &invocation,
             Some("git.example.com"),
             Some(&routed_repo),
             token,

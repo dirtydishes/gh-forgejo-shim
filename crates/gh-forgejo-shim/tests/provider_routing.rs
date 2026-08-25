@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod support;
 
 use std::io;
@@ -44,6 +46,7 @@ impl RouteRunner {
         self.fixture
             .command("gh-forgejo-shim")?
             .env_remove("FJ_SHIM_REAL_GH")
+            .env_remove("FJ_SHIM_HOSTS")
             .env("FJ_SHIM_TOKEN", "test-token")
             .env(env_key, env_value)
             .arg("gh")
@@ -58,7 +61,10 @@ fn attached_and_clustered_repo_flags_run_locally_against_the_selected_repo() -> 
 
     for (name, repo_flag) in [
         ("attached value", "-Rgit.example.com/selected/repo"),
-        ("boolean cluster then value", "-cRgit.example.com/selected/repo"),
+        (
+            "boolean cluster then value",
+            "-cRgit.example.com/selected/repo",
+        ),
     ] {
         let (api_host, handle) = start_json_server(vec![ISSUE])?;
         let runner = RouteRunner::new()?;
@@ -79,7 +85,7 @@ fn attached_and_clustered_repo_flags_run_locally_against_the_selected_repo() -> 
             "{name}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(String::from_utf8(output.stdout)?, "{\"number\":13}\n");
+        assert_eq!(String::from_utf8(output.stdout)?, "{\"number\": 13}\n");
         assert_eq!(String::from_utf8(output.stderr)?, "");
         assert_eq!(
             requests,
@@ -173,11 +179,337 @@ fn ambiguous_unsupported_options_fail_closed_before_provider_delegation() -> Tes
 
         assert_eq!(output.status.code(), Some(1), "{name}: {stderr}");
         assert_eq!(stdout, "", "{name}");
-        assert!(
-            stderr.contains("provider is ambiguous"),
-            "{name}: {stderr}"
-        );
+        assert!(stderr.contains("provider is ambiguous"), "{name}: {stderr}");
         assert!(!stderr.contains("delegated-to-github"), "{name}: {stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn managed_gh_command_targets_never_cross_provider() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    let cases = vec![
+        (
+            "attached -q keeps Forgejo issue URL authoritative",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "issue",
+                "view",
+                "-q.number",
+                "https://git.example.com/owner/repo/issues/13",
+            ],
+            false,
+        ),
+        (
+            "attached -q keeps GitHub issue URL authoritative",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec![
+                "issue",
+                "view",
+                "-q.number",
+                "https://github.com/owner/repo/issues/13",
+            ],
+            true,
+        ),
+        (
+            "attached -t keeps Forgejo pull URL authoritative",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "view",
+                "-t{{.number}}",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "attached -i keeps GitHub pull URL authoritative",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec![
+                "pr",
+                "checks",
+                "-i10",
+                "https://github.com/owner/repo/pulls/7",
+            ],
+            true,
+        ),
+        (
+            "attached -b keeps Forgejo pull URL authoritative",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "checkout",
+                "-blocal",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "attached -R selects Forgejo",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec!["issue", "view", "-Rgit.example.com/owner/repo", "13"],
+            false,
+        ),
+        (
+            "attached -R selects GitHub",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec!["issue", "view", "-Rgithub.com/owner/repo", "13"],
+            true,
+        ),
+        (
+            "attached auth -h selects Forgejo",
+            "GH_HOST",
+            "github.com",
+            vec!["auth", "status", "-hgit.example.com"],
+            false,
+        ),
+        (
+            "attached auth -h selects GitHub",
+            "GH_HOST",
+            "git.example.com",
+            vec!["auth", "status", "-hgithub.com"],
+            true,
+        ),
+        (
+            "API include flag preserves later Forgejo hostname",
+            "GH_HOST",
+            "github.com",
+            vec!["api", "-i", "--hostname", "git.example.com", "user"],
+            false,
+        ),
+        (
+            "API include flag preserves later GitHub hostname",
+            "GH_HOST",
+            "git.example.com",
+            vec!["api", "-i", "--hostname", "github.com", "user"],
+            true,
+        ),
+        (
+            "PR comments flag preserves Forgejo URL",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "view",
+                "--comments",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "PR editor flag preserves GitHub URL",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec![
+                "pr",
+                "comment",
+                "--editor",
+                "https://github.com/owner/repo/pulls/7",
+            ],
+            true,
+        ),
+        (
+            "PR draft flag preserves later Forgejo repo",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "list",
+                "--draft",
+                "--repo",
+                "git.example.com/owner/repo",
+            ],
+            false,
+        ),
+        (
+            "PR dry-run flag preserves later GitHub repo",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec![
+                "pr",
+                "create",
+                "--dry-run",
+                "--repo",
+                "github.com/owner/repo",
+            ],
+            true,
+        ),
+        (
+            "unknown workflow option fails closed in GitHub context",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "workflow",
+                "run",
+                "build.yml",
+                "--ref",
+                "main",
+                "--repo",
+                "git.example.com/owner/repo",
+            ],
+            false,
+        ),
+        (
+            "unknown workflow option fails closed in Forgejo context",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec![
+                "workflow",
+                "run",
+                "build.yml",
+                "--ref",
+                "main",
+                "--repo",
+                "github.com/owner/repo",
+            ],
+            false,
+        ),
+        (
+            "unknown release option fails closed in GitHub context",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "release",
+                "view",
+                "v1.0.0",
+                "--json",
+                "name",
+                "--repo",
+                "git.example.com/owner/repo",
+            ],
+            false,
+        ),
+        (
+            "unknown release option fails closed in Forgejo context",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec![
+                "release",
+                "view",
+                "v1.0.0",
+                "--repo",
+                "github.com/owner/repo",
+                "--json",
+                "name",
+            ],
+            false,
+        ),
+        (
+            "Forgejo issue URL after -c",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "issue",
+                "view",
+                "-c",
+                "https://git.example.com/owner/repo/issues/13",
+            ],
+            false,
+        ),
+        (
+            "Forgejo pull URL after -i",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "checks",
+                "-i",
+                "10",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "Forgejo pull URL after --exclude",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec![
+                "pr",
+                "diff",
+                "--exclude",
+                "generated",
+                "https://git.example.com/owner/repo/pulls/7",
+            ],
+            false,
+        ),
+        (
+            "plain Forgejo repo target",
+            "GH_REPO",
+            "github.com/base/repo",
+            vec!["repo", "view", "git.example.com/owner/repo"],
+            false,
+        ),
+        (
+            "plain GitHub repo target",
+            "GH_REPO",
+            "git.example.com/base/repo",
+            vec!["repo", "view", "github.com/owner/repo"],
+            true,
+        ),
+        (
+            "repo-shaped body value in Forgejo context",
+            "GH_REPO",
+            "git.example.com/owner/repo",
+            vec![
+                "pr",
+                "create",
+                "--title",
+                "test",
+                "--body",
+                "--repo=https://github.com/other/project",
+            ],
+            false,
+        ),
+        (
+            "repo-shaped body value in GitHub context",
+            "GH_REPO",
+            "github.com/owner/repo",
+            vec![
+                "pr",
+                "create",
+                "--title",
+                "test",
+                "--body",
+                "--repo=https://git.example.com/other/project",
+            ],
+            true,
+        ),
+        (
+            "hostname-shaped API field in Forgejo context",
+            "GH_HOST",
+            "git.example.com",
+            vec!["api", "user", "-f", "--hostname=github.com"],
+            false,
+        ),
+        (
+            "hostname-shaped API field in GitHub context",
+            "GH_HOST",
+            "github.com",
+            vec!["api", "user", "-f", "--hostname=git.example.com"],
+            true,
+        ),
+    ];
+
+    for (name, env_key, env_value, args, delegates) in cases {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env_remove("FJ_SHIM_REAL_GH")
+            .env(env_key, env_value)
+            .arg("gh")
+            .args(args)
+            .output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+        assert_eq!(output.status.success(), delegates, "{name}: {stdout}");
+        assert_eq!(stdout.contains("delegated"), delegates, "{name}: {stdout}");
     }
     Ok(())
 }

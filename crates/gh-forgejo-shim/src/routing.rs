@@ -8,17 +8,12 @@ use std::time::Instant;
 
 use crate::config::{self, EnvMap};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
+use crate::invocation::{Command, ParsedInvocation};
 use crate::provider::{HostProfile, HostRegistry, ProviderResolution};
 use crate::read_only;
-use crate::repo::{command_provider_target, detect_repo, RepoRef};
+use crate::repo::{detect_repo_for_target, RepoRef};
 use crate::trace;
 use crate::Result;
-
-const SUPPORTED_PR_COMMANDS: &[&str] = &[
-    "checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view",
-];
-const SUPPORTED_ISSUE_COMMANDS: &[&str] = &["create", "list", "ls", "new", "view"];
-const SUPPORTED_REPO_COMMANDS: &[&str] = &["view"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatcherConfig {
@@ -30,6 +25,7 @@ pub struct DispatcherConfig {
 pub enum RouteKind {
     Delegate,
     Forgejo,
+    Reject,
 }
 
 impl RouteKind {
@@ -37,6 +33,7 @@ impl RouteKind {
         match self {
             Self::Delegate => "delegate",
             Self::Forgejo => "forgejo",
+            Self::Reject => "reject",
         }
     }
 }
@@ -71,6 +68,9 @@ pub enum RouteDecision {
         reason: String,
         target: ForgejoTarget,
     },
+    Reject {
+        reason: String,
+    },
 }
 
 impl RouteDecision {
@@ -88,16 +88,25 @@ impl RouteDecision {
         }
     }
 
+    fn reject(reason: impl Into<String>) -> Self {
+        Self::Reject {
+            reason: reason.into(),
+        }
+    }
+
     pub const fn kind(&self) -> RouteKind {
         match self {
             Self::Delegate { .. } => RouteKind::Delegate,
             Self::Forgejo { .. } => RouteKind::Forgejo,
+            Self::Reject { .. } => RouteKind::Reject,
         }
     }
 
     pub fn reason(&self) -> &str {
         match self {
-            Self::Delegate { reason, .. } | Self::Forgejo { reason, .. } => reason,
+            Self::Delegate { reason, .. }
+            | Self::Forgejo { reason, .. }
+            | Self::Reject { reason } => reason,
         }
     }
 
@@ -105,12 +114,13 @@ impl RouteDecision {
         match self {
             Self::Delegate { repo, .. } => repo.as_ref(),
             Self::Forgejo { target, .. } => target.repo(),
+            Self::Reject { .. } => None,
         }
     }
 
     pub fn forgejo_target(&self) -> Option<&ForgejoTarget> {
         match self {
-            Self::Delegate { .. } => None,
+            Self::Delegate { .. } | Self::Reject { .. } => None,
             Self::Forgejo { target, .. } => Some(target),
         }
     }
@@ -159,13 +169,30 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    if is_global_delegate_command(argv) {
+    let invocation = ParsedInvocation::parse(argv);
+    decide_parsed_route(&invocation, config, env, cwd)
+}
+
+fn decide_parsed_route(
+    invocation: &ParsedInvocation,
+    config: &DispatcherConfig,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> RouteDecision {
+    if invocation.command() == Command::GlobalDelegate || invocation.help_requested() {
         return RouteDecision::delegate("unsupported command", None);
     }
 
-    let command_target = command_provider_target(argv);
+    if let Some(reason) = invocation.ambiguity() {
+        return RouteDecision::reject(reason);
+    }
 
-    if argv.first().is_some_and(|command| command == "auth") {
+    let command_target = invocation.provider_target();
+
+    if matches!(
+        invocation.command(),
+        Command::AuthStatus | Command::AuthToken
+    ) {
         let host = command_target
             .host()
             .or_else(|| env.get("GH_HOST").map(String::as_str));
@@ -174,7 +201,7 @@ pub fn decide_route(
         }
     }
 
-    if argv.first().is_some_and(|command| command == "api") {
+    if invocation.command() == Command::Api {
         let host = command_target
             .host()
             .or_else(|| env.get("GH_HOST").map(String::as_str));
@@ -183,7 +210,7 @@ pub fn decide_route(
         }
     }
 
-    let detection = detect_repo(argv, env, cwd);
+    let detection = detect_repo_for_target(command_target, env, cwd);
     if let Some(repo) = detection.repo {
         return route_resolution(config.registry.resolve(&repo), detection.source);
     }
@@ -194,7 +221,7 @@ pub fn decide_route(
         return decision;
     }
 
-    if !is_supported_command(argv) {
+    if !invocation.command().is_supported_local() || invocation.command() == Command::Api {
         RouteDecision::delegate("unsupported command", None)
     } else {
         RouteDecision::delegate("no repository detected", None)
@@ -228,12 +255,19 @@ fn run_gh(
             return 1;
         }
     };
-    let decision = decide_route(&argv, &config, &env, cwd);
+    let invocation = ParsedInvocation::parse(&argv);
+    let decision = decide_parsed_route(&invocation, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
     let exit_code = match &decision {
         RouteDecision::Delegate { .. } => run_delegate(&argv, &env, cwd, &config, &mut mode),
-        RouteDecision::Forgejo { target, .. } => run_forgejo(&argv, &env, cwd, target, &mut mode),
+        RouteDecision::Forgejo { target, .. } => {
+            run_forgejo(&invocation, &env, cwd, target, &mut mode)
+        }
+        RouteDecision::Reject { reason } => {
+            write_error(&mut mode, &format!("gh-forgejo-shim: {reason}"));
+            1
+        }
     };
 
     if trace_enabled {
@@ -290,7 +324,7 @@ fn run_delegate(
 }
 
 fn run_forgejo(
-    argv: &[String],
+    invocation: &ParsedInvocation,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     target: &ForgejoTarget,
@@ -302,7 +336,7 @@ fn run_forgejo(
             let stderr = io::stderr();
             let stdin = io::stdin();
             read_only::run(
-                argv,
+                invocation,
                 target,
                 env,
                 cwd,
@@ -313,7 +347,15 @@ fn run_forgejo(
         }
         DelegateMode::Capture { stdout, stderr } => {
             let stdin = io::stdin();
-            read_only::run(argv, target, env, cwd, *stdout, *stderr, &mut stdin.lock())
+            read_only::run(
+                invocation,
+                target,
+                env,
+                cwd,
+                *stdout,
+                *stderr,
+                &mut stdin.lock(),
+            )
         }
     }
 }
@@ -351,26 +393,6 @@ fn route_resolution(resolution: ProviderResolution, source: String) -> RouteDeci
         ProviderResolution::GitHub { repo } | ProviderResolution::Unconfigured { repo } => {
             RouteDecision::delegate(format!("host {} is not allowlisted", repo.host), Some(repo))
         }
-    }
-}
-
-fn is_supported_command(argv: &[String]) -> bool {
-    if argv.len() < 2 {
-        return false;
-    }
-    match argv[0].as_str() {
-        "pr" => SUPPORTED_PR_COMMANDS.contains(&argv[1].as_str()),
-        "issue" => SUPPORTED_ISSUE_COMMANDS.contains(&argv[1].as_str()),
-        "repo" => SUPPORTED_REPO_COMMANDS.contains(&argv[1].as_str()),
-        _ => false,
-    }
-}
-
-fn is_global_delegate_command(argv: &[String]) -> bool {
-    match argv {
-        [] => true,
-        [command] if matches!(command.as_str(), "--version" | "version") => true,
-        [command, ..] => matches!(command.as_str(), "--help" | "-h" | "help"),
     }
 }
 

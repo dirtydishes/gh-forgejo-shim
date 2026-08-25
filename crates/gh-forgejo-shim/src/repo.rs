@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::external::git_output;
+use crate::invocation::{ParsedInvocation, ProviderTarget};
 use crate::provider::normalize_host;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,23 +28,6 @@ impl RepoRef {
 pub struct Detection {
     pub repo: Option<RepoRef>,
     pub source: String,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CommandProviderTarget<'a> {
-    repo_flag: Option<&'a str>,
-    positional_repo: Option<&'a str>,
-    host_flag: Option<&'a str>,
-}
-
-impl<'a> CommandProviderTarget<'a> {
-    pub fn repo_spec(self) -> Option<&'a str> {
-        self.repo_flag.or(self.positional_repo)
-    }
-
-    pub fn host(self) -> Option<&'a str> {
-        self.host_flag
-    }
 }
 
 impl Detection {
@@ -94,10 +78,18 @@ pub fn detect_repo(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> Detection {
-    let command_target = command_provider_target(argv);
+    let invocation = ParsedInvocation::parse(argv);
+    detect_repo_for_target(invocation.provider_target(), env, cwd)
+}
+
+pub fn detect_repo_for_target(
+    command_target: &ProviderTarget,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> Detection {
     if let Some(repo_arg) = command_target.repo_spec() {
         if let Some(repo) = parse_repo_spec(repo_arg, env.get("GH_HOST").map(String::as_str)) {
-            let source = if command_target.repo_flag.is_some() {
+            let source = if command_target.repo_is_flag() {
                 "-R/--repo"
             } else {
                 "command target"
@@ -147,58 +139,8 @@ pub fn detect_from_git(cwd: Option<&Path>) -> Option<RepoRef> {
     None
 }
 
-pub fn command_provider_target(argv: &[String]) -> CommandProviderTarget<'_> {
-    let syntax = command_syntax(argv);
-    let mut target = CommandProviderTarget::default();
-    let mut positional_seen = false;
-    let mut index = syntax.start;
-
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if arg == "--" {
-            if !positional_seen {
-                if let Some(value) = argv.get(index + 1).map(String::as_str) {
-                    record_positional_target(&mut target, syntax.positional, value);
-                }
-            }
-            break;
-        }
-        if let Some(value) = option_value(arg, "--repo", "-R", argv.get(index + 1)) {
-            target.repo_flag = Some(value.value);
-            index += value.consumed;
-            continue;
-        }
-        if syntax.host_option {
-            if let Some(value) = option_value(arg, "--hostname", "-h", argv.get(index + 1)) {
-                target.host_flag = Some(value.value);
-                index += value.consumed;
-                continue;
-            }
-        }
-        if let Some(consumed) = syntax
-            .value_options
-            .iter()
-            .find_map(|option| value_option_consumed(arg, option))
-        {
-            index += consumed;
-            continue;
-        }
-        if flag_option_matches(arg, syntax.flag_options) {
-            index += 1;
-            continue;
-        }
-        if arg.starts_with('-') {
-            index += generic_option_consumed(arg, argv.get(index + 1));
-            continue;
-        }
-        if !positional_seen {
-            record_positional_target(&mut target, syntax.positional, arg);
-            positional_seen = true;
-        }
-        index += 1;
-    }
-
-    target
+pub fn command_provider_target(argv: &[String]) -> ProviderTarget {
+    ParsedInvocation::parse(argv).provider_target().clone()
 }
 
 fn parse_url_repo(value: &str) -> Option<RepoRef> {
@@ -253,381 +195,6 @@ fn parse_scp_repo(value: &str) -> Option<RepoRef> {
         ));
     }
     None
-}
-
-fn is_repo_url(value: &str) -> bool {
-    let Some((scheme, _)) = value.split_once("://") else {
-        return false;
-    };
-    matches!(
-        scheme.to_ascii_lowercase().as_str(),
-        "http" | "https" | "ssh" | "git"
-    )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PositionalTarget {
-    None,
-    Repository,
-    Url,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CommandSyntax {
-    start: usize,
-    value_options: &'static [&'static str],
-    flag_options: &'static [&'static str],
-    positional: PositionalTarget,
-    host_option: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct OptionValue<'a> {
-    value: &'a str,
-    consumed: usize,
-}
-
-fn command_syntax(argv: &[String]) -> CommandSyntax {
-    const OUTPUT_VALUES: &[&str] = &["--json", "--jq", "-q", "--template", "-t"];
-    const PR_CREATE_VALUES: &[&str] = &[
-        "--title",
-        "-t",
-        "--body",
-        "-b",
-        "--body-file",
-        "-F",
-        "--base",
-        "-B",
-        "--head",
-        "-H",
-        "--json",
-        "--reviewer",
-        "--reviewers",
-        "-r",
-        "--assignee",
-        "--assignees",
-        "-a",
-        "--label",
-        "--labels",
-        "-l",
-        "--project",
-        "--projects",
-        "-p",
-        "--milestone",
-        "-m",
-        "--template",
-        "-T",
-        "--recover",
-    ];
-    const PR_CREATE_FLAGS: &[&str] = &[
-        "--fill",
-        "-f",
-        "--fill-first",
-        "--fill-verbose",
-        "--web",
-        "-w",
-        "--draft",
-        "-d",
-        "--maintainer-can-modify",
-        "--no-maintainer-edit",
-        "--no-maintainer-can-modify",
-        "--dry-run",
-    ];
-    const PR_LIST_VALUES: &[&str] = &[
-        "--json",
-        "--jq",
-        "-q",
-        "--template",
-        "-t",
-        "--state",
-        "-s",
-        "--limit",
-        "-L",
-        "--head",
-        "-H",
-        "--base",
-        "-B",
-        "--author",
-        "-A",
-        "--app",
-        "--assignee",
-        "-a",
-        "--label",
-        "-l",
-        "--search",
-        "-S",
-    ];
-    const PR_LIST_FLAGS: &[&str] = &["--draft", "-d", "--web", "-w"];
-    const PR_CHECKS_VALUES: &[&str] = &[
-        "--json",
-        "--jq",
-        "-q",
-        "--template",
-        "-t",
-        "--interval",
-        "-i",
-    ];
-    const PR_CHECKS_FLAGS: &[&str] = &["--web", "-w", "--watch", "--fail-fast", "--required"];
-    const PR_CHECKOUT_VALUES: &[&str] = &["--branch", "-b"];
-    const PR_CHECKOUT_FLAGS: &[&str] = &["--detach", "--force", "-f", "--recurse-submodules"];
-    const PR_COMMENT_VALUES: &[&str] = &["--body", "-b", "--body-file", "-F"];
-    const PR_COMMENT_FLAGS: &[&str] = &["--editor", "-e", "--edit-last", "--web", "-w"];
-    const PR_DIFF_VALUES: &[&str] = &["--color", "--exclude", "-e"];
-    const PR_DIFF_FLAGS: &[&str] = &["--web", "-w", "--name-only", "--patch"];
-    const VIEW_FLAGS: &[&str] = &["--web", "-w"];
-    const PR_VIEW_FLAGS: &[&str] = &["--comments", "-c", "--web", "-w"];
-    const PR_STATUS_FLAGS: &[&str] = &["--conflict-status", "-c"];
-    const REPO_VIEW_VALUES: &[&str] =
-        &["--json", "--jq", "-q", "--template", "-t", "--branch", "-b"];
-    const ISSUE_VIEW_FLAGS: &[&str] = &["--web", "-w", "--comments", "-c"];
-    const ISSUE_LIST_VALUES: &[&str] = &[
-        "--json",
-        "--jq",
-        "-q",
-        "--template",
-        "-t",
-        "--state",
-        "-s",
-        "--limit",
-        "-L",
-        "--label",
-        "-l",
-        "--search",
-        "-S",
-        "--author",
-        "-A",
-        "--assignee",
-        "-a",
-        "--mention",
-        "--milestone",
-        "-m",
-        "--app",
-    ];
-    const ISSUE_CREATE_VALUES: &[&str] = &[
-        "--title",
-        "-t",
-        "--body",
-        "-b",
-        "--body-file",
-        "-F",
-        "--assignee",
-        "-a",
-        "--label",
-        "-l",
-        "--milestone",
-        "-m",
-        "--project",
-        "-p",
-        "--recover",
-        "--template",
-        "-T",
-    ];
-    const ISSUE_CREATE_FLAGS: &[&str] = &["--web", "-w", "--editor", "-e"];
-    const AUTH_VALUES: &[&str] = &["--user", "-u", "--json", "--jq", "-q", "--template"];
-    const AUTH_FLAGS: &[&str] = &["-t", "--show-token", "-a", "--active"];
-    const API_VALUES: &[&str] = &[
-        "--cache",
-        "-F",
-        "--field",
-        "-H",
-        "--header",
-        "--input",
-        "--method",
-        "-X",
-        "--preview",
-        "-p",
-        "-f",
-        "--raw-field",
-        "--jq",
-        "-q",
-        "--template",
-        "-t",
-    ];
-    const API_FLAGS: &[&str] = &["--silent", "--include", "-i", "--paginate", "--verbose"];
-
-    let command = argv.first().map(String::as_str);
-    let subcommand = argv.get(1).map(String::as_str);
-    let (value_options, flag_options, positional, host_option, start) = match (command, subcommand)
-    {
-        (Some("pr"), Some("create" | "new")) => (
-            PR_CREATE_VALUES,
-            PR_CREATE_FLAGS,
-            PositionalTarget::None,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("list")) => (
-            PR_LIST_VALUES,
-            PR_LIST_FLAGS,
-            PositionalTarget::None,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("checks")) => (
-            PR_CHECKS_VALUES,
-            PR_CHECKS_FLAGS,
-            PositionalTarget::Url,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("checkout" | "co")) => (
-            PR_CHECKOUT_VALUES,
-            PR_CHECKOUT_FLAGS,
-            PositionalTarget::Url,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("comment")) => (
-            PR_COMMENT_VALUES,
-            PR_COMMENT_FLAGS,
-            PositionalTarget::Url,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("diff")) => (
-            PR_DIFF_VALUES,
-            PR_DIFF_FLAGS,
-            PositionalTarget::Url,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("view")) => (
-            OUTPUT_VALUES,
-            PR_VIEW_FLAGS,
-            PositionalTarget::Url,
-            false,
-            2,
-        ),
-        (Some("pr"), Some("status")) => (
-            OUTPUT_VALUES,
-            PR_STATUS_FLAGS,
-            PositionalTarget::None,
-            false,
-            2,
-        ),
-        (Some("issue"), Some("view")) => (
-            OUTPUT_VALUES,
-            ISSUE_VIEW_FLAGS,
-            PositionalTarget::Url,
-            false,
-            2,
-        ),
-        (Some("issue"), Some("list" | "ls")) => (
-            ISSUE_LIST_VALUES,
-            &["--web", "-w"][..],
-            PositionalTarget::None,
-            false,
-            2,
-        ),
-        (Some("issue"), Some("create" | "new")) => (
-            ISSUE_CREATE_VALUES,
-            ISSUE_CREATE_FLAGS,
-            PositionalTarget::None,
-            false,
-            2,
-        ),
-        (Some("repo"), Some("view")) => (
-            REPO_VIEW_VALUES,
-            VIEW_FLAGS,
-            PositionalTarget::Repository,
-            false,
-            2,
-        ),
-        (Some("auth"), _) => (AUTH_VALUES, AUTH_FLAGS, PositionalTarget::None, true, 2),
-        (Some("api"), _) => (API_VALUES, API_FLAGS, PositionalTarget::None, true, 1),
-        _ => (&[][..], &[][..], PositionalTarget::None, false, 2),
-    };
-    CommandSyntax {
-        start,
-        value_options,
-        flag_options,
-        positional,
-        host_option,
-    }
-}
-
-fn option_value<'a>(
-    arg: &'a str,
-    long: &str,
-    short: &str,
-    next: Option<&'a String>,
-) -> Option<OptionValue<'a>> {
-    if matches!(arg, value if value == long || value == short) {
-        return next.map(|value| OptionValue {
-            value: value.as_str(),
-            consumed: 2,
-        });
-    }
-    if let Some(value) = arg
-        .strip_prefix(long)
-        .and_then(|suffix| suffix.strip_prefix('='))
-    {
-        return Some(OptionValue { value, consumed: 1 });
-    }
-    arg.strip_prefix(short)
-        .filter(|suffix| !suffix.is_empty())
-        .map(|suffix| OptionValue {
-            value: suffix.strip_prefix('=').unwrap_or(suffix),
-            consumed: 1,
-        })
-}
-
-fn value_option_consumed(arg: &str, option: &str) -> Option<usize> {
-    if arg == option {
-        return Some(2);
-    }
-    let suffix = arg.strip_prefix(option)?;
-    if option.starts_with("--") {
-        suffix.starts_with('=').then_some(1)
-    } else if option.len() == 2 && !suffix.is_empty() {
-        Some(1)
-    } else {
-        None
-    }
-}
-
-fn flag_option_matches(arg: &str, options: &[&str]) -> bool {
-    if options.contains(&arg) {
-        return true;
-    }
-    let Some(cluster) = arg
-        .strip_prefix('-')
-        .filter(|value| !value.is_empty() && !value.starts_with('-') && value.chars().count() > 1)
-    else {
-        return false;
-    };
-    cluster.chars().all(|flag| {
-        options
-            .iter()
-            .any(|option| option.len() == 2 && option.ends_with(flag))
-    })
-}
-
-fn generic_option_consumed(arg: &str, next: Option<&String>) -> usize {
-    if arg.contains('=') || is_attached_short_option(arg) {
-        return 1;
-    }
-    if next.is_some_and(|value| !value.starts_with('-')) {
-        2
-    } else {
-        1
-    }
-}
-
-fn is_attached_short_option(arg: &str) -> bool {
-    arg.strip_prefix('-')
-        .is_some_and(|value| !value.starts_with('-') && value.chars().count() > 1)
-}
-
-fn record_positional_target<'a>(
-    target: &mut CommandProviderTarget<'a>,
-    kind: PositionalTarget,
-    value: &'a str,
-) {
-    if kind == PositionalTarget::Repository || (kind == PositionalTarget::Url && is_repo_url(value))
-    {
-        target.positional_repo = Some(value);
-    }
 }
 
 fn path_parts(path: &str) -> Vec<&str> {
@@ -852,22 +419,6 @@ mod tests {
             (argv(&["pr", "status", "-c", "--repo", repo]), repo),
             (
                 argv(&["issue", "view", "-Rgit.example.com/owner/repo", "13"]),
-                repo,
-            ),
-            (
-                argv(&[
-                    "workflow",
-                    "run",
-                    "build.yml",
-                    "--ref",
-                    "main",
-                    "--repo",
-                    repo,
-                ]),
-                repo,
-            ),
-            (
-                argv(&["release", "view", "v1", "--json", "name", "--repo", repo]),
                 repo,
             ),
         ];
