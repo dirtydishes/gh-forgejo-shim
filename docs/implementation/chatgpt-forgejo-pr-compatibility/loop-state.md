@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c08
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: checkpoint-review admission pending
+Current execution strategy: frozen-head thermonuclear and adversarial C2 review
 
 Last completed phase: S6
 
-Blocked: no — S6 is closed and C2 readiness is next
+Blocked: no — C2 passed both readiness gates and is claimed
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S6 is closed and C2 readiness is next
 
 ## Last Coordinator Update
 
-S6 frozen head `1533e138ec3c89b0ba87eb828399f78e547ebfa1` passed 226 active local tests, redacted live Dirtypages replay, fresh independent review with `findings: []`, and exact pull-request/push CI. Local HEAD, origin, and PR #29 matched at clean `0/0` parity; Beads S6 is closed and Dolt is pushed. C2 readiness is next. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The checkout, origin, and PR #29 matched `b9da700917aa1135998383d3aa767cefbd12a307` at clean `0/0` parity. C2 was claimed and Dolt was pushed. The next commit freezes one SHA for the required thermonuclear and adversarial reviewers plus exact CI. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
