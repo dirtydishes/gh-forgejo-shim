@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c05
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator S4 TDD at the credential-host lookup seam
+Current execution strategy: direct coordinator S4 green repair after frozen credential-host red evidence
 
 Last completed phase: C1
 
@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4 passed exact execution and live launch readiness with empty findings at pushed head `fa4d1f5fca25ddb864928b08f05350a7f3b3a763`, then was claimed and pushed in Beads. The narrow S4 surface adds `read_only.rs` because only the resolved `HostProfile` can supply `credential_host` to `auth.rs`; this preserves canonical display and API identity. Refresh that amended projection's attestation before freezing red tests. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4's amended ownership projection passed exact execution and live launch readiness with empty findings before reclaim. Test-only commit `d7911944b8980626cfd87524ccf119e10439d25e` freezes the expected failures: Linux `fj` keys are undiscovered, and alias auth status uses canonical display identity for token lookup instead of `credential_host`; the stored-auth precedence control passes. Next, make only the narrow green repair. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
