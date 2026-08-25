@@ -350,7 +350,13 @@ fn config_path(env: &HashMap<String, String>) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
+
+    static NEXT_ROUTE_REPO_ID: AtomicU64 = AtomicU64::new(1);
 
     fn env(values: &[(&str, &str)]) -> HashMap<String, String> {
         values
@@ -374,6 +380,58 @@ mod tests {
             )
             .expect("test host registry should be valid"),
             real_gh: None,
+        }
+    }
+
+    fn profile_config() -> DispatcherConfig {
+        DispatcherConfig {
+            registry: HostRegistry::new(vec![HostProfile {
+                canonical_host: "git.dirtydishes.dev".to_string(),
+                aliases: vec![
+                    "127.0.0.1".to_string(),
+                    "127.0.0.2:2222".to_string(),
+                ],
+                api_root: "https://git.dirtydishes.dev/api/v1".to_string(),
+                credential_host: "git.dirtydishes.dev".to_string(),
+            }])
+            .expect("route matrix profile should be valid"),
+            real_gh: None,
+        }
+    }
+
+    struct TempGitRepo(PathBuf);
+
+    impl TempGitRepo {
+        fn with_remote(url: &str) -> Self {
+            let id = NEXT_ROUTE_REPO_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "gh-forgejo-shim-route-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("route fixture directory should be created");
+            let init = Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&path)
+                .status()
+                .expect("git init should run");
+            assert!(init.success());
+            let remote = Command::new("git")
+                .args(["remote", "add", "origin", url])
+                .current_dir(&path)
+                .status()
+                .expect("git remote add should run");
+            assert!(remote.success());
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempGitRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -488,5 +546,111 @@ mod tests {
             ["git.example.com"]
         );
         assert_eq!(parsed.real_gh, Some(PathBuf::from("/opt/homebrew/bin/gh")));
+    }
+
+    #[test]
+    fn provider_first_route_matrix_covers_every_repository_source() {
+        let config = profile_config();
+        let remote = TempGitRepo::with_remote(
+            "https://127.0.0.2:2222/dirtydishes/dirtypages.git",
+        );
+        let cases = [
+            (
+                "canonical Forgejo",
+                argv(&[
+                    "pr",
+                    "list",
+                    "--repo",
+                    "git.dirtydishes.dev/dirtydishes/dirtypages",
+                ]),
+                env(&[]),
+                None,
+                RouteKind::Forgejo,
+            ),
+            (
+                "alias Forgejo",
+                argv(&[
+                    "pr",
+                    "list",
+                    "--repo",
+                    "127.0.0.1/dirtydishes/dirtypages",
+                ]),
+                env(&[]),
+                None,
+                RouteKind::Forgejo,
+            ),
+            (
+                "unknown Forgejo operation",
+                argv(&[
+                    "workflow",
+                    "run",
+                    "--repo",
+                    "127.0.0.1/dirtydishes/dirtypages",
+                ]),
+                env(&[]),
+                None,
+                RouteKind::Forgejo,
+            ),
+            (
+                "unconfigured host",
+                argv(&[
+                    "pr",
+                    "list",
+                    "--repo",
+                    "git.other.test/dirtydishes/dirtypages",
+                ]),
+                env(&[]),
+                None,
+                RouteKind::Delegate,
+            ),
+            (
+                "GitHub",
+                argv(&[
+                    "pr",
+                    "list",
+                    "--repo",
+                    "github.com/dirtydishes/dirtypages",
+                ]),
+                env(&[]),
+                None,
+                RouteKind::Delegate,
+            ),
+            (
+                "GH_REPO",
+                argv(&["pr", "list"]),
+                env(&[(
+                    "GH_REPO",
+                    "127.0.0.1/dirtydishes/dirtypages",
+                )]),
+                None,
+                RouteKind::Forgejo,
+            ),
+            (
+                "GH_HOST",
+                argv(&["pr", "list", "--repo", "dirtydishes/dirtypages"]),
+                env(&[("GH_HOST", "127.0.0.1")]),
+                None,
+                RouteKind::Forgejo,
+            ),
+            (
+                "git remote with port alias",
+                argv(&["pr", "list"]),
+                env(&[]),
+                Some(remote.path()),
+                RouteKind::Forgejo,
+            ),
+        ];
+
+        for (name, argv, env, cwd, expected) in cases {
+            let decision = decide_route(&argv, &config, &env, cwd);
+            assert_eq!(decision.kind, expected, "route matrix case: {name}");
+            if decision.kind == RouteKind::Forgejo {
+                assert_eq!(
+                    decision.trace_host(),
+                    Some("git.dirtydishes.dev"),
+                    "canonical identity case: {name}"
+                );
+            }
+        }
     }
 }
