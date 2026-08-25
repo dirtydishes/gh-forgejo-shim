@@ -145,4 +145,35 @@ mod tests {
         };
         assert_eq!(error.message(), "ambiguous transport host: git.local");
     }
+
+    #[test]
+    fn registry_rejects_github_and_non_http_api_roots() {
+        let github = HostRegistry::new(vec![HostProfile {
+            canonical_host: "github.com".to_string(),
+            aliases: Vec::new(),
+            api_root: "https://api.github.com".to_string(),
+            credential_host: "github.com".to_string(),
+        }]);
+        let Err(error) = github else {
+            panic!("GitHub must not be registered as Forgejo");
+        };
+        assert_eq!(
+            error.message(),
+            "GitHub host cannot be registered as Forgejo: github.com"
+        );
+
+        let non_http = HostRegistry::new(vec![HostProfile {
+            canonical_host: "git.example.com".to_string(),
+            aliases: Vec::new(),
+            api_root: "ssh://git.example.com/api/v1".to_string(),
+            credential_host: "git.example.com".to_string(),
+        }]);
+        let Err(error) = non_http else {
+            panic!("non-HTTP API roots must fail");
+        };
+        assert_eq!(
+            error.message(),
+            "API root must use HTTP or HTTPS: ssh://git.example.com/api/v1"
+        );
+    }
 }
