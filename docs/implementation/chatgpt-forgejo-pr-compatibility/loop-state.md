@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c08
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: C2 final combined repair pass 3/3, coordinator-owned TDD
+Current execution strategy: stopped at C2 repair limit; awaiting orchestrator decision
 
 Last completed phase: S6
 
-Blocked: no — C2 final repair pass 3/3 is locally green and awaiting frozen-head review and CI
+Blocked: yes — one required adversarial credential-isolation finding remains after C2 pass 3/3
 
 ## Decisions
 
@@ -51,7 +51,7 @@ Blocked: no — C2 final repair pass 3/3 is locally green and awaiting frozen-he
 | S4 | `gh-forgejo-shim-c05` | closed | `#29` | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | closed | `#29` | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | closed | `#29` | `turn-docs/07-s6.md` |
-| C2 | `gh-forgejo-shim-c08` | open | none | `turn-docs/08-c2.md` |
+| C2 | `gh-forgejo-shim-c08` | blocked | `#29` | `turn-docs/08-c2.md` |
 | S7 | `gh-forgejo-shim-c09` | open | none | `turn-docs/09-s7.md` |
 | S8 | `gh-forgejo-shim-c10` | open | none | `turn-docs/10-s8.md` |
 | S9 | `gh-forgejo-shim-c11` | open | none | `turn-docs/11-s9.md` |
@@ -64,4 +64,4 @@ Blocked: no — C2 final repair pass 3/3 is locally green and awaiting frozen-he
 
 ## Last Coordinator Update
 
-C2 final pass `3/3` froze red head `be38a53a92afef2702c547c48f576f5155954548`, then pushed production head `e4d9ee028da32dbb19ee4c143f9713b18e4c1199` at `0/0` parity. Objects with recognized host/token fields are authoritative records; field-free maps require exactly one normalized-matching host key. The public-command and ambiguous/invalid sibling repros now fail closed. Format, all-target locked Clippy, and 235 active workspace tests pass; two later probes remain ignored. Final dual review and exact-commit PR/push CI remain. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 final review inspected `e90d827a214698b7399ca42eed58a9b8a542eac9`. Thermonuclear approved; adversarial found one required high issue after pass `3/3`: recursive `Option<String>` lets array/object traversal treat invalid or repeated target evidence as absent and accept a later token. Exact PR run `32850718110` and push run `32850714020` passed both named jobs, but review overrides green CI. Canonical Beads status is `blocked` with stop reason `repair-limit-exhausted-required-adversarial-finding`. Do not close C2 or start S7 without an orchestrator repair-policy decision. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
