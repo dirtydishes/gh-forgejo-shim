@@ -7,7 +7,7 @@ use std::io;
 use std::process::Command;
 
 use gh_forgejo_shim::VERSION;
-use serde_json::Value;
+use serde_json::{json, Value};
 use support::{load_contract, CliFixture, TestResult};
 
 #[test]
@@ -594,7 +594,11 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
         "host github.com is not allowlisted"
     );
     assert_eq!(record["argv"][4], "Authorization: Bearer <redacted>");
-    assert_eq!(record["stdout"]["bytes"], Value::Null);
+    assert_eq!(record["provider"], "github");
+    assert_eq!(record["command_class"], "api");
+    assert_eq!(record["stdout"], json!({"state": "unknown", "bytes": null}));
+    assert_eq!(record["stderr"], json!({"state": "unknown", "bytes": null}));
+    assert_eq!(String::from_utf8(output.stdout)?, "traced\n");
     Ok(())
 }
 
@@ -623,6 +627,20 @@ fn managed_gh_forgejo_auth_status_records_trace() -> TestResult {
     assert_eq!(record["host"], "git.example.com");
     assert_eq!(record["repo"]["full_name"], "owner/repo");
     assert_eq!(record["exit_code"], 0);
+    assert_eq!(record["provider"], "forgejo");
+    assert_eq!(record["command_class"], "auth-status");
+    let expected_stdout = concat!(
+        "git.example.com\n",
+        "  [ok] Logged in to git.example.com using gh-forgejo-shim\n",
+        "  - Active account: true\n",
+        "  - Token source: gh-forgejo-shim\n",
+    );
+    assert_eq!(String::from_utf8(output.stdout)?, expected_stdout);
+    assert_eq!(
+        record["stdout"],
+        json!({"state": "observed", "bytes": expected_stdout.len()})
+    );
+    assert_eq!(record["stderr"], json!({"state": "observed", "bytes": 0}));
     assert!(!trace.contains("secret-token"));
     Ok(())
 }
@@ -646,6 +664,11 @@ fn managed_gh_trace_can_use_local_path() -> TestResult {
     let record: Value = serde_json::from_str(trace.trim())?;
     assert_eq!(record["kind"], "gh");
     assert_eq!(record["route"]["kind"], "delegate");
+    assert_eq!(record["provider"], "github");
+    assert_eq!(record["command_class"], "version");
+    assert_eq!(String::from_utf8(output.stdout)?, "traced\n");
+    assert_eq!(record["stdout"], json!({"state": "observed", "bytes": 7}));
+    assert_eq!(record["stderr"], json!({"state": "observed", "bytes": 0}));
     Ok(())
 }
 
