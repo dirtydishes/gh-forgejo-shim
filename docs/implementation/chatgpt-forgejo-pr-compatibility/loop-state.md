@@ -16,15 +16,15 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S2
+Current phase: S3 readiness
 
-Current Beads issue: gh-forgejo-shim-c02
+Current Beads issue: gh-forgejo-shim-c03
 
-Current PR: none
+Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: pending S2 live launch-readiness preflight
+Current execution strategy: direct implementation in the saved coordinator-owned checkout; independent review will be read-only
 
-Last completed phase: S1
+Last completed phase: S2
 
 Blocked: no
 
@@ -45,7 +45,7 @@ Blocked: no
 |---|---|---|---|---|
 | S0 | `gh-forgejo-shim-c00` | closed | none | `turn-docs/00-s0.md` |
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
-| S2 | `gh-forgejo-shim-c02` | open | none | `turn-docs/02-s2.md` |
+| S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | open | none | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | open | none | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-S1 closed after final repair pass `3/3` approval and exact-commit green CI run `32617567969`. Beads reports S2 (`gh-forgejo-shim-c02`) ready; exact boundary and live launch readiness remain to run before S2 mutation.
+S2 closed in Beads after pushed commit `6971a2e5e4420d91d36566c343ec8b871fd587ac`, independent approval on pass `2/3`, exact-commit CI run `32811937882`, and `0/0` parity. S3 is open with its S2 dependency closed; its boundary and launch readiness have not yet run.
