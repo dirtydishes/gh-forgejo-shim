@@ -389,6 +389,34 @@ fn forgejo_alias_auth_status_uses_credential_host_without_leaking_tokens() -> Te
 }
 
 #[test]
+fn duplicate_json_host_keys_fail_closed_before_auth_status() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let keys_dir = fixture
+        .home()
+        .join(".local")
+        .join("share")
+        .join("forgejo-cli");
+    fs::create_dir_all(&keys_dir)?;
+    fs::write(
+        keys_dir.join("keys.json"),
+        r#"{"servers":[{"host":"auth.other.test","host":"auth.target.test","token":"duplicate-key-secret"}]}"#,
+    )?;
+
+    let output = fixture
+        .command("gfj")?
+        .args(["auth", "status", "auth.target.test"])
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert_eq!(stdout, "auth.target.test: not logged in\n");
+    assert_eq!(stderr, "");
+    assert!(!stdout.contains("duplicate-key-secret"));
+    Ok(())
+}
+
+#[test]
 fn forgejo_pr_list_resolves_author_me() -> TestResult {
     let (host, handle) = start_json_server(vec![
         r#"{"login":"alice","full_name":"Alice Example"}"#,
