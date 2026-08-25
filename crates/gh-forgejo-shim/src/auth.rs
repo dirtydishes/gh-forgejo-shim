@@ -356,21 +356,58 @@ fn dict_matches_host(object: &Map<String, Value>, host: &str) -> bool {
 fn find_token_in_text(text: &str, host: Option<&str>) -> Option<String> {
     if let Some(host) = host {
         let host = normalize_host(host);
-        let mut entry_matches = false;
-        for line in text.lines() {
-            if let Some(entry_host) = text_host_line(line) {
-                entry_matches = normalize_host(&entry_host) == host;
+        let lines = text.lines().collect::<Vec<_>>();
+        let mut entry_start = None;
+        let mut entry_indent = 0;
+        let mut found_list_entry = false;
+
+        for (index, line) in lines.iter().enumerate() {
+            let Some(indent) = text_list_item_indent(line) else {
+                continue;
+            };
+            if entry_start.is_some() && indent > entry_indent {
                 continue;
             }
-            if entry_matches {
-                if let Some(token) = token_line(line) {
+            if let Some(start) = entry_start {
+                if let Some(token) = token_from_text_entry(&lines[start..index], &host) {
                     return Some(token);
                 }
             }
+            found_list_entry = true;
+            entry_start = Some(index);
+            entry_indent = indent;
         }
-        return None;
+
+        if let Some(start) = entry_start {
+            if let Some(token) = token_from_text_entry(&lines[start..], &host) {
+                return Some(token);
+            }
+        }
+        if found_list_entry {
+            return None;
+        }
+        return token_from_text_entry(&lines, &host);
     }
     token_line(text)
+}
+
+fn text_list_item_indent(line: &str) -> Option<usize> {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    trimmed
+        .starts_with("- ")
+        .then_some(line.len() - trimmed.len())
+}
+
+fn token_from_text_entry(lines: &[&str], host: &str) -> Option<String> {
+    let entry_hosts = lines
+        .iter()
+        .filter_map(|line| text_host_line(line))
+        .map(|entry_host| normalize_host(&entry_host))
+        .collect::<Vec<_>>();
+    if entry_hosts.is_empty() || entry_hosts.iter().any(|entry_host| entry_host != host) {
+        return None;
+    }
+    lines.iter().find_map(|line| token_line(line))
 }
 
 fn text_host_line(line: &str) -> Option<String> {
@@ -1016,6 +1053,16 @@ mod tests {
         let text = "servers:\n  - host: https://auth.target.test\n    name: target\n  - name: other\n    token: other-secret\n    host: https://auth.other.test\n";
 
         assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
+    }
+
+    #[test]
+    fn text_token_discovery_accepts_a_matching_entry_in_any_key_order() {
+        let text = "servers:\n  - name: target\n    token: target-secret\n    host: https://auth.target.test\n";
+
+        assert_eq!(
+            find_token_in_text(text, Some("auth.target.test")).as_deref(),
+            Some("target-secret")
+        );
     }
 
     #[test]
