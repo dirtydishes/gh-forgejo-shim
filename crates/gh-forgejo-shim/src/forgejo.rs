@@ -626,6 +626,7 @@ mod tests {
         reason: &'static str,
         content_type: &'static str,
         body: &'static str,
+        delay: Duration,
     }
 
     impl FakeResponse {
@@ -635,6 +636,7 @@ mod tests {
                 reason: "OK",
                 content_type: "application/json",
                 body,
+                delay: Duration::ZERO,
             }
         }
 
@@ -644,6 +646,7 @@ mod tests {
                 reason: "OK",
                 content_type: "text/plain",
                 body,
+                delay: Duration::ZERO,
             }
         }
 
@@ -653,7 +656,13 @@ mod tests {
                 reason,
                 content_type: "text/plain",
                 body,
+                delay: Duration::ZERO,
             }
+        }
+
+        fn delayed(mut self, delay: Duration) -> Self {
+            self.delay = delay;
+            self
         }
     }
 
@@ -883,6 +892,28 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn one_client_timeout_is_shared_across_sequential_requests() -> TestResult {
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(r#"{"id":1}"#).delayed(Duration::from_millis(100)),
+            FakeResponse::json(r#"{"id":2}"#).delayed(Duration::from_millis(250)),
+        ])?;
+        let client = ForgejoClient::new(None)
+            .with_scheme("http")
+            .with_timeout(Duration::from_millis(300));
+        let repo = RepoRef::new(host, "owner", "repo");
+
+        assert_eq!(client.get_repo(&repo)?["id"], 1);
+        let second = client.get_repo(&repo);
+        let _ = finish_fake_server(handle);
+
+        let error = second
+            .err()
+            .ok_or_else(|| io::Error::other("second request reset the command deadline"))?;
+        assert_eq!(error.to_string(), "Forgejo command deadline exceeded");
+        Ok(())
+    }
+
     fn start_fake_server(
         responses: Vec<FakeResponse>,
     ) -> io::Result<(String, JoinHandle<io::Result<Vec<CapturedRequest>>>)> {
@@ -958,6 +989,7 @@ mod tests {
     }
 
     fn write_response(stream: &mut impl Write, response: &FakeResponse) -> io::Result<()> {
+        thread::sleep(response.delay);
         write!(
             stream,
             "HTTP/1.1 {} {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
