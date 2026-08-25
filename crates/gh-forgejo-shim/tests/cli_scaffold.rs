@@ -415,6 +415,27 @@ fn managed_gh_unknown_single_token_forgejo_command_fails_locally() -> TestResult
 }
 
 #[test]
+fn managed_gh_safe_global_help_delegates_in_forgejo_checkout() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_executable("gh", "#!/bin/sh\necho delegated\n")?;
+
+    for args in [&[][..], &["--help"][..], &["-h"][..], &["help", "pr"][..]] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env_remove("FJ_SHIM_REAL_GH")
+            .arg("gh")
+            .args(args)
+            .output()?;
+
+        assert!(output.status.success(), "global help failed for {args:?}");
+        assert_eq!(String::from_utf8(output.stdout)?, "delegated\n");
+        assert_eq!(String::from_utf8(output.stderr)?, "");
+    }
+    Ok(())
+}
+
+#[test]
 fn managed_gh_missing_real_gh_preserves_error_shape() -> TestResult {
     let fixture = CliFixture::new()?;
 

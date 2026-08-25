@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-S3 repair pass `2/3` is green and pushed through `b8e38deac0189abcdd0b07789bcae4b0c95fb9e2` at `0/0` parity. Only explicit `--version` and `version` probes bypass repository detection; unsupported one-token Forgejo commands fail locally. Mutation is frozen for independent pass-2 review; PR #29 remains the sole external integration PR.
+S3 review pass `2/3` verified all earlier repairs but found that safe global help shapes no longer delegate in a Forgejo checkout. Final repair pass `3/3` is red for empty `gh`, leading `--help`/`-h`, and `help <topic>`. The classifier must add only these exact leading shapes while `browse` stays fail-closed. PR #29 remains the sole external integration PR.
