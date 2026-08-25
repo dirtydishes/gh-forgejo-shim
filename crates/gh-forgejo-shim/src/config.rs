@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::provider::{HostProfile, HostRegistry};
 use crate::{Result, ShimError};
 
 pub type EnvMap = BTreeMap<String, String>;
@@ -25,10 +26,21 @@ pub struct Config {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct RawConfig {
     hosts: Option<Vec<String>>,
+    #[serde(default)]
+    host_profiles: Vec<RawHostProfile>,
     paths: Option<RawPathsConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawHostProfile {
+    canonical_host: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    api_root: Option<String>,
+    credential_host: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,21 +91,7 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         .map(Path::to_path_buf)
         .unwrap_or_else(|| config_path(None));
 
-    let mut raw = RawConfig {
-        hosts: None,
-        paths: None,
-    };
-    if config_path.exists() {
-        let text = fs::read_to_string(&config_path).map_err(|error| {
-            ShimError::new(format!("could not read {}: {error}", config_path.display()))
-        })?;
-        raw = toml::from_str(&text).map_err(|error| {
-            ShimError::new(format!(
-                "could not parse {}: {error}",
-                config_path.display()
-            ))
-        })?;
-    }
+    let raw = read_raw_config(&config_path)?;
 
     let mut hosts = raw
         .hosts
@@ -135,6 +133,53 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         paths: PathsConfig { gh, fj },
         path: config_path,
     })
+}
+
+pub fn load_host_registry_with_env(path: Option<&Path>, env: &EnvMap) -> Result<HostRegistry> {
+    let config_path = path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| config_path(None));
+    let raw = read_raw_config(&config_path)?;
+
+    if let Some(value) = env.get("FJ_SHIM_HOSTS") {
+        let profiles = split_hosts(value)
+            .into_iter()
+            .filter_map(|host| normalized_forgejo_host(&host))
+            .map(default_host_profile)
+            .collect();
+        return HostRegistry::new(profiles);
+    }
+
+    let mut profiles = raw
+        .host_profiles
+        .into_iter()
+        .map(|profile| {
+            let canonical_host = normalize_host(&profile.canonical_host);
+            HostProfile {
+                api_root: optional_string(profile.api_root.as_deref())
+                    .unwrap_or_else(|| default_api_root(&canonical_host)),
+                credential_host: optional_string(profile.credential_host.as_deref())
+                    .map_or_else(|| canonical_host.clone(), |host| normalize_host(&host)),
+                canonical_host,
+                aliases: profile.aliases,
+            }
+        })
+        .collect::<Vec<_>>();
+    let explicit_hosts = profiles
+        .iter()
+        .map(|profile| profile.canonical_host.clone())
+        .collect::<Vec<_>>();
+    for host in raw
+        .hosts
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|host| normalized_forgejo_host(&host))
+    {
+        if !explicit_hosts.contains(&host) {
+            profiles.push(default_host_profile(host));
+        }
+    }
+    HostRegistry::new(profiles)
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
@@ -247,6 +292,30 @@ fn normalized_forgejo_host(host: &str) -> Option<String> {
     } else {
         Some(normalized)
     }
+}
+
+fn default_host_profile(canonical_host: String) -> HostProfile {
+    HostProfile {
+        api_root: default_api_root(&canonical_host),
+        credential_host: canonical_host.clone(),
+        canonical_host,
+        aliases: Vec::new(),
+    }
+}
+
+fn default_api_root(canonical_host: &str) -> String {
+    format!("https://{canonical_host}/api/v1")
+}
+
+fn read_raw_config(path: &Path) -> Result<RawConfig> {
+    if !path.exists() {
+        return Ok(RawConfig::default());
+    }
+    let text = fs::read_to_string(path)
+        .map_err(|error| ShimError::new(format!("could not read {}: {error}", path.display())))?;
+    toml::from_str(&text).map_err(|error| {
+        ShimError::new(format!("could not parse {}: {error}", path.display()))
+    })
 }
 
 fn dedupe(values: Vec<String>) -> Vec<String> {
