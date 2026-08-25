@@ -11,6 +11,7 @@ pub mod cli;
 pub mod codex_smoke;
 pub mod config;
 pub mod create;
+pub mod deadline;
 pub mod doctor;
 pub mod external;
 pub mod forgejo;

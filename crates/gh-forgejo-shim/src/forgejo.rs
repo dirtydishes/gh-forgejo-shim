@@ -6,6 +6,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Method, Url};
 use serde_json::{json, Value};
 
+use crate::deadline::CommandDeadline;
 use crate::ShimError;
 
 const USER_AGENT_VALUE: &str = "gh-forgejo-shim";
@@ -174,7 +175,7 @@ impl ListIssuesOptions {
 #[derive(Clone)]
 pub struct ForgejoClient {
     token: Option<String>,
-    timeout: Duration,
+    deadline: CommandDeadline,
     scheme: String,
     api_root: Option<Url>,
     http: Client,
@@ -184,7 +185,7 @@ impl ForgejoClient {
     pub fn new(token: Option<String>) -> Self {
         Self {
             token,
-            timeout: Duration::from_secs(30),
+            deadline: CommandDeadline::after(Duration::from_secs(30)),
             scheme: "https".to_string(),
             api_root: None,
             http: Client::new(),
@@ -196,7 +197,12 @@ impl ForgejoClient {
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.deadline = CommandDeadline::after(timeout);
+        self
+    }
+
+    pub fn with_deadline(mut self, deadline: CommandDeadline) -> Self {
+        self.deadline = deadline;
         self
     }
 
@@ -500,10 +506,14 @@ impl ForgejoClient {
         payload: Option<Value>,
         accept: &str,
     ) -> ForgejoResult<Vec<u8>> {
+        let remaining = self
+            .deadline
+            .remaining()
+            .ok_or_else(|| ForgejoError::new("Forgejo command deadline exceeded"))?;
         let mut request = self
             .http
             .request(method, self.request_url(&url)?)
-            .timeout(self.timeout)
+            .timeout(remaining)
             .header(ACCEPT, accept)
             .header(USER_AGENT, USER_AGENT_VALUE);
 
@@ -518,13 +528,9 @@ impl ForgejoClient {
             request = request.header(CONTENT_TYPE, "application/json").body(body);
         }
 
-        let response = request
-            .send()
-            .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
+        let response = request.send().map_err(request_error)?;
         let status = response.status();
-        let response_data = response
-            .bytes()
-            .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
+        let response_data = response.bytes().map_err(request_error)?;
         let response_data = response_data.to_vec();
 
         if !status.is_success() {
@@ -536,6 +542,14 @@ impl ForgejoClient {
         }
 
         Ok(response_data)
+    }
+}
+
+fn request_error(error: reqwest::Error) -> ForgejoError {
+    if error.is_timeout() {
+        ForgejoError::new("Forgejo command deadline exceeded")
+    } else {
+        ForgejoError::new(format!("Forgejo API request failed: {error}"))
     }
 }
 
