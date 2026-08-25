@@ -13,6 +13,10 @@ use gh_forgejo_shim::forgejo::{ForgejoClient, RepoRef};
 use serde_json::{json, Value};
 use support::{CliFixture, TestResult};
 
+const PR_CHECKS_FIELDS: &str =
+    "bucket,completedAt,description,event,link,name,startedAt,state,workflow";
+const PR_VIEW_FIELDS: &str = "additions,author,autoMergeRequest,baseRefName,comments,createdAt,deletions,headRefName,headRefOid,isDraft,latestReviews,mergedAt,mergedBy,mergeStateStatus,mergeable,number,reviews,reviewDecision,reviewRequests,state,title,updatedAt,url,body,commits";
+
 #[test]
 fn managed_gh_traced_watch_keeps_inherited_streaming() -> TestResult {
     let fixture = CliFixture::new()?;
@@ -39,8 +43,9 @@ fn managed_gh_traced_watch_keeps_inherited_streaming() -> TestResult {
         .args([
             "pr",
             "checks",
-            "13",
             "--watch",
+            "--json",
+            PR_CHECKS_FIELDS,
             "--repo",
             "github.com/owner/repo",
         ])
@@ -97,9 +102,11 @@ fn managed_gh_traced_help_keeps_unknown_output_counts() -> TestResult {
         .args([
             "pr",
             "view",
+            "--help",
+            "--json",
+            PR_VIEW_FIELDS,
             "--repo",
             "git.example.com/owner/repo",
-            "--help",
         ])
         .output()?;
 
