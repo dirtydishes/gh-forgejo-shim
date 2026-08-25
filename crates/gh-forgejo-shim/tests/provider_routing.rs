@@ -231,6 +231,47 @@ fn assert_selector_rejected(argv: &[&str], expected_error: &str) -> TestResult {
     Ok(())
 }
 
+fn assert_empty_segment_selector_rejected(selector: &str) -> TestResult {
+    let runner = RouteRunner::new()?;
+    runner.configure_forgejo("http://127.0.0.1:1/api/v1")?;
+    let output = runner.run(
+        "GH_REPO",
+        "git.example.com/base/repo",
+        &["issue", "view", "--repo", selector, "13"],
+    )?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert_eq!(output.status.code(), Some(1), "{selector}: {stderr}");
+    assert_eq!(stdout, "", "{selector}");
+    assert!(
+        stderr.contains("invalid repository selector"),
+        "{selector}: {stderr}"
+    );
+    assert!(!stderr.contains("delegated-to-github"), "{selector}");
+    Ok(())
+}
+
+#[test]
+fn trailing_empty_explicit_repo_segment_fails_closed() -> TestResult {
+    assert_empty_segment_selector_rejected("git.example.com/owner/")
+}
+
+#[test]
+fn leading_empty_explicit_repo_segment_fails_closed() -> TestResult {
+    assert_empty_segment_selector_rejected("/owner/repo")
+}
+
+#[test]
+fn repeated_empty_owner_repo_segment_fails_closed() -> TestResult {
+    assert_empty_segment_selector_rejected("owner//repo")
+}
+
+#[test]
+fn repeated_empty_host_repo_segment_fails_closed() -> TestResult {
+    assert_empty_segment_selector_rejected("git.example.com//repo")
+}
+
 #[test]
 fn malformed_repo_flag_cannot_be_overwritten_by_a_later_valid_flag() -> TestResult {
     assert_selector_rejected(
