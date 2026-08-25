@@ -273,6 +273,32 @@ fn repeated_empty_host_repo_segment_fails_closed() -> TestResult {
 }
 
 #[test]
+fn url_query_cannot_hide_a_trailing_empty_repo_segment() -> TestResult {
+    assert_empty_segment_selector_rejected("https://github.com/owner/repo/?tab=readme")
+}
+
+#[test]
+fn url_fragment_cannot_hide_a_trailing_empty_repo_segment() -> TestResult {
+    assert_empty_segment_selector_rejected("https://github.com/owner/repo/#readme")
+}
+
+#[test]
+fn long_help_does_not_bypass_explicit_repo_validation() -> TestResult {
+    assert_selector_rejected(
+        &["issue", "view", "--repo=owner//repo", "--help"],
+        "invalid repository selector",
+    )
+}
+
+#[test]
+fn clustered_help_does_not_bypass_explicit_repo_validation() -> TestResult {
+    assert_selector_rejected(
+        &["issue", "view", "-hRowner//repo", "13"],
+        "invalid repository selector",
+    )
+}
+
+#[test]
 fn malformed_repo_flag_cannot_be_overwritten_by_a_later_valid_flag() -> TestResult {
     assert_selector_rejected(
         &[
