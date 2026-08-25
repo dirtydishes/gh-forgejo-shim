@@ -3,9 +3,13 @@ mod support;
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::TcpListener;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
+use gh_forgejo_shim::forgejo::{ForgejoClient, RepoRef};
 use gh_forgejo_shim::VERSION;
 use serde_json::{json, Value};
 use support::{load_contract, CliFixture, TestResult};
@@ -599,6 +603,43 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
     assert_eq!(record["stdout"], json!({"state": "unknown", "bytes": null}));
     assert_eq!(record["stderr"], json!({"state": "unknown", "bytes": null}));
     assert_eq!(String::from_utf8(output.stdout)?, "traced\n");
+    Ok(())
+}
+
+#[test]
+fn forgejo_client_shares_one_deadline_across_sequential_requests() -> TestResult {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let host = listener.local_addr()?.to_string();
+    let handle = thread::spawn(move || -> io::Result<()> {
+        for (delay, body) in [
+            (Duration::from_millis(100), r#"{"id":1}"#),
+            (Duration::from_millis(250), r#"{"id":2}"#),
+        ] {
+            let (mut stream, _) = listener.accept()?;
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request)?;
+            thread::sleep(delay);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+        Ok(())
+    });
+    let client = ForgejoClient::new(None)
+        .with_scheme("http")
+        .with_timeout(Duration::from_millis(300));
+    let repo = RepoRef::new(host, "owner", "repo");
+
+    assert_eq!(client.get_repo(&repo)?["id"], 1);
+    let second = client.get_repo(&repo);
+    let _ = handle.join();
+
+    let error = second
+        .err()
+        .ok_or_else(|| io::Error::other("second request reset the command deadline"))?;
+    assert_eq!(error.to_string(), "Forgejo command deadline exceeded");
     Ok(())
 }
 

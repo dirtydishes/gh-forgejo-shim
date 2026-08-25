@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, EnvMap};
 use crate::deadline::CommandDeadline;
-use crate::external::{find_program, run_program_capture, run_program_inherit};
+use crate::external::{
+    find_program, run_program_capture, run_program_inherit, CountingWriter, ProgramOutput,
+};
 use crate::invocation::{Command, ParsedInvocation};
 use crate::provider::{HostProfile, HostRegistry, ProviderResolution};
 use crate::read_only;
@@ -272,20 +274,30 @@ fn run_gh(
     let decision = decide_parsed_route(&invocation, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
-    let exit_code = match &decision {
-        RouteDecision::Delegate { .. } => run_delegate(&argv, &env, cwd, &config, &mut mode),
+    let result = match &decision {
+        RouteDecision::Delegate { .. } => run_delegate(
+            &argv,
+            &env,
+            cwd,
+            &config,
+            trace_enabled,
+            trace::observes_output(&argv, invocation.command()),
+            &mut mode,
+        ),
         RouteDecision::Forgejo { target, .. } => run_forgejo(
             &invocation,
             &env,
             cwd,
             target,
-            observed_command(&argv, &invocation).then_some(&deadline),
+            trace::observes_output(&argv, invocation.command()).then_some(&deadline),
             &mut mode,
         ),
-        RouteDecision::Reject { reason } => {
-            write_error(&mut mode, &format!("gh-forgejo-shim: {reason}"));
-            1
-        }
+        RouteDecision::Reject { reason } => command_error(
+            &mut mode,
+            &format!("gh-forgejo-shim: {reason}"),
+            1,
+            trace_enabled,
+        ),
     };
 
     if trace_enabled {
@@ -294,12 +306,13 @@ fn run_gh(
             &argv,
             cwd,
             Some(&decision),
+            trace::command_class(&argv, invocation.command()),
             started.elapsed().as_secs_f64() * 1000.0,
-            exit_code,
+            &result,
         );
     }
 
-    exit_code
+    result.code
 }
 
 fn run_delegate(
@@ -307,38 +320,58 @@ fn run_delegate(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     config: &DispatcherConfig,
+    trace_enabled: bool,
+    observed_command: bool,
     mode: &mut DelegateMode<'_>,
-) -> i32 {
+) -> trace::CommandOutcome {
     let Some(real_gh) = find_program("gh", config.real_gh.as_deref(), env) else {
-        write_error(
+        return command_error(
             mode,
             "gh-forgejo-shim: could not find the real gh executable; set FJ_SHIM_REAL_GH",
+            127,
+            trace_enabled,
         );
-        return 127;
     };
 
     match mode {
-        DelegateMode::Inherit => match run_program_inherit(&real_gh, argv, env, cwd) {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("{error}");
-                127
+        DelegateMode::Inherit if trace_enabled && observed_command => {
+            match run_program_capture(&real_gh, argv, env, cwd) {
+                Ok(output) => {
+                    let stdout = io::stdout();
+                    let stderr = io::stderr();
+                    forward_captured(output, &mut stdout.lock(), &mut stderr.lock())
+                }
+                Err(error) => command_error(mode, &error.to_string(), 127, true),
             }
+        }
+        DelegateMode::Inherit => match run_program_inherit(&real_gh, argv, env, cwd) {
+            Ok(code) => trace::CommandOutcome::unknown(code),
+            Err(error) => command_error(mode, &error.to_string(), 127, trace_enabled),
         },
         DelegateMode::Capture { stdout, stderr } => {
             match run_program_capture(&real_gh, argv, env, cwd) {
+                Ok(output) if trace_enabled => forward_captured(output, *stdout, *stderr),
                 Ok(output) => {
                     let _ = stdout.write_all(&output.stdout);
                     let _ = stderr.write_all(&output.stderr);
-                    output.code
+                    trace::CommandOutcome::unknown(output.code)
                 }
-                Err(error) => {
-                    let _ = writeln!(stderr, "{error}");
-                    127
-                }
+                Err(error) => command_error(mode, &error.to_string(), 127, trace_enabled),
             }
         }
     }
+}
+
+fn forward_captured(
+    output: ProgramOutput,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> trace::CommandOutcome {
+    let stdout_bytes = output.stdout.len();
+    let stderr_bytes = output.stderr.len();
+    let _ = stdout.write_all(&output.stdout);
+    let _ = stderr.write_all(&output.stderr);
+    trace::CommandOutcome::observed(output.code, stdout_bytes, stderr_bytes)
 }
 
 fn run_forgejo(
@@ -348,31 +381,33 @@ fn run_forgejo(
     target: &ForgejoTarget,
     deadline: Option<&CommandDeadline>,
     mode: &mut DelegateMode<'_>,
-) -> i32 {
+) -> trace::CommandOutcome {
     match mode {
         DelegateMode::Inherit => {
             let stdout = io::stdout();
             let stderr = io::stderr();
             let stdin = io::stdin();
-            read_only::run(
+            let mut stdout_lock = stdout.lock();
+            let mut stderr_lock = stderr.lock();
+            run_forgejo_with_writers(
                 invocation,
-                target,
-                deadline,
                 env,
                 cwd,
-                &mut stdout.lock(),
-                &mut stderr.lock(),
+                target,
+                deadline,
+                &mut stdout_lock,
+                &mut stderr_lock,
                 &mut stdin.lock(),
             )
         }
         DelegateMode::Capture { stdout, stderr } => {
             let stdin = io::stdin();
-            read_only::run(
+            run_forgejo_with_writers(
                 invocation,
-                target,
-                deadline,
                 env,
                 cwd,
+                target,
+                deadline,
                 *stdout,
                 *stderr,
                 &mut stdin.lock(),
@@ -381,11 +416,57 @@ fn run_forgejo(
     }
 }
 
-fn observed_command(argv: &[String], invocation: &ParsedInvocation) -> bool {
-    matches!(
-        invocation.command(),
-        Command::AuthStatus | Command::PrChecks | Command::PrList | Command::PrView
-    ) || argv == ["--version"]
+#[allow(clippy::too_many_arguments)]
+fn run_forgejo_with_writers(
+    invocation: &ParsedInvocation,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+    target: &ForgejoTarget,
+    deadline: Option<&CommandDeadline>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    stdin: &mut dyn io::Read,
+) -> trace::CommandOutcome {
+    let mut stdout = CountingWriter::new(stdout);
+    let mut stderr = CountingWriter::new(stderr);
+    let code = read_only::run(
+        invocation,
+        target,
+        deadline,
+        env,
+        cwd,
+        &mut stdout,
+        &mut stderr,
+        stdin,
+    );
+    trace::CommandOutcome::observed(code, stdout.bytes(), stderr.bytes())
+}
+
+fn command_error(
+    mode: &mut DelegateMode<'_>,
+    message: &str,
+    code: i32,
+    trace_enabled: bool,
+) -> trace::CommandOutcome {
+    if !trace_enabled {
+        write_error(mode, message);
+        return trace::CommandOutcome::unknown(code);
+    }
+
+    match mode {
+        DelegateMode::Inherit => {
+            let stderr = io::stderr();
+            let mut stderr_lock = stderr.lock();
+            let mut stderr = CountingWriter::new(&mut stderr_lock);
+            let _ = writeln!(stderr, "{message}");
+            trace::CommandOutcome::observed(code, 0, stderr.bytes())
+        }
+        DelegateMode::Capture { stderr, .. } => {
+            let mut stderr = CountingWriter::new(*stderr);
+            let _ = writeln!(stderr, "{message}");
+            trace::CommandOutcome::observed(code, 0, stderr.bytes())
+        }
+    }
 }
 
 fn write_error(mode: &mut DelegateMode<'_>, message: &str) {

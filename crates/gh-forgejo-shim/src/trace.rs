@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+use crate::invocation::Command;
 use crate::repo::RepoRef;
 use crate::routing::RouteDecision;
 
@@ -17,6 +18,76 @@ const FALSE_VALUES: &[&str] = &["", "0", "false", "no", "off"];
 const REDACTED: &str = "<redacted>";
 const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", "--token"];
 const SENSITIVE_KEY_PARTS: &[&str] = &["credential", "password", "secret", "token"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputObservation {
+    Observed(usize),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CommandOutcome {
+    pub code: i32,
+    pub stdout: OutputObservation,
+    pub stderr: OutputObservation,
+}
+
+impl CommandOutcome {
+    pub const fn unknown(code: i32) -> Self {
+        Self {
+            code,
+            stdout: OutputObservation::Unknown,
+            stderr: OutputObservation::Unknown,
+        }
+    }
+
+    pub const fn observed(code: i32, stdout: usize, stderr: usize) -> Self {
+        Self {
+            code,
+            stdout: OutputObservation::Observed(stdout),
+            stderr: OutputObservation::Observed(stderr),
+        }
+    }
+}
+
+impl OutputObservation {
+    fn record(self) -> Value {
+        match self {
+            Self::Observed(bytes) => json!({"state": "observed", "bytes": bytes}),
+            Self::Unknown => json!({"state": "unknown", "bytes": null}),
+        }
+    }
+}
+
+pub fn observes_output(argv: &[String], command: Command) -> bool {
+    matches!(
+        command,
+        Command::AuthStatus | Command::PrChecks | Command::PrList | Command::PrView
+    ) || argv == ["--version"]
+}
+
+pub fn command_class(argv: &[String], command: Command) -> &'static str {
+    match command {
+        Command::GlobalDelegate if argv == ["--version"] => "version",
+        Command::GlobalDelegate => "global",
+        Command::AuthStatus => "auth-status",
+        Command::AuthToken => "auth-token",
+        Command::Api => "api",
+        Command::RepoView => "repo-view",
+        Command::PrChecks => "pr-checks",
+        Command::PrCheckout => "pr-checkout",
+        Command::PrComment => "pr-comment",
+        Command::PrCreate => "pr-create",
+        Command::PrDiff => "pr-diff",
+        Command::PrList => "pr-list",
+        Command::PrStatus => "pr-status",
+        Command::PrView => "pr-view",
+        Command::IssueCreate => "issue-create",
+        Command::IssueList => "issue-list",
+        Command::IssueView => "issue-view",
+        Command::Unsupported => "unsupported",
+    }
+}
 
 pub fn tracing_enabled(env: &HashMap<String, String>) -> bool {
     env.get(TRACE_ENV)
@@ -32,13 +103,14 @@ pub fn append_gh_record(
     argv: &[String],
     cwd: Option<&Path>,
     decision: Option<&RouteDecision>,
+    command_class: &str,
     duration_ms: f64,
-    exit_code: i32,
+    outcome: &CommandOutcome,
 ) -> bool {
     let Some(path) = trace_path(env) else {
         return false;
     };
-    let record = build_gh_record(argv, cwd, decision, duration_ms, exit_code);
+    let record = build_gh_record(argv, cwd, decision, command_class, duration_ms, outcome);
     append_jsonl(&path, &record).is_ok()
 }
 
@@ -46,8 +118,9 @@ fn build_gh_record(
     argv: &[String],
     cwd: Option<&Path>,
     decision: Option<&RouteDecision>,
+    command_class: &str,
     duration_ms: f64,
-    exit_code: i32,
+    outcome: &CommandOutcome,
 ) -> Value {
     let route = decision
         .map(|decision| {
@@ -60,6 +133,11 @@ fn build_gh_record(
 
     let host = decision.and_then(RouteDecision::trace_host);
     let repo = decision.and_then(RouteDecision::repo);
+    let provider = decision.map_or("unknown", |decision| match decision.kind() {
+        crate::routing::RouteKind::Delegate => "github",
+        crate::routing::RouteKind::Forgejo => "forgejo",
+        crate::routing::RouteKind::Reject => "none",
+    });
 
     json!({
         "kind": "gh",
@@ -68,13 +146,15 @@ fn build_gh_record(
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| std::env::current_dir().map_or_else(|_| String::new(), |path| path.display().to_string())),
         "argv": redact_argv(argv),
+        "provider": provider,
+        "command_class": command_class,
         "route": route,
         "host": host,
         "repo": repo.map(repo_record),
         "duration_ms": duration_ms,
-        "exit_code": exit_code,
-        "stdout": {"bytes": null},
-        "stderr": {"bytes": null},
+        "exit_code": outcome.code,
+        "stdout": outcome.stdout.record(),
+        "stderr": outcome.stderr.record(),
     })
 }
 
