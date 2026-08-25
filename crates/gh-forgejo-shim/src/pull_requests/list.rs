@@ -4,6 +4,8 @@ use crate::forgejo::{ForgejoClient, ForgejoError, ForgejoResult, RepoRef};
 use crate::normalize::normalize_pull;
 
 pub(crate) const PAGE_SIZE: usize = 50;
+const DEFAULT_LIMIT: usize = 30;
+const MAX_CANDIDATES: usize = 1_000;
 
 pub(crate) trait PullRequestSource {
     fn current_user_login(&self, host: &str) -> ForgejoResult<String>;
@@ -52,6 +54,10 @@ pub(crate) fn discover<S: PullRequestSource + ?Sized>(
     repo: &RepoRef,
     query: &PullRequestQuery<'_>,
 ) -> ForgejoResult<Vec<Value>> {
+    let output_limit = query.limit.unwrap_or(DEFAULT_LIMIT);
+    if output_limit == 0 {
+        return Ok(Vec::new());
+    }
     let author = match query.author {
         Some("@me") => Some(source.current_user_login(&repo.host)?),
         Some(author) => Some(author.to_string()),
@@ -62,12 +68,32 @@ pub(crate) fn discover<S: PullRequestSource + ?Sized>(
     } else {
         query.state
     };
-    let mut pulls = source.pull_request_page(repo, api_state, 1, PAGE_SIZE)?;
-    pulls.retain(|pull| matches_query(pull, query, author.as_deref()));
-    if let Some(limit) = query.limit {
-        pulls.truncate(limit);
+    let mut matches = Vec::new();
+    let mut candidates = 0;
+    let mut page = 1;
+    loop {
+        let pulls = source.pull_request_page(repo, api_state, page, PAGE_SIZE)?;
+        if candidates + pulls.len() > MAX_CANDIDATES {
+            return Err(ForgejoError::new(
+                "Forgejo pull request discovery exceeded 1,000 candidates",
+            ));
+        }
+        candidates += pulls.len();
+        let terminal_page = pulls.len() < PAGE_SIZE;
+        matches.extend(
+            pulls
+                .into_iter()
+                .filter(|pull| matches_query(pull, query, author.as_deref())),
+        );
+        if matches.len() >= output_limit {
+            matches.truncate(output_limit);
+            return Ok(matches);
+        }
+        if terminal_page {
+            return Ok(matches);
+        }
+        page += 1;
     }
-    Ok(pulls)
 }
 
 fn matches_query(pull: &Value, query: &PullRequestQuery<'_>, author: Option<&str>) -> bool {
@@ -206,7 +232,8 @@ mod tests {
     fn finds_a_filtered_match_on_page_two() {
         let source = FakeSource::new(vec![page(1, PAGE_SIZE, "bob"), page(51, 1, "alice")]);
 
-        let pulls = discover(&source, &repo(), &query(Some("@me"), None)).unwrap();
+        let pulls = discover(&source, &repo(), &query(Some("@me"), None))
+            .expect("page-2 discovery should succeed");
 
         assert_eq!(pulls, vec![pull(51, "alice", "main")]);
         assert_eq!(source.current_user_calls.get(), 1);
@@ -220,7 +247,8 @@ mod tests {
     fn stops_after_an_empty_terminal_page() {
         let source = FakeSource::new(vec![page(1, PAGE_SIZE, "bob"), Vec::new()]);
 
-        let pulls = discover(&source, &repo(), &query(Some("@me"), None)).unwrap();
+        let pulls = discover(&source, &repo(), &query(Some("@me"), None))
+            .expect("terminal empty page should succeed");
 
         assert!(pulls.is_empty());
         assert_eq!(source.requests.borrow().len(), 2);
@@ -230,7 +258,8 @@ mod tests {
     fn applies_the_real_gh_default_limit_of_thirty() {
         let source = FakeSource::new(vec![page(1, PAGE_SIZE, "alice")]);
 
-        let pulls = discover(&source, &repo(), &query(Some("alice"), None)).unwrap();
+        let pulls = discover(&source, &repo(), &query(Some("alice"), None))
+            .expect("default-limited discovery should succeed");
 
         assert_eq!(pulls.len(), 30);
         assert_eq!(source.current_user_calls.get(), 0);
@@ -241,7 +270,8 @@ mod tests {
     fn explicit_limit_can_reach_page_two() {
         let source = FakeSource::new(vec![page(1, PAGE_SIZE, "alice"), page(51, 1, "alice")]);
 
-        let pulls = discover(&source, &repo(), &query(Some("alice"), Some(51))).unwrap();
+        let pulls = discover(&source, &repo(), &query(Some("alice"), Some(51)))
+            .expect("explicit-limit discovery should succeed");
 
         assert_eq!(pulls.len(), 51);
         assert_eq!(source.requests.borrow().len(), 2);
@@ -255,7 +285,8 @@ mod tests {
         pages.push(page(1001, 1, "alice"));
         let source = FakeSource::new(pages);
 
-        let error = discover(&source, &repo(), &query(Some("@me"), None)).unwrap_err();
+        let error = discover(&source, &repo(), &query(Some("@me"), None))
+            .expect_err("candidate overflow must fail");
 
         assert_eq!(
             error.message(),
@@ -268,7 +299,8 @@ mod tests {
     fn returns_an_error_instead_of_partial_data_when_a_later_page_fails() {
         let source = FakeSource::new(vec![page(1, PAGE_SIZE, "bob")]).failing_on(2);
 
-        let error = discover(&source, &repo(), &query(Some("@me"), None)).unwrap_err();
+        let error = discover(&source, &repo(), &query(Some("@me"), None))
+            .expect_err("later-page failure must remain an error");
 
         assert_eq!(error.message(), "simulated deadline exceeded");
         assert_eq!(source.requests.borrow().len(), 2);
@@ -288,7 +320,8 @@ mod tests {
             pull(4, "alice", "other"),
         ]]);
 
-        let pulls = discover(&source, &repo(), &query(Some("@me"), Some(30))).unwrap();
+        let pulls = discover(&source, &repo(), &query(Some("@me"), Some(30)))
+            .expect("head and author filtering should succeed");
 
         let numbers = pulls
             .iter()

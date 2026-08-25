@@ -196,7 +196,7 @@ fn fixture_preserves_the_accepted_process_boundary() -> TestResult {
 
 #[test]
 fn forgejo_alias_identity_routes_to_canonical_api_root() -> TestResult {
-    let (host, handle) = start_json_server(vec![r#"[]"#])?;
+    let (host, handle) = start_json_server(vec![r#"{"login":"alice"}"#, r#"[]"#])?;
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
     let api_root = format!("http://{host}/api/v1");
@@ -241,9 +241,10 @@ fn forgejo_alias_identity_routes_to_canonical_api_root() -> TestResult {
     );
     assert_eq!(String::from_utf8(output.stdout)?, "[]\n");
     assert_eq!(String::from_utf8(output.stderr)?, "");
-    assert_eq!(request_lines.len(), 1);
+    assert_eq!(request_lines.len(), 2);
+    assert_request(&request_lines[0], "/api/v1/user")?;
     assert_request(
-        &request_lines[0],
+        &request_lines[1],
         "/api/v1/repos/dirtydishes/dirtypages/pulls",
     )?;
     Ok(())
@@ -251,7 +252,7 @@ fn forgejo_alias_identity_routes_to_canonical_api_root() -> TestResult {
 
 #[test]
 fn forgejo_alias_uses_full_configured_api_root() -> TestResult {
-    let (host, handle) = start_json_server(vec![r#"[]"#])?;
+    let (host, handle) = start_json_server(vec![r#"{"login":"alice"}"#, r#"[]"#])?;
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
     let api_root = format!("http://{host}/forgejo/api/v1");
@@ -291,9 +292,10 @@ fn forgejo_alias_uses_full_configured_api_root() -> TestResult {
     );
     assert_eq!(String::from_utf8(output.stdout)?, "[]\n");
     assert_eq!(String::from_utf8(output.stderr)?, "");
-    assert_eq!(request_lines.len(), 1);
+    assert_eq!(request_lines.len(), 2);
+    assert_request(&request_lines[0], "/forgejo/api/v1/user")?;
     assert_request(
-        &request_lines[0],
+        &request_lines[1],
         "/forgejo/api/v1/repos/dirtydishes/dirtypages/pulls",
     )?;
     Ok(())
