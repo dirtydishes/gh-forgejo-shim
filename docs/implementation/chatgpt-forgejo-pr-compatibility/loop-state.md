@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-C1 combined repair pass `2/3` is pushed at `b34c5bb1f37b66e100586c3d1a858379e5f46a0f` with `0/0` parity. The command-aware target boundary, fallible config ingestion, uppercase number handling, 51-case grammar table, nine-case process isolation table, and full locked local gate are green. Both independent roles must rerun the exact range before CI admission. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
+C1 final combined repair pass `3/3` is pushed at `c581a7c4c38e5708c8542f34dc863afcfa49dd82` with `0/0` parity. Attached short values, the installed `gh` flag surface, and explicit selectors in unsupported command trees are covered alongside the earlier consumed-payload checks. The 145-unit, 30-process, 5-active-contract, and 6-HTTP full locked gate is green. Both independent roles must rerun the exact range before CI admission; any required finding now exhausts the shared limit. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
