@@ -26,7 +26,7 @@ Current execution strategy: direct coordinator TDD for PR discovery, `@me`, and 
 
 Last completed phase: S5
 
-Blocked: no — S6 is undergoing a narrow ownership-attestation refresh before TDD
+Blocked: no — S6 passed its refreshed ownership gates and is reclaimed for TDD
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S6 is undergoing a narrow ownership-attestation refresh before T
 
 ## Last Coordinator Update
 
-S6's exact ownership now includes the phase-named build-6720 process contract at `crates/gh-forgejo-shim/tests/chatgpt_build_6720.rs`; pagination and cap unit evidence stays in the already-owned pull-request list module. Beads records the narrow adaptation and the refreshed attestation. The leaf is open only while exact execution and live launch readiness rerun; production mutation waits for both gates and a fresh claim. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S6's exact ownership now includes the phase-named build-6720 process contract at `crates/gh-forgejo-shim/tests/chatgpt_build_6720.rs`; pagination and cap unit evidence stays in the already-owned pull-request list module. Refreshed exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The same coordinator reclaimed S6 after both gates and pushed Dolt. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
