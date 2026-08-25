@@ -4,7 +4,7 @@ Canonical tracker: Beads epic `gh-forgejo-shim-6y9`
 
 This file is a compact resume aid only. If this file disagrees with Beads, Beads wins.
 
-Status: pass-6 admission pending
+Status: in progress
 
 Stream: `chatgpt-forgejo-pr-compatibility`
 
@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator repair at the existing invocation/provider-target seam after fresh pass-6 admission
+Current execution strategy: direct coordinator pass-6 repair at the existing invocation/provider-target seam
 
 Last completed phase: S3
 
-Blocked: yes — pass `6/6` is authorized, but C1 remains unclaimed until its refreshed execution and launch readiness gates pass
+Blocked: no — C1 pass `6/6` is claimed after exact execution and live launch readiness passed with empty findings
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Blocked: yes — pass `6/6` is authorized, but C1 remains unclaimed until its re
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | admission pending | `#29` | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | in progress | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: yes — pass `6/6` is authorized, but C1 remains unclaimed until its re
 
 ## Last Coordinator Update
 
-The user authorized one narrow C1 pass `6/6` on frozen repair head `06abf54fa250ce48dc050b86c386edf613e7d100`. It owns only the required selector-occurrence finding: keep and validate every explicit flag and `repo view` positional selector, reject malformed or conflicting repetitions, and treat attached empty `-R=` as invalid without consuming the next token. The Beads amendment is canonical and pushed. C1 stays blocked and unclaimed until the coordinator refreshes only its execution-readiness attestation and both exact readiness gates pass. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+Pass `6/6` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `b278c7dc804c5442f637eae537b5523e1297ced90d5066419220b052578227e0`. Exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. C1 was claimed only after both gates passed at clean pushed head `dbe5081e1ae930ed3dea87141605070a308f7f18`. Next, freeze the three exact process repros before production mutation. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
