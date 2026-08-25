@@ -195,24 +195,51 @@ fn fixture_preserves_the_accepted_process_boundary() -> TestResult {
 }
 
 #[test]
-#[ignore = "red contract probe: alias identity belongs to S2 and S3"]
 fn forgejo_alias_identity_is_not_yet_canonicalized() -> TestResult {
+    let (host, handle) = start_json_server(vec![r#"[]"#])?;
     let fixture = CliFixture::new()?;
     fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\n")?;
+    let api_root = format!("http://{host}/api/v1");
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            "127.0.0.1",
+            "--api-root",
+            &api_root,
+        ])
+        .output()?;
+    assert_eq!(
+        configured.status.code(),
+        Some(0),
+        "host-profile setup failed: {}",
+        String::from_utf8_lossy(&configured.stderr)
+    );
     let contract = load_contract()?;
     let pr_list = command(&contract, "pr_list")?;
 
     let output = fixture
         .command("gh-forgejo-shim")?
         .env_remove("FJ_SHIM_REAL_GH")
-        .env("FJ_SHIM_HOSTS", "git.dirtydishes.dev")
+        .env_remove("FJ_SHIM_HOSTS")
         .arg("gh")
         .args(&pr_list.argv)
         .output()?;
+    let request_lines = handle
+        .join()
+        .map_err(|_| io::Error::other("fake server thread panicked"))??;
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8(output.stdout)?, "[]\n");
     assert_eq!(String::from_utf8(output.stderr)?, "");
+    assert_eq!(request_lines.len(), 1);
+    assert_request(
+        &request_lines[0],
+        "/api/v1/repos/dirtydishes/dirtypages/pulls?state=all",
+    )?;
     Ok(())
 }
 
