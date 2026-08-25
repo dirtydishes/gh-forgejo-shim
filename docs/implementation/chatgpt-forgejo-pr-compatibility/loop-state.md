@@ -26,7 +26,7 @@ Current execution strategy: direct coordinator TDD for shared deadline and truth
 
 Last completed phase: S4
 
-Blocked: no — S5 passed both readiness gates and is claimed
+Blocked: no — S5 passed both refreshed readiness gates and is being reclaimed
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S5 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S5 exact execution readiness returned `ready` with `findings: []`; live launch returned `boundary_status: ready`, `status: launchable`, and `findings: []`. Evidence required the narrow addition of `read_only.rs`, which constructs `ForgejoClient`, to carry one command-wide deadline without reset. The canonical helper refreshed the Beads projection to `5bd86070b0462f08f4876ba29b951715f4043a8eda3c9e39a3b10450440e607b`; both exact gates passed again before reclaim. Direct coordinator TDD now owns the shared deadline and truthful trace boundary. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S5 added one narrow ownership adjustment before red tests. `deadline.rs` and its `lib.rs` export keep the shared clock outside the 975-line Forgejo transport module, while `tests/cli_scaffold.rs` proves trace truth at the managed-`gh` process seam. The installed helper refreshed only S5's execution attestation to Beads projection `3507aa60b352ea8ad54679c59938774ad9c14e2ea10dbc12d57b645c06e733f5`. Exact execution readiness returned `ready` with `findings: []`; live launch returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
