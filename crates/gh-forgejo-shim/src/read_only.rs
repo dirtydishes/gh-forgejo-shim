@@ -3326,6 +3326,65 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_http_targets_preserve_pull_and_issue_numbers() {
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 7,
+                "title": "Uppercase pull",
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/pulls/7",
+                "head": {"ref": "feature", "sha": "abc123"},
+                "base": {"ref": "main"},
+                "user": {"login": "alice"}
+            })],
+            issues: vec![json!({
+                "number": 13,
+                "title": "Uppercase issue",
+                "state": "open",
+                "html_url": "https://git.example.com/owner/repo/issues/13",
+                "user": {"login": "alice"}
+            })],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr",
+                "view",
+                "HTTPS://git.example.com/owner/repo/pulls/7",
+                "--json",
+                "number",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).ok(),
+            Some(json!({"number": 7}))
+        );
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "issue",
+                "view",
+                "HTTP://git.example.com/owner/repo/issues/13",
+                "--json",
+                "number",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).ok(),
+            Some(json!({"number": 13}))
+        );
+    }
+
+    #[test]
     fn repo_and_issue_json_outputs_match_github_shapes() {
         let client = FakeApi {
             issues: vec![json!({

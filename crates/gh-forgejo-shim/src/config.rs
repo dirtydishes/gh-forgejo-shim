@@ -605,6 +605,22 @@ aliases = ["git.local"]
     }
 
     #[test]
+    fn malformed_canonical_hosts_fail_configuration_loading() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(&path, "hosts = [\"https://user@git.example.com/path\"]\n")
+            .map_err(|error| ShimError::new(error.to_string()))?;
+
+        assert!(load_runtime_config_with_env(Some(&path), &EnvMap::new()).is_err());
+
+        let env = env([("FJ_SHIM_HOSTS", "https://user@git.example.com/path")]);
+        assert!(load_runtime_config_with_env(Some(&path), &env).is_err());
+
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn add_and_remove_host_round_trips_python_readable_toml() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");

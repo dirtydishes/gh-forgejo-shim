@@ -629,6 +629,117 @@ mod tests {
     }
 
     #[test]
+    fn consumed_route_flag_values_do_not_override_provider_identity() {
+        let forgejo_repo = env(&[("GH_REPO", "git.example.com/owner/repo")]);
+        let github_repo = env(&[("GH_REPO", "github.com/owner/repo")]);
+        let forgejo_host = env(&[("GH_HOST", "git.example.com")]);
+        let github_host = env(&[("GH_HOST", "github.com")]);
+
+        for (name, argv, env, expected) in [
+            (
+                "repo-shaped body value stays Forgejo",
+                argv(&[
+                    "pr",
+                    "create",
+                    "--title",
+                    "test",
+                    "--body",
+                    "--repo=https://github.com/other/project",
+                ]),
+                &forgejo_repo,
+                RouteKind::Forgejo,
+            ),
+            (
+                "repo-shaped body value stays GitHub",
+                argv(&[
+                    "pr",
+                    "create",
+                    "--title",
+                    "test",
+                    "--body",
+                    "--repo=https://git.example.com/other/project",
+                ]),
+                &github_repo,
+                RouteKind::Delegate,
+            ),
+            (
+                "hostname-shaped API field stays Forgejo",
+                argv(&["api", "user", "-f", "--hostname=github.com"]),
+                &forgejo_host,
+                RouteKind::Forgejo,
+            ),
+            (
+                "hostname-shaped API field stays GitHub",
+                argv(&["api", "user", "-f", "--hostname=git.example.com"]),
+                &github_host,
+                RouteKind::Delegate,
+            ),
+        ] {
+            let decision = decide_route(&argv, &config(&["git.example.com"]), env, None);
+            assert_eq!(decision.kind(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn command_grammar_preserves_explicit_provider_targets() {
+        let cases = [
+            argv(&[
+                "issue",
+                "view",
+                "-c",
+                "https://git.example.com/owner/repo/issues/13",
+            ]),
+            argv(&[
+                "pr",
+                "checks",
+                "-i",
+                "10",
+                "https://git.example.com/owner/repo/pulls/7",
+            ]),
+            argv(&[
+                "pr",
+                "checks",
+                "--interval=10",
+                "https://git.example.com/owner/repo/pulls/7",
+            ]),
+            argv(&[
+                "pr",
+                "diff",
+                "--exclude",
+                "generated",
+                "https://git.example.com/owner/repo/pulls/7",
+            ]),
+            argv(&[
+                "pr",
+                "diff",
+                "-e=generated",
+                "https://git.example.com/owner/repo/pulls/7",
+            ]),
+            argv(&["repo", "view", "git.example.com/owner/repo"]),
+        ];
+
+        for argv in cases {
+            let decision = decide_route(
+                &argv,
+                &config(&["git.example.com"]),
+                &env(&[("GH_REPO", "github.com/base/repo")]),
+                None,
+            );
+            assert_eq!(decision.kind(), RouteKind::Forgejo, "argv: {argv:?}");
+            assert_eq!(decision.trace_host(), Some("git.example.com"));
+        }
+
+        let decision = decide_route(
+            &argv(&["repo", "view", "github.com/owner/repo"]),
+            &config(&["git.example.com"]),
+            &env(&[("GH_REPO", "git.example.com/base/repo")]),
+            None,
+        );
+        assert_eq!(decision.kind(), RouteKind::Delegate);
+        assert_eq!(decision.reason(), "host github.com is not allowlisted");
+    }
+
+    #[test]
     fn configured_gh_host_stays_local_without_repository_context() {
         let decision = decide_route(
             &argv(&["workflow", "run"]),
