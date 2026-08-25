@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c05
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator S4 green repair after frozen credential-host red evidence
+Current execution strategy: direct coordinator S4 repair pass 1/3 at the text-config host-isolation seam
 
 Last completed phase: C1
 
@@ -64,4 +64,4 @@ Blocked: no — S4 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S4's amended ownership projection passed exact execution and live launch readiness with empty findings before reclaim. Test-only commit `d7911944b8980626cfd87524ccf119e10439d25e` freezes the expected failures: Linux `fj` keys are undiscovered, and alias auth status uses canonical display identity for token lookup instead of `credential_host`; the stored-auth precedence control passes. Next, make only the narrow green repair. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S4 repair head `bfa6a2c51d4afb68cd135acafc44aaa63f644c3f` passed the full local gate and exact pull-request and push CI. Independent review pass `0/3` found one required host-isolation defect: text/YAML lookup can scan from a requested host substring into a later unrelated token. Repair pass `1/3` is admitted for exact normalized host-entry binding and the two negative repro classes. Freeze those red tests before the narrow repair. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
