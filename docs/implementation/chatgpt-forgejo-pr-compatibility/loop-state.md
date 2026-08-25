@@ -4,7 +4,7 @@ Canonical tracker: Beads epic `gh-forgejo-shim-6y9`
 
 This file is a compact resume aid only. If this file disagrees with Beads, Beads wins.
 
-Status: active
+Status: blocked
 
 Stream: `chatgpt-forgejo-pr-compatibility`
 
@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct sole-writer design correction for exceptional C1 pass `4/4`, followed by separate thermonuclear and adversarial review on one frozen head
+Current execution strategy: stopped after the required adversarial reviewer returned two findings on the frozen exceptional pass `4/4` head; no pass 5 is authorized
 
 Last completed phase: S3
 
-Blocked: no
+Blocked: yes — C1 pass `4/4` retains two required adversarial findings and no pass 5 is authorized
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Blocked: no
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | in progress | `#29` | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | blocked | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-The user authorized one exceptional C1 pass `4/4` after the pass-3 blocker. Beads records `repair_pass_limit: 4`; the amended projection was refreshed through `prepareLaunchableLeaf`; execution readiness returned `ready` with `findings: []`; launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`; and C1 is reclaimed. Pass 4 must replace split routing and handler argument grammars with one command-aware interpretation, support installed `gh` attached and clustered short forms, never guess unknown option arity, fail closed on ambiguity, and prove successful local execution against the intended repository. Both required reviewers must approve one frozen pass-4 head; any required finding stops the loop without pass 5. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+Exceptional C1 pass `4/4` froze red evidence at `30f06ea188aae97dc0a8e3c6a4380aab56d8368f` and the design correction at `8e5ec4f8bfd8c4acccfdebd37d0f6cf9b8c3f3a5`. Full locked local gates and exact-commit CI passed; the thermonuclear reviewer approved with `findings: []`. The independent adversarial reviewer found two required defects: the new grammar rejects the documented `repo view -R` route, and malformed explicit repository selectors can fall through to `GH_REPO` and delegate across providers. The accepted four-pass limit is exhausted. Beads C1 is `blocked`; do not claim S4 or mutate production without a new explicit repair-limit amendment. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
