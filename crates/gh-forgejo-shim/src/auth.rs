@@ -1124,6 +1124,49 @@ mod tests {
         assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
     }
 
+    #[test]
+    fn json_token_discovery_rejects_every_invalid_host_field() {
+        for data in [
+            json!({
+                "servers": [{
+                    "host": "auth.target.test",
+                    "server": "auth.other.test",
+                    "token": "other-secret"
+                }]
+            }),
+            json!({
+                "servers": [{
+                    "host": "auth.target.test",
+                    "server": "",
+                    "token": "empty-secret"
+                }]
+            }),
+            json!({
+                "servers": [{
+                    "host": "auth.target.test",
+                    "server": 42,
+                    "token": "invalid-secret"
+                }]
+            }),
+        ] {
+            assert_eq!(find_token(&data, Some("auth.target.test")), None);
+        }
+    }
+
+    #[test]
+    fn json_token_discovery_rejects_a_conflict_inside_a_matching_key() {
+        let data = json!({
+            "hosts": {
+                "auth.target.test": {
+                    "host": "auth.other.test",
+                    "token": "other-secret"
+                }
+            }
+        });
+
+        assert_eq!(find_token(&data, Some("auth.target.test")), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn auth_temp_file_starts_private() -> Result<()> {

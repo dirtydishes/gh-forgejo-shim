@@ -451,6 +451,62 @@ fn forgejo_pr_list_resolves_author_me() -> TestResult {
 }
 
 #[test]
+fn forgejo_pr_list_rejects_a_non_array_page_without_partial_output() -> TestResult {
+    assert_malformed_pr_page_rejected(r#"{}"#)
+}
+
+#[test]
+fn forgejo_pr_list_rejects_a_mixed_page_without_partial_output() -> TestResult {
+    assert_malformed_pr_page_rejected(
+        r#"[{"number":1,"state":"open","html_url":"https://git.dirtydishes.dev/dirtydishes/dirtypages/pulls/1","head":{"ref":"main"},"base":{"ref":"main"},"user":{"login":"alice"}},"malformed"]"#,
+    )
+}
+
+fn assert_malformed_pr_page_rejected(page_body: &'static str) -> TestResult {
+    let contract = load_contract()?;
+    let argv = &command(&contract, "pr_list")?.argv;
+    let (host, handle) = start_json_server(vec![r#"{"login":"alice"}"#, page_body])?;
+    let fixture = CliFixture::new()?;
+    let api_root = format!("http://{host}/api/v1");
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            "127.0.0.1",
+            "--api-root",
+            &api_root,
+            "--credential-host",
+            "git.dirtydishes.dev",
+        ])
+        .output()?;
+    assert_eq!(configured.status.code(), Some(0));
+
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_TOKEN", "test-token")
+        .env_remove("FJ_SHIM_HOSTS")
+        .arg("gh")
+        .args(argv)
+        .output()?;
+    let request_lines = handle
+        .join()
+        .map_err(|_| io::Error::other("fake server thread panicked"))??;
+
+    assert_eq!(output.status.code(), Some(1), "{page_body}");
+    assert_eq!(String::from_utf8(output.stdout)?, "", "{page_body}");
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        "gh-forgejo-shim: Forgejo API returned an invalid pull request page\n",
+        "{page_body}"
+    );
+    assert_eq!(request_lines.len(), 2);
+    Ok(())
+}
+
+#[test]
 #[ignore = "red contract probe: the missing pr view fields belong to S7 and S8"]
 fn forgejo_pr_view_does_not_yet_emit_all_25_fields() -> TestResult {
     let contract = load_contract()?;
