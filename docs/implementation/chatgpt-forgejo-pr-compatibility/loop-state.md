@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c07
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: admission pending for PR discovery, `@me`, and pagination
+Current execution strategy: direct coordinator TDD for PR discovery, `@me`, and pagination
 
 Last completed phase: S5
 
-Blocked: no — S6 exact execution and launch readiness are next
+Blocked: no — S6 passed both readiness gates and is claimed for TDD
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — S6 exact execution and launch readiness are next
 
 ## Last Coordinator Update
 
-S5 closed at repair pass `2/3` on frozen head `e21f9e1cb2eabdb6997861df8308901068ea1154`. Independent review approved with `findings: []`; full locked local gates passed with 219 active tests and 3 planned ignored; exact-head pull-request run `32843514583` and push run `32843510698` passed both required jobs. Beads and Dolt are closed and pushed. S6 is next and must pass exact execution readiness plus live launch readiness before claim. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S6 exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The checkout, origin, and PR #29 matched `50f62381fb1fa9a9a6d8d739eb56b95512346f65` at clean `0/0` parity. `gh-forgejo-shim-c07` was claimed only after both gates passed and Dolt was pushed. Direct coordinator TDD now owns the coupled identity, pagination, cap, deadline, and output path; one fresh read-only reviewer follows the frozen head. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
