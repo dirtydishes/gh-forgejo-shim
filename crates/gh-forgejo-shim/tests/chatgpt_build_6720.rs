@@ -417,6 +417,34 @@ fn duplicate_json_host_keys_fail_closed_before_auth_status() -> TestResult {
 }
 
 #[test]
+fn sibling_json_host_fields_fail_closed_before_keyed_lookup() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let keys_dir = fixture
+        .home()
+        .join(".local")
+        .join("share")
+        .join("forgejo-cli");
+    fs::create_dir_all(&keys_dir)?;
+    fs::write(
+        keys_dir.join("keys.json"),
+        r#"{"servers":[{"host":"auth.other.test","auth.target.test":{"token":"cross-host-secret"}}]}"#,
+    )?;
+
+    let output = fixture
+        .command("gfj")?
+        .args(["auth", "status", "auth.target.test"])
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert_eq!(stdout, "auth.target.test: not logged in\n");
+    assert_eq!(stderr, "");
+    assert!(!stdout.contains("cross-host-secret"));
+    Ok(())
+}
+
+#[test]
 fn forgejo_pr_list_resolves_author_me() -> TestResult {
     let (host, handle) = start_json_server(vec![
         r#"{"login":"alice","full_name":"Alice Example"}"#,

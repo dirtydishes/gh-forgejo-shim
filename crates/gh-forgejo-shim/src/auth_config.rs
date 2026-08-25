@@ -465,4 +465,51 @@ mod tests {
 
         assert_eq!(find_token(&data, Some("auth.target.test")), None);
     }
+
+    #[test]
+    fn json_token_discovery_validates_record_fields_before_keyed_children() {
+        for data in [
+            json!({
+                "host": "auth.other.test",
+                "auth.target.test": {"token": "conflict-secret"}
+            }),
+            json!({
+                "host": "",
+                "auth.target.test": {"token": "empty-secret"}
+            }),
+            json!({
+                "host": 42,
+                "auth.target.test": {"token": "invalid-secret"}
+            }),
+            json!({
+                "token": "container-secret",
+                "auth.target.test": {"token": "nested-secret"}
+            }),
+        ] {
+            assert_eq!(find_token(&data, Some("auth.target.test")), None);
+        }
+    }
+
+    #[test]
+    fn json_token_discovery_rejects_ambiguous_matching_keyed_entries() {
+        for data in [
+            json!({
+                "hosts": {
+                    "auth.target.test": {"token": "first-secret"},
+                    "https://auth.target.test/path": {"token": "second-secret"}
+                }
+            }),
+            json!({
+                "hosts": {
+                    "auth.target.test": {
+                        "host": "auth.other.test",
+                        "token": "invalid-secret"
+                    },
+                    "https://auth.target.test/path": {"token": "valid-secret"}
+                }
+            }),
+        ] {
+            assert_eq!(find_token(&data, Some("auth.target.test")), None);
+        }
+    }
 }
