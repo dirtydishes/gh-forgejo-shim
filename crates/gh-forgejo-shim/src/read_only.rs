@@ -20,12 +20,13 @@ use crate::normalize::{
     normalize_pr_checks_for_repo, normalize_pull, normalize_repo, render_json_or_jq,
     render_json_or_jq_list, status_for_current_branch, with_status_check_rollup_for_repo,
 };
+use crate::pull_requests::list::{self as pull_request_list, PullRequestQuery, PullRequestSource};
 use crate::repo::RepoRef as DetectedRepoRef;
 use crate::routing::ForgejoTarget;
 use crate::{auth, create};
 use crate::{Result, ShimError};
 
-trait ForgejoApi {
+trait ForgejoApi: PullRequestSource {
     fn get_current_user(&self, host: &str) -> ForgejoResult<Value>;
     fn get_repo(&self, repo: &ForgejoRepoRef) -> ForgejoResult<Value>;
     fn create_pull(
@@ -177,6 +178,7 @@ struct ListArgs {
     state: String,
     limit: Option<usize>,
     head: Option<String>,
+    author: Option<String>,
     base: Option<String>,
     draft_only: bool,
 }
@@ -188,6 +190,7 @@ impl Default for ListArgs {
             state: "open".to_string(),
             limit: None,
             head: None,
+            author: None,
             base: None,
             draft_only: false,
         }
@@ -700,28 +703,18 @@ fn run_list(
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
-    let api_state = if parsed.state == "merged" {
-        "closed"
-    } else {
-        parsed.state.as_str()
-    };
-    let mut pulls = client.list_pulls(&target_repo, api_state, parsed.head.as_deref())?;
-    if parsed.state == "merged" {
-        pulls.retain(|pull| normalize_pull(pull).get("state") == Some(&json!("MERGED")));
-    }
-    if let Some(base) = parsed.base.as_deref() {
-        pulls.retain(|pull| {
-            pull.get("base")
-                .and_then(Value::as_object)
-                .and_then(|base| base.get("ref"))
-                .and_then(Value::as_str)
-                == Some(base)
-        });
-    }
-    if parsed.draft_only {
-        pulls.retain(|pull| pull.get("draft").and_then(Value::as_bool) == Some(true));
-    }
-    truncate_to_limit(&mut pulls, parsed.limit);
+    let pulls = pull_request_list::discover(
+        client,
+        &target_repo,
+        &PullRequestQuery {
+            state: &parsed.state,
+            head: parsed.head.as_deref(),
+            author: parsed.author.as_deref(),
+            base: parsed.base.as_deref(),
+            draft_only: parsed.draft_only,
+            limit: parsed.limit,
+        },
+    )?;
 
     let normalized = pulls
         .iter()
@@ -1506,15 +1499,15 @@ fn parse_list_args(argv: &[String]) -> Result<ListArgs> {
         } else if let Some(value) = flag_value_any(arg, &["--base", "-B"]) {
             parsed.base = Some(value.to_string());
             index += 1;
-        } else if matches!(
-            arg,
-            "--author" | "--app" | "--assignee" | "--label" | "--search"
-        ) {
+        } else if arg == "--author" {
+            parsed.author = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value(arg, "--author") {
+            parsed.author = Some(value.to_string());
+            index += 1;
+        } else if matches!(arg, "--app" | "--assignee" | "--label" | "--search") {
             index = skip_value(argv, index, arg)?;
-        } else if has_value_prefix(
-            arg,
-            &["--author", "--app", "--assignee", "--label", "--search"],
-        ) {
+        } else if has_value_prefix(arg, &["--app", "--assignee", "--label", "--search"]) {
             index += 1;
         } else if arg == "--draft" {
             parsed.draft_only = true;
@@ -2576,6 +2569,26 @@ mod tests {
                 created_issues: RefCell::new(Vec::new()),
                 comments: RefCell::new(Vec::new()),
             }
+        }
+    }
+
+    impl PullRequestSource for FakeApi {
+        fn current_user_login(&self, _host: &str) -> ForgejoResult<String> {
+            self.user
+                .get("login")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| ForgejoError::new("Forgejo API user response has no login"))
+        }
+
+        fn pull_request_page(
+            &self,
+            _repo: &ForgejoRepoRef,
+            _state: &str,
+            _page: usize,
+            _page_size: usize,
+        ) -> ForgejoResult<Vec<Value>> {
+            Ok(self.pulls.clone())
         }
     }
 

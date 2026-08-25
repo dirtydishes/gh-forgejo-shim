@@ -21,6 +21,7 @@ pub mod invocation;
 pub mod normalize;
 mod observation;
 pub mod provider;
+mod pull_requests;
 pub mod read_only;
 pub mod repo;
 pub mod routing;

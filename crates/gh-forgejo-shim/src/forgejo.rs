@@ -425,6 +425,30 @@ impl ForgejoClient {
             .collect())
     }
 
+    pub(crate) fn list_pull_page(
+        &self,
+        repo: &RepoRef,
+        state: &str,
+        page: usize,
+        page_size: usize,
+    ) -> ForgejoResult<Vec<Value>> {
+        let params = [
+            ("state".to_string(), state.to_string()),
+            ("limit".to_string(), page_size.to_string()),
+            ("page".to_string(), page.to_string()),
+        ];
+        self.request_json(
+            Method::GET,
+            format!(
+                "{}/pulls?{}",
+                self.repo_api_base_url(repo),
+                form_urlencode(&params)
+            ),
+            None,
+        )
+        .map(list_of_objects)
+    }
+
     fn repo_api_base_url(&self, repo: &RepoRef) -> String {
         if self.api_root.is_some() {
             self.api_endpoint_url(&repo.host, &["repos", &repo.owner, &repo.repo])
@@ -790,33 +814,6 @@ mod tests {
         assert_eq!(
             requests[0].request_line,
             "GET /api/v1/repos/owner/repo/issues?state=closed&type=issues&labels=bug%2Chelp+wanted&q=needs+work&milestones=v1&created_by=alice&mentioned_by=bob&limit=10 HTTP/1.1"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn list_pulls_filters_head_by_ref_or_label_suffix() -> TestResult {
-        let (host, handle) = start_fake_server(vec![FakeResponse::json(
-            r#"[
-                {"number":1,"head":{"ref":"feature"}},
-                {"number":2,"head":{"label":"alice:feature"}},
-                {"number":3,"head":{"ref":"other"}}
-            ]"#,
-        )])?;
-        let client = ForgejoClient::new(None).with_scheme("http");
-        let repo = RepoRef::new(host, "owner", "repo");
-
-        let pulls = client.list_pulls(&repo, "open", Some("feature"))?;
-        let requests = finish_fake_server(handle)?;
-
-        let numbers = pulls
-            .iter()
-            .filter_map(|pull| pull.get("number").and_then(Value::as_i64))
-            .collect::<Vec<_>>();
-        assert_eq!(numbers, vec![1, 2]);
-        assert_eq!(
-            requests[0].request_line,
-            "GET /api/v1/repos/owner/repo/pulls?state=open HTTP/1.1"
         );
         Ok(())
     }
