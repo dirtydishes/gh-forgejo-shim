@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator pass-7 repair at the explicit CLI repository-selector validation boundary
+Current execution strategy: direct coordinator pass-7 repair at the explicit CLI repository-selector validation boundary after frozen red evidence
 
 Last completed phase: S3
 
@@ -64,4 +64,4 @@ Blocked: no — C1 pass `7/7` is claimed after exact execution and live launch r
 
 ## Last Coordinator Update
 
-Pass `7/7` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `6365caf6af8bf20a3ebc99eb986b32482120a75716711a688217b3c3a95bcace`. Exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. C1 was claimed only after both gates passed at clean pushed head `8494ec613e6502120209518c543c8a246aafd0ba`. Next, freeze the exact malformed empty-segment process repros before production mutation. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+Pass `7/7` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `6365caf6af8bf20a3ebc99eb986b32482120a75716711a688217b3c3a95bcace`. Both exact readiness gates passed with empty findings before claim. Test-only commit `8881a3056f22595f39f7854cd1938943ef6f78f0` now freezes the four empty-segment selector forms: the ten prior provider tests pass and all four new tests fail by reaching fake GitHub with exit `23`. Next, repair only explicit CLI selector validation. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
