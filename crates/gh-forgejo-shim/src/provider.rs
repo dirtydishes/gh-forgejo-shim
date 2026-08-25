@@ -38,6 +38,21 @@ impl HostRegistry {
         let mut assigned = BTreeMap::<String, usize>::new();
         for (profile_index, profile) in profiles.iter_mut().enumerate() {
             profile.canonical_host = normalize_host(&profile.canonical_host);
+            if is_known_github_host(Some(&profile.canonical_host)) {
+                return Err(ShimError::new(format!(
+                    "GitHub host cannot be registered as Forgejo: {}",
+                    profile.canonical_host
+                )));
+            }
+            let api_root = reqwest::Url::parse(&profile.api_root).map_err(|_| {
+                ShimError::new(format!("invalid API root: {}", profile.api_root))
+            })?;
+            if !matches!(api_root.scheme(), "http" | "https") {
+                return Err(ShimError::new(format!(
+                    "API root must use HTTP or HTTPS: {}",
+                    profile.api_root
+                )));
+            }
             profile.aliases = profile
                 .aliases
                 .iter()
