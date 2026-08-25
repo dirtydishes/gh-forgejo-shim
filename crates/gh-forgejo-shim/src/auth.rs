@@ -1012,6 +1012,13 @@ mod tests {
     }
 
     #[test]
+    fn text_token_discovery_does_not_inherit_a_match_across_key_order() {
+        let text = "servers:\n  - host: https://auth.target.test\n    name: target\n  - name: other\n    token: other-secret\n    host: https://auth.other.test\n";
+
+        assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
+    }
+
+    #[test]
     fn text_token_discovery_matches_the_whole_normalized_host() {
         let text =
             "servers:\n  - host: https://auth.target.test.evil\n    token: substring-secret\n";
