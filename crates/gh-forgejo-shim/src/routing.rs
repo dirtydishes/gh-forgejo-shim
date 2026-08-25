@@ -115,7 +115,7 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    if argv.len() < 2 {
+    if is_global_delegate_command(argv) {
         return RouteDecision::delegate("unsupported command", None);
     }
 
@@ -319,6 +319,10 @@ fn is_supported_command(argv: &[String]) -> bool {
         "repo" => SUPPORTED_REPO_COMMANDS.contains(&argv[1].as_str()),
         _ => false,
     }
+}
+
+fn is_global_delegate_command(argv: &[String]) -> bool {
+    matches!(argv, [command] if matches!(command.as_str(), "--version" | "version"))
 }
 
 fn hostname_arg(argv: &[String], allow_short: bool) -> Option<&str> {
