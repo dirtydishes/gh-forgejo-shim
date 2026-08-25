@@ -91,6 +91,12 @@ pub fn detect_repo_for_target(
     let mut explicit_repo = None;
     let mut explicit_source = None;
     for (repo_arg, selector_source) in command_target.repo_selectors() {
+        if explicit_selector_has_empty_path_segment(repo_arg) {
+            return Err(ShimError::new(format!(
+                "invalid repository selector from {}: {repo_arg:?}",
+                selector_source.description()
+            )));
+        }
         let default_host = env
             .get("GH_HOST")
             .map(String::as_str)
@@ -214,6 +220,22 @@ fn parse_scp_repo(value: &str) -> Option<RepoRef> {
         ));
     }
     None
+}
+
+fn explicit_selector_has_empty_path_segment(spec: &str) -> bool {
+    let value = spec.trim();
+    let path = if let Some((_, rest)) = value.split_once("://") {
+        rest.split_once('/').map_or("", |(_, path)| path)
+    } else if let Some((prefix, path)) = value.split_once(':') {
+        if !prefix.contains('/') && !prefix.chars().any(char::is_whitespace) {
+            path
+        } else {
+            value
+        }
+    } else {
+        value
+    };
+    path.split('/').any(str::is_empty)
 }
 
 fn path_parts(path: &str) -> Vec<&str> {
