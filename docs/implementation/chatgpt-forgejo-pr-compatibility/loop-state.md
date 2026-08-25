@@ -16,17 +16,17 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S5
+Current phase: S6
 
-Current Beads issue: gh-forgejo-shim-c06
+Current Beads issue: gh-forgejo-shim-c07
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator TDD for shared deadline and truthful tracing
+Current execution strategy: admission pending for PR discovery, `@me`, and pagination
 
-Last completed phase: S4
+Last completed phase: S5
 
-Blocked: no — S5 shared repair pass 2/3 is active after one required independent-review finding
+Blocked: no — S6 exact execution and launch readiness are next
 
 ## Decisions
 
@@ -49,7 +49,7 @@ Blocked: no — S5 shared repair pass 2/3 is active after one required independe
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | closed | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | closed | `#29` | `turn-docs/05-s4.md` |
-| S5 | `gh-forgejo-shim-c06` | in progress | `#29` | `turn-docs/06-s5.md` |
+| S5 | `gh-forgejo-shim-c06` | closed | `#29` | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
 | C2 | `gh-forgejo-shim-c08` | open | none | `turn-docs/08-c2.md` |
 | S7 | `gh-forgejo-shim-c09` | open | none | `turn-docs/09-s7.md` |
@@ -64,4 +64,4 @@ Blocked: no — S5 shared repair pass 2/3 is active after one required independe
 
 ## Last Coordinator Update
 
-S5 pass-2 red head `e1dfe16659675a00f4d9e51366ba420b4fca5462` freezes both exact typed-slot escapes. Source repair `543bc7e2cc347d65996128ced5085818b27c1437` derives one capture/deadline decision from `ParsedInvocation`, requires positive PR numbers, excludes help and ambiguous parses, and leaves trace serialization-only. The full locked local gate passes with 219 active tests and 3 planned ignored. Routing is 984 lines, trace 542, and observation 180. Shared repair pass `2/3` now awaits one frozen-head independent review and exact-commit pull-request plus push CI. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S5 closed at repair pass `2/3` on frozen head `e21f9e1cb2eabdb6997861df8308901068ea1154`. Independent review approved with `findings: []`; full locked local gates passed with 219 active tests and 3 planned ignored; exact-head pull-request run `32843514583` and push run `32843510698` passed both required jobs. Beads and Dolt are closed and pushed. S6 is next and must pass exact execution readiness plus live launch readiness before claim. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
