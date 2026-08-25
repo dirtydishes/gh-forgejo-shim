@@ -974,6 +974,20 @@ mod tests {
         assert_eq!(find_token_in_text(&text, Some("git.example.com")), None);
     }
 
+    #[test]
+    fn text_token_discovery_does_not_cross_yaml_host_entries() {
+        let text = "servers:\n  - host: https://auth.target.test\n    name: target\n  - host: https://auth.other.test\n    token: other-secret\n";
+
+        assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
+    }
+
+    #[test]
+    fn text_token_discovery_matches_the_whole_normalized_host() {
+        let text = "servers:\n  - host: https://auth.target.test.evil\n    token: substring-secret\n";
+
+        assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn auth_temp_file_starts_private() -> Result<()> {
