@@ -26,7 +26,7 @@ Current execution strategy: C2 final combined repair pass 3/3, coordinator-owned
 
 Last completed phase: S6
 
-Blocked: no — C2 pass-2 review produced one combined JSON traversal finding for final pass 3/3
+Blocked: no — C2 final repair pass 3/3 is locally green and awaiting frozen-head review and CI
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Blocked: no — C2 pass-2 review produced one combined JSON traversal finding fo
 
 ## Last Coordinator Update
 
-C2 review pass `2/3` inspected frozen head `0e7e7584064b1b3549cd263f97094cb40aa848b5`; both required reviewers returned the same remaining high finding. A host-keyed child is accepted before recognized record fields in its current object, and first-match lookup can hide ambiguous normalized host keys. Exact PR run `32849677595` and push run `32849673246` passed both named jobs. Final pass `3/3` owns only record-before-container classification and validation of the complete matching-key set, with public-command and focused red cases first. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+C2 final pass `3/3` froze red head `be38a53a92afef2702c547c48f576f5155954548`, then pushed production head `e4d9ee028da32dbb19ee4c143f9713b18e4c1199` at `0/0` parity. Objects with recognized host/token fields are authoritative records; field-free maps require exactly one normalized-matching host key. The public-command and ambiguous/invalid sibling repros now fail closed. Format, all-target locked Clippy, and 235 active workspace tests pass; two later probes remain ignored. Final dual review and exact-commit PR/push CI remain. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
