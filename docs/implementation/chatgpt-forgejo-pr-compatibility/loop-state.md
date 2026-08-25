@@ -4,7 +4,7 @@ Canonical tracker: Beads epic `gh-forgejo-shim-6y9`
 
 This file is a compact resume aid only. If this file disagrees with Beads, Beads wins.
 
-Status: in progress
+Status: blocked
 
 Stream: `chatgpt-forgejo-pr-compatibility`
 
@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator repair under the admitted final pass `5/5`
+Current execution strategy: stopped after the required adversarial reviewer retained one selector-overwrite finding on the frozen final pass `5/5` head
 
 Last completed phase: S3
 
-Blocked: no
+Blocked: yes — C1 pass `5/5` retains one required adversarial finding and the amended repair limit is exhausted
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Blocked: no
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | in progress | `#29` | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | blocked | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-Exceptional C1 pass `4/4` froze red evidence at `30f06ea188aae97dc0a8e3c6a4380aab56d8368f` and the design correction at `8e5ec4f8bfd8c4acccfdebd37d0f6cf9b8c3f3a5`. Full locked local gates and exact-commit CI passed; the thermonuclear reviewer approved with `findings: []`. The independent adversarial reviewer found two required defects: the new grammar rejects the documented `repo view -R` route, and malformed explicit repository selectors can fall through to `GH_REPO` and delegate across providers. The user raised C1's shared limit from four to five for one final narrow pass owning exactly those defects. The canonical helper refreshed only the amended projection attestation. Exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. C1 is reclaimed at pushed head `899060dc0df36bd33e6a9a631466491ff1f36441`. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+Final C1 pass `5/5` froze red evidence at `a6dd103005fe4d3a3dfe19244ecce95ad4b10118` and the source repair at `06abf54fa250ce48dc050b86c386edf613e7d100`. The full locked local gate and exact-commit CI passed; pull-request run `32829609685` and push run `32829604422` both passed `rust` and `release package smoke`. The thermonuclear reviewer approved with `findings: []`. The adversarial reviewer found one required defect: a malformed explicit or positional repository selector can be overwritten by a later valid selector, and attached empty `-R=` can consume the next token, allowing delegation. The amended five-pass limit is exhausted. Beads C1 is `blocked`; do not close it, claim S4, or mutate later phases without a new explicit amendment. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
