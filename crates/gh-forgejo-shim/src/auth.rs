@@ -357,36 +357,25 @@ fn find_token_in_text(text: &str, host: Option<&str>) -> Option<String> {
     if let Some(host) = host {
         let host = normalize_host(host);
         let lines = text.lines().collect::<Vec<_>>();
-        let mut entry_start = None;
-        let mut entry_indent = 0;
         let mut found_list_entry = false;
 
         for (index, line) in lines.iter().enumerate() {
             let Some(indent) = text_list_item_indent(line) else {
                 continue;
             };
-            if entry_start.is_some() && indent > entry_indent {
-                continue;
-            }
-            if let Some(start) = entry_start {
-                if let Some(token) = token_from_text_entry(&lines[start..index], &host) {
-                    return Some(token);
-                }
-            }
             found_list_entry = true;
-            entry_start = Some(index);
-            entry_indent = indent;
-        }
-
-        if let Some(start) = entry_start {
-            if let Some(token) = token_from_text_entry(&lines[start..], &host) {
+            let end = lines[index + 1..]
+                .iter()
+                .position(|candidate| text_scope_ends(candidate, indent))
+                .map_or(lines.len(), |offset| index + 1 + offset);
+            if let Some(token) = token_from_text_entry(&lines[index..end], &host, Some(indent)) {
                 return Some(token);
             }
         }
         if found_list_entry {
             return None;
         }
-        return token_from_text_entry(&lines, &host);
+        return token_from_text_entry(&lines, &host, None);
     }
     token_line(text)
 }
@@ -398,37 +387,79 @@ fn text_list_item_indent(line: &str) -> Option<usize> {
         .then_some(line.len() - trimmed.len())
 }
 
-fn token_from_text_entry(lines: &[&str], host: &str) -> Option<String> {
-    let entry_hosts = lines
-        .iter()
-        .filter_map(|line| text_host_line(line))
-        .map(|entry_host| normalize_host(&entry_host))
-        .collect::<Vec<_>>();
-    if entry_hosts.is_empty() || entry_hosts.iter().any(|entry_host| entry_host != host) {
-        return None;
-    }
-    lines.iter().find_map(|line| token_line(line))
+fn text_scope_ends(line: &str, entry_indent: usize) -> bool {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    !trimmed.is_empty() && !trimmed.starts_with('#') && line.len() - trimmed.len() <= entry_indent
 }
 
-fn text_host_line(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let field = trimmed.strip_prefix("- ").unwrap_or(trimmed);
-    let lower = field.to_ascii_lowercase();
-    for key in [
-        "host",
-        "hostname",
-        "url",
-        "server",
-        "server_url",
-        "base_url",
-    ] {
-        if lower.starts_with(key) {
-            if let Some(value) = parse_token_tail(&field[key.len()..]) {
-                return Some(value);
+fn token_from_text_entry(lines: &[&str], host: &str, list_indent: Option<usize>) -> Option<String> {
+    let direct_indent = list_indent.map_or(0, |indent| indent + 2);
+    let mut matched_host = false;
+    let mut token = None;
+
+    for (index, line) in lines.iter().enumerate() {
+        let field = if index == 0 {
+            list_indent
+                .and_then(|_| line.trim_start_matches([' ', '\t']).strip_prefix("- "))
+                .unwrap_or_else(|| line.trim_start_matches([' ', '\t']))
+        } else {
+            let trimmed = line.trim_start_matches([' ', '\t']);
+            if line.len() - trimmed.len() != direct_indent {
+                continue;
             }
+            trimmed
+        };
+        let Some((key, value)) = text_mapping_field(field) else {
+            continue;
+        };
+        if is_text_host_key(&key) {
+            if matched_host {
+                return None;
+            }
+            let value = value?;
+            let normalized = normalize_host(&value);
+            if normalized.is_empty() || normalized != host {
+                return None;
+            }
+            matched_host = true;
+        } else if matches!(key.as_str(), "token" | "access_token") && token.is_none() {
+            token = value;
         }
     }
-    None
+
+    matched_host.then_some(token).flatten()
+}
+
+fn text_mapping_field(field: &str) -> Option<(String, Option<String>)> {
+    let field = field.trim();
+    let (key, tail) = if let Some(quote) = field.chars().next().filter(|c| matches!(c, '"' | '\''))
+    {
+        let closing = field[quote.len_utf8()..].find(quote)? + quote.len_utf8();
+        (
+            &field[quote.len_utf8()..closing],
+            &field[closing + quote.len_utf8()..],
+        )
+    } else {
+        match field.find([':', '=']) {
+            Some(delimiter) => (field[..delimiter].trim(), &field[delimiter..]),
+            None => (field.split_whitespace().next()?, ""),
+        }
+    };
+    let tail = tail.trim_start();
+    if key.is_empty() {
+        return None;
+    }
+    let value = (tail.starts_with(':') || tail.starts_with('='))
+        .then(|| parse_token_tail(tail))
+        .flatten();
+    Some((key.to_ascii_lowercase(), value))
+}
+
+fn is_text_host_key(key: &str) -> bool {
+    matches!(
+        key,
+        "host" | "hostname" | "url" | "server" | "server_url" | "base_url"
+    )
 }
 
 fn token_line(text: &str) -> Option<String> {
