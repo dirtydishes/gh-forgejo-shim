@@ -16,7 +16,7 @@ Adapter contract: `dirtyloops-harness/1`
 
 
 
-Current phase: S3 readiness
+Current phase: S3
 
 Current Beads issue: gh-forgejo-shim-c03
 
@@ -26,7 +26,7 @@ Current execution strategy: direct implementation in the saved coordinator-owned
 
 Last completed phase: S2
 
-Blocked: no
+Blocked: yes — S3 review found that full `api_root` ownership belongs in `forgejo.rs`, outside the accepted S3 file boundary; user approval is required before widening the repair surface
 
 ## Decisions
 
@@ -46,7 +46,7 @@ Blocked: no
 | S0 | `gh-forgejo-shim-c00` | closed | none | `turn-docs/00-s0.md` |
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
-| S3 | `gh-forgejo-shim-c03` | open | none | `turn-docs/03-s3.md` |
+| S3 | `gh-forgejo-shim-c03` | in progress | `#29` | `turn-docs/03-s3.md` |
 | C1 | `gh-forgejo-shim-c04` | open | none | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-S2 closed in Beads after pushed commit `6971a2e5e4420d91d36566c343ec8b871fd587ac`, independent approval on pass `2/3`, exact-commit CI run `32811937882`, and `0/0` parity. S3 is open with its S2 dependency closed; its boundary and launch readiness have not yet run.
+S3 review set `s3-abb330b` pass `0/3` requested a combined repair for global `--version` delegation and full `api_root` path ownership. Both regression tests are red. The version fix stays inside S3; the API-root fix should make `ForgejoClient` own the full base URL, which adds `src/forgejo.rs` to S3 and needs a user-approved plan amendment. Production repair and CI are paused; PR #29 remains the sole external integration PR.
