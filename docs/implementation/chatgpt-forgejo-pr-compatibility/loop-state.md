@@ -64,4 +64,4 @@ Blocked: no — S5 passed both readiness gates and is claimed
 
 ## Last Coordinator Update
 
-S5 exact execution readiness returned `ready` with `findings: []`; live launch returned `boundary_status: ready`, `status: launchable`, and `findings: []`. The phase was claimed at clean pushed head `e70717faef0202e766e84dc4e9eca6adf3245cb4` with `0/0` parity. Direct coordinator TDD now owns the shared deadline and truthful trace boundary. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+S5 exact execution readiness returned `ready` with `findings: []`; live launch returned `boundary_status: ready`, `status: launchable`, and `findings: []`. Evidence required the narrow addition of `read_only.rs`, which constructs `ForgejoClient`, to carry one command-wide deadline without reset. The canonical helper refreshed the Beads projection to `5bd86070b0462f08f4876ba29b951715f4043a8eda3c9e39a3b10450440e607b`; both exact gates passed again before reclaim. Direct coordinator TDD now owns the shared deadline and truthful trace boundary. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
