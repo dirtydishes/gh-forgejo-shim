@@ -336,13 +336,12 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
         return false;
     };
     let normalized = normalize_host(host);
-    let normalized = normalized.trim_end_matches('.');
-    let normalized = normalized
-        .strip_suffix(":443")
-        .or_else(|| normalized.strip_suffix(":80"))
-        .unwrap_or(normalized)
+    let authority = normalized.trim_end_matches('.');
+    let hostname = authority
+        .split_once(':')
+        .map_or(authority, |(hostname, _)| hostname)
         .trim_end_matches('.');
-    KNOWN_GITHUB_HOSTS.contains(&normalized)
+    KNOWN_GITHUB_HOSTS.contains(&hostname)
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {
