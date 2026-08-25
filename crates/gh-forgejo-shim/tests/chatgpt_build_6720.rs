@@ -300,6 +300,99 @@ fn forgejo_alias_uses_full_configured_api_root() -> TestResult {
 }
 
 #[test]
+fn forgejo_alias_auth_status_uses_credential_host_without_leaking_tokens() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.write_executable("gh", "#!/bin/sh\nprintf 'delegated-to-github\\n'\nexit 23\n")?;
+    let configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.dirtydishes.dev",
+            "--alias",
+            "127.0.0.1",
+            "--credential-host",
+            "auth.dirtydishes.dev",
+        ])
+        .output()?;
+    assert_eq!(
+        configured.status.code(),
+        Some(0),
+        "host-profile setup failed: {}",
+        String::from_utf8_lossy(&configured.stderr)
+    );
+    let other_configured = fixture
+        .command("gfj")?
+        .args([
+            "config",
+            "add-host",
+            "git.other.test",
+            "--credential-host",
+            "auth.other.test",
+        ])
+        .output()?;
+    assert_eq!(other_configured.status.code(), Some(0));
+
+    let keys_dir = fixture
+        .home()
+        .join(".local")
+        .join("share")
+        .join("forgejo-cli");
+    fs::create_dir_all(&keys_dir)?;
+    fs::write(
+        keys_dir.join("keys.json"),
+        r#"{"hosts":{"auth.dirtydishes.dev":{"token":"linux-secret"},"unrelated.invalid":{"token":"unrelated-secret"}}}"#,
+    )?;
+
+    for requested_host in ["127.0.0.1", "git.dirtydishes.dev"] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env_remove("FJ_SHIM_HOSTS")
+            .env_remove("FJ_SHIM_REAL_GH")
+            .arg("gh")
+            .args([
+                "auth",
+                "status",
+                "--active",
+                "--hostname",
+                requested_host,
+            ])
+            .output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+        let stderr = String::from_utf8(output.stderr)?;
+
+        assert_eq!(output.status.code(), Some(0), "{requested_host}: {stderr}");
+        assert!(stdout.contains("Logged in to git.dirtydishes.dev"), "{stdout}");
+        assert!(!stdout.contains("linux-secret"), "{stdout}");
+        assert!(!stdout.contains("unrelated-secret"), "{stdout}");
+        assert!(!stdout.contains("delegated-to-github"), "{stdout}");
+        assert!(!stderr.contains("linux-secret"), "{stderr}");
+        assert!(!stderr.contains("unrelated-secret"), "{stderr}");
+    }
+
+    let unrelated = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_HOSTS")
+        .env_remove("FJ_SHIM_REAL_GH")
+        .arg("gh")
+        .args([
+            "auth",
+            "status",
+            "--active",
+            "--hostname",
+            "git.other.test",
+        ])
+        .output()?;
+    let stdout = String::from_utf8(unrelated.stdout)?;
+    let stderr = String::from_utf8(unrelated.stderr)?;
+    assert_eq!(unrelated.status.code(), Some(1), "{stderr}");
+    assert!(!stdout.contains("unrelated-secret"), "{stdout}");
+    assert!(!stderr.contains("unrelated-secret"), "{stderr}");
+    assert!(!stdout.contains("delegated-to-github"), "{stdout}");
+    Ok(())
+}
+
+#[test]
 #[ignore = "red contract probe: @me filtering belongs to S6"]
 fn forgejo_pr_list_does_not_yet_resolve_author_me() -> TestResult {
     let (host, handle) = start_json_server(vec![

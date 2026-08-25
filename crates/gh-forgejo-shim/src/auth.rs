@@ -701,6 +701,82 @@ mod tests {
     }
 
     #[test]
+    fn discovers_linux_fj_keys_json_only_for_matching_credential_host() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join(".local").join("share").join("forgejo-cli");
+        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
+        fs::write(
+            path.join("keys.json"),
+            r#"{"hosts":{"auth.dirtydishes.dev":{"token":"linux-secret"},"auth.other.test":{"token":"other-secret"}}}"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let matching = discover_token(
+            Some("auth.dirtydishes.dev"),
+            &EnvMap::new(),
+            Some(&home),
+            Some("linux"),
+            true,
+        );
+        let unrelated = discover_token(
+            Some("auth.missing.test"),
+            &EnvMap::new(),
+            Some(&home),
+            Some("linux"),
+            true,
+        );
+
+        assert_eq!(
+            matching.as_ref().map(|value| value.token.as_str()),
+            Some("linux-secret")
+        );
+        assert_eq!(
+            matching.as_ref().map(|value| value.source.as_str()),
+            Some(path.join("keys.json").to_string_lossy().as_ref())
+        );
+        assert!(unrelated.is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn stored_shim_auth_precedes_linux_fj_keys_json() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join(".local").join("share").join("forgejo-cli");
+        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
+        fs::write(
+            path.join("keys.json"),
+            r#"{"hosts":{"auth.dirtydishes.dev":{"token":"linux-secret"}}}"#,
+        )
+        .map_err(|error| ShimError::new(error.to_string()))?;
+        write_stored_token(
+            "auth.dirtydishes.dev",
+            "stored-secret",
+            Some(&home),
+            Some("linux"),
+        )?;
+
+        let discovery = discover_token(
+            Some("auth.dirtydishes.dev"),
+            &EnvMap::new(),
+            Some(&home),
+            Some("linux"),
+            true,
+        );
+
+        assert_eq!(
+            discovery.as_ref().map(|value| value.token.as_str()),
+            Some("stored-secret")
+        );
+        assert_eq!(
+            discovery.as_ref().map(|value| value.source.as_str()),
+            Some(auth_file_path(Some(&home)).to_string_lossy().as_ref())
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
     fn discovers_yaml_token_for_matching_host() -> Result<()> {
         let home = temp_root()?;
         let path = home.join(".config").join("tea");
