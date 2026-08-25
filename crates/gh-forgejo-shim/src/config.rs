@@ -142,9 +142,12 @@ pub fn load_host_registry_with_env(path: Option<&Path>, env: &EnvMap) -> Result<
     let raw = read_raw_config(&config_path)?;
 
     if let Some(value) = env.get("FJ_SHIM_HOSTS") {
-        let profiles = split_hosts(value)
+        let hosts = split_hosts(value)
             .into_iter()
             .filter_map(|host| normalized_forgejo_host(&host))
+            .collect::<Vec<_>>();
+        let profiles = dedupe(hosts)
+            .into_iter()
             .map(default_host_profile)
             .collect();
         return HostRegistry::new(profiles);
