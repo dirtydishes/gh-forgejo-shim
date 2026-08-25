@@ -355,13 +355,43 @@ fn dict_matches_host(object: &Map<String, Value>, host: &str) -> bool {
 
 fn find_token_in_text(text: &str, host: Option<&str>) -> Option<String> {
     if let Some(host) = host {
-        let lower_text = text.to_ascii_lowercase();
-        let lower_host = host.to_ascii_lowercase();
-        let host_index = lower_text.find(&lower_host)?;
-        let nearby = text[host_index..].chars().take(2000).collect::<String>();
-        return token_line(&nearby);
+        let host = normalize_host(host);
+        let mut entry_matches = false;
+        for line in text.lines() {
+            if let Some(entry_host) = text_host_line(line) {
+                entry_matches = normalize_host(&entry_host) == host;
+                continue;
+            }
+            if entry_matches {
+                if let Some(token) = token_line(line) {
+                    return Some(token);
+                }
+            }
+        }
+        return None;
     }
     token_line(text)
+}
+
+fn text_host_line(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let field = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+    let lower = field.to_ascii_lowercase();
+    for key in [
+        "host",
+        "hostname",
+        "url",
+        "server",
+        "server_url",
+        "base_url",
+    ] {
+        if lower.starts_with(key) {
+            if let Some(value) = parse_token_tail(&field[key.len()..]) {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 fn token_line(text: &str) -> Option<String> {
@@ -983,7 +1013,8 @@ mod tests {
 
     #[test]
     fn text_token_discovery_matches_the_whole_normalized_host() {
-        let text = "servers:\n  - host: https://auth.target.test.evil\n    token: substring-secret\n";
+        let text =
+            "servers:\n  - host: https://auth.target.test.evil\n    token: substring-secret\n";
 
         assert_eq!(find_token_in_text(text, Some("auth.target.test")), None);
     }
