@@ -24,9 +24,9 @@
     "adapter_identity": {
       "target": "codex",
       "path": "codex-source-builder-closure",
-      "sha256": "712c5c2121feb2103cbe2a843e11a1c4e487aa39072fc045c0a00393d52c77d7"
+      "sha256": "818f3fa37ef51948448b46e065d3bc0423e5e1a1a7b1b19075dc4bc6d5c10eba"
     },
     "execution_readiness": "ready"
   },
-  "generation_id": "931a928f19149d848cfb3eb5255846f2fb786a929596e37913ee41e3a0fdfd11"
+  "generation_id": "95591782f575fb3e9e4d8cdb6b9b8228bc42694fc99c87fe5b18809eda2d256d"
 }

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecutionSummary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["execution_profile", "strategy", "rationale", "delegations", "adaptations"],
+  "properties": {
+    "execution_profile": { "enum": ["adaptive", "orchestrator-callback"] },
+    "strategy": { "enum": ["direct", "delegates", "sessions", "native-multi-agent", "hybrid"] },
+    "rationale": { "type": "string", "minLength": 1 },
+    "delegations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mission", "model", "effort", "status", "evidence"],
+        "properties": {
+          "mission": { "type": "string", "minLength": 1 },
+          "model": { "type": ["string", "null"] },
+          "effort": { "type": ["string", "null"] },
+          "status": { "enum": ["done", "blocked"] },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "adaptations": { "type": "array", "items": { "type": "string" } }
+  }
+}

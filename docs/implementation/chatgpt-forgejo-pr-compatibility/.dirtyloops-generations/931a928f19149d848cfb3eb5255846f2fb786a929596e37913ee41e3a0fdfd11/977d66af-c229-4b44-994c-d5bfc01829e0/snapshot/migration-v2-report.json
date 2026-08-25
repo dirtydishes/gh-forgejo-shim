@@ -7,6 +7,10 @@
   "blockers": [],
   "actions": [
     {
+      "action": "install-v2-schema",
+      "path": "schemas/review-callback.schema.json"
+    },
+    {
       "action": "install-generated",
       "path": "IMPLEMENT.md",
       "sha256": "2ef6271b4a27e88afff492a16641d99ff7f194f3f7f91a2fcb154078072c539e"
@@ -84,7 +88,7 @@
     {
       "action": "install-generated",
       "path": "runtime/generation.json",
-      "sha256": "30b9119fe949c3b0db80a76facac7f6025b2c01d75a558b885ffd5fcf61b3956"
+      "sha256": "57f75162399961ee17f60a5a12526b3407c15a982152429a3d7c869e5781c369"
     },
     {
       "action": "commit-generated-evidence",
@@ -356,11 +360,11 @@
       "adapter_identity": {
         "target": "codex",
         "path": "codex-source-builder-closure",
-        "sha256": "712c5c2121feb2103cbe2a843e11a1c4e487aa39072fc045c0a00393d52c77d7"
+        "sha256": "818f3fa37ef51948448b46e065d3bc0423e5e1a1a7b1b19075dc4bc6d5c10eba"
       },
       "execution_readiness": "ready"
     },
-    "generation_id": "931a928f19149d848cfb3eb5255846f2fb786a929596e37913ee41e3a0fdfd11"
+    "generation_id": "95591782f575fb3e9e4d8cdb6b9b8228bc42694fc99c87fe5b18809eda2d256d"
   },
   "protected_hashes_before": {
     "00-roadmap.md": "05387983714a539347135e81c6e516411c5eed14ddc5573e5f50bcb2f1f8419f",
@@ -382,8 +386,8 @@
     "15-c4-pass-the-packaging-and-rollback-checkpoint.md": "0148dbcc717c6eeae9479a95f417191e50fb8eba876b614c51ec8456ffe88138",
     "16-s12-validate-the-native-chatgpt-pr-screen.md": "07fb1b2b674d2eba485f59fd98c33d739c8236bc1b1ab6357aa5706d6cd4f453",
     "17-c5-accept-the-native-chatgpt-product-result.md": "2dc16f2208180f6d23e13c0cec212a206ed65b2b0ea2fb8260ce49323b6c5650",
-    "turn-docs/00-s0.md": "1ce0b0cb1bcd31d27ddafad36d17b88d277c5c046ab7a31c0874ebb0d104b7a7",
-    "turn-docs/01-s1.md": "1d36d048983ff203dae854797098c848c36393f41df37f2e3a727a42a1404812",
+    "turn-docs/00-s0.md": "daed88a08ce26ed2e2d462312820e22a105280f1a9232492cf2104c57c038983",
+    "turn-docs/01-s1.md": "2d3846a9af64f55dca952d2982c9a789ac4470665053e0e848aa684d285b2f2c",
     "turn-docs/02-s2.md": "bc70b2ce5d2891a3bd92fe263afa5058a123efdc71d5a91f25dbc403e0b6594c",
     "turn-docs/03-s3.md": "39e85affc1276b1b12082e7d3262529aebcb2cac212df363f57fc1df10bcef41",
     "turn-docs/04-c1.md": "a53285213d0e63ed786d89203895cd82e11ba174e794228f3ec57532c768b27c",
@@ -421,8 +425,8 @@
     "15-c4-pass-the-packaging-and-rollback-checkpoint.md": "0148dbcc717c6eeae9479a95f417191e50fb8eba876b614c51ec8456ffe88138",
     "16-s12-validate-the-native-chatgpt-pr-screen.md": "07fb1b2b674d2eba485f59fd98c33d739c8236bc1b1ab6357aa5706d6cd4f453",
     "17-c5-accept-the-native-chatgpt-product-result.md": "2dc16f2208180f6d23e13c0cec212a206ed65b2b0ea2fb8260ce49323b6c5650",
-    "turn-docs/00-s0.md": "1ce0b0cb1bcd31d27ddafad36d17b88d277c5c046ab7a31c0874ebb0d104b7a7",
-    "turn-docs/01-s1.md": "1d36d048983ff203dae854797098c848c36393f41df37f2e3a727a42a1404812",
+    "turn-docs/00-s0.md": "daed88a08ce26ed2e2d462312820e22a105280f1a9232492cf2104c57c038983",
+    "turn-docs/01-s1.md": "2d3846a9af64f55dca952d2982c9a789ac4470665053e0e848aa684d285b2f2c",
     "turn-docs/02-s2.md": "bc70b2ce5d2891a3bd92fe263afa5058a123efdc71d5a91f25dbc403e0b6594c",
     "turn-docs/03-s3.md": "39e85affc1276b1b12082e7d3262529aebcb2cac212df363f57fc1df10bcef41",
     "turn-docs/04-c1.md": "a53285213d0e63ed786d89203895cd82e11ba174e794228f3ec57532c768b27c",
@@ -444,13 +448,13 @@
     "schema_version": 1,
     "state": "ready",
     "target": "codex",
-    "generation_id": "931a928f19149d848cfb3eb5255846f2fb786a929596e37913ee41e3a0fdfd11",
+    "generation_id": "95591782f575fb3e9e4d8cdb6b9b8228bc42694fc99c87fe5b18809eda2d256d",
     "adapter_identity": {
       "target": "codex",
       "path": "codex-source-builder-closure",
-      "sha256": "712c5c2121feb2103cbe2a843e11a1c4e487aa39072fc045c0a00393d52c77d7"
+      "sha256": "818f3fa37ef51948448b46e065d3bc0423e5e1a1a7b1b19075dc4bc6d5c10eba"
     },
-    "source_coordinator_id": "01a02dd9-7c95-74b3-95eb-85614d0ec9b5",
+    "source_coordinator_id": "01a02b71-2ee7-7e42-8f7b-8493c1c2d42f",
     "operation": "update-v2",
     "evidence": {
       "mode": "first-party-builder-contract",
