@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::config::{self, EnvMap};
+use crate::deadline::CommandDeadline;
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::invocation::{Command, ParsedInvocation};
 use crate::provider::{HostProfile, HostRegistry, ProviderResolution};
@@ -259,6 +260,7 @@ fn run_gh(
     mut mode: DelegateMode<'_>,
 ) -> i32 {
     let started = Instant::now();
+    let deadline = CommandDeadline::after(Duration::from_secs(5));
     let config = match load_dispatcher_config(&env) {
         Ok(config) => config,
         Err(error) => {
@@ -272,9 +274,14 @@ fn run_gh(
 
     let exit_code = match &decision {
         RouteDecision::Delegate { .. } => run_delegate(&argv, &env, cwd, &config, &mut mode),
-        RouteDecision::Forgejo { target, .. } => {
-            run_forgejo(&invocation, &env, cwd, target, &mut mode)
-        }
+        RouteDecision::Forgejo { target, .. } => run_forgejo(
+            &invocation,
+            &env,
+            cwd,
+            target,
+            observed_command(&argv, &invocation).then_some(&deadline),
+            &mut mode,
+        ),
         RouteDecision::Reject { reason } => {
             write_error(&mut mode, &format!("gh-forgejo-shim: {reason}"));
             1
@@ -339,6 +346,7 @@ fn run_forgejo(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     target: &ForgejoTarget,
+    deadline: Option<&CommandDeadline>,
     mode: &mut DelegateMode<'_>,
 ) -> i32 {
     match mode {
@@ -349,6 +357,7 @@ fn run_forgejo(
             read_only::run(
                 invocation,
                 target,
+                deadline,
                 env,
                 cwd,
                 &mut stdout.lock(),
@@ -361,6 +370,7 @@ fn run_forgejo(
             read_only::run(
                 invocation,
                 target,
+                deadline,
                 env,
                 cwd,
                 *stdout,
@@ -369,6 +379,13 @@ fn run_forgejo(
             )
         }
     }
+}
+
+fn observed_command(argv: &[String], invocation: &ParsedInvocation) -> bool {
+    matches!(
+        invocation.command(),
+        Command::AuthStatus | Command::PrChecks | Command::PrList | Command::PrView
+    ) || argv == ["--version"]
 }
 
 fn write_error(mode: &mut DelegateMode<'_>, message: &str) {

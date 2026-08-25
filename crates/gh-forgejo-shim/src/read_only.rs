@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::config::EnvMap;
+use crate::deadline::CommandDeadline;
 use crate::external::{git_output, git_run, open_web_url, GitRunResult};
 use crate::forgejo::{
     CreateIssueRequest, CreatePullRequest, ForgejoClient, ForgejoResult, ListIssuesOptions,
@@ -301,6 +302,7 @@ struct ApiArgs {
 pub fn run(
     invocation: &ParsedInvocation,
     target: &ForgejoTarget,
+    deadline: Option<&CommandDeadline>,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
@@ -321,6 +323,7 @@ pub fn run(
         credential_host,
         repo.as_ref(),
         api_root,
+        deadline,
         &env_map,
         home.as_deref(),
         cwd,
@@ -345,6 +348,7 @@ fn run_with_context(
     credential_host: &str,
     repo: Option<&ForgejoRepoRef>,
     api_root: &str,
+    deadline: Option<&CommandDeadline>,
     env: &EnvMap,
     home: Option<&Path>,
     cwd: Option<&Path>,
@@ -363,7 +367,10 @@ fn run_with_context(
         true,
     )
     .map(|discovery| discovery.token);
-    let client = ForgejoClient::new(token.clone()).with_api_root(api_root)?;
+    let mut client = ForgejoClient::new(token.clone()).with_api_root(api_root)?;
+    if let Some(deadline) = deadline {
+        client = client.with_deadline(deadline.clone());
+    }
 
     if command == "auth" {
         return run_auth(argv, host, token.as_deref(), stdout, stderr);
