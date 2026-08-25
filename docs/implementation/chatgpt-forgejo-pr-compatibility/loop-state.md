@@ -22,7 +22,7 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: direct coordinator pass-6 repair at the existing invocation/provider-target seam
+Current execution strategy: direct coordinator pass-6 repair at the existing invocation/provider-target seam after frozen red evidence
 
 Last completed phase: S3
 
@@ -64,4 +64,4 @@ Blocked: no — C1 pass `6/6` is claimed after exact execution and live launch r
 
 ## Last Coordinator Update
 
-Pass `6/6` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `b278c7dc804c5442f637eae537b5523e1297ced90d5066419220b052578227e0`. Exact execution readiness returned `ready` with `findings: []`; live launch readiness returned `boundary_status: ready`, `status: launchable`, and `findings: []`. C1 was claimed only after both gates passed at clean pushed head `dbe5081e1ae930ed3dea87141605070a308f7f18`. Next, freeze the three exact process repros before production mutation. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
+Pass `6/6` is admitted. The canonical helper changed only C1's execution-readiness attestation, producing Beads projection hash `b278c7dc804c5442f637eae537b5523e1297ced90d5066419220b052578227e0`. Both exact readiness gates passed with empty findings before claim. Test-only commit `37f7e8ec2fe342e0aa3243e5e58b52d287a7864a` now freezes the three reviewer repros plus a repeated-valid-selector conflict: the six prior provider tests pass and all four new tests fail by reaching fake GitHub with exit `23`. Next, repair only the unified invocation/provider-target seam. The coordinator remains the sole writer and PR #29 remains the sole external integration PR.
