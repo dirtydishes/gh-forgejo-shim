@@ -4,7 +4,7 @@ Canonical tracker: Beads epic `gh-forgejo-shim-6y9`
 
 This file is a compact resume aid only. If this file disagrees with Beads, Beads wins.
 
-Status: active
+Status: blocked
 
 Stream: `chatgpt-forgejo-pr-compatibility`
 
@@ -22,11 +22,11 @@ Current Beads issue: gh-forgejo-shim-c04
 
 Current PR: https://github.com/dirtydishes/gh-forgejo-shim/pull/29
 
-Current execution strategy: two separate read-only C1 checkpoint reviewers on one frozen S2-S3 range; coordinator is the sole repair owner if the combined set returns findings
+Current execution strategy: halted after both final C1 reviewers returned required findings at the accepted pass `3/3` limit
 
 Last completed phase: S3
 
-Blocked: no
+Blocked: yes — C1 required review failed after the shared three-pass repair limit was exhausted
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Blocked: no
 | S1 | `gh-forgejo-shim-c01` | closed | none | `turn-docs/01-s1.md` |
 | S2 | `gh-forgejo-shim-c02` | closed | `#29` | `turn-docs/02-s2.md` |
 | S3 | `gh-forgejo-shim-c03` | closed | `#29` | `turn-docs/03-s3.md` |
-| C1 | `gh-forgejo-shim-c04` | in progress | `#29` | `turn-docs/04-c1.md` |
+| C1 | `gh-forgejo-shim-c04` | blocked | `#29` | `turn-docs/04-c1.md` |
 | S4 | `gh-forgejo-shim-c05` | open | none | `turn-docs/05-s4.md` |
 | S5 | `gh-forgejo-shim-c06` | open | none | `turn-docs/06-s5.md` |
 | S6 | `gh-forgejo-shim-c07` | open | none | `turn-docs/07-s6.md` |
@@ -64,4 +64,4 @@ Blocked: no
 
 ## Last Coordinator Update
 
-C1 final combined repair pass `3/3` is pushed at `c581a7c4c38e5708c8542f34dc863afcfa49dd82` with `0/0` parity. Attached short values, the installed `gh` flag surface, and explicit selectors in unsupported command trees are covered alongside the earlier consumed-payload checks. The 145-unit, 30-process, 5-active-contract, and 6-HTTP full locked gate is green. Both independent roles must rerun the exact range before CI admission; any required finding now exhausts the shared limit. The coordinator remains the sole writer; PR #29 remains the sole external integration PR.
+C1 is blocked at exact frozen review head `a0749eab819bf6d0652c0046dc624abd6a4b7a63`. Both required roles returned `changes_requested` at final pass `3/3`: clustered `-R` selectors and selector-shaped consumed payloads can still reverse provider choice; local handler grammar rejects valid attached forms that the routing test counts as safe; and the monolithic CLI process table crossed the required 1,000-line boundary. The full local gate is green, but required review failed and CI admission did not start. No fourth repair or S4 claim is authorized. Beads is canonical and records `gh-forgejo-shim-c04` as blocked; PR #29 remains the sole external integration PR.
