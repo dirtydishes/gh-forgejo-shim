@@ -524,11 +524,8 @@ GH_HOST
 FJ_SHIM_HOSTS=git.example.com,code.example.org gh pr view
 ```
 
-`FJ_SHIM_CA_FILE` points to a PEM-encoded CA certificate or bundle to trust for Forgejo API HTTPS connections. It adds to the bundled public roots; certificate and hostname verification remain enabled. A missing or invalid file causes an error. For example:
-
-```sh
-export FJ_SHIM_CA_FILE=/path/to/ca.pem
-```
+For private CA setup with `FJ_SHIM_CA_FILE`, see
+[Private CA Certificates](docs/configuration.md#private-ca-certificates).
 
 `FJ_SHIM_REAL_GH` and `FJ_SHIM_REAL_FJ` override configured executable paths:
 
