@@ -506,6 +506,7 @@ Environment overrides:
 FJ_SHIM_HOSTS
 FJ_SHIM_REAL_GH
 FJ_SHIM_REAL_FJ
+FJ_SHIM_CA_FILE
 FJ_SHIM_TRACE
 FJ_SHIM_TRACE_BODY
 FJ_SHIM_REAL_GIT
@@ -521,6 +522,12 @@ GH_HOST
 
 ```sh
 FJ_SHIM_HOSTS=git.example.com,code.example.org gh pr view
+```
+
+`FJ_SHIM_CA_FILE` points to a PEM-encoded CA certificate or bundle to trust for Forgejo API HTTPS connections. It adds to the bundled public roots; certificate and hostname verification remain enabled. A missing or invalid file causes an error. For example:
+
+```sh
+export FJ_SHIM_CA_FILE=/path/to/ca.pem
 ```
 
 `FJ_SHIM_REAL_GH` and `FJ_SHIM_REAL_FJ` override configured executable paths:

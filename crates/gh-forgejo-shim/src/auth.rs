@@ -203,42 +203,14 @@ pub fn auth_file_path(home: Option<&Path>) -> PathBuf {
 }
 
 pub fn validate_token(host: &str, token: &str) -> Result<Option<String>> {
-    let host = normalize_host(host);
-    let url = format!("https://{host}/api/v1/user");
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build();
-    let response = agent
-        .get(&url)
-        .set("Accept", "application/json")
-        .set("User-Agent", "gh-forgejo-shim")
-        .set("Authorization", &format!("token {token}"))
-        .call();
-
-    let body = match response {
-        Ok(response) => response
-            .into_string()
-            .map_err(|error| ShimError::new(format!("Forgejo API request failed: {error}")))?,
-        Err(ureq::Error::Status(code, response)) => {
-            let body = response.into_string().unwrap_or_default();
-            return Err(ShimError::new(format!(
-                "Forgejo API returned HTTP {code}: {body}"
-            )));
+    let client = match std::env::var_os("FJ_SHIM_CA_FILE") {
+        Some(path) => {
+            crate::forgejo::ForgejoClient::with_ca_file(Some(token.to_string()), Path::new(&path))?
         }
-        Err(ureq::Error::Transport(error)) => {
-            let message = error
-                .message()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| error.to_string());
-            return Err(ShimError::new(format!(
-                "Forgejo API request failed: {}",
-                message
-            )));
-        }
-    };
-
-    let value = serde_json::from_str::<Value>(&body)
-        .map_err(|error| ShimError::new(format!("Forgejo API returned invalid JSON: {error}")))?;
+        None => crate::forgejo::ForgejoClient::with_token(token),
+    }
+    .with_timeout(Duration::from_secs(10));
+    let value = client.get_current_user(&normalize_host(host))?;
     let object = value
         .as_object()
         .ok_or_else(|| ShimError::new("Forgejo API returned unexpected user data"))?;

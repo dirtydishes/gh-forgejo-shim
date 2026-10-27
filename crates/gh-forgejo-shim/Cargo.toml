@@ -34,3 +34,6 @@ rpassword = "7.3"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }

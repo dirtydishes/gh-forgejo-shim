@@ -189,6 +189,43 @@ impl ForgejoClient {
         }
     }
 
+    pub fn with_ca_file(token: Option<String>, path: &std::path::Path) -> ForgejoResult<Self> {
+        let pem = std::fs::read(path).map_err(|error| {
+            ForgejoError::new(format!(
+                "could not read CA certificate {}: {error}",
+                path.display()
+            ))
+        })?;
+        let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| {
+            ForgejoError::new(format!(
+                "invalid CA certificate {}: {error}",
+                path.display()
+            ))
+        })?;
+        if certificates.is_empty() {
+            return Err(ForgejoError::new(format!(
+                "invalid CA certificate {}: no PEM certificates found",
+                path.display()
+            )));
+        }
+        let mut builder = Client::builder();
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+        let http = builder.build().map_err(|error| {
+            ForgejoError::new(format!(
+                "could not configure CA certificate {}: {error}",
+                path.display()
+            ))
+        })?;
+        Ok(Self {
+            token,
+            timeout: Duration::from_secs(30),
+            scheme: "https".to_string(),
+            http,
+        })
+    }
+
     pub fn with_token(token: impl Into<String>) -> Self {
         Self::new(Some(token.into()))
     }
@@ -600,6 +637,76 @@ mod tests {
                 body,
             }
         }
+    }
+
+    #[test]
+    fn configured_ca_file_is_checked() {
+        let missing = std::env::temp_dir().join("gh-forgejo-shim-missing-test-ca.pem");
+        let error = ForgejoClient::with_ca_file(None, &missing)
+            .err()
+            .expect("missing CA must fail");
+        assert!(error.to_string().contains("CA certificate"));
+        let invalid = std::env::current_exe().expect("test executable");
+        let error = ForgejoClient::with_ca_file(None, &invalid)
+            .err()
+            .expect("invalid CA must fail");
+        assert!(error.to_string().contains("CA certificate"));
+        let valid =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+        assert!(ForgejoClient::with_ca_file(None, &valid).is_ok());
+    }
+
+    #[test]
+    fn private_ca_enables_tls_without_disabling_hostname_checks() -> TestResult {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        use std::sync::Arc;
+
+        fn serve() -> io::Result<(u16, JoinHandle<()>)> {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let port = listener.local_addr()?.port();
+            let cert =
+                CertificateDer::from(include_bytes!("../tests/fixtures/test-server.der").to_vec());
+            let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                include_bytes!("../tests/fixtures/test-server-key.der").to_vec(),
+            ));
+            let config = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .map_err(io::Error::other)?;
+            let handle = thread::spawn(move || {
+                let (socket, _) = listener.accept().expect("accept");
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("timeout");
+                let connection =
+                    rustls::ServerConnection::new(Arc::new(config)).expect("connection");
+                let mut stream = rustls::StreamOwned::new(connection, socket);
+                if read_request(&mut stream).is_ok() {
+                    let _ = write_response(&mut stream, &FakeResponse::json(r#"{"login":"test"}"#));
+                }
+            });
+            Ok((port, handle))
+        }
+        let ca =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+        let (port, handle) = serve()?;
+        assert!(ForgejoClient::new(None)
+            .get_current_user(&format!("localhost:{port}"))
+            .is_err());
+        handle.join().expect("server");
+        let (port, handle) = serve()?;
+        let client = ForgejoClient::with_ca_file(None, &ca)?;
+        assert_eq!(
+            client.get_current_user(&format!("localhost:{port}"))?["login"],
+            "test"
+        );
+        handle.join().expect("server");
+        let (port, handle) = serve()?;
+        assert!(client
+            .get_current_user(&format!("127.0.0.1:{port}"))
+            .is_err());
+        handle.join().expect("server");
+        Ok(())
     }
 
     #[test]
