@@ -14,3 +14,6 @@ dist/
 
 # Rust generated files
 target/
+
+# bd lock file at the repo root
+.beads.gate.lock
