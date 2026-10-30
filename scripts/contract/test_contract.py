@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import capture
 import runner
-from common import REPO, ROOT, load_cases, normalize, oracle_argv, validate_case
+from common import LOCAL_PROBES, REPO, ROOT, load_cases, normalize, oracle_argv, validate_case
 
 
 class ContractTests(unittest.TestCase):
@@ -60,6 +60,45 @@ class ContractTests(unittest.TestCase):
                 capture.main()
             download.assert_not_called()
             run.assert_not_called()
+
+    def test_local_cases_cannot_be_captured_or_disguised_as_oracle_cases(self):
+        for argv in LOCAL_PROBES:
+            case = self.case(argv)
+            with self.subTest(argv=argv):
+                with self.assertRaises(ValueError):
+                    validate_case(case)
+                case["kind"] = "shim-local"
+                case["expected"] = case.pop("oracle")
+                validate_case(case)
+                with self.assertRaisesRegex(ValueError, "never reach real gh"):
+                    oracle_argv(case)
+                with self.assertRaises(ValueError):
+                    validate_case(case | {"argv": ["pr", "create"]})
+
+    def test_selecting_only_local_cases_does_not_read_auth_or_download(self):
+        case = self.case(LOCAL_PROBES[0]) | {"kind": "shim-local"}
+        case["expected"] = case.pop("oracle")
+        with patch.object(capture, "load_cases", return_value=[(Path("probe.json"), case)]), \
+                patch("sys.argv", ["capture.py", "--case", "probe"]), \
+                patch.object(capture, "official_gh") as download, \
+                patch.object(capture.subprocess, "run") as run:
+            capture.main()
+            download.assert_not_called()
+            run.assert_not_called()
+
+    def test_error_probe_exceptions_are_exact(self):
+        for argv in (["pr", "view", "1", "--gfjs-unknown", "--web"],
+                     ["pr", "gfjs-unknown", "--repo", "evil.test/other/repo"],
+                     ["pr", "view", "1", "--template", "--web"]):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                validate_case(self.case(argv))
+
+    def test_local_expected_output_compares_both_streams_and_exit(self):
+        case = self.case(LOCAL_PROBES[0]) | {"kind": "shim-local"}
+        case["expected"] = case.pop("oracle")
+        self.assertEqual(runner.classify(case, case["expected"]), ("pass", ""))
+        for key, value in (("exit", 97), ("stdout", "wrong"), ("stderr", "wrong")):
+            self.assertEqual(runner.classify(case, case["expected"] | {key: value})[0], "unexpected")
 
     def test_checksum_mismatch_refuses_executable(self):
         class Download:

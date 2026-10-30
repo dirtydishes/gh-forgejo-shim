@@ -18,6 +18,23 @@ VALUE_FLAGS = {
 BOOL_FLAGS = {"--name-only", "--patch", "--required", "--verbose"}
 SAFE_ENV = {"NO_COLOR", "CLICOLOR", "TERM", "TZ", "LANG", "LC_ALL", "COLUMNS"}
 
+# Exact client-error probes keep unknown flags and missing values out of the general allowlist.
+ERROR_PROBES = [
+    ["pr", "view", "1", "--gfjs-unknown"],
+    ["pr", "view", "1", "--template"],
+    ["pr", "view", "1", "--json"],
+    ["pr", "view", "1", "--json", "x"],
+    ["pr", "view", "1", "--jq", ".number"],
+    ["pr", "gfjs-unknown"],
+    ["pr", "view", "1", "-Z"],
+    ["pr", "view", "1", "--comments=no"],
+]
+LOCAL_PROBES = [
+    ["pr", "merge", "1"],
+    ["pr", "edit", "1", "--title", "x"],
+    ["api", f"repos/{REPO}/pulls"],
+]
+
 
 def validate_case(case):
     """Reject unsafe commands before reading credentials or starting any command."""
@@ -36,6 +53,17 @@ def validate_case(case):
     argv = case["argv"]
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) for a in argv):
         raise ValueError("argv must be a nonempty string array")
+    kind = case.get("kind", "oracle")
+    if kind == "shim-local":
+        if argv not in LOCAL_PROBES:
+            raise ValueError("shim-local command is outside the exact local allowlist")
+        if not isinstance(case.get("expected"), dict) or "oracle" in case:
+            raise ValueError("shim-local cases require expected output and no oracle")
+        return
+    if kind != "oracle":
+        raise ValueError("unknown case kind")
+    if argv in ERROR_PROBES:
+        return
     command = tuple(argv[:2])
     if argv == ["--version"]:
         return
@@ -61,6 +89,9 @@ def validate_case(case):
                 raise ValueError("repository override must name the twin")
         elif arg in bools:
             pass
+        elif command[0] == "pr" and arg.startswith("-R") and len(arg) > 2:
+            if arg[2:].removeprefix("=") != f"forge.test/{REPO}":
+                raise ValueError("repository override must name the twin")
         elif not arg.startswith("-") and command in {
             ("pr", "view"), ("pr", "checks"), ("pr", "diff"), ("repo", "view"),
         }:
@@ -91,6 +122,8 @@ def load_cases(directory):
 
 
 def oracle_argv(case):
+    if case.get("kind") == "shim-local":
+        raise ValueError("shim-local cases must never reach real gh")
     return [arg.replace(f"forge.test/{REPO}", f"github.com/{REPO}") for arg in case["argv"]]
 
 

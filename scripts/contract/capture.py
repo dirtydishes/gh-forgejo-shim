@@ -1,5 +1,6 @@
 """Read-only captures from the GitHub twin with a checksum-pinned official gh."""
 
+import argparse
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from pathlib import Path
 
 from common import REPO, ROOT, load_cases, oracle_argv
 
@@ -47,7 +49,16 @@ def official_gh(destination):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", action="append", default=[], help="capture only this case ID; preserve scenarios")
     cases = load_cases(ROOT / "contract/cases")  # Validate ALL cases before reading the login.
+    args = parser.parse_args()
+    if set(args.case) - {case["id"] for _, case in cases}:
+        raise ValueError("unknown case ID")
+    cases = [(path, case) for path, case in cases
+             if case.get("kind") != "shim-local" and (not args.case or case["id"] in args.case)]
+    if not cases:
+        return
     cache = ROOT / "target/contract"
     cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="capture-", dir=cache) as temporary:
@@ -86,7 +97,7 @@ def main():
             raise ValueError("downloaded gh version does not match")
         # These are also read-only allowlisted pr view commands against the same twin.
         scenarios = []
-        for number in range(1, 8):
+        for number in ([] if args.case else range(1, 8)):
             result = read(["pr", "view", str(number), "--json", "number,title,body,state,isDraft,headRefName,baseRefName"])
             if result["exit"]:
                 raise ValueError(f"could not capture scenario {number}")
@@ -96,7 +107,8 @@ def main():
         for path, case in captures:
             path.write_text(json.dumps(case, indent=2) + "\n")
             print(f"captured {case['id']}: exit {case['oracle']['exit']}")
-        (ROOT / "contract/scenarios.json").write_text(json.dumps(scenarios, indent=2) + "\n")
+        if not args.case:
+            (ROOT / "contract/scenarios.json").write_text(json.dumps(scenarios, indent=2) + "\n")
         (ROOT / "contract/oracle-version.txt").write_text(version["stdout"])
 
 

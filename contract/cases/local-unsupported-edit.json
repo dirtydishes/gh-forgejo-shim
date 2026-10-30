@@ -1,0 +1,18 @@
+{
+  "id": "local-unsupported-edit",
+  "kind": "shim-local",
+  "argv": [
+    "pr",
+    "edit",
+    "1",
+    "--title",
+    "x"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "gh-forgejo-shim: \"gh pr edit\" is not supported for Forgejo host forge.test yet\n"
+  }
+}
