@@ -36,6 +36,7 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
+          rustup toolchain install
           rustup show active-toolchain
           rustup target add "${{ matrix.target }}"
 
