@@ -1,0 +1,17 @@
+{
+  "id": "api-user",
+  "argv": [
+    "api",
+    "user",
+    "--jq",
+    ".login"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": null,
+  "normalize": [],
+  "oracle": {
+    "exit": 0,
+    "stdout": "dirtydishes\n",
+    "stderr": ""
+  }
+}

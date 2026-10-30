@@ -1,0 +1,22 @@
+{
+  "id": "pr-checks-pass-1",
+  "argv": [
+    "pr",
+    "checks",
+    "1"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 1,
+  "normalize": [
+    "host",
+    "durations",
+    "check_details_urls"
+  ],
+  "oracle": {
+    "exit": 0,
+    "stdout": "check\tpass\t5s\thttps://github.com/dirtydishes/gfj-oracle/actions/runs/41111883015/job/124255720967\t\nlint\tpass\t4s\thttps://github.com/dirtydishes/gfj-oracle/actions/runs/41111883015/job/124255721638\t\n",
+    "stderr": ""
+  },
+  "xfail": "Passing checks use the shim status/description columns instead of gh job/bucket/duration/link columns.",
+  "xfail_diff": "check/pass/<duration>/<check-url> -> pass/ci / check (pull_request)/Has finished running; lint row also differs."
+}

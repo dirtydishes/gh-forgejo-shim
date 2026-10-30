@@ -1,0 +1,34 @@
+{
+  "id": "pr-list-author-other",
+  "argv": [
+    "pr",
+    "list",
+    "--head",
+    "s/pass",
+    "--author",
+    "github-actions[bot]",
+    "--state",
+    "all",
+    "--json",
+    "number,url,state,headRefName",
+    "--repo",
+    "forge.test/dirtydishes/gfj-oracle"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 1,
+  "normalize": [
+    "host",
+    "pr_urls",
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "[]\n",
+    "stderr": ""
+  },
+  "xfail": "The shim ignores --author and returns PR 1 even though github-actions[bot] did not author it.",
+  "xfail_diff": "stdout [] -> [{headRefName:s/pass,number:1,state:OPEN,url:<PR 1 URL>}]."
+}
