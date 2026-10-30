@@ -72,6 +72,9 @@ impl CliFixture {
 
     pub fn write_executable(&self, name: &str, contents: &str) -> io::Result<PathBuf> {
         let path = self.bin.join(name);
+        if path.is_symlink() {
+            fs::remove_file(&path)?;
+        }
         fs::write(&path, contents)?;
         make_executable(&path)?;
         Ok(path)
@@ -143,11 +146,18 @@ fn install_git_fixture(bin: &Path) -> io::Result<()> {
                 io::ErrorKind::NotFound,
                 "git is not available for the test fixture",
             )
-        })?;
+        })?
+        .canonicalize()?;
     let target = bin.join(executable);
 
-    fs::copy(source, &target)?;
-    make_executable(&target)
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, target)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::copy(source, target).map(|_| ())
+    }
 }
 
 impl Drop for CliFixture {

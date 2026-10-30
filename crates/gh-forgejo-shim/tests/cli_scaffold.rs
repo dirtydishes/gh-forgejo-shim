@@ -743,6 +743,9 @@ fn fixture_exposes_isolated_paths_and_private_bin_only() -> TestResult {
         .bin()
         .join(format!("git{}", std::env::consts::EXE_SUFFIX))
         .is_file());
+    #[cfg(unix)]
+    assert!(fixture.bin().join("git").is_symlink());
+    fixture.init_git_repo()?;
     Ok(())
 }
 
