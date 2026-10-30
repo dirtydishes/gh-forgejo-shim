@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::config::EnvMap;
+use crate::config::{self, EnvMap};
 use crate::external::{git_output, git_run, open_web_url, GitRunResult};
 use crate::forgejo::{
     CreateIssueRequest, CreatePullRequest, ForgejoClient, ForgejoResult, ListIssuesOptions,
@@ -358,17 +358,16 @@ fn run_with_context(
         return Err(ShimError::new("unsupported empty Forgejo command"));
     };
     let host = host.ok_or_else(|| ShimError::new("could not determine Forgejo host"))?;
-    let token = auth::discover_token(Some(host), env, home, Some(current_platform()), true)
+    let config = config::load_config_with_env(Some(&config::config_path(home)), env)?;
+    let token = auth::resolve_token(host, &config, env, home, Some(current_platform()))
         .map(|discovery| discovery.token);
 
     if command == "auth" {
         return run_auth(argv, host, token.as_deref(), stdout, stderr);
     }
 
-    let make_client = |token| match env.get("FJ_SHIM_CA_FILE") {
-        Some(path) => ForgejoClient::with_ca_file(token, Path::new(path)).map_err(ShimError::from),
-        None => Ok(ForgejoClient::new(token)),
-    };
+    let make_client =
+        |token| ForgejoClient::for_host(host, token, &config, env).map_err(ShimError::from);
 
     if command == "api" {
         if token.is_none() {
@@ -2055,7 +2054,7 @@ fn filter_selected_fields(data: &Value, fields: &[String]) -> Value {
 
 fn missing_auth_message(host: &str) -> String {
     format!(
-        "gh-forgejo-shim: Forgejo auth is not configured for {host}; run gh-forgejo-shim auth login {host} or gh-forgejo-shim auth import {host}"
+        "gh-forgejo-shim: Forgejo auth is not configured for {host}; run gh-forgejo-shim auth login {host} or gh-forgejo-shim auth import --from fj --hostname {host}"
     )
 }
 

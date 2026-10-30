@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Result, ShimError};
 
@@ -18,15 +18,30 @@ pub struct PathsConfig {
     pub fj: Option<String>,
 }
 
+/// Per-host tables use `host`, singular, so they can coexist with the legacy
+/// `hosts = [...]` array. A table also adds its key to the host allowlist.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct HostConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub hosts: Vec<String>,
+    pub host: BTreeMap<String, HostConfig>,
     pub paths: PathsConfig,
     pub path: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawConfig {
+    #[serde(default)]
+    host: BTreeMap<String, HostConfig>,
     hosts: Option<Vec<String>>,
     paths: Option<RawPathsConfig>,
 }
@@ -39,16 +54,7 @@ struct RawPathsConfig {
 
 impl Config {
     pub fn is_forgejo_host(&self, host: Option<&str>) -> bool {
-        let Some(host) = host else {
-            return false;
-        };
-        let normalized = normalize_host(host);
-        if is_known_github_host(Some(&normalized)) {
-            return false;
-        }
-        self.hosts
-            .iter()
-            .any(|configured| normalize_host(configured) == normalized)
+        is_forgejo_host(&self.hosts, host)
     }
 }
 
@@ -77,9 +83,10 @@ pub fn load_config_at(path: &Path) -> Result<Config> {
 pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config> {
     let config_path = path
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| config_path(None));
+        .unwrap_or_else(|| config_path(env.get("HOME").map(Path::new)));
 
     let mut raw = RawConfig {
+        host: BTreeMap::new(),
         hosts: None,
         paths: None,
     };
@@ -101,6 +108,38 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         .into_iter()
         .filter_map(|host| normalized_forgejo_host(&host))
         .collect::<Vec<_>>();
+
+    let mut host_settings = BTreeMap::new();
+    for (host, mut settings) in raw.host {
+        let Some(host) = normalized_forgejo_host(&host) else {
+            continue;
+        };
+        settings.api_url = optional_string(settings.api_url.as_deref());
+        settings.token_env = optional_string(settings.token_env.as_deref());
+        if let Some(base) = &settings.api_url {
+            let url = reqwest::Url::parse(base).map_err(|_| {
+                ShimError::new(format!(
+                    "invalid api_url for {host}: expected an HTTP or HTTPS base URL"
+                ))
+            })?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(ShimError::new(format!("invalid api_url for {host}: expected an HTTP or HTTPS base URL without credentials, query, or fragment")));
+            }
+            settings.api_url = Some(base.trim_end_matches('/').to_string());
+        }
+        hosts.push(host.clone());
+        if host_settings.insert(host.clone(), settings).is_some() {
+            return Err(ShimError::new(format!(
+                "duplicate host settings for {host}"
+            )));
+        }
+    }
 
     let mut gh = raw
         .paths
@@ -132,6 +171,7 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
 
     Ok(Config {
         hosts: dedupe(hosts),
+        host: host_settings,
         paths: PathsConfig { gh, fj },
         path: config_path,
     })
@@ -149,6 +189,7 @@ pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
 
     let updated = Config {
         hosts,
+        host: config.host,
         paths: config.paths,
         path: config.path,
     };
@@ -157,8 +198,9 @@ pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
 }
 
 pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
-    let config = load_config_with_env(path, &EnvMap::new())?;
+    let mut config = load_config_with_env(path, &EnvMap::new())?;
     let normalized = normalize_host(host);
+    config.host.remove(&normalized);
     let hosts = config
         .hosts
         .into_iter()
@@ -166,6 +208,7 @@ pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
         .collect();
     let updated = Config {
         hosts,
+        host: config.host,
         paths: config.paths,
         path: config.path,
     };
@@ -192,6 +235,16 @@ pub fn write_config(config: &Config) -> Result<()> {
         .collect::<Vec<_>>()
         .join(", ");
     lines.push(format!("hosts = [{hosts}]"));
+    for (host, settings) in &config.host {
+        lines.push(String::new());
+        lines.push(format!("[host.{}]", toml_string(host)));
+        lines.push(
+            toml::to_string(settings)
+                .map_err(|error| ShimError::new(error.to_string()))?
+                .trim_end()
+                .to_string(),
+        );
+    }
     if config.paths.gh.is_some() || config.paths.fj.is_some() {
         lines.push(String::new());
         lines.push("[paths]".to_string());
@@ -221,6 +274,15 @@ pub fn normalize_host(host: &str) -> String {
         value = host;
     }
     value.to_ascii_lowercase()
+}
+
+pub fn is_forgejo_host(hosts: &[String], host: Option<&str>) -> bool {
+    let Some(host) = host else { return false };
+    let normalized = normalize_host(host);
+    !is_known_github_host(Some(&normalized))
+        && hosts
+            .iter()
+            .any(|configured| normalize_host(configured) == normalized)
 }
 
 pub fn is_known_github_host(host: Option<&str>) -> bool {
@@ -304,6 +366,110 @@ mod tests {
         let config = load_config_with_env(Some(&root.join("config.toml")), &EnvMap::new())?;
 
         assert_eq!(config.hosts, Vec::<String>::new());
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_hosts_and_quoted_hash_use_toml_syntax() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            r#"
+hosts = [
+    "Git.Example.com",
+    "git.example.com", # duplicate
+    "code.example.org",
+]
+[paths]
+gh = "/bin/gh#real"
+"#,
+        )?;
+
+        let config = load_config_with_env(Some(&path), &EnvMap::new())?;
+        assert_eq!(config.hosts, ["git.example.com", "code.example.org"]);
+        assert_eq!(config.paths.gh.as_deref(), Some("/bin/gh#real"));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn host_tables_allowlist_and_survive_config_edits() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            r#"
+hosts = ["legacy.example.com"]
+[host."https://Git.Example.com/path"]
+api_url = "http://127.0.0.1:3000/forgejo/"
+token_env = "EXAMPLE_TOKEN"
+ca_file = "/tmp/ca#root.pem"
+[host."table-only.example.com"]
+[paths]
+gh = "/bin/gh#real"
+"#,
+        )?;
+        let config = load_config_with_env(Some(&path), &EnvMap::new())?;
+        assert_eq!(
+            config.hosts,
+            [
+                "legacy.example.com",
+                "git.example.com",
+                "table-only.example.com"
+            ]
+        );
+        let settings = &config.host["git.example.com"];
+        assert_eq!(
+            settings.api_url.as_deref(),
+            Some("http://127.0.0.1:3000/forgejo")
+        );
+        assert_eq!(settings.token_env.as_deref(), Some("EXAMPLE_TOKEN"));
+        assert_eq!(
+            settings.ca_file.as_deref(),
+            Some(Path::new("/tmp/ca#root.pem"))
+        );
+
+        add_host("new.example.com", Some(&path))?;
+        let updated = load_config_with_env(Some(&path), &EnvMap::new())?;
+        assert_eq!(updated.host, config.host);
+        assert_eq!(updated.paths, config.paths);
+        let removed = remove_host("git.example.com", Some(&path))?;
+        assert!(!removed.host.contains_key("git.example.com"));
+        assert!(!load_config_with_env(Some(&path), &EnvMap::new())?
+            .is_forgejo_host(Some("git.example.com")));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_base_urls_and_duplicate_normalized_tables() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        for base in [
+            "ftp://git.example.com",
+            "https://user:secret@git.example.com",
+            "https://git.example.com/?token=secret",
+            "https://git.example.com/#secret",
+            "not a URL",
+        ] {
+            fs::write(
+                &path,
+                format!("[host.\"git.example.com\"]\napi_url = {base:?}\n"),
+            )?;
+            let error = load_config_with_env(Some(&path), &EnvMap::new()).expect_err("invalid URL");
+            assert!(error.to_string().contains("invalid api_url"));
+            assert!(!error.to_string().contains("secret"));
+        }
+        fs::write(
+            &path,
+            "[host.\"Git.Example.com\"]\n[host.\"git.example.com\"]\n",
+        )?;
+        assert!(load_config_with_env(Some(&path), &EnvMap::new())
+            .expect_err("duplicate host")
+            .to_string()
+            .contains("duplicate host settings"));
         fs::remove_dir_all(root).ok();
         Ok(())
     }

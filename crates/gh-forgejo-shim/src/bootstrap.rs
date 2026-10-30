@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::auth;
-use crate::config::{self, EnvMap};
+use crate::config::{self, Config, EnvMap};
 use crate::external;
 use crate::gui_path;
 use crate::repo::{self, RepoRef};
@@ -266,8 +266,10 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     } else {
         checks.push(auth_check(
             repo.as_ref(),
+            &config,
             &options.env,
             options.home.as_deref(),
+            &options.platform,
         ));
     }
     checks.extend(origin_checks(repo.as_ref(), options.cwd.as_deref()));
@@ -571,8 +573,23 @@ fn gui_path_action(
     }))
 }
 
-fn auth_check(repo: Option<&RepoRef>, env: &EnvMap, home: Option<&Path>) -> BootstrapCheck {
-    if auth::discover_fj_token(repo.map(|repo| repo.host.as_str()), env, home).is_some() {
+fn auth_check(
+    repo: Option<&RepoRef>,
+    config: &Config,
+    env: &EnvMap,
+    home: Option<&Path>,
+    platform: &str,
+) -> BootstrapCheck {
+    let host = repo
+        .map(|repo| repo.host.as_str())
+        .or(match config.hosts.as_slice() {
+            [host] => Some(host.as_str()),
+            _ => None,
+        });
+    if host
+        .and_then(|host| auth::resolve_token(host, config, env, home, Some(platform)))
+        .is_some()
+    {
         return BootstrapCheck::new("auth", true, "found Forgejo token", Vec::<String>::new());
     }
     let login_command = repo.map_or_else(
@@ -580,13 +597,18 @@ fn auth_check(repo: Option<&RepoRef>, env: &EnvMap, home: Option<&Path>) -> Boot
         |repo| format!("gh-forgejo-shim auth login {}", repo.host),
     );
     let import_command = repo.map_or_else(
-        || "gh-forgejo-shim auth import HOST".to_string(),
-        |repo| format!("gh-forgejo-shim auth import {}", repo.host),
+        || "gh-forgejo-shim auth import --from fj --hostname HOST".to_string(),
+        |repo| {
+            format!(
+                "gh-forgejo-shim auth import --from fj --hostname {}",
+                repo.host
+            )
+        },
     );
     BootstrapCheck::new(
         "auth",
         false,
-        "no Forgejo token found in shim storage, env, or common fj/tea/gitea config files",
+        "no Forgejo token found in shim storage or configured environment variables; use auth import --from fj or --from tea",
         [
             login_command,
             import_command,

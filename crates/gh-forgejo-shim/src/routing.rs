@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::read_only;
 use crate::repo::{detect_repo, RepoRef};
@@ -18,7 +18,6 @@ const SUPPORTED_PR_COMMANDS: &[&str] = &[
 const SUPPORTED_ISSUE_COMMANDS: &[&str] = &["create", "list", "ls", "new", "view"];
 const SUPPORTED_REPO_COMMANDS: &[&str] = &["view"];
 const SUPPORTED_AUTH_COMMANDS: &[&str] = &["status", "token"];
-const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com"];
 
 const API_FLAGS_WITH_VALUES: &[&str] = &[
     "--cache",
@@ -45,15 +44,7 @@ pub struct DispatcherConfig {
 
 impl DispatcherConfig {
     pub fn is_forgejo_host(&self, host: Option<&str>) -> bool {
-        let Some(host) = host else {
-            return false;
-        };
-        let normalized = normalize_host(host);
-        !is_known_github_host(Some(normalized.as_str()))
-            && self
-                .hosts
-                .iter()
-                .any(|candidate| normalize_host(candidate) == normalized)
+        config::is_forgejo_host(&self.hosts, host)
     }
 }
 
@@ -174,45 +165,16 @@ pub fn decide_route(
     RouteDecision::forgejo(detection.source, Some(repo), Some(host))
 }
 
-pub fn load_dispatcher_config(env: &HashMap<String, String>) -> DispatcherConfig {
-    let mut config = load_dispatcher_config_file(env).unwrap_or_else(|| DispatcherConfig {
-        hosts: Vec::new(),
-        real_gh: None,
-    });
-
-    if let Some(hosts) = env.get("FJ_SHIM_HOSTS") {
-        config.hosts = split_hosts(hosts)
-            .into_iter()
-            .filter(|host| !is_known_github_host(Some(host.as_str())))
-            .collect();
-    }
-
-    if let Some(real_gh) = optional_env(env, "FJ_SHIM_REAL_GH") {
-        config.real_gh = Some(PathBuf::from(real_gh));
-    }
-
-    config.hosts = dedupe_hosts(config.hosts);
-    config
-}
-
-pub fn normalize_host(host: &str) -> String {
-    let without_scheme = host
-        .trim()
-        .split_once("://")
-        .map_or(host.trim(), |(_, rest)| rest);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or(without_scheme)
-        .to_ascii_lowercase()
-}
-
-pub fn is_known_github_host(host: Option<&str>) -> bool {
-    host.map(|host| {
-        let normalized = normalize_host(host);
-        KNOWN_GITHUB_HOSTS.contains(&normalized.as_str())
+pub fn load_dispatcher_config(env: &HashMap<String, String>) -> crate::Result<DispatcherConfig> {
+    let env = env
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let config = config::load_config_with_env(None, &env)?;
+    Ok(DispatcherConfig {
+        hosts: config.hosts,
+        real_gh: config.paths.gh.map(PathBuf::from),
     })
-    .unwrap_or(false)
 }
 
 fn run_gh(
@@ -222,7 +184,13 @@ fn run_gh(
     mut mode: DelegateMode<'_>,
 ) -> i32 {
     let started = Instant::now();
-    let config = load_dispatcher_config(&env);
+    let config = match load_dispatcher_config(&env) {
+        Ok(config) => config,
+        Err(error) => {
+            write_error(&mut mode, &format!("gh-forgejo-shim: {error}"));
+            return 1;
+        }
+    };
     let decision = decide_route(&argv, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
@@ -431,136 +399,6 @@ fn has_flag_value_prefix(arg: &str, flags: &[&str]) -> bool {
     })
 }
 
-fn load_dispatcher_config_file(env: &HashMap<String, String>) -> Option<DispatcherConfig> {
-    let path = config_path(env)?;
-    let text = fs::read_to_string(path).ok()?;
-    Some(parse_config_text(&text))
-}
-
-fn config_path(env: &HashMap<String, String>) -> Option<PathBuf> {
-    env.get("HOME")
-        .filter(|home| !home.trim().is_empty())
-        .map(|home| {
-            Path::new(home)
-                .join(".config")
-                .join("gh-forgejo-shim")
-                .join("config.toml")
-        })
-}
-
-fn parse_config_text(text: &str) -> DispatcherConfig {
-    let mut table = "";
-    let mut hosts = Vec::new();
-    let mut real_gh = None;
-
-    for raw_line in text.lines() {
-        let line = raw_line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            table = line.trim_matches(&['[', ']'][..]).trim();
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if table.is_empty() && key == "hosts" {
-            hosts = parse_host_list(value);
-        } else if table == "paths" && key == "gh" {
-            real_gh = parse_toml_string(value).map(PathBuf::from);
-        }
-    }
-
-    DispatcherConfig {
-        hosts: hosts
-            .into_iter()
-            .filter(|host| !is_known_github_host(Some(host.as_str())))
-            .collect(),
-        real_gh,
-    }
-}
-
-fn parse_host_list(value: &str) -> Vec<String> {
-    let trimmed = value.trim();
-    let Some(inner) = trimmed
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-    else {
-        return Vec::new();
-    };
-    inner
-        .split(',')
-        .filter_map(parse_toml_string)
-        .map(|host| normalize_host(&host))
-        .filter(|host| !host.is_empty())
-        .collect()
-}
-
-fn parse_toml_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    let quote = trimmed.chars().next()?;
-    if !matches!(quote, '"' | '\'') || !trimmed.ends_with(quote) || trimmed.len() < 2 {
-        return None;
-    }
-    let inner = &trimmed[1..trimmed.len() - 1];
-    if quote == '\'' {
-        return Some(inner.to_string());
-    }
-    Some(unescape_basic_toml_string(inner))
-}
-
-fn unescape_basic_toml_string(value: &str) -> String {
-    let mut result = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            result.push(character);
-            continue;
-        }
-        match chars.next() {
-            Some('"') => result.push('"'),
-            Some('\\') => result.push('\\'),
-            Some('n') => result.push('\n'),
-            Some('t') => result.push('\t'),
-            Some(other) => {
-                result.push('\\');
-                result.push(other);
-            }
-            None => result.push('\\'),
-        }
-    }
-    result
-}
-
-fn split_hosts(value: &str) -> Vec<String> {
-    value
-        .replace([';', ' '], ",")
-        .split(',')
-        .map(normalize_host)
-        .filter(|host| !host.is_empty())
-        .collect()
-}
-
-fn optional_env<'a>(env: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
-    env.get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn dedupe_hosts(hosts: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::new();
-    for host in hosts {
-        if !deduped.contains(&host) {
-            deduped.push(host);
-        }
-    }
-    deduped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,20 +507,5 @@ mod tests {
 
         assert_eq!(decision.kind, RouteKind::Forgejo);
         assert_eq!(decision.reason, "GH_REPO");
-    }
-
-    #[test]
-    fn parses_dispatcher_config_hosts_and_paths() {
-        let parsed = parse_config_text(
-            r#"
-            hosts = ["git.example.com", "github.com"]
-
-            [paths]
-            gh = "/opt/homebrew/bin/gh"
-            "#,
-        );
-
-        assert_eq!(parsed.hosts, vec!["git.example.com"]);
-        assert_eq!(parsed.real_gh, Some(PathBuf::from("/opt/homebrew/bin/gh")));
     }
 }

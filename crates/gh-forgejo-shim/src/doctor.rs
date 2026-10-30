@@ -92,11 +92,15 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     })?;
     let configured_fj = config.paths.fj.as_deref().map(Path::new);
     let real_fj = setup::find_tool("fj", configured_fj, &options.env, &fallback_dirs, false);
-    let token = auth::discover_fj_token(
-        config.hosts.first().map(String::as_str),
-        &options.env,
-        options.home.as_deref(),
-    );
+    let token = config.hosts.first().and_then(|host| {
+        auth::resolve_token(
+            host,
+            &config,
+            &options.env,
+            options.home.as_deref(),
+            Some(&options.platform),
+        )
+    });
 
     let mut checks = vec![
         current_path_check(&setup_model),
@@ -424,7 +428,7 @@ fn fj_check(real_fj: Option<setup::ToolPath>) -> Check {
     }
     Check::warn(
         "fj",
-        "not found; auth import can still use env, shim storage, tea, or gitea configs",
+        "not found; auth import --from fj or --from tea reads its source file directly",
     )
 }
 
@@ -496,6 +500,7 @@ mod tests {
 
         let checks = run_checks(CheckOptions {
             config: Some(Config {
+                host: Default::default(),
                 hosts: vec!["git.example.com".to_string()],
                 paths: config::PathsConfig { gh: None, fj: None },
                 path: fixture.home.join("config.toml"),
@@ -544,6 +549,7 @@ mod tests {
 
         let checks = run_checks(CheckOptions {
             config: Some(Config {
+                host: Default::default(),
                 hosts: vec!["git.example.com".to_string()],
                 paths: config::PathsConfig { gh: None, fj: None },
                 path: fixture.home.join("config.toml"),

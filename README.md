@@ -79,7 +79,7 @@ When bootstrap changes the macOS GUI PATH, restart already-running GUI apps befo
 1. Install the native package with Homebrew or a GitHub release tarball.
 2. Open a terminal inside your Forgejo repository.
 3. Run `gfj bootstrap`.
-4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
+4. Run `gfj auth login HOST`, or use `gfj auth import --from fj|tea --hostname HOST` to copy a token from that tool's config.
 5. Copy and run any repair commands `bootstrap` prints.
 6. On macOS, restart the GUI tool if `bootstrap` reports that it changed the GUI PATH.
 7. Confirm the setup:
@@ -436,14 +436,14 @@ Native auth commands:
 
 ```sh
 gh-forgejo-shim auth login [host]
-gh-forgejo-shim auth import [host]
+gh-forgejo-shim auth import --from fj|tea [--hostname HOST]
 gh-forgejo-shim auth status [host]
 gh-forgejo-shim auth logout [host]
 ```
 
 `auth login` prompts for a host when needed, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, stores it in shim-owned auth storage, and adds the host to the allowlist.
 
-`auth import` finds an existing token from supported sources, validates it, and stores it in the same shim-owned storage. This is useful when Terminal already has auth through an environment variable or another Forgejo CLI, but GUI-launched apps do not inherit that shell environment.
+`auth import --from fj` reads forgejo-cli's `keys.json`; `--from tea` reads tea's YAML config. It copies the requested host's token into shim storage and adds the host to the allowlist, without contacting the server. Omit `--hostname` only when the file has one entry. Missing or ambiguous entries cause an error without a write. The command prints the host and source path, never the token. Imports do not refresh OAuth tokens or read another tool's Keychain entries.
 
 `auth status` reports whether shim-owned auth exists for the host without printing secrets. `auth logout` removes only shim-owned stored auth for that host.
 
@@ -455,7 +455,7 @@ On macOS, the shim first tries to store tokens in Keychain with the system `secu
 
 The fallback file is written with owner-only permissions.
 
-Token environment variables are checked in this order:
+For each host, the shim first checks its stored token, then the variable named by that host's `token_env`. If exactly one Forgejo host is configured, it also checks these generic variables in order:
 
 ```text
 FJ_SHIM_TOKEN
@@ -464,15 +464,15 @@ GITEA_TOKEN
 FJ_TOKEN
 ```
 
-Environment variables take precedence for the current process. If none are set, the shim checks native shim storage and then tries common `fj`, `tea`, and `gitea` config files.
+Empty variables count as unset. With multiple hosts, generic variables never supply a token. Normal commands never read other tools' credential files; use the explicit import command once to copy a token.
 
 On macOS, the current `fj` CLI stores auth in:
 
 ```text
-~/Library/Application Support/Cyborus.forgejo-cli/keys.json
+~/Library/Application Support/forgejo-cli.forgejo-cli/keys.json
 ```
 
-The shim can import from that file when present.
+Import also accepts fj's older `Cyborus.forgejo-cli/keys.json` location. On Linux, fj uses `${XDG_DATA_HOME:-~/.local/share}/forgejo-cli/keys.json`. Tea uses `${XDG_CONFIG_HOME}/tea/config.yml`, defaulting to `~/Library/Application Support/tea/config.yml` on macOS or `~/.config/tea/config.yml` on Linux, with `~/.tea/tea.yml` as its legacy fallback.
 
 ## Configuration
 
@@ -487,10 +487,17 @@ Example:
 ```toml
 hosts = ["git.example.com"]
 
+[host."git.example.com"]
+api_url = "https://git.example.com"
+token_env = "EXAMPLE_FORGEJO_TOKEN"
+ca_file = "/path/to/ca.pem"
+
 [paths]
 gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
 ```
+
+The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store.
 
 Config commands:
 

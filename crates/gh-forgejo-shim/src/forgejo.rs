@@ -176,6 +176,7 @@ pub struct ForgejoClient {
     token: Option<String>,
     timeout: Duration,
     scheme: String,
+    base_url: Option<String>,
     http: Client,
 }
 
@@ -185,43 +186,74 @@ impl ForgejoClient {
             token,
             timeout: Duration::from_secs(30),
             scheme: "https".to_string(),
+            base_url: None,
             http: Client::new(),
         }
     }
 
-    pub fn with_ca_file(token: Option<String>, path: &std::path::Path) -> ForgejoResult<Self> {
-        let pem = std::fs::read(path).map_err(|error| {
-            ForgejoError::new(format!(
-                "could not read CA certificate {}: {error}",
-                path.display()
-            ))
-        })?;
-        let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| {
-            ForgejoError::new(format!(
-                "invalid CA certificate {}: {error}",
-                path.display()
-            ))
-        })?;
-        if certificates.is_empty() {
-            return Err(ForgejoError::new(format!(
-                "invalid CA certificate {}: no PEM certificates found",
-                path.display()
-            )));
+    /// Build a client for one configured host. Both CA sources add roots to
+    /// the normal trust store; neither disables certificate verification.
+    pub fn for_host(
+        host: &str,
+        token: Option<String>,
+        config: &crate::config::Config,
+        env: &crate::config::EnvMap,
+    ) -> ForgejoResult<Self> {
+        let host = crate::config::normalize_host(host);
+        let settings = config.host.get(&host);
+        let mut paths = Vec::new();
+        if let Some(path) = settings.and_then(|settings| settings.ca_file.as_deref()) {
+            paths.push(path);
         }
+        if let Some(path) = env.get("FJ_SHIM_CA_FILE") {
+            paths.push(std::path::Path::new(path));
+        }
+        let mut client = Self::with_ca_files(token, &paths)?;
+        client.base_url = Some(
+            settings
+                .and_then(|settings| settings.api_url.clone())
+                .unwrap_or_else(|| format!("https://{}", host_for_url(&host))),
+        );
+        Ok(client)
+    }
+
+    pub fn with_ca_file(token: Option<String>, path: &std::path::Path) -> ForgejoResult<Self> {
+        Self::with_ca_files(token, &[path])
+    }
+
+    fn with_ca_files(token: Option<String>, paths: &[&std::path::Path]) -> ForgejoResult<Self> {
         let mut builder = Client::builder();
-        for certificate in certificates {
-            builder = builder.add_root_certificate(certificate);
+        for path in paths {
+            let pem = std::fs::read(path).map_err(|error| {
+                ForgejoError::new(format!(
+                    "could not read CA certificate {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| {
+                ForgejoError::new(format!(
+                    "invalid CA certificate {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if certificates.is_empty() {
+                return Err(ForgejoError::new(format!(
+                    "invalid CA certificate {}: no PEM certificates found",
+                    path.display()
+                )));
+            }
+            for certificate in certificates {
+                builder = builder.add_root_certificate(certificate);
+            }
         }
         let http = builder.build().map_err(|error| {
-            ForgejoError::new(format!(
-                "could not configure CA certificate {}: {error}",
-                path.display()
-            ))
+            ForgejoError::new(format!("could not configure HTTP client: {error}"))
         })?;
         Ok(Self {
             token,
             timeout: Duration::from_secs(30),
             scheme: "https".to_string(),
+            base_url: None,
             http,
         })
     }
@@ -243,7 +275,7 @@ impl ForgejoClient {
     pub fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {
         self.request_json(
             Method::GET,
-            format!("{}://{}/api/v1/user", self.scheme, host_for_url(host)),
+            format!("{}/api/v1/user", self.host_base_url(host)),
             None,
         )
     }
@@ -447,7 +479,18 @@ impl ForgejoClient {
     }
 
     fn repo_api_base_url(&self, repo: &RepoRef) -> String {
-        repo.api_base_url_with_scheme(&self.scheme)
+        format!(
+            "{}/api/v1/repos/{}/{}",
+            self.host_base_url(&repo.host),
+            quote_path_segment(&repo.owner),
+            quote_path_segment(&repo.repo)
+        )
+    }
+
+    fn host_base_url(&self, host: &str) -> String {
+        self.base_url
+            .clone()
+            .unwrap_or_else(|| format!("{}://{}", self.scheme, host_for_url(host)))
     }
 
     fn request_json(
@@ -657,6 +700,79 @@ mod tests {
     }
 
     #[test]
+    fn host_and_environment_ca_files_are_both_loaded() {
+        let valid =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+        let invalid = std::env::current_exe().expect("test executable");
+        for (host_ca, env_ca) in [(&invalid, &valid), (&valid, &invalid)] {
+            let config = configured_host(None, Some(host_ca.clone()));
+            let env = crate::config::EnvMap::from([(
+                "FJ_SHIM_CA_FILE".to_string(),
+                env_ca.to_string_lossy().to_string(),
+            )]);
+            let error = ForgejoClient::for_host("git.example.com", None, &config, &env)
+                .err()
+                .expect("invalid CA must fail");
+            assert!(error.to_string().contains("invalid CA certificate"));
+        }
+    }
+
+    #[test]
+    fn configured_http_base_applies_to_user_and_repository_endpoints() -> TestResult {
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(r#"{"login":"test"}"#),
+            FakeResponse::json(r#"{"name":"repo"}"#),
+        ])?;
+        let config = configured_host(Some(format!("http://{host}/forgejo")), None);
+        let client = ForgejoClient::for_host(
+            "git.example.com",
+            Some("host-token".to_string()),
+            &config,
+            &crate::config::EnvMap::new(),
+        )?;
+        assert_eq!(client.get_current_user("git.example.com")?["login"], "test");
+        assert_eq!(
+            client.get_repo(&RepoRef::new("git.example.com", "own er", "r/e"))?["name"],
+            "repo"
+        );
+        let requests = finish_fake_server(handle)?;
+        assert_eq!(
+            requests[0].request_line,
+            "GET /forgejo/api/v1/user HTTP/1.1"
+        );
+        assert_eq!(
+            requests[1].request_line,
+            "GET /forgejo/api/v1/repos/own%20er/r%2Fe HTTP/1.1"
+        );
+        for request in requests {
+            assert_eq!(
+                request.headers.get("authorization").map(String::as_str),
+                Some("token host-token")
+            );
+        }
+        Ok(())
+    }
+
+    fn configured_host(
+        api_url: Option<String>,
+        ca_file: Option<std::path::PathBuf>,
+    ) -> crate::config::Config {
+        crate::config::Config {
+            hosts: vec!["git.example.com".to_string()],
+            host: BTreeMap::from([(
+                "git.example.com".to_string(),
+                crate::config::HostConfig {
+                    api_url,
+                    ca_file,
+                    token_env: None,
+                },
+            )]),
+            paths: crate::config::PathsConfig { gh: None, fj: None },
+            path: std::path::PathBuf::new(),
+        }
+    }
+
+    #[test]
     fn private_ca_enables_tls_without_disabling_hostname_checks() -> TestResult {
         use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
         use std::sync::Arc;
@@ -706,6 +822,24 @@ mod tests {
             .get_current_user(&format!("127.0.0.1:{port}"))
             .is_err());
         handle.join().expect("server");
+        for (host_ca, env_ca) in [(true, false), (false, true), (true, true)] {
+            let (port, handle) = serve()?;
+            let config = configured_host(
+                Some(format!("https://localhost:{port}")),
+                host_ca.then(|| ca.clone()),
+            );
+            let env = if env_ca {
+                crate::config::EnvMap::from([(
+                    "FJ_SHIM_CA_FILE".to_string(),
+                    ca.to_string_lossy().to_string(),
+                )])
+            } else {
+                crate::config::EnvMap::new()
+            };
+            let client = ForgejoClient::for_host("git.example.com", None, &config, &env)?;
+            assert_eq!(client.get_current_user("git.example.com")?["login"], "test");
+            handle.join().expect("server");
+        }
         Ok(())
     }
 
