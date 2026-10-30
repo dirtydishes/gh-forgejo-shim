@@ -1,3 +1,5 @@
+#[path = "support/config_credentials.rs"]
+mod config_credentials;
 mod support;
 
 use std::collections::BTreeSet;

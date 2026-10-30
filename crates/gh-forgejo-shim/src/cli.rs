@@ -920,8 +920,7 @@ fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) 
     match args {
         [command] if command == "login" => auth_login(None, stdout, runtime),
         [command, host] if command == "login" => auth_login(Some(host), stdout, runtime),
-        [command] if command == "import" => auth_import(None, stdout, runtime),
-        [command, host] if command == "import" => auth_import(Some(host), stdout, runtime),
+        [command, args @ ..] if command == "import" => auth_import(args, stdout, runtime),
         [command] if command == "status" => auth_status(None, stdout, runtime),
         [command, host] if command == "status" => auth_status(Some(host), stdout, runtime),
         [command] if command == "logout" => auth_logout(None, stdout, runtime),
@@ -962,32 +961,49 @@ fn auth_login(
     Ok(0)
 }
 
-fn auth_import(
-    host_arg: Option<&String>,
-    stdout: &mut dyn Write,
-    runtime: &mut dyn Runtime,
-) -> Result<i32> {
-    let host = prompt_host(host_arg, runtime)?;
-    let home = runtime.home().map(Path::to_path_buf);
-    let discovery = auth::discover_import_token(&host, runtime.env(), home.as_deref()).ok_or_else(|| {
-        ShimError::new(
-            "no Forgejo token found in FJ_SHIM_TOKEN, FORGEJO_TOKEN, GITEA_TOKEN, FJ_TOKEN, or common fj/tea/gitea config files",
-        )
-    })?;
-
-    let login = runtime.validate_token(&host, &discovery.token)?;
-    let platform = runtime.platform().to_string();
-    let storage =
-        auth::write_stored_token(&host, &discovery.token, home.as_deref(), Some(&platform))?;
-    let config_path = config::config_path(home.as_deref());
-    config::add_host(&host, Some(&config_path))?;
-
+fn auth_import(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
+    let usage = "usage: gfj auth import --from fj|tea [--hostname HOST]";
+    let mut source = None;
+    let mut hostname = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--from" if source.is_none() => {
+                source = Some(crate::auth_import::ImportSource::parse(
+                    args.next().ok_or_else(|| ShimError::new(usage))?,
+                )?);
+            }
+            "--hostname" if hostname.is_none() => {
+                hostname = Some(args.next().ok_or_else(|| ShimError::new(usage))?.as_str());
+            }
+            _ => return Err(ShimError::new(usage)),
+        }
+    }
+    let source = source.ok_or_else(|| ShimError::new(usage))?;
+    let home = runtime
+        .home()
+        .ok_or_else(|| ShimError::new("HOME is required for auth import"))?
+        .to_path_buf();
+    let imported = crate::auth_import::read_import(
+        source,
+        hostname,
+        &home,
+        runtime.env(),
+        runtime.platform(),
+    )?;
+    let storage = auth::write_stored_token(
+        &imported.host,
+        &imported.token,
+        Some(&home),
+        Some(runtime.platform()),
+    )?;
+    config::add_host(&imported.host, Some(&config::config_path(Some(&home))))?;
     writeln!(
         stdout,
-        "{}",
-        validated_message("imported auth", &host, login.as_deref())
+        "imported auth for {} from {}",
+        imported.host,
+        imported.path.display()
     )?;
-    writeln!(stdout, "source: {}", discovery.source)?;
     writeln!(stdout, "saved auth in {storage}")?;
     Ok(0)
 }
@@ -1000,6 +1016,8 @@ fn auth_status(
     let hosts = status_hosts(host_arg, runtime)?;
     let home = runtime.home().map(Path::to_path_buf);
     let platform = runtime.platform().to_string();
+    let config =
+        config::load_config_with_env(Some(&config::config_path(home.as_deref())), runtime.env())?;
     let mut all_authenticated = true;
 
     for host in hosts {
@@ -1010,18 +1028,14 @@ fn auth_status(
             continue;
         }
 
-        if let Some(discovery) = auth::discover_token(
-            Some(&host),
+        if let Some(discovery) = auth::resolve_token(
+            &host,
+            &config,
             runtime.env(),
             home.as_deref(),
             Some(&platform),
-            false,
         ) {
-            writeln!(
-                stdout,
-                "{host}: token available from {}; run gh-forgejo-shim auth import {host}",
-                discovery.source
-            )?;
+            writeln!(stdout, "{host}: token available from {}", discovery.source)?;
         } else {
             all_authenticated = false;
             writeln!(stdout, "{host}: not logged in")?;
@@ -1222,7 +1236,8 @@ mod tests {
             String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
         assert_eq!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home))
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
                 .as_deref(),
             Some("login-token")
         );
@@ -1505,18 +1520,28 @@ mod tests {
     }
 
     #[test]
-    fn import_uses_env_token_without_printing_secret() -> Result<()> {
+    fn import_uses_fj_file_without_printing_secret() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
-        runtime
-            .env
-            .insert("FJ_SHIM_TOKEN".to_string(), "import-token".to_string());
+        let source_dir = home.join(".local/share/forgejo-cli");
+        fs::create_dir_all(&source_dir)?;
+        fs::write(
+            source_dir.join("keys.json"),
+            r#"{"hosts":{"git.example.com":{"type":"Application","token":"import-token"}}}"#,
+        )?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let code = run_with_runtime(
             BinaryName::GhForgejoShim,
-            os_args(["auth", "import", "git.example.com"]),
+            os_args([
+                "auth",
+                "import",
+                "--from",
+                "fj",
+                "--hostname",
+                "git.example.com",
+            ]),
             &mut stdout,
             &mut stderr,
             &mut runtime,
@@ -1526,11 +1551,12 @@ mod tests {
             String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
         assert_eq!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home))
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
                 .as_deref(),
             Some("import-token")
         );
-        assert!(output.contains("source: FJ_SHIM_TOKEN"), "{output}");
+        assert!(output.contains("forgejo-cli/keys.json"), "{output}");
         assert!(!output.contains("import-token"), "{output}");
         assert_eq!(
             config::load_config_with_env(Some(&config::config_path(Some(&home))), &EnvMap::new())?
@@ -1565,7 +1591,9 @@ mod tests {
             "{error}"
         );
         assert!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
         );
         assert!(config::load_config_with_env(
             Some(&config::config_path(Some(&home))),
@@ -1602,7 +1630,9 @@ mod tests {
         assert!(error.contains("Forgejo token is required"), "{error}");
         assert!(runtime.validated.is_empty());
         assert!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
         );
         assert!(config::load_config_with_env(
             Some(&config::config_path(Some(&home))),
@@ -1674,7 +1704,9 @@ mod tests {
         assert!(output.contains("logged out of git.example.com"), "{output}");
         assert!(!output.contains("stored-secret"), "{output}");
         assert!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
         );
         assert_eq!(
             config::load_config_with_env(Some(&config::config_path(Some(&home))), &EnvMap::new())?
