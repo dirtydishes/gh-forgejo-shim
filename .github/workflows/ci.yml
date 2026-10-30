@@ -24,9 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+        run: rustup show active-toolchain
 
       - name: Cache cargo build output
         uses: Swatinem/rust-cache@v2
@@ -49,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show active-toolchain
 
       - name: Build release archive
         run: scripts/package-release.sh
