@@ -76,6 +76,21 @@ lives somewhere else, such as Homebrew. `gfj doctor` reports `bd` separately
 because this repository's workflows may need Beads, but `bd` is not installed,
 wrapped, or used for GitHub CLI routing.
 
+## Private CA Certificates
+
+`FJ_SHIM_CA_FILE` points to a PEM-encoded CA certificate or bundle to trust for
+Forgejo API HTTPS connections, including token validation during `auth login`
+and `auth import`. It adds to the bundled public roots; certificate and hostname
+verification remain enabled. A missing or invalid file causes an error.
+
+```sh
+export FJ_SHIM_CA_FILE=/path/to/ca.pem
+```
+
+Set this variable in the environment of the process running the shim. GUI apps
+must inherit it too; saving a token with `auth import` does not persist the CA
+setting.
+
 ## macOS GUI PATH
 
 Some GUI apps, including Codex.app when launched from Finder, Dock, or Spotlight, can start with only the system PATH:

@@ -506,6 +506,7 @@ Environment overrides:
 FJ_SHIM_HOSTS
 FJ_SHIM_REAL_GH
 FJ_SHIM_REAL_FJ
+FJ_SHIM_CA_FILE
 FJ_SHIM_TRACE
 FJ_SHIM_TRACE_BODY
 FJ_SHIM_REAL_GIT
@@ -522,6 +523,9 @@ GH_HOST
 ```sh
 FJ_SHIM_HOSTS=git.example.com,code.example.org gh pr view
 ```
+
+For private CA setup with `FJ_SHIM_CA_FILE`, see
+[Private CA Certificates](docs/configuration.md#private-ca-certificates).
 
 `FJ_SHIM_REAL_GH` and `FJ_SHIM_REAL_FJ` override configured executable paths:
 

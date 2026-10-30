@@ -365,17 +365,22 @@ fn run_with_context(
         return run_auth(argv, host, token.as_deref(), stdout, stderr);
     }
 
+    let make_client = |token| match env.get("FJ_SHIM_CA_FILE") {
+        Some(path) => ForgejoClient::with_ca_file(token, Path::new(path)).map_err(ShimError::from),
+        None => Ok(ForgejoClient::new(token)),
+    };
+
     if command == "api" {
         if token.is_none() {
             writeln!(stderr, "{}", missing_auth_message(host))?;
             return Ok(1);
         }
-        let client = ForgejoClient::new(token);
+        let client = make_client(token)?;
         return run_api(argv, host, &client, stdout);
     }
 
     let token_present = token.is_some();
-    let client = ForgejoClient::new(token);
+    let client = make_client(token)?;
     let repo = repo.ok_or_else(|| ShimError::new("could not determine Forgejo repository"))?;
     let context = RepoCommandContext {
         repo,
