@@ -1,0 +1,22 @@
+{
+  "id": "pr-checks-fail-2",
+  "argv": [
+    "pr",
+    "checks",
+    "2"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 2,
+  "normalize": [
+    "host",
+    "durations",
+    "check_details_urls"
+  ],
+  "oracle": {
+    "exit": 1,
+    "stdout": "check\tfail\t4s\thttps://github.com/dirtydishes/gfj-oracle/actions/runs/41111888450/job/124255743871\t\nlint\tpass\t3s\thttps://github.com/dirtydishes/gfj-oracle/actions/runs/41111888450/job/124255743348\t\n",
+    "stderr": ""
+  },
+  "xfail": "Failed checks exit 0 and use the shim status/description columns instead of gh job/bucket/duration/link columns.",
+  "xfail_diff": "exit 1 -> 0; check/fail/<duration>/<check-url> -> fail/ci / check (pull_request)/Has finished running; lint row also differs."
+}

@@ -1,0 +1,65 @@
+[
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/pass`. Do not merge by hand.",
+    "headRefName": "s/pass",
+    "isDraft": false,
+    "number": 1,
+    "state": "OPEN",
+    "title": "scenario: checks pass"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/fail`. Do not merge by hand.",
+    "headRefName": "s/fail",
+    "isDraft": false,
+    "number": 2,
+    "state": "OPEN",
+    "title": "scenario: checks fail"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/pending`. Do not merge by hand.",
+    "headRefName": "s/pending",
+    "isDraft": false,
+    "number": 3,
+    "state": "OPEN",
+    "title": "scenario: checks pending"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/draft`. Do not merge by hand.",
+    "headRefName": "s/draft",
+    "isDraft": true,
+    "number": 4,
+    "state": "OPEN",
+    "title": "scenario: draft"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/nochecks`. Do not merge by hand.",
+    "headRefName": "s/nochecks",
+    "isDraft": false,
+    "number": 5,
+    "state": "OPEN",
+    "title": "scenario: no checks"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/merged`. Do not merge by hand.",
+    "headRefName": "s/merged",
+    "isDraft": false,
+    "number": 6,
+    "state": "MERGED",
+    "title": "scenario: merged"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Oracle scenario `s/closed`. Do not merge by hand.",
+    "headRefName": "s/closed",
+    "isDraft": false,
+    "number": 7,
+    "state": "CLOSED",
+    "title": "scenario: closed"
+  }
+]

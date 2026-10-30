@@ -16,6 +16,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  contract:
+    name: contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Cache cargo build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compare shim with committed gh oracle
+        run: scripts/contract/run.sh
+
   rust:
     name: rust
     runs-on: ubuntu-latest

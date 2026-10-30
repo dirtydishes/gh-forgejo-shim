@@ -24,6 +24,10 @@ path = "src/main.rs"
 name = "gfj"
 path = "src/bin/gfj.rs"
 
+[[test]]
+name = "contract"
+path = "../../tests/contract.rs"
+
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
