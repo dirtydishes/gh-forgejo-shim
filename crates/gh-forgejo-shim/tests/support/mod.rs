@@ -28,6 +28,7 @@ impl CliFixture {
         fs::create_dir_all(&home)?;
         fs::create_dir_all(&repo)?;
         fs::create_dir_all(&bin)?;
+        install_git_fixture(&bin)?;
 
         Ok(Self {
             root,
@@ -71,6 +72,9 @@ impl CliFixture {
 
     pub fn write_executable(&self, name: &str, contents: &str) -> io::Result<PathBuf> {
         let path = self.bin.join(name);
+        if path.is_symlink() {
+            fs::remove_file(&path)?;
+        }
         fs::write(&path, contents)?;
         make_executable(&path)?;
         Ok(path)
@@ -89,11 +93,7 @@ impl CliFixture {
     }
 
     fn fixture_path(&self) -> io::Result<OsString> {
-        let mut paths = vec![self.bin.clone()];
-        if let Some(system_path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&system_path));
-        }
-        std::env::join_paths(paths).map_err(|error| {
+        std::env::join_paths([self.bin.as_os_str()]).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("unable to build fixture PATH: {error}"),
@@ -110,13 +110,19 @@ impl CliFixture {
             .into_iter()
             .map(|arg| arg.as_ref().to_owned())
             .collect::<Vec<OsString>>();
-        let status = Command::new("git")
-            .args(&args)
-            .current_dir(&self.repo)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
+        let status = Command::new(
+            self.bin
+                .join(format!("git{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .env_clear()
+        .env("HOME", &self.home)
+        .env("PATH", self.fixture_path()?)
+        .args(&args)
+        .current_dir(&self.repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
 
         if status.success() {
             Ok(())
@@ -125,6 +131,32 @@ impl CliFixture {
                 "git {args:?} failed with {status}"
             )))
         }
+    }
+}
+
+fn install_git_fixture(bin: &Path) -> io::Result<()> {
+    let executable = format!("git{}", std::env::consts::EXE_SUFFIX);
+    let source = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .map(|directory| directory.join(&executable))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "git is not available for the test fixture",
+            )
+        })?
+        .canonicalize()?;
+    let target = bin.join(executable);
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, target)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::copy(source, target).map(|_| ())
     }
 }
 

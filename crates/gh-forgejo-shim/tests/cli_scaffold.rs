@@ -1,7 +1,7 @@
 mod support;
 
 use std::collections::BTreeSet;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::process::Command;
@@ -57,22 +57,11 @@ fn short_binary_prints_version_without_python() -> TestResult {
 }
 
 #[test]
-fn doctor_runs_native_diagnostics() -> TestResult {
+fn doctor_ignores_an_installed_system_gh() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
 
-    let restricted_path = std::env::join_paths([
-        fixture.bin().as_os_str(),
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])?;
-    let output = fixture
-        .command("gh-forgejo-shim")?
-        .env("PATH", restricted_path)
-        .arg("doctor")
-        .output()?;
+    let output = fixture.command("gh-forgejo-shim")?.arg("doctor").output()?;
 
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
@@ -89,6 +78,7 @@ fn doctor_runs_native_diagnostics() -> TestResult {
     assert!(stdout.contains("[fix] auth token:"), "{stdout}");
     assert!(stdout.contains("[ok] current repo host:"), "{stdout}");
     assert!(stdout.contains("repair commands:"), "{stdout}");
+    assert!(!stdout.contains("/usr/bin/gh"), "{stdout}");
     Ok(())
 }
 
@@ -263,7 +253,10 @@ fn bootstrap_default_current_target_uses_visible_user_dir() -> TestResult {
 
     let output = fixture
         .command("gfj")?
-        .env("PATH", restricted_path_with(&cargo_bin)?)
+        .env(
+            "PATH",
+            std::env::join_paths([cargo_bin.as_path(), fixture.bin()])?,
+        )
         .env("FJ_SHIM_REAL_GH", &real_gh)
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
         .args(["bootstrap", "--no-gui-path"])
@@ -297,7 +290,6 @@ fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visibl
 
     let output = fixture
         .command("gfj")?
-        .env("PATH", system_path_only()?)
         .env("FJ_SHIM_REAL_GH", &real_gh)
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
         .args(["bootstrap", "--no-gui-path"])
@@ -326,7 +318,6 @@ fn bootstrap_dry_run_writes_nothing_and_prints_planned_actions() -> TestResult {
 
     let output = fixture
         .command("gfj")?
-        .env("PATH", restricted_path_with(fixture.bin())?)
         .env("FJ_SHIM_REAL_GH", &real_gh)
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
         .args(["bootstrap", "--dry-run", "--no-gui-path", "--bin-dir"])
@@ -634,6 +625,9 @@ fn trace_git_recorder_captures_fake_git_and_removes_wrapper() -> TestResult {
     assert!(wrapper_path.exists());
 
     let output = Command::new(&wrapper_path)
+        .env_clear()
+        .env("HOME", fixture.home())
+        .env("PATH", fixture.bin())
         .arg("status")
         .arg("--token")
         .arg("secret-value")
@@ -725,7 +719,7 @@ fn auth_status_reports_stored_auth_without_secret() -> TestResult {
 }
 
 #[test]
-fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestResult {
+fn fixture_exposes_isolated_paths_and_private_bin_only() -> TestResult {
     let fixture = CliFixture::new()?;
 
     assert!(fixture.root().is_dir(), "{:?}", fixture.root());
@@ -742,33 +736,17 @@ fn fixture_exposes_isolated_paths_and_fake_bin_precedes_system_path() -> TestRes
         .find_map(|(name, value)| (name == OsStr::new("PATH")).then_some(value))
         .flatten()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fixture PATH is not set"))?;
-    let first_path = std::env::split_paths(path_value)
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fixture PATH is empty"))?;
+    let paths = std::env::split_paths(path_value).collect::<Vec<_>>();
 
-    assert_eq!(first_path, fixture.bin());
+    assert_eq!(paths, vec![fixture.bin().to_path_buf()]);
+    assert!(fixture
+        .bin()
+        .join(format!("git{}", std::env::consts::EXE_SUFFIX))
+        .is_file());
+    #[cfg(unix)]
+    assert!(fixture.bin().join("git").is_symlink());
+    fixture.init_git_repo()?;
     Ok(())
-}
-
-fn restricted_path_with(first: impl AsRef<OsStr>) -> io::Result<OsString> {
-    std::env::join_paths([
-        first.as_ref(),
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
-}
-
-fn system_path_only() -> io::Result<OsString> {
-    std::env::join_paths([
-        OsStr::new("/usr/bin"),
-        OsStr::new("/bin"),
-        OsStr::new("/usr/sbin"),
-        OsStr::new("/sbin"),
-    ])
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 #[test]

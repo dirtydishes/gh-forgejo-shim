@@ -411,19 +411,16 @@ pub fn apply_simple_jq(data: &Value, expression: &str) -> Option<Value> {
             continue;
         }
         if let Value::Array(items) = &value {
-            if let Some(key) = part.strip_suffix("[]") {
-                value = Value::Array(
-                    items
-                        .iter()
-                        .filter_map(|item| {
-                            item.as_object()
-                                .map(|object| object.get(key).cloned().unwrap_or(Value::Null))
-                        })
-                        .collect(),
-                );
-            } else {
-                return None;
-            }
+            let key = part.strip_suffix("[]")?;
+            value = Value::Array(
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.as_object()
+                            .map(|object| object.get(key).cloned().unwrap_or(Value::Null))
+                    })
+                    .collect(),
+            );
         } else if let Value::Object(object) = &value {
             value = object.get(part).cloned().unwrap_or(Value::Null);
         } else {
