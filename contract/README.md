@@ -22,6 +22,11 @@ Run this only when you intend to replace the committed GitHub observations:
 scripts/contract/capture-oracle.sh
 ```
 
+Use repeated `--case <id>` options to capture selected cases and preserve the other captures and scenarios.
+Cases with `kind = "shim-local"` use `expected` instead of `oracle`. Capture skips these cases, and
+`oracle_argv` rejects them. The exact local allowlist covers unsupported merge, edit, and repository API calls.
+The runner still checks exit code, both streams, and the real-gh decoy for these cases.
+
 Capture requires curl and the host's existing gh login for `github.com`. It validates every case
 before reading the login through `gh auth token --hostname github.com`. It downloads the official
 gh 2.103.3 archive and checks it against the committed upstream release checksums in
@@ -84,4 +89,15 @@ fallback check with a deliberately broken shim.
 
 The exact ChatGPT `--author @me` probe currently passes because both the viewer and PR #1's author are
 `dirtydishes`. The added `pr-list-author-other` case uses `github-actions[bot]` and exposes the ignored
-author filter. Product code stays unchanged.
+author filter. The case still records that handler gap.
+
+## Invocation grammar
+
+`tiers.toml` contains the generated gh 2.103.3 grammar. Only its `support` labels change in this checkout.
+`usage-errors.json` supplies the help descriptions and available command names needed for gh's exact errors.
+`python3 scripts/contract/capture-usage.py` rebuilds that file from checksum-pinned official gh with local
+`gh help` calls. It reads no login and executes none of the named commands.
+
+After `cargo build --workspace --locked`, `python3 scripts/contract/check-parser.py` compares 107 local
+argument errors against the pinned CLI. It uses a temporary HOME, dummy credentials, read-only commands,
+and a closed proxy. Ordinary Cargo tests compare committed error captures and check routing through a decoy.

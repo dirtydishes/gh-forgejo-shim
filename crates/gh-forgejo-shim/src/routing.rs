@@ -8,33 +8,10 @@ use std::time::Instant;
 
 use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
+use crate::invocation::Invocation;
 use crate::read_only;
 use crate::repo::{detect_repo, RepoRef};
 use crate::trace;
-
-const SUPPORTED_PR_COMMANDS: &[&str] = &[
-    "checks", "checkout", "co", "comment", "create", "diff", "list", "new", "status", "view",
-];
-const SUPPORTED_ISSUE_COMMANDS: &[&str] = &["create", "list", "ls", "new", "view"];
-const SUPPORTED_REPO_COMMANDS: &[&str] = &["view"];
-const SUPPORTED_AUTH_COMMANDS: &[&str] = &["status", "token"];
-
-const API_FLAGS_WITH_VALUES: &[&str] = &[
-    "--cache",
-    "-F",
-    "--field",
-    "-H",
-    "--header",
-    "--hostname",
-    "--input",
-    "--method",
-    "-X",
-    "--preview",
-    "-p",
-    "-f",
-    "--raw-field",
-];
-const API_FLAGS_WITH_OPTIONAL_VALUES: &[&str] = &["--jq", "-q", "--template", "-t"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatcherConfig {
@@ -109,10 +86,7 @@ pub fn run_gh_from_env<I>(args: I) -> i32
 where
     I: IntoIterator<Item = OsString>,
 {
-    let argv = args
-        .into_iter()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
+    let argv = args.into_iter().collect::<Vec<_>>();
     let env = std::env::vars().collect::<HashMap<_, _>>();
     let cwd = std::env::current_dir().ok();
     run_gh(argv, env, cwd.as_deref(), DelegateMode::Inherit)
@@ -125,7 +99,12 @@ pub fn run_gh_captured(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
-    run_gh(argv, env, cwd, DelegateMode::Capture { stdout, stderr })
+    run_gh(
+        argv.into_iter().map(OsString::from).collect(),
+        env,
+        cwd,
+        DelegateMode::Capture { stdout, stderr },
+    )
 }
 
 pub fn decide_route(
@@ -134,25 +113,38 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    if is_supported_auth_command(argv) {
-        let host =
-            hostname_arg(&argv[2..], true).or_else(|| env.get("GH_HOST").map(String::as_str));
-        return decide_host_route(argv, config, env, cwd, host);
-    }
+    let invocation = Invocation::parse(argv);
+    decide_invocation_route(&invocation, config, env, cwd)
+}
 
-    if is_supported_api_command(argv) {
-        let host =
-            hostname_arg(&argv[1..], false).or_else(|| env.get("GH_HOST").map(String::as_str));
-        return decide_host_route(argv, config, env, cwd, host);
+fn decide_invocation_route(
+    invocation: &Invocation,
+    config: &DispatcherConfig,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> RouteDecision {
+    if invocation.command.starts_with("auth ") || invocation.command == "api" {
+        if let Some(host) = invocation
+            .flag("hostname")
+            .or_else(|| env.get("GH_HOST").map(String::as_str))
+            .filter(|host| !host.trim().is_empty())
+        {
+            return host_route(host, config);
+        }
     }
-
-    if argv.len() < 2 || !is_supported_command(argv) {
-        return RouteDecision::delegate("unsupported command", None);
-    }
-
-    let detection = detect_repo(argv, env, cwd);
+    let detection = detect_repo(invocation, env, cwd);
     let Some(repo) = detection.repo else {
-        return RouteDecision::delegate("no repository detected", None);
+        if let Some(host) = env.get("GH_HOST").filter(|host| !host.trim().is_empty()) {
+            return host_route(host, config);
+        }
+        return RouteDecision::delegate(
+            if !invocation.has_grammar() {
+                "unsupported command"
+            } else {
+                "no repository detected"
+            },
+            None,
+        );
     };
     if !config.is_forgejo_host(Some(repo.host.as_str())) {
         return RouteDecision::delegate(
@@ -160,9 +152,17 @@ pub fn decide_route(
             Some(repo),
         );
     }
-
     let host = repo.host.clone();
     RouteDecision::forgejo(detection.source, Some(repo), Some(host))
+}
+
+fn host_route(host: &str, config: &DispatcherConfig) -> RouteDecision {
+    let host = normalize_host(host);
+    if config.is_forgejo_host(Some(&host)) {
+        RouteDecision::forgejo("host", None, Some(host))
+    } else {
+        RouteDecision::delegate(format!("host {host} is not allowlisted"), None)
+    }
 }
 
 pub fn load_dispatcher_config(env: &HashMap<String, String>) -> crate::Result<DispatcherConfig> {
@@ -178,11 +178,16 @@ pub fn load_dispatcher_config(env: &HashMap<String, String>) -> crate::Result<Di
 }
 
 fn run_gh(
-    argv: Vec<String>,
+    original_argv: Vec<OsString>,
     env: HashMap<String, String>,
     cwd: Option<&Path>,
     mut mode: DelegateMode<'_>,
 ) -> i32 {
+    let argv = original_argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let invocation = Invocation::parse(&argv);
     let started = Instant::now();
     let config = match load_dispatcher_config(&env) {
         Ok(config) => config,
@@ -191,12 +196,12 @@ fn run_gh(
             return 1;
         }
     };
-    let decision = decide_route(&argv, &config, &env, cwd);
+    let decision = decide_invocation_route(&invocation, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
     let exit_code = match decision.kind {
-        RouteKind::Delegate => run_delegate(&argv, &env, cwd, &config, &mut mode),
-        RouteKind::Forgejo => run_forgejo(&argv, &env, cwd, &decision, &mut mode),
+        RouteKind::Delegate => run_delegate(&original_argv, &env, cwd, &config, &mut mode),
+        RouteKind::Forgejo => run_forgejo(&invocation, &env, cwd, &decision, &mut mode),
     };
 
     if trace_enabled {
@@ -214,7 +219,7 @@ fn run_gh(
 }
 
 fn run_delegate(
-    argv: &[String],
+    argv: &[OsString],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     config: &DispatcherConfig,
@@ -253,19 +258,46 @@ fn run_delegate(
 }
 
 fn run_forgejo(
-    argv: &[String],
+    invocation: &Invocation,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     decision: &RouteDecision,
     mode: &mut DelegateMode<'_>,
 ) -> i32 {
+    if let Err(error) = invocation.validate() {
+        write_stderr(mode, &error.render());
+        return error.exit_code();
+    }
+    if let Some(help) = invocation.help() {
+        match mode {
+            DelegateMode::Inherit => {
+                let _ = io::stdout().write_all(help.as_bytes());
+            }
+            DelegateMode::Capture { stdout, .. } => {
+                let _ = stdout.write_all(help.as_bytes());
+            }
+        }
+        return 0;
+    }
+    if !invocation.is_native() {
+        write_error(
+            mode,
+            &format!(
+                "gh-forgejo-shim: \"gh {}\" is not supported for Forgejo host {} yet",
+                invocation.command,
+                decision.trace_host().unwrap_or_default(),
+            ),
+        );
+        return 1;
+    }
+    let argv = invocation.handler_argv();
     match mode {
         DelegateMode::Inherit => {
             let stdout = io::stdout();
             let stderr = io::stderr();
             let stdin = io::stdin();
             read_only::run(
-                argv,
+                &argv,
                 decision,
                 env,
                 cwd,
@@ -277,7 +309,7 @@ fn run_forgejo(
         DelegateMode::Capture { stdout, stderr } => {
             let stdin = io::stdin();
             read_only::run(
-                argv,
+                &argv,
                 decision,
                 env,
                 cwd,
@@ -298,105 +330,15 @@ fn write_error(mode: &mut DelegateMode<'_>, message: &str) {
     }
 }
 
-fn decide_host_route(
-    argv: &[String],
-    config: &DispatcherConfig,
-    env: &HashMap<String, String>,
-    cwd: Option<&Path>,
-    host: Option<&str>,
-) -> RouteDecision {
-    if let Some(host) = host.filter(|host| !host.trim().is_empty()) {
-        let normalized = normalize_host(host);
-        if config.is_forgejo_host(Some(normalized.as_str())) {
-            return RouteDecision::forgejo("host", None, Some(normalized));
+fn write_stderr(mode: &mut DelegateMode<'_>, message: &str) {
+    match mode {
+        DelegateMode::Inherit => {
+            let _ = io::stderr().write_all(message.as_bytes());
         }
-        return RouteDecision::delegate(format!("host {normalized} is not allowlisted"), None);
-    }
-
-    let detection = detect_repo(argv, env, cwd);
-    let Some(repo) = detection.repo else {
-        return RouteDecision::delegate("no repository detected", None);
-    };
-    if !config.is_forgejo_host(Some(repo.host.as_str())) {
-        return RouteDecision::delegate(
-            format!("host {} is not allowlisted", repo.host),
-            Some(repo),
-        );
-    }
-
-    let host = repo.host.clone();
-    RouteDecision::forgejo(detection.source, Some(repo), Some(host))
-}
-
-fn is_supported_command(argv: &[String]) -> bool {
-    if argv.len() < 2 {
-        return false;
-    }
-    match argv[0].as_str() {
-        "pr" => SUPPORTED_PR_COMMANDS.contains(&argv[1].as_str()),
-        "issue" => SUPPORTED_ISSUE_COMMANDS.contains(&argv[1].as_str()),
-        "repo" => SUPPORTED_REPO_COMMANDS.contains(&argv[1].as_str()),
-        _ => false,
-    }
-}
-
-fn is_supported_auth_command(argv: &[String]) -> bool {
-    argv.len() >= 2 && argv[0] == "auth" && SUPPORTED_AUTH_COMMANDS.contains(&argv[1].as_str())
-}
-
-fn is_supported_api_command(argv: &[String]) -> bool {
-    argv.len() >= 2
-        && argv[0] == "api"
-        && matches!(api_endpoint(&argv[1..]).as_deref(), Some("user" | "/user"))
-}
-
-fn hostname_arg(argv: &[String], allow_short: bool) -> Option<&str> {
-    let mut index = 0;
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if (arg == "--hostname" || (allow_short && arg == "-h")) && index + 1 < argv.len() {
-            return Some(argv[index + 1].as_str());
-        }
-        if let Some(value) = arg.strip_prefix("--hostname=") {
-            return Some(value);
-        }
-        if allow_short {
-            if let Some(value) = arg.strip_prefix("-h=") {
-                return Some(value);
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-fn api_endpoint(argv: &[String]) -> Option<String> {
-    let mut index = 0;
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if arg == "--" {
-            return argv.get(index + 1).cloned();
-        }
-        if API_FLAGS_WITH_VALUES.contains(&arg) || API_FLAGS_WITH_OPTIONAL_VALUES.contains(&arg) {
-            index += 2;
-        } else if has_flag_value_prefix(arg, API_FLAGS_WITH_VALUES)
-            || has_flag_value_prefix(arg, API_FLAGS_WITH_OPTIONAL_VALUES)
-            || arg.starts_with('-')
-        {
-            index += 1;
-        } else {
-            return Some(arg.to_string());
+        DelegateMode::Capture { stderr, .. } => {
+            let _ = stderr.write_all(message.as_bytes());
         }
     }
-    None
-}
-
-fn has_flag_value_prefix(arg: &str, flags: &[&str]) -> bool {
-    flags.iter().any(|flag| {
-        arg.strip_prefix(flag)
-            .and_then(|rest| rest.strip_prefix('='))
-            .is_some()
-    })
 }
 
 #[cfg(test)]
@@ -422,16 +364,16 @@ mod tests {
     }
 
     #[test]
-    fn delegates_unsupported_command() {
+    fn delegates_non_forgejo_api_command() {
         let decision = decide_route(
             &argv(&["api", "repos/owner/repo"]),
             &config(&["git.example.com"]),
             &env(&[]),
-            None,
+            Some(Path::new("/nonexistent-gfjs-repo")),
         );
 
         assert_eq!(decision.kind, RouteKind::Delegate);
-        assert_eq!(decision.reason, "unsupported command");
+        assert_eq!(decision.reason, "no repository detected");
     }
 
     #[test]

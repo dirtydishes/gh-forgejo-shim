@@ -1,6 +1,7 @@
 //! External command discovery and delegation helpers.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -81,7 +82,7 @@ pub fn find_program_with_fallbacks(
 
 pub fn run_program_capture(
     path: &Path,
-    argv: &[String],
+    argv: &[OsString],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> io::Result<ProgramOutput> {
@@ -95,7 +96,7 @@ pub fn run_program_capture(
 
 pub fn run_program_inherit(
     path: &Path,
-    argv: &[String],
+    argv: &[OsString],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> io::Result<i32> {
@@ -194,7 +195,7 @@ fn opened_web_urls() -> &'static Mutex<Vec<String>> {
 
 fn command_with_env(
     path: &Path,
-    argv: &[String],
+    argv: &[OsString],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> Command {

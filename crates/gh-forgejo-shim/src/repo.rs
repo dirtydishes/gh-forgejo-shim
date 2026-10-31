@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::config::normalize_host;
 use crate::external::git_output;
+use crate::invocation::Invocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
@@ -73,17 +74,25 @@ pub fn parse_repo_spec(spec: &str, default_host: Option<&str>) -> Option<RepoRef
 }
 
 pub fn detect_repo(
-    argv: &[String],
+    invocation: &Invocation,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> Detection {
-    if let Some(repo_arg) = extract_repo_arg(argv) {
+    if let Some(repo_arg) = invocation.repo_override.as_deref() {
         if let Some(repo) = parse_repo_spec(repo_arg, env.get("GH_HOST").map(String::as_str)) {
             return Detection::found(repo, "-R/--repo");
         }
     }
 
-    if let Some(url_arg) = extract_repo_url_arg(argv) {
+    if let Some(url_arg) = invocation
+        .positionals
+        .iter()
+        .map(String::as_str)
+        .find(|arg| {
+            matches!(url_scheme(arg), Some("http" | "https" | "ssh" | "git"))
+                || invocation.command == "repo view"
+        })
+    {
         if let Some(repo) = parse_repo_spec(url_arg, env.get("GH_HOST").map(String::as_str)) {
             return Detection::found(repo, "command URL");
         }
@@ -128,27 +137,6 @@ pub fn detect_from_git(cwd: Option<&Path>) -> Option<RepoRef> {
         }
     }
     None
-}
-
-pub fn extract_repo_arg(argv: &[String]) -> Option<&str> {
-    let mut index = 0;
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if matches!(arg, "-R" | "--repo") && index + 1 < argv.len() {
-            return Some(argv[index + 1].as_str());
-        }
-        if let Some(value) = arg.strip_prefix("--repo=") {
-            return Some(value);
-        }
-        index += 1;
-    }
-    None
-}
-
-pub fn extract_repo_url_arg(argv: &[String]) -> Option<&str> {
-    argv.iter()
-        .map(String::as_str)
-        .find(|arg| matches!(url_scheme(arg), Some("http" | "https" | "ssh" | "git")))
 }
 
 fn parse_url_repo(value: &str) -> Option<RepoRef> {

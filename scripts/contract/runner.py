@@ -13,7 +13,7 @@ from common import REPO, ROOT, load_cases, normalize
 
 
 def classify(case, actual):
-    expected = case["oracle"]
+    expected = case["expected"] if case.get("kind") == "shim-local" else case["oracle"]
     diffs = []
     if actual["exit"] != expected["exit"]:
         diffs.append(f"exit: expected {expected['exit']}, got {actual['exit']}")

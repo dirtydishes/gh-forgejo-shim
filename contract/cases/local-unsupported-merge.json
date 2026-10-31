@@ -1,0 +1,16 @@
+{
+  "id": "local-unsupported-merge",
+  "kind": "shim-local",
+  "argv": [
+    "pr",
+    "merge",
+    "1"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "gh-forgejo-shim: \"gh pr merge\" is not supported for Forgejo host forge.test yet\n"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "pr-view-repeated-json",
+  "argv": [
+    "pr",
+    "view",
+    "1",
+    "--json",
+    "number,title,state,url",
+    "--json",
+    "isDraft,headRefName,baseRefName"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 1,
+  "normalize": [
+    "host",
+    "pr_urls",
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "{\"baseRefName\":\"main\",\"headRefName\":\"s/pass\",\"isDraft\":false,\"number\":1,\"state\":\"OPEN\",\"title\":\"scenario: checks pass\",\"url\":\"https://github.com/dirtydishes/gfj-oracle/pull/1\"}\n",
+    "stderr": ""
+  }
+}
