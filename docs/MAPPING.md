@@ -1,6 +1,6 @@
 # Field mapping: Forgejo → GitHub (A3)
 
-Status: v1, 2026-10-30 (Opus). v1 folds in the G2a evidence (`docs/G2A-FINDINGS.md`). The gateway (`fga-core::map`) and gh-forgejo-shim share this spec.
+Status: v1.1, 2026-11-01 (Opus). v1 folds in the G2a evidence (`docs/G2A-FINDINGS.md`); v1.1 adds §8, web URLs. The gateway (`fga-core::map`) and gh-forgejo-shim share this spec.
 
 **Sources:**
 - GitHub's public GraphQL schema (`schema.docs.graphql`, fetched 2026-10-30).
@@ -144,6 +144,26 @@ Never emit `HAS_HOOKS`. `isMergeQueueEnabled` is always false. `viewerCanMergeAs
 
 Node IDs are opaque base64 strings of `fga:<Type>:<owner>/<repo>:<number|id>`, per DESIGN.md.
 `databaseId` holds the Forgejo numeric ID. `fullDatabaseId` is the same value as a string.
+
+## 8. Web URLs (v1.1)
+
+**Decision:** every pull request web URL the gateway or the shim emits uses GitHub's layout,
+`{web base}/{o}/{r}/pull/{n}`, not Forgejo's `/pulls/{n}`. That covers GraphQL `PullRequest.url`, REST
+`html_url`, `pr list --json url`, and URLs derived from a PR (`#issuecomment-…`, `#discussion_r…`, and
+`/files`). Other web URLs (issues, commits, runs, repos) keep Forgejo's paths; they already match GitHub's.
+
+The gateway answers `GET /{o}/{r}/pull/{n}{rest}` with `301 Location: /{o}/{r}/pulls/{n}{rest}`, keeping
+the query and fragment. The deployment's proxy routes that path pattern to the gateway (G5), so every
+emitted link opens.
+
+**Evidence** (foreman `pilots/gh-forgejo-shim/clients.md`, probe 2026-11-01):
+- ChatGPT 22943 on a Forgejo remote received `pr list` output with `…/pulls/1`. It found the PR, then
+  ignored it: no GraphQL followed, and no PR showed.
+- With `…/pull/1`, the same app immediately sent all six of its GraphQL documents to
+  `--hostname <forge>`. The bundle parses PR URLs with `\/pull\/(\d+)`.
+- Forgejo has no `/pull/{n}` route: Codeberg (Forgejo 16) returns 404 for it and 200 for `/pulls/{n}`.
+
+This replaces DESIGN.md's earlier "emit what Forgejo actually serves" rule for PR URLs.
 
 ## Open items to verify against the live twin (G2/G3)
 

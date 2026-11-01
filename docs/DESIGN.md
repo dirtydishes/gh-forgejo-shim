@@ -126,8 +126,8 @@ client ──https──▶ reverse proxy (git.example.com)
   stable across restarts, and `node(id:)` decodes them without any storage.
 - **Database IDs** are Forgejo's numeric IDs.
 - **URLs:** API URLs use the public base (`https://host/api/v3/...`), and `html_url`/`url` fields use
-  Forgejo's web URLs. Those match GitHub's layout (`/{o}/{r}/pulls/{n}`), except that Forgejo serves PRs
-  at `/pulls/` where GitHub uses `/pull/`. Emit what Forgejo actually serves.
+  Forgejo's web URLs. Pull request URLs are the exception: they use GitHub's `/{o}/{r}/pull/{n}`, and the
+  gateway redirects that path to Forgejo's `/pulls/{n}` (MAPPING.md §8).
 
 ## Semantic mapping (to be completed: foreman A3)
 
