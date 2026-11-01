@@ -10,6 +10,9 @@ use serde_json::{json, Value};
 
 use crate::ShimError;
 
+/// Upper bound for paginated reads: 200 pages of 50 items.
+const MAX_PAGES: usize = 200;
+
 const USER_AGENT_VALUE: &str = "gh-forgejo-shim";
 
 pub type ForgejoResult<T> = std::result::Result<T, ForgejoError>;
@@ -364,10 +367,15 @@ impl ForgejoClient {
         repo: &RepoRef,
         branch: &str,
     ) -> ForgejoResult<Option<Protection>> {
-        let rules: Vec<Protection> = self.get_pages(format!(
-            "{}/branch_protections",
-            self.repo_api_base_url(repo)
-        ))?;
+        // Forgejo's branch_protections list takes no page or limit parameters and
+        // returns every rule on each request, so it is read once, not paginated.
+        let value = self.request_json(
+            Method::GET,
+            format!("{}/branch_protections", self.repo_api_base_url(repo)),
+            None,
+        )?;
+        let rules: Vec<Protection> = serde_json::from_value(value)
+            .map_err(|error| ForgejoError::new(format!("invalid Forgejo response: {error}")))?;
         // Match the gateway Session::protection rule selection, including globs.
         Ok(rules.into_iter().find(|rule| {
             glob::Pattern::new(&rule.rule_name).is_ok_and(|pattern| pattern.matches(branch))
@@ -375,8 +383,22 @@ impl ForgejoClient {
     }
 
     fn get_pages<T: DeserializeOwned>(&self, url: String) -> ForgejoResult<Vec<T>> {
+        self.get_pages_up_to(url, MAX_PAGES)
+    }
+
+    fn get_pages_up_to<T: DeserializeOwned>(
+        &self,
+        url: String,
+        max_pages: usize,
+    ) -> ForgejoResult<Vec<T>> {
         let mut items = Vec::new();
         for page in 1.. {
+            // An endpoint that ignores `page` returns the same non-empty page forever.
+            if page > max_pages {
+                return Err(ForgejoError::new(format!(
+                    "Forgejo returned more than {max_pages} pages for {url}"
+                )));
+            }
             let value =
                 self.request_json(Method::GET, format!("{url}?page={page}&limit=50"), None)?;
             let batch: Vec<T> = serde_json::from_value(value)
@@ -1064,14 +1086,12 @@ mod tests {
     }
 
     #[test]
-    fn branch_protection_paginates_and_selects_the_matching_glob() -> TestResult {
-        let (host, handle) = start_fake_server(vec![
-            FakeResponse::json(r#"[{"rule_name":"other","enable_status_check":true}]"#),
-            FakeResponse::json(
-                r#"[{"rule_name":"release/*","enable_status_check":true,"status_check_contexts":["ci/*"]}]"#,
-            ),
-            FakeResponse::json("[]"),
-        ])?;
+    fn branch_protection_reads_once_and_selects_the_matching_glob() -> TestResult {
+        // Forgejo 15 returns the full rule list for any `page`, so a paginated read
+        // would never see an empty page.
+        let (host, handle) = start_fake_server(vec![FakeResponse::json(
+            r#"[{"rule_name":"other","enable_status_check":true},{"rule_name":"release/*","enable_status_check":true,"status_check_contexts":["ci/*"]}]"#,
+        )])?;
         let client = ForgejoClient::new(None).with_scheme("http");
         let repo = RepoRef::new(host, "owner", "repo");
         let protection = client
@@ -1080,15 +1100,31 @@ mod tests {
         let requests = finish_fake_server(handle)?;
         assert_eq!(protection.status_check_contexts, ["ci/*"]);
         assert!(protection.enable_status_check);
-        for (index, request) in requests.iter().enumerate() {
-            assert_eq!(
-                request.request_line,
-                format!(
-                    "GET /api/v1/repos/owner/repo/branch_protections?page={}&limit=50 HTTP/1.1",
-                    index + 1
-                )
-            );
-        }
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].request_line,
+            "GET /api/v1/repos/owner/repo/branch_protections HTTP/1.1"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn paginated_reads_stop_at_the_page_cap() -> TestResult {
+        let page = r#"[{"id":1,"context":"ci","status":"success","target_url":"","description":null,"created_at":"2026-06-01T00:00:00Z","updated_at":"2026-06-01T00:00:00Z"}]"#;
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(page),
+            FakeResponse::json(page),
+            FakeResponse::json(page),
+        ])?;
+        let client = ForgejoClient::new(None).with_scheme("http");
+        let repo = RepoRef::new(host, "owner", "repo");
+        let url = format!("{}/commits/abc/statuses", client.repo_api_base_url(&repo));
+        let error = client
+            .get_pages_up_to::<CommitStatus>(url, 3)
+            .expect_err("page cap");
+        let requests = finish_fake_server(handle)?;
+        assert_eq!(requests.len(), 3);
+        assert!(error.message().contains("more than 3 pages"));
         Ok(())
     }
 
