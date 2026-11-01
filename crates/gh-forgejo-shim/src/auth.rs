@@ -1,9 +1,10 @@
 //! Host-keyed authentication storage and token resolution.
 
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,19 +16,40 @@ use crate::{Result, ShimError};
 pub const TOKEN_ENV_VARS: &[&str] = &["FJ_SHIM_TOKEN", "FORGEJO_TOKEN", "GITEA_TOKEN", "FJ_TOKEN"];
 pub const KEYCHAIN_SERVICE: &str = "gh-forgejo-shim";
 pub const AUTH_FILE_NAME: &str = "auth.json";
+/// Absolute, so a PATH entry can never substitute the binary that receives tokens.
+const SECURITY: &str = "/usr/bin/security";
 
 static NEXT_AUTH_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TokenDiscovery {
     pub token: String,
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StoredToken {
     pub token: String,
     pub storage: String,
+}
+
+// Tokens never reach Debug output.
+impl fmt::Debug for TokenDiscovery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenDiscovery")
+            .field("token", &"<redacted>")
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl fmt::Debug for StoredToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredToken")
+            .field("token", &"<redacted>")
+            .field("storage", &self.storage)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,7 +220,7 @@ pub fn validate_token(host: &str, token: &str) -> Result<Option<String>> {
 }
 
 fn read_file_token(host: &str, home: Option<&Path>) -> Option<String> {
-    let data = read_auth_file(home);
+    let data = read_auth_file(home).ok()?;
     let item = data.get("hosts")?.as_object()?.get(host)?;
     if let Some(object) = item.as_object() {
         return object
@@ -215,7 +237,7 @@ fn read_file_token(host: &str, home: Option<&Path>) -> Option<String> {
 }
 
 fn write_file_token(host: &str, token: &str, home: Option<&Path>) -> Result<()> {
-    let mut data = read_auth_file(home);
+    let mut data = read_auth_file(home)?;
     let object = ensure_object(&mut data);
     let hosts = object
         .entry("hosts".to_string())
@@ -233,7 +255,7 @@ fn write_file_token(host: &str, token: &str, home: Option<&Path>) -> Result<()> 
 
 fn delete_file_token(host: &str, home: Option<&Path>) -> Result<bool> {
     let path = auth_file_path(home);
-    let mut data = read_auth_file(home);
+    let mut data = read_auth_file(home)?;
     let Some(hosts) = data.get_mut("hosts").and_then(Value::as_object_mut) else {
         return Ok(false);
     };
@@ -258,14 +280,25 @@ fn delete_file_token(host: &str, home: Option<&Path>) -> Result<bool> {
     Ok(true)
 }
 
-fn read_auth_file(home: Option<&Path>) -> Value {
+/// A missing file is an empty store. Any other failure is an error, so a write
+/// never replaces an unreadable file and loses the other hosts' tokens.
+fn read_auth_file(home: Option<&Path>) -> Result<Value> {
     let path = auth_file_path(home);
-    let Ok(text) = fs::read_to_string(path) else {
-        return json!({ "hosts": {} });
+    let unreadable = |detail: String| {
+        ShimError::new(format!(
+            "{} is unreadable ({detail}); fix or remove it",
+            path.display()
+        ))
+    };
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(json!({ "hosts": {} })),
+        Err(error) => return Err(unreadable(error.to_string())),
     };
     match serde_json::from_str::<Value>(&text) {
-        Ok(data) if data.is_object() => data,
-        _ => json!({ "hosts": {} }),
+        Ok(data) if data.is_object() => Ok(data),
+        Ok(_) => Err(unreadable("not a JSON object".to_string())),
+        Err(error) => Err(unreadable(error.to_string())),
     }
 }
 
@@ -364,9 +397,11 @@ fn create_temp_file(parent: &Path) -> io::Result<(File, PathBuf)> {
 
 fn use_keychain(platform: Option<&str>) -> bool {
     // Unit tests may simulate macOS, but must never access the user's Keychain.
+    // Process tests set FJ_SHIM_AUTH_STORE=file for the same reason.
     !cfg!(test)
         && platform.unwrap_or(current_platform()) == "darwin"
-        && executable_in_path("security")
+        && std::env::var_os("FJ_SHIM_AUTH_STORE").is_none_or(|store| store != "file")
+        && Path::new(SECURITY).is_file()
 }
 
 fn current_platform() -> &'static str {
@@ -378,13 +413,6 @@ fn current_platform() -> &'static str {
     {
         std::env::consts::OS
     }
-}
-
-fn executable_in_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|directory| directory.join(name).is_file())
 }
 
 fn read_keychain_token(host: &str) -> Option<String> {
@@ -404,27 +432,56 @@ fn read_keychain_token(host: &str) -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-fn write_keychain_token(host: &str, token: &str) -> Result<()> {
-    let output = run_security([
-        "add-generic-password",
-        "-a",
-        host,
-        "-s",
-        KEYCHAIN_SERVICE,
-        "-w",
-        token,
-        "-U",
-    ])
-    .map_err(|error| ShimError::new(format!("security add-generic-password failed: {error}")))?;
-    if output.status.success() {
-        return Ok(());
+/// The `security -i` command line that stores `token`. Values are double-quoted
+/// with backslash escapes; a control character would end the command early.
+fn keychain_add_command(host: &str, token: &str) -> Result<String> {
+    if token.chars().chain(host.chars()).any(char::is_control) {
+        return Err(ShimError::new(
+            "token and host must not contain control characters",
+        ));
     }
+    let quote = |value: &str| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
+    Ok(format!(
+        "add-generic-password -a {} -s {} -w {} -U\n",
+        quote(host),
+        quote(KEYCHAIN_SERVICE),
+        quote(token)
+    ))
+}
+
+/// `security -i` reads its command from stdin, so the token never appears in
+/// argv, where other local users could read it with `ps`.
+fn write_keychain_token(host: &str, token: &str) -> Result<()> {
+    let command = keychain_add_command(host, token)?;
+    let failed =
+        |detail: String| ShimError::new(format!("security add-generic-password failed: {detail}"));
+    let mut child = Command::new(SECURITY)
+        .arg("-i")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| failed(error.to_string()))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| failed("no stdin".to_string()))?
+        .write_all(command.as_bytes())
+        .map_err(|error| failed(error.to_string()))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| failed(error.to_string()))?;
     let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(ShimError::new(if message.is_empty() {
-        "security add-generic-password failed".to_string()
+    // `security -i` exits 0 even when its command fails, so stderr decides.
+    if output.status.success() && message.is_empty() {
+        Ok(())
     } else {
-        message
-    }))
+        Err(failed(if message.is_empty() {
+            output.status.to_string()
+        } else {
+            message
+        }))
+    }
 }
 
 fn delete_keychain_token(host: &str) -> bool {
@@ -439,7 +496,7 @@ fn delete_keychain_token(host: &str) -> bool {
 }
 
 fn run_security<const N: usize>(args: [&str; N]) -> io::Result<std::process::Output> {
-    Command::new("security").args(args).output()
+    Command::new(SECURITY).args(args).output()
 }
 
 fn home_dir(home: Option<&Path>) -> PathBuf {
@@ -718,6 +775,44 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn corrupt_auth_file_is_never_overwritten() -> Result<()> {
+        let root = temp_root()?;
+        let path = auth_file_path(Some(&root));
+        fs::create_dir_all(path.parent().expect("parent"))?;
+        let corrupt = r#"{"hosts": {"a.example": "#;
+        fs::write(&path, corrupt)?;
+        let error = write_stored_token("b.example", "token-b", Some(&root), Some("linux"))
+            .expect_err("a corrupt file must block the write");
+        assert!(error.to_string().contains("fix or remove it"));
+        assert!(delete_stored_token("a.example", Some(&root), Some("linux")).is_err());
+        assert_eq!(fs::read_to_string(&path)?, corrupt);
+        Ok(())
+    }
+
+    #[test]
+    fn keychain_command_quotes_values_and_rejects_control_characters() -> Result<()> {
+        assert_eq!(
+            keychain_add_command("git.example.com", r#"a"b\c"#)?,
+            "add-generic-password -a \"git.example.com\" -s \"gh-forgejo-shim\" -w \"a\\\"b\\\\c\" -U\n"
+        );
+        assert!(keychain_add_command("git.example.com", "a\nadd-generic-password").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn token_debug_output_is_redacted() {
+        let stored = StoredToken {
+            token: "secret-token".to_string(),
+            storage: "file".to_string(),
+        };
+        let found = TokenDiscovery {
+            token: "secret-token".to_string(),
+            source: "FJ_SHIM_TOKEN".to_string(),
+        };
+        assert!(!format!("{stored:?}{found:?}").contains("secret-token"));
+    }
+
     #[test]
     fn auth_temp_file_starts_private() -> Result<()> {
         let home = temp_root()?;

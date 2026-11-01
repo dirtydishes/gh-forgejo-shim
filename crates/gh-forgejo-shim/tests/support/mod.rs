@@ -88,6 +88,7 @@ impl CliFixture {
             .env("HOME", &self.home)
             .env("PATH", self.fixture_path()?)
             .env("FJ_SHIM_HOSTS", "git.example.com")
+            .env("FJ_SHIM_AUTH_STORE", "file")
             .env("FJ_SHIM_REAL_GH", "/missing/gh");
         Ok(command)
     }

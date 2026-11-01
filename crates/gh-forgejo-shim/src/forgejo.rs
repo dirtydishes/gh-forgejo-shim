@@ -210,8 +210,14 @@ impl ForgejoClient {
         if let Some(path) = settings.and_then(|settings| settings.ca_file.as_deref()) {
             paths.push(path);
         }
-        if let Some(path) = env.get("FJ_SHIM_CA_FILE") {
-            paths.push(std::path::Path::new(path));
+        if let Some(path) = env.get("FJ_SHIM_CA_FILE").filter(|path| !path.is_empty()) {
+            let path = std::path::Path::new(path);
+            if !path.is_absolute() {
+                return Err(ForgejoError::new(
+                    "FJ_SHIM_CA_FILE must be an absolute path",
+                ));
+            }
+            paths.push(path);
         }
         let mut client = Self::with_ca_files(token, &paths)?;
         client.base_url = Some(
@@ -784,6 +790,19 @@ mod tests {
                 .expect("invalid CA must fail");
             assert!(error.to_string().contains("invalid CA certificate"));
         }
+    }
+
+    #[test]
+    fn environment_ca_file_must_be_absolute_and_empty_means_unset() {
+        let config = configured_host(None, None);
+        let env = |value: &str| {
+            crate::config::EnvMap::from([("FJ_SHIM_CA_FILE".to_string(), value.to_string())])
+        };
+        let error = ForgejoClient::for_host("git.example.com", None, &config, &env("ca.pem"))
+            .err()
+            .expect("relative CA path must fail");
+        assert!(error.to_string().contains("absolute path"));
+        assert!(ForgejoClient::for_host("git.example.com", None, &config, &env("")).is_ok());
     }
 
     #[test]
