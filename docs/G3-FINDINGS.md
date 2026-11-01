@@ -7,7 +7,9 @@ Forgejo 15 exposes scheduled and cancelled merges through
 `pull_scheduled_merge` and `pull_cancel_scheduled_merge`. Both have `created_at` and `user`.
 A schedule event has an empty `body`. Cancelling can occur in the same second as scheduling,
 so the gateway orders relevant events by timestamp and then numeric event ID. It reads every
-page before choosing the latest event.
+page before choosing the latest event. Forgejo accepts `page` and `limit` on this endpoint.
+The gateway reads the full timeline for each PR on each query. A request cache could avoid
+repeated reads, but this round does not change that behavior.
 
 The binding G3 decision makes `autoMergeRequest` non-null only for an open, unmerged PR whose
 latest relevant event schedules a merge. `enabledAt` uses that event's `created_at`, and
@@ -63,9 +65,10 @@ A direct mutation on the GitHub conflict PR returns:
 ```
 
 `fixtures/oracle/writes/conflict-error.json` contains that live response. The gateway uses this
-message for Forgejo's merge 405, and the e2e seed compares the direct mutation's type, path, and
-message against GitHub. Other 405 causes, including a WIP or an unfinished mergeability check,
-share Forgejo's status code. The mapping cannot prove a conflict from 405 alone.
+message for Forgejo's 405 mergeability precheck rejection, and the e2e seed compares the direct
+mutation's type, path, and message against GitHub. The mapping below distinguishes the other
+405 causes by their wire messages. An unfinished mergeability check shares the precheck response
+with a conflict, so that response still cannot prove a conflict.
 
 The gh conflict case has a strict expected stderr difference. Its stdout, exit code, and complete
 read-back state must still match. The allowed stderr pair is the exact GitHub two-line preflight
@@ -76,6 +79,68 @@ Development runs returned transient 405 responses for clean rebase and squash ca
 mergeability had reported true. The seed now posts its status before waiting for two settled
 mergeability reads. The next full run succeeded with the same repository merge settings. The
 gateway does not retry a merge command or claim that this response proves a conflict.
+
+## Merge failures need the status and the wire body
+
+Forgejo v15 returns 405 for several distinct merge failures. It also returns 409 for real
+merge-time conflicts. The gateway matches each known wire body within its documented status,
+then keeps the previous status fallback for an unknown response. It never returns upstream git
+output or branch-protection reasons to the client.
+
+The table records the JSON `message`, not the title passed to `ctx.Error`. [APIContext.Error](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/services/context/api.go#L182)
+uses only its third argument as the message and [writes `{message, url}`](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/services/context/api.go#L198).
+In particular, already-merged sends an explicitly empty string. A missing `message` does not
+match that case. The mergeability precheck sends `Please try again later`. The title describes
+why the handler chose the response but never reaches the client.
+
+Raw 409 conflict structs have no `message`. The tests use their exact exported Go JSON field
+names, including `Err: {}` for an unexported underlying error. All three conflict structs carry
+`Style`, `StdOut`, `StdErr`, and `Err`. Rebase conflicts also carry `CommitSHA`. The already-merged
+struct has a separate shape and must not count as a merge conflict.
+
+Every path in this table is `['mergePullRequest']`. The shared write client also serves
+`enablePullRequestAutoMerge`, whose path is `['enablePullRequestAutoMerge']`. Tests assert both
+paths, each error type, and each message. They cover all rows, absent messages, incomplete JSON
+structs, and known messages under the wrong status code.
+
+| Forgejo status | Forgejo wire message or body, with source line | GitHub type | GitHub path | GitHub message | GitHub text evidence |
+|---|---|---|---|---|---|
+| 405 | `User not allowed to merge PR`, [pull.go:940](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L940) | `FORBIDDEN` | `mergePullRequest` | User does not have permission to merge this pull request | closest, uncaptured |
+| 405 | `""`, title `PR already merged`, [pull.go:942](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L942) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request is already merged | closest, uncaptured |
+| 405 | `Work in progress PRs cannot be merged`, [pull.go:944](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L944) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request is still a draft | closest, uncaptured |
+| 405 | `Please try again later`, title `PR not in mergeable state`, [pull.go:946](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L946) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request has merge conflicts | captured |
+| 405 | `not allowed to merge [reason: …]`, title `PR is not ready to be merged`, [pull.go:948](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L948), [error.go:333](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/models/error.go#L333) | `UNPROCESSABLE` | `mergePullRequest` | Protected branch hook declined | closest, uncaptured |
+| 405 | `won't sign: <reason>`, [pull.go:950](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L950), [sign.go:77](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/services/asymkey/sign.go#L77) | `UNPROCESSABLE` | `mergePullRequest` | Commits must have verified signatures. | closest, uncaptured |
+| 405 | `merge is not an allowed merge style for this repository`, [pull.go:1011](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1011) | `UNPROCESSABLE` | `mergePullRequest` | Merge commits are not allowed on this repository. | closest, uncaptured |
+| 405 | `squash is not an allowed merge style for this repository`, [pull.go:1011](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1011) | `UNPROCESSABLE` | `mergePullRequest` | Squash merges are not allowed on this repository. | closest, uncaptured |
+| 405 | `rebase is not an allowed merge style for this repository`, [pull.go:1011](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1011) | `UNPROCESSABLE` | `mergePullRequest` | Rebase merges are not allowed on this repository. | closest, uncaptured |
+| 409 | No `message`. `ErrMergeConflicts` JSON with `Style`, `StdOut`, `StdErr`, `Err`, [pull.go:1014](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1014), [error.go:446](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/models/error.go#L446) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request has merge conflicts | captured |
+| 409 | No `message`. `ErrRebaseConflicts` JSON adds `CommitSHA`, [pull.go:1017](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1017), [error.go:499](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/models/error.go#L499) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request has merge conflicts | captured |
+| 409 | No `message`. `ErrMergeUnrelatedHistories` JSON uses the merge-conflict fields, [pull.go:1020](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1020), [error.go:464](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/models/error.go#L464) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request has merge conflicts | closest, uncaptured |
+| 409 | No `message`. `ErrPullRequestHasMerged` JSON has `ID`, `IssueID`, `HeadRepoID`, `BaseRepoID`, `HeadBranch`, `BaseBranch`, [pull.go:1023](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1023), [error.go:518](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/models/error.go#L518) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request is already merged | closest, uncaptured |
+| 409 | `merge push out of date`, [pull.go:1025](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1025) | `UNPROCESSABLE` | `mergePullRequest` | Base branch was modified. Review and try the merge again. | closest, uncaptured |
+| 409 | `head out of date`, [pull.go:1027](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1027) | `UNPROCESSABLE` | `mergePullRequest` | Head branch was modified. Review and try the merge again. | captured |
+| 409 | `PushRejected without remote error message`, [pull.go:1031](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1031) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request merge failed | closest, uncaptured |
+| 409 | `PushRejected with remote message: <remote text>`, [pull.go:1033](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L1033) | `UNPROCESSABLE` | `mergePullRequest` | Pull Request merge failed | closest, uncaptured |
+| 409 | `pull request is already scheduled to auto merge when checks succeed [pull_id: <id>]`, [pull.go:997](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L997), [automerge.go:44](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/models/pull/automerge.go#L44) | `UNPROCESSABLE` | `mergePullRequest` | Auto merge is already enabled | closest, uncaptured |
+| 403 | Permission rejection before the merge handler. Existing transport mapping. | `FORBIDDEN` | `mergePullRequest` | Resource not accessible by token | closest, uncaptured |
+| 404 | Missing PR, [pull.go:899](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/routers/api/v1/repo/pull.go#L899). Existing transport mapping. | `NOT_FOUND` | `mergePullRequest` | Not Found | closest, uncaptured |
+| 405 | Unrecognized message or missing `message`. Existing status fallback. | `UNPROCESSABLE` | `mergePullRequest` | Pull Request has merge conflicts | closest, uncaptured |
+| 409 | Unrecognized message or incomplete conflict JSON. Existing status fallback. | `UNPROCESSABLE` | `mergePullRequest` | Pull Request is not mergeable | closest, uncaptured |
+
+Captured conflict text comes from `fixtures/oracle/writes/conflict-error.json`. The head-mismatch
+text comes from MAPPING §6 and `fixtures/oracle/writes/head-mismatch.stderr`. Those captures
+establish the GitHub text for the same causes, not each Forgejo response body. The other rows
+use the closest GitHub wording without a twin capture. They remain evidence gaps. In particular,
+unrelated histories and Forgejo-specific signing or push failures do not prove an exact GitHub
+match. The base-race and per-method wording follow this round's binding requirements.
+
+The protection row uses one general GitHub rejection because Forgejo can report status checks,
+approvals, requested changes, outdated heads, or protected files through the same error type.
+Their reasons appear in [CheckPullBranchProtections](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/services/pull/merge.go#L513).
+No repository setting changed to capture a disallowed merge method. This round made no GitHub
+writes and added no captures or normalizers. The `g3/*` fence, refusal floor, and per-write guard
+remain unchanged.
 
 ## Gh uses separate close and reopen mutations
 
@@ -105,3 +170,10 @@ normalizers. Fresh write cases also need these identity substitutions:
 No normalizer changes titles, bodies, draft flags, PR states, merge methods, comment records,
 or exit codes. The conflict expected failure accepts one exact stderr pair. Tests reject extra
 stderr, changed comment bodies, and an expected failure that starts matching.
+
+## Other write limits
+
+`gh pr merge --delete-branch` is not served. The merge payload keeps
+`delete_branch_after_merge: false`. The DELETE request used to cancel auto-merge sends a JSON
+`null` body because the shared writer serializes Rust's unit value. Neither limit changes in
+this round.

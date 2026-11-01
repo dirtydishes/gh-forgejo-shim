@@ -12,8 +12,98 @@ pub enum WriteError {
     NotMergeable,
     #[error("Pull Request has merge conflicts")]
     MergeConflicts,
+    #[error("User does not have permission to merge this pull request")]
+    MergeDenied,
+    #[error("Base branch was modified. Review and try the merge again.")]
+    BaseMismatch,
+    #[error("Pull Request is already merged")]
+    AlreadyMerged,
+    #[error("Pull Request is still a draft")]
+    Draft,
+    #[error("Protected branch hook declined")]
+    ProtectedBranch,
+    #[error("Commits must have verified signatures.")]
+    Unsigned,
+    #[error("Pull Request merge failed")]
+    PushRejected,
+    #[error("Auto merge is already enabled")]
+    AlreadyScheduled,
+    #[error("{0} are not allowed on this repository.")]
+    DisallowedMergeStyle(&'static str),
     #[error("Validation failed")]
     Validation,
+}
+
+/// Forgejo v15 pull.go:940-1033 uses both ctx.Error messages and raw Go structs.
+/// Never expose upstream git output or branch-protection details to the client.
+fn merge_error(status: StatusCode, value: &serde_json::Value) -> WriteError {
+    match (status, value["message"].as_str()) {
+        (StatusCode::METHOD_NOT_ALLOWED, Some("User not allowed to merge PR")) => {
+            WriteError::MergeDenied
+        }
+        // ctx.Error serializes its third argument, not its title. "PR already
+        // merged" has an explicitly empty message; missing messages fall back.
+        (StatusCode::METHOD_NOT_ALLOWED, Some("")) => WriteError::AlreadyMerged,
+        (StatusCode::METHOD_NOT_ALLOWED, Some("Work in progress PRs cannot be merged")) => {
+            WriteError::Draft
+        }
+        (StatusCode::METHOD_NOT_ALLOWED, Some("Please try again later")) => {
+            WriteError::MergeConflicts
+        }
+        (StatusCode::METHOD_NOT_ALLOWED, Some(message)) => {
+            if message.starts_with("not allowed to merge [reason: ") && message.ends_with(']') {
+                WriteError::ProtectedBranch
+            } else if message.starts_with("won't sign: ") {
+                WriteError::Unsigned
+            } else {
+                match message.strip_suffix(" is not an allowed merge style for this repository") {
+                    Some("merge") => WriteError::DisallowedMergeStyle("Merge commits"),
+                    Some("squash") => WriteError::DisallowedMergeStyle("Squash merges"),
+                    Some("rebase") => WriteError::DisallowedMergeStyle("Rebase merges"),
+                    _ => WriteError::MergeConflicts,
+                }
+            }
+        }
+        (StatusCode::CONFLICT, Some(message)) => {
+            if message.contains("head out of date") {
+                WriteError::HeadMismatch
+            } else if message == "merge push out of date" {
+                WriteError::BaseMismatch
+            } else if message == "PushRejected without remote error message"
+                || message.starts_with("PushRejected with remote message: ")
+            {
+                WriteError::PushRejected
+            } else if message.starts_with(
+                "pull request is already scheduled to auto merge when checks succeed [pull_id: ",
+            ) && message.ends_with(']')
+            {
+                WriteError::AlreadyScheduled
+            } else {
+                WriteError::NotMergeable
+            }
+        }
+        (StatusCode::CONFLICT, None)
+            if ["ID", "IssueID", "HeadRepoID", "BaseRepoID"]
+                .iter()
+                .all(|key| value[key].is_i64())
+                && ["HeadBranch", "BaseBranch"]
+                    .iter()
+                    .all(|key| value[key].is_string()) =>
+        {
+            WriteError::AlreadyMerged
+        }
+        (StatusCode::CONFLICT, None)
+            if ["Style", "StdOut", "StdErr"]
+                .iter()
+                .all(|key| value[key].is_string())
+                && value.get("Err").is_some() =>
+        {
+            // ErrMergeConflicts, ErrRebaseConflicts, ErrMergeUnrelatedHistories.
+            WriteError::MergeConflicts
+        }
+        (StatusCode::METHOD_NOT_ALLOWED, _) => WriteError::MergeConflicts,
+        _ => WriteError::NotMergeable,
+    }
 }
 
 #[derive(Serialize)]
@@ -88,21 +178,11 @@ impl Session {
                 StatusCode::UNAUTHORIZED => Err(Error::Unauthorized.into()),
                 StatusCode::FORBIDDEN => Err(Error::Forbidden.into()),
                 StatusCode::NOT_FOUND => Err(Error::NotFound.into()),
-                StatusCode::CONFLICT if merge => {
-                    // Forgejo also uses 409 for merge push conflicts and duplicate schedules.
-                    // Only its explicit head-OID rejection is GitHub's expectedHeadOid error.
+                status @ (StatusCode::CONFLICT | StatusCode::METHOD_NOT_ALLOWED) if merge => {
                     let value: serde_json::Value =
                         response.json().await.map_err(|_| Error::Upstream)?;
-                    if value["message"]
-                        .as_str()
-                        .is_some_and(|m| m.contains("head out of date"))
-                    {
-                        Err(WriteError::HeadMismatch)
-                    } else {
-                        Err(WriteError::NotMergeable)
-                    }
+                    Err(merge_error(status, &value))
                 }
-                StatusCode::METHOD_NOT_ALLOWED if merge => Err(WriteError::MergeConflicts),
                 StatusCode::BAD_REQUEST
                 | StatusCode::UNPROCESSABLE_ENTITY
                 | StatusCode::CONFLICT => Err(WriteError::Validation),

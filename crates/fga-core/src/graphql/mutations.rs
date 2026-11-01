@@ -10,6 +10,8 @@ pub struct Mutation;
 fn write_error(error: forgejo::WriteError) -> async_graphql::Error {
     match error {
         forgejo::WriteError::Transport(e) => super::error(e),
+        forgejo::WriteError::MergeDenied => async_graphql::Error::new(error.to_string())
+            .extend_with(|_, extensions| extensions.set("type", "FORBIDDEN")),
         other => async_graphql::Error::new(other.to_string())
             .extend_with(|_, extensions| extensions.set("type", "UNPROCESSABLE")),
     }
