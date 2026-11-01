@@ -12,8 +12,10 @@ use url::Url;
 mod cache;
 mod reads;
 mod types;
+mod writes;
 use cache::SessionCache;
 pub use types::*;
+pub use writes::*;
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {

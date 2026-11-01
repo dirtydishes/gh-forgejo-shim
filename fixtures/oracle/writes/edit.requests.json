@@ -1,0 +1,41 @@
+[
+  {
+    "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {id,author{login,...on User{id,name}},url,title,body,baseRefName,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login,name},...on Bot{login},...on Team{organization{login}name,slug}}}},labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},assignedActors(first: 10) {nodes {...on User {id,login,name,__typename}...on Bot {id,login,__typename}},totalCount},number}\n    }\n  }",
+    "variables": {
+      "owner": "dirtydishes",
+      "pr_number": 30,
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "query": "query PullRequestProjectItems($endCursor:String$name:String!$number:Int!$owner:String!){repository(owner: $owner, name: $name){pullRequest(number: $number){projectItems(first: 100, after: $endCursor){totalCount,nodes{id,project{id,title},status:fieldValueByName(name: \"Status\"){... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},pageInfo{hasNextPage,endCursor}}}}}",
+    "variables": {
+      "endCursor": null,
+      "name": "gfj-oracle",
+      "number": 30,
+      "owner": "dirtydishes"
+    }
+  },
+  {
+    "query": "mutation PullRequestUpdate($input:UpdatePullRequestInput!){updatePullRequest(input: $input){__typename}}",
+    "variables": {
+      "input": {
+        "pullRequestId": "PR_kwDOVdZkPs8AAAABMHuoBg",
+        "title": "T2",
+        "body": "B2"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

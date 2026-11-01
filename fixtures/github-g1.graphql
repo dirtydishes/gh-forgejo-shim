@@ -7,6 +7,17 @@ interface Actor {
   login: String!
 }
 
+input AddCommentInput {
+  subjectId: ID!
+  body: String!
+  clientMutationId: String
+}
+
+type AddCommentPayload {
+  clientMutationId: String
+  commentEdge: IssueCommentEdge
+}
+
 type AutoMergeRequest {
   authorEmail: String
   commitBody: String
@@ -85,6 +96,16 @@ type CheckSuite implements Node {
   workflowRun: WorkflowRun
 }
 
+input ClosePullRequestInput {
+  pullRequestId: ID!
+  clientMutationId: String
+}
+
+type ClosePullRequestPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
 enum CommentAuthorAssociation {
   COLLABORATOR
   CONTRIBUTOR
@@ -106,7 +127,57 @@ type Commit implements Node {
   authors( after: String before: String first: Int last: Int ): GitActorConnection!
 }
 
+input ConvertPullRequestToDraftInput {
+  pullRequestId: ID!
+  clientMutationId: String
+}
+
+type ConvertPullRequestToDraftPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
+input CreatePullRequestInput {
+  repositoryId: ID!
+  baseRefName: String!
+  headRefName: String!
+  title: String!
+  body: String
+  draft: Boolean = false
+  maintainerCanModify: Boolean = true
+  clientMutationId: String
+}
+
+type CreatePullRequestPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
 scalar DateTime
+
+input DisablePullRequestAutoMergeInput {
+  pullRequestId: ID!
+  clientMutationId: String
+}
+
+type DisablePullRequestAutoMergePayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
+input EnablePullRequestAutoMergeInput {
+  pullRequestId: ID!
+  mergeMethod: PullRequestMergeMethod = MERGE
+  expectedHeadOid: GitObjectID
+  commitHeadline: String
+  commitBody: String
+  clientMutationId: String
+}
+
+type EnablePullRequestAutoMergePayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
 
 type GitActor {
   name: String
@@ -171,6 +242,10 @@ type IssueCommentConnection {
   nodes: [IssueComment]
   totalCount: Int!
   pageInfo: PageInfo!
+}
+
+type IssueCommentEdge {
+  node: IssueComment
 }
 
 type IssueConnection {
@@ -242,6 +317,30 @@ type LabelConnection {
   pageInfo: PageInfo!
 }
 
+input MarkPullRequestReadyForReviewInput {
+  pullRequestId: ID!
+  clientMutationId: String
+}
+
+type MarkPullRequestReadyForReviewPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
+input MergePullRequestInput {
+  pullRequestId: ID!
+  mergeMethod: PullRequestMergeMethod = MERGE
+  expectedHeadOid: GitObjectID
+  commitHeadline: String
+  commitBody: String
+  clientMutationId: String
+}
+
+type MergePullRequestPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
 enum MergeStateStatus {
   BEHIND
   BLOCKED
@@ -264,6 +363,19 @@ type Milestone implements Node {
   title: String!
   description: String
   dueOn: DateTime
+}
+
+type Mutation {
+  createPullRequest( input: CreatePullRequestInput! ): CreatePullRequestPayload
+  addComment( input: AddCommentInput! ): AddCommentPayload
+  updatePullRequest( input: UpdatePullRequestInput! ): UpdatePullRequestPayload
+  closePullRequest( input: ClosePullRequestInput! ): ClosePullRequestPayload
+  reopenPullRequest( input: ReopenPullRequestInput! ): ReopenPullRequestPayload
+  convertPullRequestToDraft( input: ConvertPullRequestToDraftInput! ): ConvertPullRequestToDraftPayload
+  markPullRequestReadyForReview( input: MarkPullRequestReadyForReviewInput! ): MarkPullRequestReadyForReviewPayload
+  mergePullRequest( input: MergePullRequestInput! ): MergePullRequestPayload
+  enablePullRequestAutoMerge( input: EnablePullRequestAutoMergeInput! ): EnablePullRequestAutoMergePayload
+  disablePullRequestAutoMerge( input: DisablePullRequestAutoMergeInput! ): DisablePullRequestAutoMergePayload
 }
 
 interface Node {
@@ -423,6 +535,11 @@ enum PullRequestState {
   OPEN
 }
 
+enum PullRequestUpdateState {
+  CLOSED
+  OPEN
+}
+
 type Query implements Node {
   viewer: User!
   repository( followRenames: Boolean = true name: String! owner: String! ): Repository
@@ -455,6 +572,16 @@ type Ref implements Node {
   branchProtectionRule: BranchProtectionRule
 }
 
+input ReopenPullRequestInput {
+  pullRequestId: ID!
+  clientMutationId: String
+}
+
+type ReopenPullRequestPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
+
 type Repository implements Node {
   id: ID!
   name: String!
@@ -465,6 +592,9 @@ type Repository implements Node {
   isPrivate: Boolean!
   isFork: Boolean!
   isArchived: Boolean!
+  mergeCommitAllowed: Boolean!
+  rebaseMergeAllowed: Boolean!
+  squashMergeAllowed: Boolean!
   hasIssuesEnabled: Boolean!
   hasWikiEnabled: Boolean!
   databaseId: Int
@@ -580,6 +710,21 @@ type Team implements Node {
 }
 
 scalar URI
+
+input UpdatePullRequestInput {
+  pullRequestId: ID!
+  title: String
+  body: String
+  baseRefName: String
+  state: PullRequestUpdateState
+  maintainerCanModify: Boolean
+  clientMutationId: String
+}
+
+type UpdatePullRequestPayload {
+  clientMutationId: String
+  pullRequest: PullRequest
+}
 
 type User implements Actor & Node & RepositoryOwner {
   login: String!

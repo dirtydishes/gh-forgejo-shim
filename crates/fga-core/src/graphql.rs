@@ -1,8 +1,10 @@
 use crate::forgejo;
-use async_graphql::{EmptyMutation, EmptySubscription, ErrorExtensions, Schema};
+use async_graphql::{EmptySubscription, ErrorExtensions, Schema};
 mod checks;
 mod connections;
 mod issues;
+mod mutation_inputs;
+mod mutations;
 mod pulls;
 mod query;
 mod search;
@@ -10,14 +12,16 @@ mod types;
 use checks::*;
 use connections::*;
 use issues::*;
+use mutation_inputs::*;
+pub use mutations::Mutation;
 use pulls::*;
 pub use query::{Query, Repository, SearchResultItem};
 pub use types::*;
 
-pub type GithubSchema = Schema<Query, EmptyMutation, EmptySubscription>;
+pub type GithubSchema = Schema<Query, Mutation, EmptySubscription>;
 
 pub fn schema() -> GithubSchema {
-    Schema::build(Query, EmptyMutation, EmptySubscription)
+    Schema::build(Query, Mutation, EmptySubscription)
         .data(crate::map::WipPrefixes::default())
         .finish()
 }

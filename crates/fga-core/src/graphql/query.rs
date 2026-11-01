@@ -145,6 +145,15 @@ impl Repository {
     async fn is_archived(&self) -> bool {
         self.source.archived
     }
+    async fn merge_commit_allowed(&self) -> bool {
+        self.source.allow_merge_commits
+    }
+    async fn rebase_merge_allowed(&self) -> bool {
+        self.source.allow_rebase
+    }
+    async fn squash_merge_allowed(&self) -> bool {
+        self.source.allow_squash_merge
+    }
     async fn has_issues_enabled(&self) -> bool {
         self.source.has_issues
     }

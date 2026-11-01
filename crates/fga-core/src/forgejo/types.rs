@@ -30,6 +30,14 @@ pub struct Repository {
     #[serde(default)]
     pub has_wiki: bool,
     pub parent: Option<Box<Repository>>,
+    #[serde(default)]
+    pub default_merge_style: String,
+    #[serde(default)]
+    pub allow_merge_commits: bool,
+    #[serde(default)]
+    pub allow_rebase: bool,
+    #[serde(default)]
+    pub allow_squash_merge: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
@@ -190,6 +198,15 @@ pub struct Comment {
     pub body: String,
     pub created_at: String,
     pub html_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TimelineEvent {
+    pub id: i64,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub created_at: String,
+    pub user: User,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct PullCommit {

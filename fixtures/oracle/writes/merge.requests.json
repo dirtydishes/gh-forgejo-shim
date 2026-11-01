@@ -1,0 +1,41 @@
+[
+  {
+    "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {id,number,state,title,commits(last:1){nodes{commit{oid}}},mergeStateStatus,headRefName,baseRefName,headRefOid,isCrossRepository,isInMergeQueue,isMergeQueueEnabled}\n    }\n  }",
+    "variables": {
+      "owner": "dirtydishes",
+      "pr_number": 33,
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "query": "mutation PullRequestMerge($input:MergePullRequestInput!){mergePullRequest(input: $input){clientMutationId}}",
+    "variables": {
+      "input": {
+        "pullRequestId": "PR_kwDOVdZkPs8AAAABMHu1xg",
+        "mergeMethod": "MERGE"
+      }
+    }
+  },
+  {
+    "query": "query PullRequest_fields2{WorkflowRun: __type(name: \"WorkflowRun\"){fields(includeDeprecated: true){name}}}"
+  },
+  {
+    "query": "query PullRequest_fields{PullRequest: __type(name: \"PullRequest\"){fields(includeDeprecated: true){name}},StatusCheckRollupContextConnection: __type(name: \"StatusCheckRollupContextConnection\"){fields(includeDeprecated: true){name}}}"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

@@ -216,8 +216,38 @@ impl PullRequest {
             behind,
         ))
     }
-    async fn auto_merge_request(&self) -> Option<AutoMergeRequest> {
-        None
+    async fn auto_merge_request(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Option<AutoMergeRequest>> {
+        if self.source.state != "open" || self.source.merged {
+            return Ok(None);
+        }
+        let session = ctx.data_unchecked::<Session>();
+        let Some(event) = session
+            .auto_merge_event(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?
+        else {
+            return Ok(None);
+        };
+        let repository = session
+            .repository(&self.owner, &self.repo)
+            .await
+            .map_err(error)?;
+        let method = match repository.default_merge_style.as_str() {
+            "squash" => PullRequestMergeMethod::Squash,
+            "rebase" | "rebase-merge" => PullRequestMergeMethod::Rebase,
+            _ => PullRequestMergeMethod::Merge,
+        };
+        Ok(Some(AutoMergeRequest {
+            author_email: None,
+            commit_body: None,
+            commit_headline: None,
+            merge_method: method,
+            enabled_at: Some(DateTime(event.created_at)),
+            enabled_by: Some(Actor::User(User(event.user))),
+        }))
     }
     async fn is_merge_queue_enabled(&self) -> bool {
         false

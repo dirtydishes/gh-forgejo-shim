@@ -1,0 +1,96 @@
+{
+  "repository": {
+    "default_merge_style": "merge",
+    "default_branch": "main"
+  },
+  "pull_fields": [
+    "additions",
+    "allow_maintainer_edit",
+    "assignee",
+    "assignees",
+    "base",
+    "body",
+    "changed_files",
+    "closed_at",
+    "comments",
+    "created_at",
+    "deletions",
+    "diff_url",
+    "draft",
+    "due_date",
+    "flow",
+    "head",
+    "html_url",
+    "id",
+    "is_locked",
+    "labels",
+    "merge_base",
+    "merge_commit_sha",
+    "mergeable",
+    "merged",
+    "merged_at",
+    "merged_by",
+    "milestone",
+    "number",
+    "patch_url",
+    "pin_order",
+    "requested_reviewers",
+    "requested_reviewers_teams",
+    "review_comments",
+    "state",
+    "title",
+    "updated_at",
+    "url",
+    "user"
+  ],
+  "merge_route_methods": [
+    "delete",
+    "get",
+    "post"
+  ],
+  "scheduled": [
+    {
+      "id": 52,
+      "type": "pull_scheduled_merge",
+      "created_at": "2026-11-01T14:52:47Z",
+      "body": "",
+      "user": {
+        "login": "dirtydishes"
+      }
+    }
+  ],
+  "cancelled": [
+    {
+      "id": 52,
+      "type": "pull_scheduled_merge",
+      "created_at": "2026-11-01T14:52:47Z",
+      "body": "",
+      "user": {
+        "login": "dirtydishes"
+      }
+    },
+    {
+      "id": 53,
+      "type": "pull_cancel_scheduled_merge",
+      "created_at": "2026-11-01T14:52:47Z",
+      "body": "",
+      "user": {
+        "login": "dirtydishes"
+      }
+    }
+  ],
+  "scheduled_read_back": {
+    "authorEmail": null,
+    "commitBody": null,
+    "commitHeadline": null,
+    "mergeMethod": "MERGE",
+    "enabledAt": "2026-11-01T14:52:47Z",
+    "enabledBy": {
+      "id": "ZmdhOlVzZXI6OjI=",
+      "is_bot": false,
+      "login": "dirtydishes",
+      "name": "dirtydishes"
+    }
+  },
+  "cancelled_read_back": null
+}

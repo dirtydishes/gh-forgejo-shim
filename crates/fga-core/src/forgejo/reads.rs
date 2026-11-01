@@ -3,6 +3,33 @@ use crate::search::{Filters, Kind, State};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 impl Session {
+    pub async fn auto_merge_event(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i32,
+    ) -> Result<Option<TimelineEvent>, Error> {
+        let events: Vec<TimelineEvent> = self
+            .all(&[
+                "repos",
+                owner,
+                repo,
+                "issues",
+                &number.to_string(),
+                "timeline",
+            ])
+            .await?;
+        let latest = events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.kind.as_str(),
+                    "pull_scheduled_merge" | "pull_cancel_scheduled_merge"
+                )
+            })
+            .max_by(|a, b| (a.created_at.as_str(), a.id).cmp(&(b.created_at.as_str(), b.id)));
+        Ok(latest.filter(|event| event.kind == "pull_scheduled_merge"))
+    }
     /// Page using only local page numbers; never follow an upstream URL with credentials.
     pub async fn issues(
         &self,
