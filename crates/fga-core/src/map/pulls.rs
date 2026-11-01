@@ -45,6 +45,22 @@ pub enum PullRequestReviewState {
 pub struct WipPrefixes(Vec<String>);
 
 impl WipPrefixes {
+    pub fn strip<'a>(&self, title: &'a str) -> &'a str {
+        for prefix in &self.0 {
+            if title
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+            {
+                return title[prefix.len()..].trim_start();
+            }
+        }
+        title
+    }
+
+    pub fn draft_title(&self, title: &str) -> Option<String> {
+        self.0.first().map(|prefix| format!("{prefix} {title}"))
+    }
+
     pub fn from_csv(value: &str) -> Self {
         Self(
             value
@@ -65,17 +81,10 @@ impl Default for WipPrefixes {
 
 pub fn title<'a>(pr: &'a PullRequest, prefixes: &WipPrefixes) -> &'a str {
     if pr.draft {
-        for prefix in &prefixes.0 {
-            if pr
-                .title
-                .get(..prefix.len())
-                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-            {
-                return pr.title[prefix.len()..].trim_start();
-            }
-        }
+        prefixes.strip(&pr.title)
+    } else {
+        &pr.title
     }
-    &pr.title
 }
 
 pub fn state(pr: &PullRequest) -> PullRequestState {

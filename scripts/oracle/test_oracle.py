@@ -1,5 +1,7 @@
 """Check the capture allowlist and ensure expected failures cannot hide new differences."""
 import contextlib
+import importlib.util
+import shutil
 import io
 import json
 from pathlib import Path
@@ -13,9 +15,64 @@ import subprocess
 import compare
 import run
 import scrub
+import writes
+spec = importlib.util.spec_from_file_location('compare_writes', Path(__file__).with_name('compare-writes.py'))
+compare_writes = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(compare_writes)
 
 
 class OracleTests(unittest.TestCase):
+    def test_write_allowlist_ownership_floor_and_nested_debug(self):
+        writes.validate_cases()
+        for args in [[], ['pr', 'merge', '1'], ['pr', 'edit', '{number}', '--title', 'other'],
+                     ['pr', 'create', '--base', 'main', '--head', 'other']]:
+            self.assertFalse(writes.allowed(args))
+        with tempfile.TemporaryDirectory() as temp:
+            writer = writes.Writer('github.com', Path(temp))
+            writer.baseline = 19
+            writer.created[18] = 'g3/old'
+            with patch.object(writer, 'api') as api:
+                for number in (1, 18, 19, 20):
+                    with self.assertRaises(ValueError): writer.guard(number)
+                    with self.assertRaises(ValueError): writer.register({'id':'create'}, number if number < 20 else 18)
+                api.assert_not_called()
+            with self.assertRaises(ValueError):
+                writer.api('repos/other/repo/git/refs', {}, 'POST')
+            with self.assertRaises(ValueError):
+                writer.api('repos/' + writes.REPO + '/branches/main/protection', writer.auto_protection(), 'PUT')
+        debug = (b'* Request at one\n> Authorization: token secret\n* Request at two\n'
+                 b'GraphQL query:\nquery Test { viewer { login } }\n* Request took 1ms\n'
+                 b'< Response\nprivate response\n* Request took 2ms\nactual error\n')
+        self.assertEqual(writes.without_debug(debug), b'actual error\n')
+        with self.assertRaises(RuntimeError): writes.without_debug(b'* Request at incomplete\n')
+        with self.assertRaises(RuntimeError): writes.without_debug(b'> Authorization: token secret\n')
+
+    def test_write_comparison_rejects_new_differences_and_fixed_xfail(self):
+        expected = Path(__file__).resolve().parents[2] / 'fixtures/oracle/writes'
+        with tempfile.TemporaryDirectory() as temp:
+            actual = Path(temp)
+            for path in expected.iterdir():
+                if path.is_file(): shutil.copyfile(path, actual / path.name)
+            conflict = actual / 'conflict.stderr'
+            conflict.write_text('GraphQL: Pull Request has merge conflicts (mergePullRequest)\n')
+            def check():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    return compare_writes.main(expected, actual)
+            self.assertEqual(check(), 0)
+            state = actual / 'comment.state.json'
+            original = state.read_text()
+            state.write_text(original.replace('"body":"x"', '"body":"changed"'))
+            self.assertEqual(check(), 1)
+            state.write_text(original)
+            conflict.write_text(conflict.read_text() + 'unrelated error\n')
+            self.assertEqual(check(), 1)
+            conflict.write_text((expected / conflict.name).read_text())
+            self.assertEqual(check(), 1, 'a fixed xfail must force its removal')
+        github = compare_writes.canonical('{"number":27,"headRefName":"g3/create-r4","url":"https://github.com/o/r/pull/27","state":"OPEN"}', {'id':'create'}, {'number':27,'branch':'g3/create-r4'})
+        forgejo = compare_writes.canonical('{"number":13,"headRefName":"g3/create","url":"https://forge.test/o/r/pulls/13","state":"OPEN"}', {'id':'create'}, {'number':13,'branch':'g3/create'})
+        self.assertEqual(github, forgejo)
+        self.assertNotEqual(github, forgejo.replace('OPEN', 'CLOSED'))
+
     def test_email_scrubbing_at_capture_and_comparison(self):
         raw = b'Author <first.last+tag@sub.example.com>, OTHER@EXAMPLE.ORG; "email":"dirtydishes@users.noreply.invalid"\n'
         expected = b'Author <email@example.invalid>, email@example.invalid; "email":"email@example.invalid"\n'

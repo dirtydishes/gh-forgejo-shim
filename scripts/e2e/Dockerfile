@@ -23,3 +23,5 @@ COPY fixtures/gh-pr-view.graphql /test/gh-pr-view.graphql
 COPY scripts/e2e/g2.sh scripts/e2e/seed.py scripts/e2e/read-contract.py scripts/e2e/merge_retry.py /test/
 COPY scripts/oracle /test/oracle-scripts
 COPY fixtures/oracle /test/oracle
+
+COPY scripts/e2e/write-seed.py /test/write-seed.py
