@@ -472,7 +472,7 @@ fn write_keychain_token(host: &str, token: &str) -> Result<()> {
         .wait_with_output()
         .map_err(|error| failed(error.to_string()))?;
     let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    // `security -i` exits 0 even when its command fails, so stderr decides.
+    // Treat any stderr as failure too: security reports problems there.
     if output.status.success() && message.is_empty() {
         Ok(())
     } else {
