@@ -1,0 +1,23 @@
+{
+  "id": "pr-checks-json-pass-1",
+  "argv": [
+    "pr",
+    "checks",
+    "1",
+    "--json",
+    "name,state,bucket,workflow,event"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 1,
+  "normalize": [
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "Compare JSON values and array order without object key order or whitespace differences."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "[{\"bucket\":\"pass\",\"event\":\"pull_request\",\"name\":\"check\",\"state\":\"SUCCESS\",\"workflow\":\"ci\"},{\"bucket\":\"pass\",\"event\":\"pull_request\",\"name\":\"lint\",\"state\":\"SUCCESS\",\"workflow\":\"ci\"}]\n",
+    "stderr": ""
+  }
+}

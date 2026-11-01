@@ -272,6 +272,10 @@ impl Invocation {
             .command
             .get(&self.command)
             .is_some_and(|spec| spec.support == "native")
+            && (self.command != "pr checks"
+                || !["watch", "fail-fast", "interval"]
+                    .iter()
+                    .any(|flag| self.flags.contains_key(*flag)))
             && (self.command != "api"
                 || matches!(
                     self.positionals.first().map(String::as_str),

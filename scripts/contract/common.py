@@ -137,6 +137,9 @@ def normalize(text, names):
             text = re.sub(r"\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)\b", "<timestamp>", text)
         elif name == "durations":
             text = re.sub(r"\b(?:\d+h)?(?:\d+m)?\d+(?:\.\d+)?s\b|\b\d+h(?:\d+m)?\b|\b\d+m\b", "<duration>", text)
+            # gh prints a bare 0 for zero/unknown elapsed time. Only replace
+            # the checks table's elapsed column, never other numeric values.
+            text = re.sub(r"(?m)^([^\t\n]+\t(?:pass|fail|pending|skipping)\t)0(?=\t)", r"\1<duration>", text)
         elif name == "shas":
             text = re.sub(r"\b[0-9a-fA-F]{7,40}\b", "<sha>", text)
         elif name == "node_ids":

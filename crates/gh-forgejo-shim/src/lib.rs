@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod auth_import;
 pub mod bootstrap;
+mod checks;
 pub mod cli;
 pub mod codex_smoke;
 pub mod config;
