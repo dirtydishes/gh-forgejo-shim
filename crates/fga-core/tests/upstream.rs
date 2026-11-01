@@ -327,6 +327,7 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
                         *n += 1;
                         let mut p = pr(number, "e2e", "s/pass");
                         p["mergeable"] = json!(number == 1 && *n == 2);
+                        p["draft"] = json!(number == 3);
                         Json(p)
                     }
                 }
@@ -337,8 +338,9 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
             get(
                 |axum::extract::Path(refs): axum::extract::Path<String>| async move {
                     Json(match refs.as_str() {
-                        "base...head" => json!({"total_commits":1}),
-                        "head...base" => json!({"total_commits":2}),
+                        // The head has 3 commits the base lacks; the base has none the head lacks.
+                        "base...head" => json!({"total_commits":3}),
+                        "head...base" => json!({"total_commits":0}),
                         _ => panic!("unexpected compare"),
                     })
                 },
@@ -363,10 +365,16 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
         fga_core::map::mergeable(&p),
         fga_core::map::MergeableState::Unknown
     );
+    // Drafts always report false and map to UNKNOWN, so they skip the retry.
+    session.pull_request("e2e", "oracle", 3).await.unwrap();
     session.pull_request("e2e", "oracle", 1).await.unwrap();
-    assert_eq!(*hits.lock().unwrap(), HashMap::from([(1, 2), (2, 2)]));
+    assert_eq!(
+        *hits.lock().unwrap(),
+        HashMap::from([(1, 2), (2, 2), (3, 1)])
+    );
+    // behind(base, head) asks whether the head lacks base commits.
     assert!(
-        session
+        !session
             .behind("e2e", "oracle", "base", "head")
             .await
             .unwrap()
@@ -377,5 +385,106 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
             .await
             .unwrap()
     );
+    server.abort();
+}
+
+fn comment(id: i64) -> Value {
+    json!({"id":id,"body":"x","user":user(),"created_at":"2026-10-30T00:00:00Z",
+        "updated_at":"2026-10-30T00:00:00Z","html_url":format!("https://forge.test/e2e/oracle/pulls/1#issuecomment-{id}")})
+}
+
+fn status(id: i64) -> Value {
+    json!({"id":id,"context":format!("ci-{id}"),"status":"success","target_url":"",
+        "description":"","created_at":"2026-10-30T00:00:00Z","updated_at":"2026-10-30T00:00:00Z"})
+}
+
+/// Endpoints whose swagger has no `page` return the whole list for every query. Reads of them
+/// must stop after one request, and paged reads of a misbehaving endpoint must stop at the cap.
+#[tokio::test]
+async fn unpaged_endpoints_are_read_once_and_paging_is_bounded() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let comment_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let status_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let run_pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/e2e/oracle/issues/1/comments",
+            get({
+                let hits = comment_hits.clone();
+                move || async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Json(Value::Array((1..=60).map(comment).collect()))
+                }
+            }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/commits/abc/statuses",
+            get({
+                let hits = status_hits.clone();
+                move || async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Json(Value::Array((1..=50).map(status).collect()))
+                }
+            }),
+        )
+        // Forgejo's links mark the last page even when it is full.
+        .route(
+            "/api/v1/repos/e2e/oracle/commits/full/statuses",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                let page: i64 = query["page"].parse().unwrap();
+                let rel = if page < 200 { "next" } else { "prev" };
+                (
+                    [("link", format!("<http://untrusted.invalid>; rel=\"{rel}\""))],
+                    Json(Value::Array((1..=50).map(|i| status(page * 50 + i)).collect())),
+                )
+            }),
+        )
+        // Forgejo pages reviews before hiding others' pending ones, so they are read unpaged.
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/1/reviews",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert!(!query.contains_key("page"), "reviews must not be paged");
+                Json(json!([{"id":1,"user":user(),"body":"","state":"APPROVED","submitted_at":null,"commit_id":"abc"}]))
+            }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/actions/runs",
+            get({
+                let hits = run_pages.clone();
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    hits.lock().unwrap().push(query["page"].clone());
+                    let run = json!({"id":1,"workflow_id":"ci.yml","index_in_repo":1,"title":"x","prettyref":"main","commit_sha":"abc","status":"waiting","event":"push","html_url":"","created":"","updated":"","started":""});
+                    Json(json!({"total_count":2_000_000,"workflow_runs":vec![run; 50]}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = Forgejo::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let session = forgejo.authenticate("token good").await.unwrap();
+    let comments = session.comments("e2e", "oracle", 1).await.unwrap();
+    assert_eq!(comments.len(), 60);
+    assert_eq!(comment_hits.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        session.statuses("e2e", "oracle", "abc").await,
+        Err(Error::Upstream)
+    ));
+    assert_eq!(status_hits.load(Ordering::SeqCst), 200);
+    let full = session.statuses("e2e", "oracle", "full").await.unwrap();
+    assert_eq!(full.len(), 200 * 50);
+    assert_eq!(session.reviews("e2e", "oracle", 1).await.unwrap().len(), 1);
+    // Only the upstream page holding the requested window is read, however deep it is.
+    let runs = session
+        .action_runs("e2e", "oracle", &[], 1_000_010, 30)
+        .await
+        .unwrap();
+    assert_eq!(runs.workflow_runs.len(), 30);
+    assert_eq!(*run_pages.lock().unwrap(), ["20001"]);
     server.abort();
 }

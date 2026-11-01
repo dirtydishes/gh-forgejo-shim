@@ -123,10 +123,9 @@ impl Check {
 
 pub fn required(context: &str, protection: Option<&Protection>) -> bool {
     protection.is_some_and(|p| {
-        p.enable_status_check
-            && p.status_check_contexts
-                .iter()
-                .any(|pattern| glob::Pattern::new(pattern).is_ok_and(|p| p.matches(context)))
+        p.required_contexts()
+            .iter()
+            .any(|glob| glob.is_match(context))
     })
 }
 

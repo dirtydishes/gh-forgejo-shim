@@ -193,16 +193,13 @@ pub fn merge_state(
         return MergeStateStatus::Behind;
     }
     let missing_checks = protection.is_some_and(|p| {
-        p.enable_status_check
-            && p.status_check_contexts.iter().any(|pattern| {
-                let matching: Vec<_> = checks
-                    .iter()
-                    .filter(|c| {
-                        glob::Pattern::new(pattern).is_ok_and(|p| p.matches(&c.source().context))
-                    })
-                    .collect();
-                matching.is_empty() || matching.iter().any(|c| c.state() != StatusState::Success)
-            })
+        p.required_contexts().iter().any(|glob| {
+            let mut matching = checks
+                .iter()
+                .filter(|c| glob.is_match(&c.source().context))
+                .peekable();
+            matching.peek().is_none() || matching.any(|c| c.state() != StatusState::Success)
+        })
     });
     if matches!(
         decision,

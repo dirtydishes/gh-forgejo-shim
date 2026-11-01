@@ -202,7 +202,7 @@ pub async fn run(
 ) -> Response {
     let result = async {
         let value = session
-            .read_json(
+            .get::<serde_json::Value>(
                 &["repos", &owner, &repo, "actions", "runs", &id.to_string()],
                 &[],
             )

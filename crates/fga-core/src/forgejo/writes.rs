@@ -1,5 +1,4 @@
 use super::*;
-use reqwest::Method;
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -143,60 +142,27 @@ pub struct MergePull {
     pub delete_branch_after_merge: bool,
 }
 
+/// Forgejo's 400, 409 and 422 on a write mean it refused the input.
+fn written(reply: Reply) -> Result<Reply, WriteError> {
+    match reply.status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY | StatusCode::CONFLICT => {
+            Err(WriteError::Validation)
+        }
+        _ => Ok(ok(reply)?),
+    }
+}
+
 impl Session {
-    /// Writes share the incoming request's deadline and credentials, but never its GET memo.
-    async fn write(
+    /// Send a write and drop memoized reads, so later reads in this request see its effect.
+    async fn write<B: Serialize + ?Sized>(
         &self,
         method: Method,
         segments: &[&str],
-        body: &impl Serialize,
-        merge: bool,
-    ) -> Result<reqwest::Response, WriteError> {
-        tokio::time::timeout_at(self.deadline, async {
-            let mut url = self.forgejo.base.clone();
-            url.path_segments_mut()
-                .map_err(|_| Error::Upstream)?
-                .pop_if_empty()
-                .extend(["api", "v1"])
-                .extend(segments);
-            let response = self
-                .forgejo
-                .client
-                .request(method, url)
-                .header(AUTHORIZATION, &self.authorization)
-                .json(body)
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        Error::Timeout
-                    } else {
-                        Error::Upstream
-                    }
-                })?;
-            match response.status() {
-                StatusCode::UNAUTHORIZED => Err(Error::Unauthorized.into()),
-                StatusCode::FORBIDDEN => Err(Error::Forbidden.into()),
-                StatusCode::NOT_FOUND => Err(Error::NotFound.into()),
-                status @ (StatusCode::CONFLICT | StatusCode::METHOD_NOT_ALLOWED) if merge => {
-                    let value: serde_json::Value =
-                        response.json().await.map_err(|_| Error::Upstream)?;
-                    Err(merge_error(status, &value))
-                }
-                StatusCode::BAD_REQUEST
-                | StatusCode::UNPROCESSABLE_ENTITY
-                | StatusCode::CONFLICT => Err(WriteError::Validation),
-                status if !status.is_success() => Err(Error::Upstream.into()),
-                _ => Ok(response),
-            }
-        })
-        .await
-        .map_err(|_| Error::Timeout)?
-    }
-
-    fn invalidate_reads(&self) {
-        self.memo.lock().expect("request memo lock").clear();
-        self.pulls.lock().expect("PR memo lock").clear();
+        body: Option<&B>,
+    ) -> Result<Reply, Error> {
+        let reply = self.send(method, segments, &[], body).await?;
+        self.forget_reads();
+        Ok(reply)
     }
 
     pub async fn create_pull(
@@ -206,16 +172,9 @@ impl Session {
         input: CreatePull<'_>,
     ) -> Result<PullRequest, WriteError> {
         let response = self
-            .write(
-                Method::POST,
-                &["repos", owner, repo, "pulls"],
-                &input,
-                false,
-            )
+            .write(Method::POST, &["repos", owner, repo, "pulls"], Some(&input))
             .await?;
-        let pull = response.json().await.map_err(|_| Error::Upstream)?;
-        self.invalidate_reads();
-        Ok(pull)
+        Ok(written(response)?.json()?)
     }
 
     pub async fn edit_pull(
@@ -225,17 +184,9 @@ impl Session {
         number: i32,
         input: EditPull,
     ) -> Result<PullRequest, WriteError> {
-        let response = self
-            .write(
-                Method::PATCH,
-                &["repos", owner, repo, "pulls", &number.to_string()],
-                &input,
-                false,
-            )
-            .await?;
-        let pull = response.json().await.map_err(|_| Error::Upstream)?;
-        self.invalidate_reads();
-        Ok(pull)
+        let segments = ["repos", owner, repo, "pulls", &number.to_string()];
+        let response = self.write(Method::PATCH, &segments, Some(&input)).await?;
+        Ok(written(response)?.json()?)
     }
 
     pub async fn add_pull_comment(
@@ -245,24 +196,17 @@ impl Session {
         number: i32,
         body: &str,
     ) -> Result<Comment, WriteError> {
-        let response = self
-            .write(
-                Method::POST,
-                &[
-                    "repos",
-                    owner,
-                    repo,
-                    "issues",
-                    &number.to_string(),
-                    "comments",
-                ],
-                &serde_json::json!({"body":body}),
-                false,
-            )
-            .await?;
-        let comment = response.json().await.map_err(|_| Error::Upstream)?;
-        self.invalidate_reads();
-        Ok(comment)
+        let segments = [
+            "repos",
+            owner,
+            repo,
+            "issues",
+            &number.to_string(),
+            "comments",
+        ];
+        let body = serde_json::json!({ "body": body });
+        let response = self.write(Method::POST, &segments, Some(&body)).await?;
+        Ok(written(response)?.json()?)
     }
 
     pub async fn merge_pull(
@@ -272,14 +216,30 @@ impl Session {
         number: i32,
         input: MergePull,
     ) -> Result<PullRequest, WriteError> {
-        self.write(
-            Method::POST,
-            &["repos", owner, repo, "pulls", &number.to_string(), "merge"],
-            &input,
-            true,
-        )
-        .await?;
-        self.invalidate_reads();
+        let segments = ["repos", owner, repo, "pulls", &number.to_string(), "merge"];
+        // Forgejo sends "Please try again later" both while it is still checking a PR and when the
+        // PR conflicts (`services/pull/check.go:97`), and a PR pushed moments ago is usually still
+        // being checked. A refused merge changes nothing, so retry before reporting a conflict.
+        let mut retries = 3;
+        let response = loop {
+            let response = self.write(Method::POST, &segments, Some(&input)).await?;
+            let checking = response.status == StatusCode::METHOD_NOT_ALLOWED
+                && response
+                    .json::<serde_json::Value>()
+                    .is_ok_and(|value| value["message"] == "Please try again later");
+            if !checking || retries == 0 {
+                break response;
+            }
+            retries -= 1;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        if matches!(
+            response.status,
+            StatusCode::CONFLICT | StatusCode::METHOD_NOT_ALLOWED
+        ) {
+            return Err(merge_error(response.status, &response.json()?));
+        }
+        written(response)?;
         Ok(self.pull_request(owner, repo, number).await?)
     }
 
@@ -291,19 +251,11 @@ impl Session {
     ) -> Result<PullRequest, WriteError> {
         // A missing PR must still fail. Forgejo returns the same 404 for "not scheduled".
         self.pull_request(owner, repo, number).await?;
-        match self
-            .write(
-                Method::DELETE,
-                &["repos", owner, repo, "pulls", &number.to_string(), "merge"],
-                &(),
-                false,
-            )
-            .await
-        {
+        let segments = ["repos", owner, repo, "pulls", &number.to_string(), "merge"];
+        match written(self.write::<()>(Method::DELETE, &segments, None).await?) {
             Ok(_) | Err(WriteError::Transport(Error::NotFound)) => {}
             Err(error) => return Err(error),
         }
-        self.invalidate_reads();
         Ok(self.pull_request(owner, repo, number).await?)
     }
 }

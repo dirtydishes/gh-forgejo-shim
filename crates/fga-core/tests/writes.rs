@@ -1,5 +1,5 @@
 use async_graphql::Request;
-use axum::{Json, Router, extract::Query, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
 use fga_core::{forgejo::Forgejo, graphql, ids::node_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -265,6 +265,34 @@ async fn merge_errors_keep_the_github_type_message_and_mutation_path() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Forgejo refuses a merge with "Please try again later" while it is still checking a new PR.
+#[tokio::test]
+async fn merge_retries_while_forgejo_is_still_checking() {
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let app = router().route(
+        "/api/v1/repos/o/r/pulls/1/merge",
+        axum::routing::post({
+            let attempts = attempts.clone();
+            move || async move {
+                match attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 | 1 => (
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        Json(api_error("Please try again later")),
+                    ),
+                    _ => (StatusCode::OK, Json(Value::Null)),
+                }
+            }
+        }),
+    );
+    let query = format!(
+        r#"mutation {{mergePullRequest(input:{{pullRequestId:"{}", mergeMethod:SQUASH}}){{pullRequest{{number}}}}}}"#,
+        node_id("PullRequest", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
 #[tokio::test]
 async fn disable_is_idempotent_but_missing_prs_still_fail() {
     let app = router().route(
@@ -289,20 +317,35 @@ async fn disable_is_idempotent_but_missing_prs_still_fail() {
 }
 
 #[tokio::test]
-async fn timeline_reads_every_page_and_uses_latest_event_even_in_the_same_second() {
-    for (last_kind, scheduled) in [
-        ("pull_cancel_scheduled_merge", false),
-        ("pull_scheduled_merge", true),
+async fn timeline_is_read_whole_and_uses_latest_event_even_in_the_same_second() {
+    let event =
+        |id, kind| json!({"id":id,"type":kind,"created_at":"2026-11-01T00:00:00Z","user":user()});
+    // Forgejo filters the timeline after paging it, so it must be read in one request; it
+    // returns `null` for an empty timeline.
+    for (events, scheduled) in [
+        (
+            json!([
+                event(1, "pull_scheduled_merge"),
+                event(3, "pull_cancel_scheduled_merge"),
+                event(2, "pull_scheduled_merge")
+            ]),
+            false,
+        ),
+        (
+            json!([
+                event(1, "pull_cancel_scheduled_merge"),
+                event(3, "pull_scheduled_merge"),
+                event(2, "pull_cancel_scheduled_merge")
+            ]),
+            true,
+        ),
+        (Value::Null, false),
     ] {
         let app = router()
             .route("/api/v1/repos/o/r", get(|| async { Json(json!({"id":1,"name":"r","full_name":"o/r","owner":{"id":1,"login":"o","avatar_url":""},"private":false,"html_url":"","default_branch":"main","fork":false,"archived":false,"default_merge_style":"squash"})) }))
             .route("/api/v1/repos/o/r/issues/1/timeline", get(move |Query(query): Query<HashMap<String,String>>| async move {
-                let event = |id, kind| json!({"id":id,"type":kind,"created_at":"2026-11-01T00:00:00Z","user":user()});
-                match query["page"].as_str() {
-                    "1" => ([("link", "<http://untrusted.invalid>; rel=\"next\"")], Json(json!([event(1,"pull_scheduled_merge")]))).into_response(),
-                    "2" => Json(json!([event(3,last_kind), event(2,"pull_scheduled_merge")])).into_response(),
-                    _ => panic!("unexpected page"),
-                }
+                assert!(!query.contains_key("page"), "timeline must not be paged");
+                Json(events)
             }));
         let response = execute(app, "{repository(owner:\"o\",name:\"r\"){pullRequest(number:1){autoMergeRequest{enabledAt enabledBy{login} mergeMethod commitHeadline commitBody authorEmail}}}}".into()).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
