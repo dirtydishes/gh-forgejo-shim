@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use fga_core::forgejo::{CommitStatus, Protection};
 use serde_json::{json, Value};
 
 use crate::config::{self, EnvMap};
@@ -14,13 +15,13 @@ use crate::forgejo::{
     RepoRef as ForgejoRepoRef,
 };
 use crate::normalize::{
-    filter_check_fields, filter_fields, filter_issue_fields, filter_repo_fields, normalize_issue,
-    normalize_pr_checks_for_repo, normalize_pull, normalize_repo, render_json_or_jq,
-    render_json_or_jq_list, status_for_current_branch, with_status_check_rollup_for_repo,
+    filter_fields, filter_issue_fields, filter_repo_fields, normalize_issue, normalize_pull,
+    normalize_repo, render_json_or_jq, render_json_or_jq_list, status_for_current_branch,
+    with_status_check_rollup_for_repo,
 };
 use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
 use crate::routing::RouteDecision;
-use crate::{auth, create};
+use crate::{auth, checks, create};
 use crate::{Result, ShimError};
 
 trait ForgejoApi {
@@ -39,6 +40,16 @@ trait ForgejoApi {
     ) -> ForgejoResult<Vec<Value>>;
     fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value>;
     fn list_commit_statuses(&self, repo: &ForgejoRepoRef, sha: &str) -> ForgejoResult<Vec<Value>>;
+    fn list_check_statuses(
+        &self,
+        repo: &ForgejoRepoRef,
+        sha: &str,
+    ) -> ForgejoResult<Vec<CommitStatus>>;
+    fn get_branch_protection(
+        &self,
+        repo: &ForgejoRepoRef,
+        branch: &str,
+    ) -> ForgejoResult<Option<Protection>>;
     fn get_pull_diff(
         &self,
         repo: &ForgejoRepoRef,
@@ -105,6 +116,22 @@ impl ForgejoApi for ForgejoClient {
 
     fn list_commit_statuses(&self, repo: &ForgejoRepoRef, sha: &str) -> ForgejoResult<Vec<Value>> {
         ForgejoClient::list_commit_statuses(self, repo, sha)
+    }
+
+    fn list_check_statuses(
+        &self,
+        repo: &ForgejoRepoRef,
+        sha: &str,
+    ) -> ForgejoResult<Vec<CommitStatus>> {
+        ForgejoClient::list_check_statuses(self, repo, sha)
+    }
+
+    fn get_branch_protection(
+        &self,
+        repo: &ForgejoRepoRef,
+        branch: &str,
+    ) -> ForgejoResult<Option<Protection>> {
+        ForgejoClient::get_branch_protection(self, repo, branch)
     }
 
     fn get_pull_diff(
@@ -202,10 +229,11 @@ struct RepoViewArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ChecksArgs {
-    json_fields: Vec<String>,
+    output: OutputArgs,
     repo: Option<String>,
-    jq: Option<String>,
     number: Option<u64>,
+    branch: Option<String>,
+    required: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -865,36 +893,56 @@ fn run_checks(
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
-    let pull = resolve_pull(&target_repo, client, parsed.number, None, cwd)?;
-    let statuses = pull
-        .as_ref()
-        .map(|pull| pull_statuses(&target_repo, client, pull))
-        .transpose()?
+    let pull = resolve_pull(
+        &target_repo,
+        client,
+        parsed.number,
+        parsed.branch.as_deref(),
+        cwd,
+    )?
+    .ok_or_else(|| ShimError::new("could not find pull request"))?;
+    let Some(sha) = pull_head_sha(&pull) else {
+        writeln!(stderr, "no commit found on the pull request")?;
+        return Ok(1);
+    };
+    let statuses = client.list_check_statuses(&target_repo, &sha)?;
+    let head = pull
+        .pointer("/head/ref")
+        .and_then(Value::as_str)
         .unwrap_or_default();
-    let checks = normalize_pr_checks_for_repo(&statuses, &target_repo)
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|check| filter_check_fields(check, &parsed.json_fields))
-        .collect::<Vec<_>>();
-
-    if parsed.json_fields.is_empty() {
-        if checks.is_empty() {
-            writeln!(stdout, "no checks reported")?;
-        }
-        for check in checks {
-            writeln!(stdout, "{}", format_check_item(&check))?;
-        }
-    } else {
-        let output = OutputArgs {
-            json_fields: parsed.json_fields,
-            jq: parsed.jq,
-            template: None,
-        };
-        print_json_list(&checks, &output, stdout)?;
+    if statuses.is_empty() {
+        writeln!(stderr, "no checks reported on the '{head}' branch")?;
+        return Ok(1);
     }
-    Ok(0)
+    let protection = if parsed.required {
+        let base = pull
+            .pointer("/base/ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ShimError::new("could not determine pull request base branch"))?;
+        client.get_branch_protection(&target_repo, base)?
+    } else {
+        None
+    };
+    let rows = checks::aggregate(
+        &statuses,
+        &target_repo,
+        parsed.required,
+        protection.as_ref(),
+    )?;
+    if rows.is_empty() && parsed.required {
+        writeln!(stderr, "no required checks reported on the '{head}' branch")?;
+        return Ok(1);
+    }
+    if parsed.output.json_fields.is_empty() {
+        checks::print(rows, stdout)
+    } else {
+        let values = rows
+            .iter()
+            .map(|row| row.export(&parsed.output.json_fields))
+            .collect::<Result<Vec<_>>>()?;
+        print_json_list(&values, &parsed.output, stdout)?;
+        Ok(0)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1565,10 +1613,10 @@ fn parse_checks_args(argv: &[String]) -> Result<ChecksArgs> {
     while index < argv.len() {
         let arg = argv[index].as_str();
         if arg == "--json" {
-            parsed.json_fields = split_fields(required_value(argv, index, arg)?);
+            parsed.output.json_fields = split_fields(required_value(argv, index, arg)?);
             index += 2;
         } else if let Some(value) = flag_value(arg, "--json") {
-            parsed.json_fields = split_fields(value);
+            parsed.output.json_fields = split_fields(value);
             index += 1;
         } else if matches!(arg, "-R" | "--repo") {
             parsed.repo = Some(required_value(argv, index, arg)?.to_string());
@@ -1577,28 +1625,28 @@ fn parse_checks_args(argv: &[String]) -> Result<ChecksArgs> {
             parsed.repo = Some(value.to_string());
             index += 1;
         } else if matches!(arg, "--jq" | "-q") {
-            parsed.jq = Some(required_value(argv, index, arg)?.to_string());
+            parsed.output.jq = Some(required_value(argv, index, arg)?.to_string());
             index += 2;
         } else if let Some(value) = flag_value_any(arg, &["--jq", "-q"]) {
-            parsed.jq = Some(value.to_string());
+            parsed.output.jq = Some(value.to_string());
             index += 1;
-        } else if matches!(arg, "--template" | "-t" | "--interval" | "-i") {
-            index = skip_value(argv, index, arg)?;
-        } else if has_value_prefix(arg, &["--template", "-t", "--interval", "-i"])
-            || matches!(
-                arg,
-                "--web" | "-w" | "--watch" | "--fail-fast" | "--required"
-            )
-        {
+        } else if matches!(arg, "--template" | "-t") {
+            parsed.output.template = Some(required_value(argv, index, arg)?.to_string());
+            index += 2;
+        } else if let Some(value) = flag_value_any(arg, &["--template", "-t"]) {
+            parsed.output.template = Some(value.to_string());
+            index += 1;
+        } else if arg == "--required" {
+            parsed.required = true;
+            index += 1;
+        } else if matches!(arg, "--web" | "-w") {
             index += 1;
         } else if arg.starts_with('-') {
             return Err(ShimError::new(format!(
                 "unsupported Forgejo PR checks flag: {arg}"
             )));
         } else {
-            if let (Some(number), _) = parse_number_or_branch(arg, "pull") {
-                parsed.number = Some(number);
-            }
+            (parsed.number, parsed.branch) = parse_number_or_branch(arg, "pull");
             index += 1;
         }
     }
@@ -2272,17 +2320,6 @@ fn format_issue_list_item(data: &Value) -> String {
     .to_string()
 }
 
-fn format_check_item(data: &Value) -> String {
-    format!(
-        "{}\t{}\t{}",
-        truthy_text(data.get("bucket")).unwrap_or_else(|| "pending".to_string()),
-        truthy_text(data.get("name")).unwrap_or_else(|| "status".to_string()),
-        truthy_text(data.get("description")).unwrap_or_default(),
-    )
-    .trim_end()
-    .to_string()
-}
-
 fn python_text(value: Option<&Value>) -> String {
     match value {
         Some(Value::Null) | None => "None".to_string(),
@@ -2539,6 +2576,9 @@ mod tests {
         issues: Vec<Value>,
         labels: Vec<Value>,
         statuses: Vec<Value>,
+        check_statuses: Vec<CommitStatus>,
+        protection: Option<Protection>,
+        protection_branches: RefCell<Vec<String>>,
         files: Vec<Value>,
         repo: Value,
         user: Value,
@@ -2555,6 +2595,9 @@ mod tests {
                 issues: Vec::new(),
                 labels: Vec::new(),
                 statuses: Vec::new(),
+                check_statuses: Vec::new(),
+                protection: None,
+                protection_branches: RefCell::new(Vec::new()),
                 files: vec![
                     json!({"filename": "README.md"}),
                     json!({"filename": "generated/output.txt"}),
@@ -2656,6 +2699,26 @@ mod tests {
             _sha: &str,
         ) -> ForgejoResult<Vec<Value>> {
             Ok(self.statuses.clone())
+        }
+
+        fn list_check_statuses(
+            &self,
+            _repo: &ForgejoRepoRef,
+            sha: &str,
+        ) -> ForgejoResult<Vec<CommitStatus>> {
+            assert_eq!(sha, "abc123");
+            Ok(self.check_statuses.clone())
+        }
+
+        fn get_branch_protection(
+            &self,
+            _repo: &ForgejoRepoRef,
+            branch: &str,
+        ) -> ForgejoResult<Option<Protection>> {
+            self.protection_branches
+                .borrow_mut()
+                .push(branch.to_string());
+            Ok(self.protection.clone())
         }
 
         fn get_pull_diff(
@@ -3175,15 +3238,142 @@ mod tests {
     }
 
     #[test]
+    fn pr_checks_pending_exit_is_eight_but_json_exits_zero() {
+        // gh v2.103.3 checks.go:73-74,189-190,248-252. PR #3's real
+        // checks have finished, so an oracle case cannot exercise pending.
+        let mut client = checks_api();
+        let pending = check_status("pending");
+        client.check_statuses = vec![pending];
+        let (code, stdout, stderr) = run_fake(&["pr", "checks", "8"], &client, Some("token"), None);
+        assert_eq!(code, 8, "{stderr}");
+        assert_eq!(
+            stdout,
+            "test\tpending\t0\thttps://git.example.com/owner/repo/actions/runs/1/jobs/1\t\n"
+        );
+        assert_eq!(stderr, "");
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checks", "8", "--json", "bucket,name"],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).expect("json"),
+            json!([{"bucket":"pending","name":"test"}])
+        );
+
+        client.check_statuses.push(CommitStatus {
+            context: "external".into(),
+            ..check_status("failure")
+        });
+        let (code, _, stderr) = run_fake(&["pr", "checks", "8"], &client, Some("token"), None);
+        assert_eq!(code, 1, "failure wins over pending: {stderr}");
+        let (code, _, stderr) = run_fake(
+            &["pr", "checks", "8", "--json", "bucket"],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "failure JSON also exits zero: {stderr}");
+    }
+
+    #[test]
+    fn pr_checks_required_uses_base_branch_protection_and_core_globs() {
+        let mut client = checks_api();
+        client.check_statuses = vec![
+            check_status("success"),
+            CommitStatus {
+                context: "external".into(),
+                ..check_status("failure")
+            },
+        ];
+        client.protection = Some(Protection {
+            enable_status_check: true,
+            status_check_contexts: vec!["ci / * (pull_request)".into()],
+            ..Protection::default()
+        });
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checks", "8", "--required", "--json", "name,bucket"],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).expect("json"),
+            json!([{"bucket":"pass","name":"test"}])
+        );
+        assert_eq!(*client.protection_branches.borrow(), ["main"]);
+
+        client
+            .protection
+            .as_mut()
+            .expect("protection")
+            .enable_status_check = false;
+        for args in [
+            vec!["pr", "checks", "8", "--required"],
+            vec!["pr", "checks", "8", "--required", "--json", "name"],
+        ] {
+            let (code, stdout, stderr) = run_fake(&args, &client, Some("token"), None);
+            assert_eq!(code, 1);
+            assert_eq!(stdout, "");
+            assert_eq!(
+                stderr,
+                "no required checks reported on the 'feature' branch\n"
+            );
+        }
+    }
+
+    #[test]
+    fn pr_checks_without_statuses_names_the_branch_even_in_json_mode() {
+        let client = checks_api();
+        for args in [
+            vec!["pr", "checks", "8"],
+            vec!["pr", "checks", "8", "--json", "name"],
+            vec!["pr", "checks", "8", "--required"],
+        ] {
+            let (code, stdout, stderr) = run_fake(&args, &client, Some("token"), None);
+            assert_eq!(code, 1);
+            assert_eq!(stdout, "");
+            assert_eq!(stderr, "no checks reported on the 'feature' branch\n");
+        }
+        assert!(client.protection_branches.borrow().is_empty());
+    }
+
+    fn checks_api() -> FakeApi {
+        FakeApi {
+            pulls: vec![
+                json!({"number":8,"head":{"ref":"feature","sha":"abc123"},"base":{"ref":"main"}}),
+            ],
+            ..FakeApi::default()
+        }
+    }
+
+    fn check_status(state: &str) -> CommitStatus {
+        serde_json::from_value(json!({
+            "id": 1, "context": "ci / test (pull_request)", "status": state,
+            "target_url": "/owner/repo/actions/runs/1/jobs/1", "description":"Has started running",
+            "created_at":"2026-06-01T00:00:00Z", "updated_at":"2026-06-01T00:01:00Z"
+        }))
+        .expect("valid status")
+    }
+
+    #[test]
     fn pr_checks_and_diff_use_statuses_and_files() {
         let client = FakeApi {
             pulls: vec![json!({"number": 8, "head": {"ref": "feature", "sha": "abc123"}})],
-            statuses: vec![json!({
+            check_statuses: vec![serde_json::from_value(json!({
+                "id": 1,
                 "context": "ci/test",
                 "description": "tests passed",
-                "state": "success",
+                "status": "success",
                 "target_url": "https://git.example.com/owner/repo/actions/runs/1",
-            })],
+                "created_at": "2026-06-01T00:00:00Z",
+                "updated_at": "2026-06-01T00:00:02Z",
+            }))
+            .expect("valid status")],
             ..FakeApi::default()
         };
 
@@ -3208,7 +3398,7 @@ mod tests {
                 "description": "tests passed",
                 "link": "https://git.example.com/owner/repo/actions/runs/1",
                 "name": "ci/test",
-                "workflow": "ci/test",
+                "workflow": "",
             }]))
         );
 

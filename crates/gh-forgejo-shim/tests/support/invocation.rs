@@ -10,6 +10,26 @@ fn forgejo_errors_and_unsupported_commands_never_delegate_or_need_auth() -> Test
     let marker = fixture.root().join("delegated");
     let decoy = fixture.write_executable("gh", "#!/bin/sh\n: > \"$DECOY_MARKER\"\nexit 97\n")?;
     let cases = [
+        (
+            vec!["pr", "checks", "1", "--watch"],
+            "\"gh pr checks\" is not supported",
+        ),
+        (
+            vec!["pr", "checks", "1", "--watch=false"],
+            "\"gh pr checks\" is not supported",
+        ),
+        (
+            vec!["pr", "checks", "1", "--fail-fast"],
+            "\"gh pr checks\" is not supported",
+        ),
+        (
+            vec!["pr", "checks", "1", "--interval", "2"],
+            "\"gh pr checks\" is not supported",
+        ),
+        (
+            vec!["pr", "checks", "1", "-i2"],
+            "\"gh pr checks\" is not supported",
+        ),
         (vec!["pr", "merge", "1"], "\"gh pr merge\" is not supported"),
         (
             vec!["pr", "edit", "1", "--title", "x"],

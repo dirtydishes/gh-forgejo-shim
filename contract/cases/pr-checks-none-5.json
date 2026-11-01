@@ -12,7 +12,5 @@
     "exit": 1,
     "stdout": "",
     "stderr": "no checks reported on the 's/nochecks' branch\n"
-  },
-  "xfail": "No checks exit 0 and print a generic message on stdout; gh exits 1 and names the branch on stderr.",
-  "xfail_diff": "exit 1 -> 0; stderr no checks reported on the 's/nochecks' branch -> stdout no checks reported."
+  }
 }

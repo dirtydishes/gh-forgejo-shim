@@ -1,9 +1,11 @@
 use std::fmt;
 use std::time::Duration;
 
+use fga_core::forgejo::{CommitStatus, Protection};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Method;
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::ShimError;
@@ -342,6 +344,51 @@ impl ForgejoClient {
                 .collect());
         }
         Ok(list_of_objects(statuses))
+    }
+
+    /// Check mapping needs the full history, including contexts beyond page one.
+    pub fn list_check_statuses(
+        &self,
+        repo: &RepoRef,
+        sha: &str,
+    ) -> ForgejoResult<Vec<CommitStatus>> {
+        self.get_pages(format!(
+            "{}/commits/{}/statuses",
+            self.repo_api_base_url(repo),
+            quote_path_segment(sha)
+        ))
+    }
+
+    pub fn get_branch_protection(
+        &self,
+        repo: &RepoRef,
+        branch: &str,
+    ) -> ForgejoResult<Option<Protection>> {
+        let rules: Vec<Protection> = self.get_pages(format!(
+            "{}/branch_protections",
+            self.repo_api_base_url(repo)
+        ))?;
+        // Match the gateway Session::protection rule selection, including globs.
+        Ok(rules.into_iter().find(|rule| {
+            glob::Pattern::new(&rule.rule_name).is_ok_and(|pattern| pattern.matches(branch))
+        }))
+    }
+
+    fn get_pages<T: DeserializeOwned>(&self, url: String) -> ForgejoResult<Vec<T>> {
+        let mut items = Vec::new();
+        for page in 1.. {
+            let value =
+                self.request_json(Method::GET, format!("{url}?page={page}&limit=50"), None)?;
+            let batch: Vec<T> = serde_json::from_value(value)
+                .map_err(|error| ForgejoError::new(format!("invalid Forgejo response: {error}")))?;
+            // A server may cap the requested limit below 50. Only an empty page
+            // proves that all history was read; a short page does not.
+            if batch.is_empty() {
+                break;
+            }
+            items.extend(batch);
+        }
+        Ok(items)
     }
 
     pub fn get_repo(&self, repo: &RepoRef) -> ForgejoResult<Value> {
@@ -972,6 +1019,76 @@ mod tests {
             requests[0].request_line,
             "GET /api/v1/repos/owner/repo/pulls?state=open HTTP/1.1"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn check_status_history_reads_past_short_pages_and_uses_status_field() -> TestResult {
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(
+                r#"[{"id":2,"context":"ci","status":"success","target_url":"","description":null,"created_at":"2026-06-01T00:00:00Z","updated_at":"2026-06-01T00:00:01Z"}]"#,
+            ),
+            FakeResponse::json(
+                r#"[{"id":1,"context":"other","status":"pending","target_url":"","description":null,"created_at":"2026-06-01T00:00:00Z","updated_at":"2026-06-01T00:00:00Z"}]"#,
+            ),
+            FakeResponse::json("[]"),
+        ])?;
+        let client = ForgejoClient::new(None).with_scheme("http");
+        let repo = RepoRef::new(host, "owner", "repo");
+        let statuses = client.list_check_statuses(&repo, "abc/123")?;
+        let requests = finish_fake_server(handle)?;
+        assert_eq!(statuses.iter().map(|s| s.id).collect::<Vec<_>>(), [2, 1]);
+        assert!(matches!(
+            statuses[1].state,
+            fga_core::forgejo::CommitStatusState::Pending
+        ));
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(request.request_line, format!("GET /api/v1/repos/owner/repo/commits/abc%2F123/statuses?page={}&limit=50 HTTP/1.1", index + 1));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn check_statuses_reject_invalid_dtos_instead_of_reporting_no_checks() -> TestResult {
+        let (host, handle) = start_fake_server(vec![FakeResponse::json(
+            r#"[{"context":"ci","state":"success"}]"#,
+        )])?;
+        let client = ForgejoClient::new(None).with_scheme("http");
+        let repo = RepoRef::new(host, "owner", "repo");
+        let error = client
+            .list_check_statuses(&repo, "abc")
+            .expect_err("invalid DTO");
+        finish_fake_server(handle)?;
+        assert!(error.message().contains("invalid Forgejo response"));
+        Ok(())
+    }
+
+    #[test]
+    fn branch_protection_paginates_and_selects_the_matching_glob() -> TestResult {
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(r#"[{"rule_name":"other","enable_status_check":true}]"#),
+            FakeResponse::json(
+                r#"[{"rule_name":"release/*","enable_status_check":true,"status_check_contexts":["ci/*"]}]"#,
+            ),
+            FakeResponse::json("[]"),
+        ])?;
+        let client = ForgejoClient::new(None).with_scheme("http");
+        let repo = RepoRef::new(host, "owner", "repo");
+        let protection = client
+            .get_branch_protection(&repo, "release/next")?
+            .expect("matched rule");
+        let requests = finish_fake_server(handle)?;
+        assert_eq!(protection.status_check_contexts, ["ci/*"]);
+        assert!(protection.enable_status_check);
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(
+                request.request_line,
+                format!(
+                    "GET /api/v1/repos/owner/repo/branch_protections?page={}&limit=50 HTTP/1.1",
+                    index + 1
+                )
+            );
+        }
         Ok(())
     }
 

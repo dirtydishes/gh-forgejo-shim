@@ -51,7 +51,7 @@ Normalizers run only when a case names them:
 | `host` | Exact `github.com` or `forge.test` host names with `<host>` |
 | `pr_urls` | Forgejo `/pulls/N` and GitHub `/pull/N` with `/pull/N`, preserving N |
 | `timestamps` | ISO timestamps with `<timestamp>` |
-| `durations` | gh elapsed durations such as `5s` and `1m4s` with `<duration>` |
+| `durations` | gh elapsed durations such as `5s` and `1m4s`, plus bare `0` in the checks elapsed column, with `<duration>` |
 | `shas` | 7-40 digit hexadecimal commit IDs with `<sha>` |
 | `node_ids` | JSON `id`, `node_id`, and `nodeId` string values with `<node-id>` |
 | `check_details_urls` | Check-run Actions job URLs and JSON `detailsUrl` values with `<check-url>` |

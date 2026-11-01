@@ -133,6 +133,14 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(normalize(value, ["check_details_urls"]), "<check-url>")
         self.assertEqual(normalize('{"detailsUrl":"https://forge.test/custom/123"}', ["check_details_urls"]), '{"detailsUrl":"<check-url>"}')
 
+    def test_zero_duration_only_normalizes_the_checks_elapsed_column(self):
+        for bucket in ("pass", "fail", "pending", "skipping"):
+            row = f"0\t{bucket}\t0\thttps://forge.test/0\tdescription 0\n"
+            self.assertEqual(normalize(row, ["durations"]),
+                             f"0\t{bucket}\t<duration>\thttps://forge.test/0\tdescription 0\n")
+        for text in ('{"number":0}\n', "0\n", "job\tunknown\t0\turl\t\n", "job\tpass\tbroken\turl\t\n"):
+            self.assertEqual(normalize(text, ["durations"]), text)
+
     def test_json_normalization_keeps_values_and_array_order(self):
         self.assertEqual(normalize('{ "b":2,"a":1 }\n', ["json"]), '{"a":1,"b":2}\n')
         self.assertNotEqual(normalize('[1,2]', ["json"]), normalize('[2,1]', ["json"]))
