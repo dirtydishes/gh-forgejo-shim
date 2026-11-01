@@ -133,6 +133,16 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
             }
             settings.api_url = Some(base.trim_end_matches('/').to_string());
         }
+        // A relative path would resolve against whatever repo the shim runs in.
+        if settings
+            .ca_file
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err(ShimError::new(format!(
+                "invalid ca_file for {host}: expected an absolute path"
+            )));
+        }
         hosts.push(host.clone());
         if host_settings.insert(host.clone(), settings).is_some() {
             return Err(ShimError::new(format!(
@@ -470,6 +480,11 @@ gh = "/bin/gh#real"
             .expect_err("duplicate host")
             .to_string()
             .contains("duplicate host settings"));
+        fs::write(&path, "[host.\"git.example.com\"]\nca_file = \"ca.pem\"\n")?;
+        assert!(load_config_with_env(Some(&path), &EnvMap::new())
+            .expect_err("relative ca_file")
+            .to_string()
+            .contains("expected an absolute path"));
         fs::remove_dir_all(root).ok();
         Ok(())
     }

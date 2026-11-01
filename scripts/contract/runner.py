@@ -51,11 +51,11 @@ def execute(case, binary, seed_home, work_dir):
         checkout = directory / "checkout"
         checkout.mkdir()
         # A fresh environment prevents host tokens, config, proxies, and Git overrides from leaking in.
-        # PATH has only git and the gh decoy, so macOS cannot consult the user's security/Keychain.
+        # PATH has only git and the gh decoy; FJ_SHIM_AUTH_STORE=file keeps the shim off the user's Keychain.
         env = {
             "HOME": str(home), "PATH": str(tools), "GH_HOST": "forge.test",
             "GH_PROMPT_DISABLED": "1", "GH_PAGER": "cat", "NO_COLOR": "1", "TERM": "dumb",
-            "LC_ALL": "C", "TZ": "UTC", "GFJS_TOKEN": os.environ["GFJS_TOKEN"],
+            "LC_ALL": "C", "TZ": "UTC", "GFJS_TOKEN": os.environ["GFJS_TOKEN"], "FJ_SHIM_AUTH_STORE": "file",
             "GFJS_DECOY_MARKER": str(marker), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
         } | case.get("env", {})
         for args in (("init", "-q", "-b", "s/pass"), ("remote", "add", "origin", f"https://forge.test/{REPO}.git")):
