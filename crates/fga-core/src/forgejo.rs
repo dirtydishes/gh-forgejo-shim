@@ -11,6 +11,7 @@ use tokio::sync::OnceCell;
 use url::Url;
 
 mod cache;
+mod glob;
 mod reads;
 mod types;
 mod writes;
@@ -49,8 +50,22 @@ impl From<reqwest::Error> for Error {
     }
 }
 
-/// One upstream response body plus whether Forgejo's `Link` header announced another page.
-type Page = (serde_json::Value, bool);
+/// A fully read upstream response, so a deadline around the request also covers its body.
+struct Reply {
+    status: StatusCode,
+    /// Whether Forgejo's `Link` header names a next page; `None` when it sent no links.
+    next: Option<bool>,
+    body: Vec<u8>,
+}
+
+impl Reply {
+    fn json<T: DeserializeOwned>(&self) -> Result<T, Error> {
+        serde_json::from_slice(&self.body).map_err(|_| Error::Upstream)
+    }
+}
+
+/// One upstream JSON body plus its [`Reply::next`].
+type Page = (serde_json::Value, Option<bool>);
 type Memo = Arc<Mutex<HashMap<String, Arc<OnceCell<Result<Page, Error>>>>>>;
 
 /// Credentials and memoized upstream data live only for the incoming request.
@@ -66,16 +81,16 @@ pub struct Session {
 /// Paged reads ask Forgejo for this many items per page.
 pub(crate) const PAGE_SIZE: usize = 50;
 /// A list longer than this many pages is treated as an upstream fault, not read forever.
-const MAX_PAGES: usize = 200;
+pub(crate) const MAX_PAGES: usize = 200;
 
 /// Map Forgejo's error statuses onto the gateway's errors; success passes through.
-fn ok(response: reqwest::Response) -> Result<reqwest::Response, Error> {
-    match response.status() {
+fn ok(reply: Reply) -> Result<Reply, Error> {
+    match reply.status {
         StatusCode::UNAUTHORIZED => Err(Error::Unauthorized),
         StatusCode::FORBIDDEN => Err(Error::Forbidden),
         StatusCode::NOT_FOUND => Err(Error::NotFound),
         status if !status.is_success() => Err(Error::Upstream),
-        _ => Ok(response),
+        _ => Ok(reply),
     }
 }
 
@@ -108,10 +123,10 @@ impl Forgejo {
         let viewer = match cached {
             Some(viewer) => viewer,
             None => {
-                let response = self
+                let viewer: User = ok(self
                     .send::<()>(Method::GET, &["user"], &[], None, authorization)
-                    .await?;
-                let viewer: User = ok(response)?.json().await?;
+                    .await?)?
+                .json()?;
                 self.sessions.lock().expect("session cache lock").insert(
                     key,
                     viewer.clone(),
@@ -129,8 +144,8 @@ impl Forgejo {
         })
     }
 
-    /// The one upstream request path: URL, credentials and transport errors. Callers map statuses
-    /// with [`ok`], or first claim the statuses whose bodies they interpret.
+    /// The one upstream request path: URL, credentials, transport errors and the whole body.
+    /// Callers map statuses with [`ok`], or first claim the statuses whose bodies they interpret.
     async fn send<B: serde::Serialize + ?Sized>(
         &self,
         method: Method,
@@ -138,7 +153,7 @@ impl Forgejo {
         query: &[(&str, String)],
         body: Option<&B>,
         authorization: &str,
-    ) -> Result<reqwest::Response, Error> {
+    ) -> Result<Reply, Error> {
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|_| Error::Upstream)?
@@ -153,7 +168,17 @@ impl Forgejo {
         if let Some(body) = body {
             request = request.json(body);
         }
-        Ok(request.send().await?)
+        let response = request.send().await?;
+        // Kept as a flag only: following an upstream-provided URL could send the token elsewhere.
+        let next = response.headers().get(reqwest::header::LINK).map(|h| {
+            h.to_str()
+                .is_ok_and(|h| h.split(',').any(|link| link.contains("rel=\"next\"")))
+        });
+        Ok(Reply {
+            status: response.status(),
+            next,
+            body: response.bytes().await?.to_vec(),
+        })
     }
 }
 
@@ -165,7 +190,7 @@ impl Session {
         segments: &[&str],
         query: &[(&str, String)],
         body: Option<&B>,
-    ) -> Result<reqwest::Response, Error> {
+    ) -> Result<Reply, Error> {
         tokio::time::timeout_at(
             self.deadline,
             self.forgejo
@@ -197,32 +222,20 @@ impl Session {
         self.memo.lock().expect("request memo lock").clear();
     }
 
-    /// Drop one memoized unqueried GET so the next [`Session::get`] refetches it.
-    fn forget(&self, segments: &[&str]) {
-        let key = serde_json::to_string(&(segments, &[] as &[(&str, String)]))
-            .expect("request key serializes");
-        self.memo.lock().expect("request memo lock").remove(&key);
+    /// One unmemoized GET.
+    async fn fetch(&self, segments: &[&str], query: &[(&str, String)]) -> Result<Page, Error> {
+        let reply = ok(self.send::<()>(Method::GET, segments, query, None).await?)?;
+        Ok((reply.json()?, reply.next))
     }
 
-    /// One memoized GET, with whether Forgejo announced a next page. Reads use only local page
-    /// numbers, never an upstream-provided URL, so credentials stay on this host.
+    /// One memoized GET, with whether Forgejo announced a next page.
     pub(crate) async fn page<T: DeserializeOwned>(
         &self,
         segments: &[&str],
         query: &[(&str, String)],
-    ) -> Result<(T, bool), Error> {
+    ) -> Result<(T, Option<bool>), Error> {
         let key = serde_json::to_string(&(segments, query)).expect("request key serializes");
-        let (body, next) = self
-            .memoize(key, || async {
-                let response = ok(self.send::<()>(Method::GET, segments, query, None).await?)?;
-                let next = response
-                    .headers()
-                    .get(reqwest::header::LINK)
-                    .and_then(|h| h.to_str().ok())
-                    .is_some_and(|h| h.split(',').any(|link| link.contains("rel=\"next\"")));
-                Ok((response.json().await?, next))
-            })
-            .await?;
+        let (body, next) = self.memoize(key, || self.fetch(segments, query)).await?;
         Ok((
             serde_json::from_value(body).map_err(|_| Error::Upstream)?,
             next,
@@ -252,7 +265,8 @@ impl Session {
             let (batch, next): (Vec<T>, _) = self.page(segments, &paged).await?;
             let count = batch.len();
             items.extend(batch);
-            if !next && count < PAGE_SIZE {
+            // Forgejo's links are authoritative; endpoints that send none end on a short page.
+            if !next.unwrap_or(count >= PAGE_SIZE) {
                 return Ok(items);
             }
         }
@@ -261,11 +275,8 @@ impl Session {
 
     /// An unmemoized read of a raw body, such as a diff.
     pub async fn text(&self, segments: &[&str], query: &[(&str, String)]) -> Result<String, Error> {
-        Ok(
-            ok(self.send::<()>(Method::GET, segments, query, None).await?)?
-                .text()
-                .await?,
-        )
+        let reply = ok(self.send::<()>(Method::GET, segments, query, None).await?)?;
+        Ok(String::from_utf8_lossy(&reply.body).into_owned())
     }
 
     pub async fn statuses(
@@ -284,7 +295,10 @@ impl Session {
         repo: &str,
         number: i32,
     ) -> Result<Vec<Review>, Error> {
-        self.pages(
+        // Forgejo pages reviews before hiding other users' pending ones and sends no links, so a
+        // short page proves nothing; without `page` it returns them all
+        // (`routers/api/v1/repo/pull_review.go:84-108`, `models/issues/review_list.go:126`).
+        self.get(
             &[
                 "repos",
                 owner,
@@ -359,30 +373,19 @@ impl Session {
         base: &str,
         head: &str,
     ) -> Result<bool, Error> {
+        // Forgejo 15's compare has no behind_by (`modules/structs/repo_compare.go`). Reverse the
+        // comparison to count base commits absent from the head.
         match self
             .get::<serde_json::Value>(
-                &["repos", owner, repo, "compare", &format!("{base}...{head}")],
+                &["repos", owner, repo, "compare", &format!("{head}...{base}")],
                 &[],
             )
             .await
         {
-            Ok(value) => {
-                if let Some(behind) = value["behind_by"].as_u64() {
-                    return Ok(behind > 0);
-                }
-                // Forgejo 15 omits behind_by. Reverse the comparison to count base
-                // commits absent from the head, using the same merge-base semantics.
-                let reverse: serde_json::Value = self
-                    .get(
-                        &["repos", owner, repo, "compare", &format!("{head}...{base}")],
-                        &[],
-                    )
-                    .await?;
-                reverse["total_commits"]
-                    .as_u64()
-                    .map(|n| n > 0)
-                    .ok_or(Error::Upstream)
-            }
+            Ok(reverse) => reverse["total_commits"]
+                .as_u64()
+                .map(|n| n > 0)
+                .ok_or(Error::Upstream),
             Err(Error::NotFound) => Ok(false),
             Err(e) => Err(e),
         }
@@ -411,7 +414,7 @@ impl Session {
         let key = format!("pull:{owner}/{name}/{number}");
         let (value, _) = self
             .memoize(key, || async {
-                let mut value: serde_json::Value = self.get(&segments, &[]).await?;
+                let (mut value, _) = self.fetch(&segments, &[]).await?;
                 let pr: PullRequest =
                     serde_json::from_value(value.clone()).map_err(|_| Error::Upstream)?;
                 // Forgejo 15's false also means checking or error. Retry once; a persistent
@@ -419,10 +422,9 @@ impl Session {
                 // report false and map to UNKNOWN anyway, so they skip the wait.
                 if pr.state == "open" && !pr.merged && !pr.mergeable && !pr.draft {
                     tokio::time::sleep(Duration::from_millis(300)).await;
-                    self.forget(&segments);
-                    value = self.get(&segments, &[]).await?;
+                    value = self.fetch(&segments, &[]).await?.0;
                 }
-                Ok((value, false))
+                Ok((value, None))
             })
             .await?;
         serde_json::from_value(value).map_err(|_| Error::Upstream)
@@ -458,5 +460,38 @@ impl Session {
                 .then_with(|| b.number.cmp(&a.number))
         });
         Ok(pulls)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// Headers arrive at once and the body only after the deadline: the read still times out.
+    #[tokio::test]
+    async fn the_session_deadline_covers_the_response_body() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _ = socket.read(&mut [0; 4096]).unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n")
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            let _ = socket.write_all(b"{}");
+        });
+        let session = Session {
+            forgejo: Forgejo::new(base.parse().unwrap()).unwrap(),
+            authorization: "token disposable".into(),
+            viewer: serde_json::from_value(serde_json::json!({"id":1,"login":"t","avatar_url":""}))
+                .unwrap(),
+            memo: Memo::default(),
+            deadline: tokio::time::Instant::now() + Duration::from_millis(50),
+        };
+        let result = session.get::<serde_json::Value>(&["slow"], &[]).await;
+        assert!(matches!(result, Err(Error::Timeout)), "{result:?}");
+        upstream.join().unwrap();
     }
 }

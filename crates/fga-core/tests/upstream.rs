@@ -405,6 +405,7 @@ async fn unpaged_endpoints_are_read_once_and_paging_is_bounded() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let comment_hits = std::sync::Arc::new(AtomicUsize::new(0));
     let status_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let run_pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let upstream = Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
         .route(
@@ -426,6 +427,37 @@ async fn unpaged_endpoints_are_read_once_and_paging_is_bounded() {
                     Json(Value::Array((1..=50).map(status).collect()))
                 }
             }),
+        )
+        // Forgejo's links mark the last page even when it is full.
+        .route(
+            "/api/v1/repos/e2e/oracle/commits/full/statuses",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                let page: i64 = query["page"].parse().unwrap();
+                let rel = if page < 200 { "next" } else { "prev" };
+                (
+                    [("link", format!("<http://untrusted.invalid>; rel=\"{rel}\""))],
+                    Json(Value::Array((1..=50).map(|i| status(page * 50 + i)).collect())),
+                )
+            }),
+        )
+        // Forgejo pages reviews before hiding others' pending ones, so they are read unpaged.
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/1/reviews",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert!(!query.contains_key("page"), "reviews must not be paged");
+                Json(json!([{"id":1,"user":user(),"body":"","state":"APPROVED","submitted_at":null,"commit_id":"abc"}]))
+            }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/actions/runs",
+            get({
+                let hits = run_pages.clone();
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    hits.lock().unwrap().push(query["page"].clone());
+                    let run = json!({"id":1,"workflow_id":"ci.yml","index_in_repo":1,"title":"x","prettyref":"main","commit_sha":"abc","status":"waiting","event":"push","html_url":"","created":"","updated":"","started":""});
+                    Json(json!({"total_count":2_000_000,"workflow_runs":vec![run; 50]}))
+                }
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let forgejo = Forgejo::new(
@@ -444,5 +476,15 @@ async fn unpaged_endpoints_are_read_once_and_paging_is_bounded() {
         Err(Error::Upstream)
     ));
     assert_eq!(status_hits.load(Ordering::SeqCst), 200);
+    let full = session.statuses("e2e", "oracle", "full").await.unwrap();
+    assert_eq!(full.len(), 200 * 50);
+    assert_eq!(session.reviews("e2e", "oracle", 1).await.unwrap().len(), 1);
+    // Only the upstream page holding the requested window is read, however deep it is.
+    let runs = session
+        .action_runs("e2e", "oracle", &[], 1_000_010, 30)
+        .await
+        .unwrap();
+    assert_eq!(runs.workflow_runs.len(), 30);
+    assert_eq!(*run_pages.lock().unwrap(), ["20001"]);
     server.abort();
 }

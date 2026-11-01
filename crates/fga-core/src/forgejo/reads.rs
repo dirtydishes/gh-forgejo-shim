@@ -9,8 +9,11 @@ impl Session {
         repo: &str,
         number: i32,
     ) -> Result<Option<TimelineEvent>, Error> {
-        let events: Vec<TimelineEvent> = self
-            .pages(
+        // Forgejo pages the timeline before dropping code comments and hidden references and sends
+        // no links, so a short page proves nothing; without `page` it returns every event, and
+        // `null` for none (`routers/api/v1/repo/issue_comment.go:199-233`).
+        let events: Option<Vec<TimelineEvent>> = self
+            .get(
                 &[
                     "repos",
                     owner,
@@ -24,6 +27,7 @@ impl Session {
             .await?;
         let latest = events
             .into_iter()
+            .flatten()
             .filter(|event| {
                 matches!(
                     event.kind.as_str(),

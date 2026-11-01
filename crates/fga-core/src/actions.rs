@@ -1,5 +1,5 @@
 //! Forgejo Actions uses workflow filenames and native run states, not GitHub IDs.
-use crate::forgejo::{Error, PAGE_SIZE, Session};
+use crate::forgejo::{Error, MAX_PAGES, PAGE_SIZE, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -71,8 +71,11 @@ impl Session {
         start: usize,
         limit: usize,
     ) -> Result<RunList, Error> {
+        // Read only the upstream pages that overlap the requested window.
+        let skip = start % PAGE_SIZE;
+        let first = (start / PAGE_SIZE).saturating_add(1);
         let mut collected = Vec::new();
-        for page in 1.. {
+        for page in first..first.saturating_add(MAX_PAGES) {
             let mut query = filters.to_vec();
             query.extend([("page", page.to_string()), ("limit", PAGE_SIZE.to_string())]);
             let (batch, _): (RunList, _) = self
@@ -81,16 +84,16 @@ impl Session {
             let count = batch.workflow_runs.len();
             collected.extend(batch.workflow_runs);
             if count == 0
-                || collected.len() >= start.saturating_add(limit)
-                || collected.len() as u64 >= batch.total_count
+                || collected.len() >= skip.saturating_add(limit)
+                || page.saturating_mul(PAGE_SIZE) as u64 >= batch.total_count
             {
                 return Ok(RunList {
                     total_count: batch.total_count,
-                    workflow_runs: collected.into_iter().skip(start).take(limit).collect(),
+                    workflow_runs: collected.into_iter().skip(skip).take(limit).collect(),
                 });
             }
         }
-        unreachable!("unbounded page range")
+        Err(Error::Upstream)
     }
 
     pub async fn workflows(
