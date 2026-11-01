@@ -142,9 +142,6 @@ class Writer:
         entry.update(number=number, url=pr['html_url'], state=pr['state'], merged=pr['merged'])
         self.save_ledger()
         print('CREATED ' + pr['html_url'], flush=True)
-        if os.environ.get('FGA_LINK_HANDSHAKE') == '1':
-            if sys.stdin.readline().strip() != 'linked':
-                raise RuntimeError('PR link handshake aborted')
 
     def guard(self, number):
         if number <= self.baseline or number not in self.created:

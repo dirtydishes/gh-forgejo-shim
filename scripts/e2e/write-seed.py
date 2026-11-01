@@ -39,8 +39,6 @@ git('-c', 'http.extraHeader=Authorization: token ' + TOKEN, 'fetch', '-q',
 main = git('rev-parse', 'FETCH_HEAD')
 writer = LocalWriter('forge.test', Path('/artifacts/writes'))
 writer.baseline = 12
-metadata = api('repos/' + REPO)
-Path('/artifacts/write-merge-settings.json').write_text(json.dumps({key: value for key, value in metadata.items() if key.startswith('allow_') or key == 'default_merge_style'}, indent=2) + '\n')
 
 
 def branch(name, files):
@@ -88,15 +86,6 @@ for case in CASES:
     if case.get('conflict'): time.sleep(1)
     for command in case['commands']:
         number = writer.capture(case, command, number, sha)
-        if case.get('pending'):
-            events = api('repos/' + REPO + f'/issues/{number}/timeline')
-            # Evidence contains only fields used for auto-merge, with no account metadata.
-            evidence = [dict(id=event['id'], type=event['type'], created_at=event['created_at'], body=event['body'], user=dict(login=event['user']['login'])) for event in events if event['type'] in ('pull_scheduled_merge', 'pull_cancel_scheduled_merge')]
-            (writer.destination / (command['id'] + '.timeline.json')).write_text(json.dumps(evidence, indent=2) + '\n')
-            metadata = api('repos/' + REPO)
-            (writer.destination / (command['id'] + '.repository.json')).write_text(json.dumps({key: metadata[key] for key in ('default_merge_style', 'default_branch')}, indent=2) + '\n')
-            pull = api('repos/' + REPO + f'/pulls/{number}')
-            (writer.destination / (command['id'] + '.pull-keys.json')).write_text(json.dumps(sorted(pull), indent=2) + '\n')
     if case['id'] == 'squash':
         pull = api('repos/' + REPO + f'/pulls/{number}')
         commit = api('repos/' + REPO + '/git/commits/' + pull['merge_commit_sha'])
@@ -113,15 +102,4 @@ for case in CASES:
         assert result.returncode == 1 and errors(actual) == errors(expected), actual
         (writer.destination / 'conflict-error.json').write_bytes(emails(result.stdout))
         print('PASS direct conflict mutation matches GitHub type/path/message')
-swagger = json.loads(Path('/artifacts/forgejo-swagger.json').read_text())
-evidence = dict(
-    repository=json.loads((writer.destination / 'auto.repository.json').read_text()),
-    pull_fields=json.loads((writer.destination / 'auto.pull-keys.json').read_text()),
-    merge_route_methods=sorted(swagger['paths']['/repos/{owner}/{repo}/pulls/{index}/merge']),
-    scheduled=json.loads((writer.destination / 'auto.timeline.json').read_text()),
-    cancelled=json.loads((writer.destination / 'disable-auto.timeline.json').read_text()),
-    scheduled_read_back=json.loads((writer.destination / 'auto.state.json').read_text())['autoMergeRequest'],
-    cancelled_read_back=json.loads((writer.destination / 'disable-auto.state.json').read_text())['autoMergeRequest'],
-)
-Path('/artifacts/forgejo15-auto-merge.json').write_bytes(emails((json.dumps(evidence, indent=2) + '\n').encode()))
 print('PASS Forgejo write commands and read-back completed')

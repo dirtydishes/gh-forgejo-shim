@@ -9,36 +9,25 @@ impl Session {
         repo: &str,
         number: i32,
     ) -> Result<Option<TimelineEvent>, Error> {
-        let mut latest: Option<TimelineEvent> = None;
-        for page in 1.. {
-            let (events, next): (Vec<TimelineEvent>, _) = self
-                .get(
-                    &[
-                        "repos",
-                        owner,
-                        repo,
-                        "issues",
-                        &number.to_string(),
-                        "timeline",
-                    ],
-                    &[("page", page.to_string()), ("limit", "50".into())],
-                )
-                .await?;
-            let count = events.len();
-            for event in events {
-                if matches!(
+        let events: Vec<TimelineEvent> = self
+            .all(&[
+                "repos",
+                owner,
+                repo,
+                "issues",
+                &number.to_string(),
+                "timeline",
+            ])
+            .await?;
+        let latest = events
+            .into_iter()
+            .filter(|event| {
+                matches!(
                     event.kind.as_str(),
                     "pull_scheduled_merge" | "pull_cancel_scheduled_merge"
-                ) && latest.as_ref().is_none_or(|old| {
-                    (event.created_at.as_str(), event.id) > (old.created_at.as_str(), old.id)
-                }) {
-                    latest = Some(event);
-                }
-            }
-            if !next && count < 50 {
-                break;
-            }
-        }
+                )
+            })
+            .max_by(|a, b| (a.created_at.as_str(), a.id).cmp(&(b.created_at.as_str(), b.id)));
         Ok(latest.filter(|event| event.kind == "pull_scheduled_merge"))
     }
     /// Page using only local page numbers; never follow an upstream URL with credentials.
