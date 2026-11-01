@@ -161,6 +161,50 @@ pub struct Protection {
     pub block_on_outdated_branch: bool,
 }
 
+/// gobwas/glob's meta characters (`syntax/lexer.go` `specials`), which Forgejo uses to tell a
+/// plain rule name from a glob.
+const GLOB_SYNTAX: &[char] = &['*', '?', '\\', '[', ']', '{', '}'];
+
+impl Protection {
+    fn is_plain_name(&self) -> bool {
+        !self.rule_name.contains(GLOB_SYNTAX)
+    }
+
+    /// Forgejo v15 `ProtectedBranch.Match` (`models/git/protected_branch.go:81-107`): a plain name
+    /// matches case-insensitively; a glob uses `/` as separator; an invalid glob matches literally.
+    pub fn matches_branch(&self, branch: &str) -> bool {
+        if self.is_plain_name() {
+            return self.rule_name.eq_ignore_ascii_case(branch);
+        }
+        globset::GlobBuilder::new(&self.rule_name)
+            .literal_separator(true)
+            .build()
+            .map_or(self.rule_name == branch, |glob| {
+                glob.compile_matcher().is_match(branch)
+            })
+    }
+
+    /// The rule Forgejo applies to `branch`: plain names before globs, then creation order, which
+    /// is the API's order (`models/git/protected_branch_list.go:18-44`).
+    pub fn for_branch(mut rules: Vec<Protection>, branch: &str) -> Option<Protection> {
+        rules.sort_by_key(|rule| !rule.is_plain_name());
+        rules.into_iter().find(|rule| rule.matches_branch(branch))
+    }
+
+    /// Required status contexts are separator-free globs; an invalid one never matches
+    /// (`services/pull/commit_status.go:28-41`).
+    pub fn required_contexts(&self) -> Vec<globset::GlobMatcher> {
+        if !self.enable_status_check {
+            return Vec::new();
+        }
+        self.status_check_contexts
+            .iter()
+            .filter_map(|pattern| globset::Glob::new(pattern).ok())
+            .map(|glob| glob.compile_matcher())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Review {
     pub id: i64,

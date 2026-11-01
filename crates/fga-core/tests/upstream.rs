@@ -327,6 +327,7 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
                         *n += 1;
                         let mut p = pr(number, "e2e", "s/pass");
                         p["mergeable"] = json!(number == 1 && *n == 2);
+                        p["draft"] = json!(number == 3);
                         Json(p)
                     }
                 }
@@ -337,8 +338,9 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
             get(
                 |axum::extract::Path(refs): axum::extract::Path<String>| async move {
                     Json(match refs.as_str() {
-                        "base...head" => json!({"total_commits":1}),
-                        "head...base" => json!({"total_commits":2}),
+                        // The head has 3 commits the base lacks; the base has none the head lacks.
+                        "base...head" => json!({"total_commits":3}),
+                        "head...base" => json!({"total_commits":0}),
                         _ => panic!("unexpected compare"),
                     })
                 },
@@ -363,10 +365,16 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
         fga_core::map::mergeable(&p),
         fga_core::map::MergeableState::Unknown
     );
+    // Drafts always report false and map to UNKNOWN, so they skip the retry.
+    session.pull_request("e2e", "oracle", 3).await.unwrap();
     session.pull_request("e2e", "oracle", 1).await.unwrap();
-    assert_eq!(*hits.lock().unwrap(), HashMap::from([(1, 2), (2, 2)]));
+    assert_eq!(
+        *hits.lock().unwrap(),
+        HashMap::from([(1, 2), (2, 2), (3, 1)])
+    );
+    // behind(base, head) asks whether the head lacks base commits.
     assert!(
-        session
+        !session
             .behind("e2e", "oracle", "base", "head")
             .await
             .unwrap()
@@ -377,5 +385,64 @@ async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind
             .await
             .unwrap()
     );
+    server.abort();
+}
+
+fn comment(id: i64) -> Value {
+    json!({"id":id,"body":"x","user":user(),"created_at":"2026-10-30T00:00:00Z",
+        "updated_at":"2026-10-30T00:00:00Z","html_url":format!("https://forge.test/e2e/oracle/pulls/1#issuecomment-{id}")})
+}
+
+fn status(id: i64) -> Value {
+    json!({"id":id,"context":format!("ci-{id}"),"status":"success","target_url":"",
+        "description":"","created_at":"2026-10-30T00:00:00Z","updated_at":"2026-10-30T00:00:00Z"})
+}
+
+/// Endpoints whose swagger has no `page` return the whole list for every query. Reads of them
+/// must stop after one request, and paged reads of a misbehaving endpoint must stop at the cap.
+#[tokio::test]
+async fn unpaged_endpoints_are_read_once_and_paging_is_bounded() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let comment_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let status_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/e2e/oracle/issues/1/comments",
+            get({
+                let hits = comment_hits.clone();
+                move || async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Json(Value::Array((1..=60).map(comment).collect()))
+                }
+            }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/commits/abc/statuses",
+            get({
+                let hits = status_hits.clone();
+                move || async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Json(Value::Array((1..=50).map(status).collect()))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = Forgejo::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let session = forgejo.authenticate("token good").await.unwrap();
+    let comments = session.comments("e2e", "oracle", 1).await.unwrap();
+    assert_eq!(comments.len(), 60);
+    assert_eq!(comment_hits.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        session.statuses("e2e", "oracle", "abc").await,
+        Err(Error::Upstream)
+    ));
+    assert_eq!(status_hits.load(Ordering::SeqCst), 200);
     server.abort();
 }

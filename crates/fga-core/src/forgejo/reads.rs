@@ -10,14 +10,17 @@ impl Session {
         number: i32,
     ) -> Result<Option<TimelineEvent>, Error> {
         let events: Vec<TimelineEvent> = self
-            .all(&[
-                "repos",
-                owner,
-                repo,
-                "issues",
-                &number.to_string(),
-                "timeline",
-            ])
+            .pages(
+                &[
+                    "repos",
+                    owner,
+                    repo,
+                    "issues",
+                    &number.to_string(),
+                    "timeline",
+                ],
+                &[],
+            )
             .await?;
         let latest = events
             .into_iter()
@@ -30,7 +33,6 @@ impl Session {
             .max_by(|a, b| (a.created_at.as_str(), a.id).cmp(&(b.created_at.as_str(), b.id)));
         Ok(latest.filter(|event| event.kind == "pull_scheduled_merge"))
     }
-    /// Page using only local page numbers; never follow an upstream URL with credentials.
     pub async fn issues(
         &self,
         owner: &str,
@@ -39,33 +41,24 @@ impl Session {
         kind: Kind,
         filters: &Filters,
     ) -> Result<Vec<Issue>, Error> {
-        let mut result = Vec::new();
-        for page in 1.. {
-            let mut query = filters.upstream(state, kind);
-            query.extend([("page", page.to_string()), ("limit", "50".into())]);
-            let (batch, next): (Vec<Issue>, _) =
-                self.get(&["repos", owner, repo, "issues"], &query).await?;
-            let count = batch.len();
-            result.extend(batch);
-            if !next && count < 50 {
-                break;
-            }
-        }
-        Ok(result)
+        self.pages(
+            &["repos", owner, repo, "issues"],
+            &filters.upstream(state, kind),
+        )
+        .await
     }
     pub async fn issue(&self, owner: &str, repo: &str, number: i32) -> Result<Issue, Error> {
         let issue: Issue = self
             .get(&["repos", owner, repo, "issues", &number.to_string()], &[])
-            .await?
-            .0;
+            .await?;
         if issue.pull_request.is_some() {
             return Err(Error::NotFound);
         }
         Ok(issue)
     }
     pub async fn file_text(&self, owner: &str, repo: &str, path: &str) -> Result<String, Error> {
-        let value = self
-            .read_json(&["repos", owner, repo, "contents", path], &[])
+        let value: serde_json::Value = self
+            .get(&["repos", owner, repo, "contents", path], &[])
             .await?;
         let content = value["content"].as_str().ok_or(Error::Upstream)?;
         let bytes = STANDARD
@@ -77,34 +70,5 @@ impl Session {
             )
             .map_err(|_| Error::Upstream)?;
         String::from_utf8(bytes).map_err(|_| Error::Upstream)
-    }
-    pub async fn read_json(
-        &self,
-        segments: &[&str],
-        query: &[(&str, String)],
-    ) -> Result<serde_json::Value, Error> {
-        Ok(self.get(segments, query).await?.0)
-    }
-    pub async fn read_text(
-        &self,
-        segments: &[&str],
-        query: &[(&str, String)],
-    ) -> Result<String, Error> {
-        tokio::time::timeout_at(self.deadline, async {
-            self.forgejo
-                .request(segments, query, &self.authorization)
-                .await?
-                .text()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        Error::Timeout
-                    } else {
-                        Error::Upstream
-                    }
-                })
-        })
-        .await
-        .map_err(|_| Error::Timeout)?
     }
 }

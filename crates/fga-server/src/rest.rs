@@ -144,7 +144,7 @@ pub async fn pull(
         })
     {
         return match session
-            .read_text(
+            .text(
                 &["repos", &owner, &repo, "pulls", &format!("{number}.diff")],
                 &[],
             )
@@ -157,7 +157,9 @@ pub async fn pull(
     match session.pull_request(&owner, &repo, number).await {
         Ok(pr) => {
             let mut value = map::pull_request(&pr, &state.wip_prefixes);
-            value["mergeable"] = json!(pr.mergeable);
+            // MAPPING §2: Forgejo's false never proves a conflict, so REST reports null, not false.
+            let mergeable = map::mergeable(&pr) == map::MergeableState::Mergeable;
+            value["mergeable"] = json!(mergeable.then_some(true));
             Json(value).into_response()
         }
         Err(e) => rest_error(e),
@@ -177,7 +179,7 @@ pub async fn commit_pulls(
         // Forgejo's singular route also knows merged commits. Preserve additional
         // open PRs sharing the head, which that route alone cannot represent.
         match session
-            .read_json(&["repos", &owner, &repo, "commits", &sha, "pull"], &[])
+            .get::<serde_json::Value>(&["repos", &owner, &repo, "commits", &sha, "pull"], &[])
             .await
         {
             Ok(value) => {
@@ -189,7 +191,10 @@ pub async fn commit_pulls(
             }
             Err(fga_core::forgejo::Error::NotFound) if pulls.is_empty() => {
                 session
-                    .read_json(&["repos", &owner, &repo, "git", "commits", &sha], &[])
+                    .get::<serde_json::Value>(
+                        &["repos", &owner, &repo, "git", "commits", &sha],
+                        &[],
+                    )
                     .await?;
             }
             Err(fga_core::forgejo::Error::NotFound) => {}
@@ -215,7 +220,7 @@ pub async fn readme(
 ) -> Response {
     let result = async {
         let entries = session
-            .read_json(&["repos", &owner, &repo, "contents"], &[])
+            .get::<serde_json::Value>(&["repos", &owner, &repo, "contents"], &[])
             .await?;
         let entries = entries
             .as_array()
@@ -241,7 +246,7 @@ pub async fn readme(
             .as_str()
             .ok_or(fga_core::forgejo::Error::Upstream)?;
         let value = session
-            .read_json(&["repos", &owner, &repo, "contents", path], &[])
+            .get::<serde_json::Value>(&["repos", &owner, &repo, "contents", path], &[])
             .await?;
         if headers
             .get("accept")
