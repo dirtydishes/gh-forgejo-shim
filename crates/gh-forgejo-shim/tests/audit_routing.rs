@@ -45,12 +45,14 @@ impl Fixture {
         executable(&real_gh, "#!/bin/sh\nprintf 'real-gh\\n'\n")?;
         executable(&bin.join("fj"), "#!/bin/sh\nexit 99\n")?;
 
-        // Reuse the installed Git binary, but never its user or system config.
+        // Reuse the installed Git binary, but never its user or system config, and never a
+        // wrapper script on PATH (a git recorder, say) that could write outside the fixture.
         let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .map(|dir| dir.join("git"))
-            .find(|path| path.is_file())
-            .ok_or_else(|| io::Error::other("git is required for routing audit fixtures"))?
-            .canonicalize()?;
+            .filter_map(|dir| dir.join("git").canonicalize().ok())
+            .find(|path| path.is_file() && !is_script(path))
+            .ok_or_else(|| {
+                io::Error::other("a git binary is required for routing audit fixtures")
+            })?;
         symlink(git, bin.join("git"))?;
         let fixture = Self {
             root,
@@ -173,6 +175,13 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+fn is_script(path: &Path) -> bool {
+    let mut start = [0_u8; 2];
+    File::open(path)
+        .and_then(|mut file| io::Read::read_exact(&mut file, &mut start))
+        .map_or(true, |()| &start == b"#!")
 }
 
 fn executable(path: &Path, contents: &str) -> io::Result<()> {
