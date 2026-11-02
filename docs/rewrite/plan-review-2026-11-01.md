@@ -334,8 +334,9 @@ This was found by the gateway thread and two reviewers independently. It only af
   (`models/git/protected_branch_list.go:27-35`) and matches plain names case-insensitively
   (`models/git/protected_branch.go:100-107`). Its globs don't let `*` cross `/`. So a `release/*` rule
   listed before `release/**` wins in the shim and loses in Forgejo for `release/a/b`.
-- The head name comes from `/head/ref` (`read_only.rs:909-912`). After the head branch is deleted,
-  Forgejo returns `refs/pull/N/head` there (`services/convert/pull.go:108,229`).
+- A cosmetic one: the "no checks reported" message names the branch from `/head/ref`
+  (`read_only.rs:909-916`). After the head branch is deleted, Forgejo returns `refs/pull/N/head` there
+  (`services/convert/pull.go:108,229`). The protection lookup uses `/base/ref` and isn't affected.
 
 fga-core already handles all three (`Session::protection`, `Protection::for_branch`).
 
