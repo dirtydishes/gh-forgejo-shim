@@ -20,16 +20,24 @@ below assume Forgejo listens on the host at `127.0.0.1:3000` and the proxy runs 
 
 ```sh
 docker build -f packaging/gateway/Dockerfile -t fga-server .
-docker run -d --name fga-server --network host \
+docker run -d --name fga-server --restart unless-stopped --network host \
     -e FGA_LISTEN=127.0.0.1:8080 \
     -e FGA_FORGEJO_URL=http://127.0.0.1:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
     fga-server
 ```
 
-If Forgejo runs in a container instead, put the gateway on Forgejo's Docker network
-(`--network <forgejo's network>`), set `FGA_FORGEJO_URL=http://<forgejo container>:3000`, and publish
-the gateway with `-p 127.0.0.1:8080:8080` for a proxy on the host.
+If Forgejo runs in a container instead, put the gateway on Forgejo's Docker network and publish it
+on the host's loopback for a proxy on the host. Leave `FGA_LISTEN` unset: the image listens on
+`0.0.0.0:8080` inside its container, which a published port or another container needs.
+
+```sh
+docker run -d --name fga-server --restart unless-stopped \
+    --network <forgejo's network> -p 127.0.0.1:8080:8080 \
+    -e FGA_FORGEJO_URL=http://<forgejo container>:3000 \
+    -e FGA_PUBLIC_URL=https://forge.example.com \
+    fga-server
+```
 
 - `FGA_FORGEJO_URL` is how the gateway reaches Forgejo, usually its internal address.
 - `FGA_PUBLIC_URL` is the forge's own address, as users type it. The gateway builds links from it and
@@ -67,20 +75,37 @@ server {
 }
 ```
 
-The snippet uses `$http_host`, because `$host` drops a non-default port.
+The snippet uses `$http_host`, because `$host` drops a non-default port. It answers `400` to a request
+whose first line names a host (`GET https://forge.example.com:8443/api/v3/user`), because nginx would
+forward it without that host. Clients send such lines only to forward proxies.
 
 **Caddy.** Copy the [site block](../../packaging/gateway/caddy/Caddyfile) and set its hostname and two
 upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. Caddy passes `Host`
 through by default, and its site block answers only the forge's hostname.
 
 **Nginx Proxy Manager.** NPM's nginx runs inside the NPM container, so the gateway must be on a Docker
-network NPM shares, reached by its container name: run it with `--network <NPM's network>` and
-`--name fga-server`, and no published port. Start it before the next step: nginx looks up that name
-when NPM saves the host, and if it can't, NPM takes the whole proxy host offline, forge included.
+network NPM shares, reached by its container name, with no published port. Forgejo must be reachable
+from that network too:
+
+```sh
+docker run -d --name fga-server --restart unless-stopped \
+    --network <NPM's network> \
+    -e FGA_FORGEJO_URL=http://<forgejo container>:3000 \
+    -e FGA_PUBLIC_URL=https://forge.example.com \
+    fga-server
+```
+
+Start it before the next step: nginx looks up that name when NPM saves the host, and if it can't, NPM
+takes the whole proxy host offline, forge included.
 
 Then open the forge's proxy host, choose **Advanced**, and add the contents of the nginx locations
 snippet, with `http://fga` replaced by `http://fga-server:8080`. Add it **below** anything already in
 that field; don't replace it. Leave the host's main forward settings pointing at Forgejo.
+
+With **Cache Assets** on, NPM's asset location comes before the Advanced field and wins for paths that
+end like a file it caches. A PR link such as `/{owner}/{repo}/pull/1/files/logo.svg` then reaches
+Forgejo, which answers `404`. The API routes aren't affected, and GitHub's own PR links don't end that
+way.
 
 NPM's **Access Lists** don't cover locations added in the Advanced field. If the forge relies on an
 Access List to limit who can reach it, the gateway's routes are open to everyone. Restrict them with
