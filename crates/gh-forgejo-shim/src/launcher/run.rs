@@ -58,6 +58,10 @@ pub struct Launch<'a> {
 
 const SIGNALS: [Signal; 4] = [Signal::INT, Signal::QUIT, Signal::TERM, Signal::HUP];
 
+/// How long an `auth status` login lookup may take before the account is left out (§3); gh then
+/// reports that host's status itself.
+const LOGIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Runs a launch and returns the code the wrapper exits with: gh's own, or 128 + s when gh died
 /// of signal s, which `external::exit_like_child` then turns back into that death. Failures
 /// before gh starts print one line and return §6's codes.
@@ -201,14 +205,37 @@ async fn serve_gh(
     // gh's `auth status` shows the account from `user` in hosts.yml and fetches it only for
     // environment tokens, so the launcher looks each login up first, through the gateway's own
     // client, which warms its session cache (§3).
+    // The lookups run at once, each within LOGIN_BUDGET, and a signal ends the launch as it would
+    // before gh starts: a forge that is down mustn't hold off Ctrl-C.
     let mut logins = vec![None; clients.len()];
     if hosts_yml.look_up_logins {
-        for ((client, token), login) in clients.iter().zip(&upstream_tokens).zip(&mut logins) {
-            *login = client
-                .authenticate(&format!("token {token}"))
-                .await
-                .ok()
-                .map(|session| session.viewer.login.clone());
+        let mut lookups = tokio::task::JoinSet::new();
+        for (index, (client, token)) in clients.into_iter().zip(upstream_tokens).enumerate() {
+            lookups.spawn(async move {
+                let session = tokio::time::timeout(
+                    LOGIN_BUDGET,
+                    client.authenticate(&format!("token {token}")),
+                )
+                .await;
+                let login = match session {
+                    Ok(Ok(session)) => Some(session.viewer.login.clone()),
+                    _ => None,
+                };
+                (index, login)
+            });
+        }
+        loop {
+            tokio::select! {
+                joined = lookups.join_next() => match joined {
+                    Some(Ok((index, login))) => logins[index] = login,
+                    Some(Err(_)) => {}
+                    None => break,
+                },
+                _ = signals.int.recv() => return Outcome::Signalled(Signal::INT.as_raw()),
+                _ = signals.quit.recv() => return Outcome::Signalled(Signal::QUIT.as_raw()),
+                _ = signals.term.recv() => return Outcome::Signalled(Signal::TERM.as_raw()),
+                _ = signals.hup.recv() => return Outcome::Signalled(Signal::HUP.as_raw()),
+            }
         }
     }
     if let Err(error) = run_dir.write("hosts.yml", (hosts_yml.build)(&logins).as_bytes(), 0o600) {
