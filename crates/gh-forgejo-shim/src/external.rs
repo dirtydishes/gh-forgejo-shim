@@ -142,8 +142,9 @@ pub fn inherited_exit_code(status: ExitStatus) -> i32 {
 ///
 /// The signal's default action is put back and the signal unblocked first: Rust ignores SIGPIPE
 /// and handles SIGSEGV and SIGBUS itself, and a parent may have left the signal ignored or
-/// blocked. signal-hook's table has no real-time signals, so those are raised as they are. If
-/// the process somehow survives, `code` is returned.
+/// blocked. signal-hook's table has no real-time signals, so those are raised as they are: one
+/// this process inherited ignored stays ignored, but then gh inherited it ignored too and could
+/// not have died of it. If the process survives, `code` is returned.
 pub fn exit_like_child(code: i32) -> i32 {
     #[cfg(unix)]
     {
