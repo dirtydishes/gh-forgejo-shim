@@ -16,18 +16,23 @@ pub const TRACE_ENV: &str = "FJ_SHIM_TRACE";
 const FALSE_VALUES: &[&str] = &["", "0", "false", "no", "off"];
 const REDACTED: &str = "<redacted>";
 const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", "--token"];
-/// Shared with the git recorder, so either trace redacts what the other does.
+/// Shared with the git recorder, so either trace redacts what the other does. Matched anywhere in
+/// a key.
 const SENSITIVE_KEY_PARTS: &[&str] = &[
     "api-key",
     "api_key",
-    "authorization",
     "credential",
-    "pass",
+    "passphrase",
+    "passwd",
+    "password",
     "private-key",
     "private_key",
     "secret",
     "token",
 ];
+/// Matched only as a whole part of a key, split at `-`, `_` and `.`: `db_pass` and
+/// `Authorization` are secrets, `bypass` and `authorizations_url` aren't.
+const SENSITIVE_KEY_WORDS: &[&str] = &["authorization", "pass"];
 /// Authorization schemes. A first word that isn't one of these is part of the credential.
 const AUTH_SCHEMES: &[&str] = &[
     "aws4-hmac-sha256",
@@ -214,7 +219,9 @@ fn redact_sensitive_key_values(value: &str, replacement: &str) -> String {
     let mut index = 0;
 
     while let Some((delimiter_index, delimiter)) = find_assignment_delimiter(value, index) {
-        if let Some((value_start, value_end)) = sensitive_value_range(value, delimiter_index) {
+        if let Some((value_start, value_end)) =
+            sensitive_value_range(value, delimiter_index).filter(|(start, end)| start < end)
+        {
             ranges.push((value_start, value_end));
             index = value_end;
         } else {
@@ -312,15 +319,20 @@ pub(crate) fn is_sensitive_key(key: &str) -> bool {
     SENSITIVE_KEY_PARTS
         .iter()
         .any(|part| normalized.contains(part))
+        || normalized
+            .split(['-', '_', '.'])
+            .any(|word| SENSITIVE_KEY_WORDS.contains(&word))
 }
 
 fn is_key_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
 }
 
+/// Skips spaces and tabs, not line breaks: a key with nothing after it on its line has no value,
+/// and the next line isn't one.
 fn skip_whitespace(value: &str, mut index: usize) -> usize {
     while let Some(character) = value[index..].chars().next() {
-        if !character.is_whitespace() {
+        if !matches!(character, ' ' | '\t') {
             break;
         }
         index += character.len_utf8();
@@ -348,7 +360,8 @@ fn redact_token_prefixes(value: &str, replacement: &str) -> String {
 
 fn token_prefix_match_len(value: &str, index: usize) -> Option<usize> {
     let bytes = value.as_bytes();
-    if index > 0 && is_token_character(bytes[index - 1]) {
+    // A token can follow `-` (`x-ghp_…`), though `-` may also appear inside one.
+    if index > 0 && (bytes[index - 1].is_ascii_alphanumeric() || bytes[index - 1] == b'_') {
         return None;
     }
     TOKEN_PREFIXES.iter().find_map(|(prefix, min_suffix_len)| {
@@ -642,6 +655,19 @@ mod tests {
             redact_text("Authorization: Bearer abc"),
             "Authorization: Bearer <redacted>"
         );
+    }
+
+    #[test]
+    fn ordinary_words_stay_readable_and_values_stay_on_their_line() {
+        for text in [
+            "bypass_pull_request_allowances=1 passed: 3 compass=north",
+            r#"{"authorizations_url": "https://api.example.test/authorizations"}"#,
+            "Authorization:\nnext line here",
+        ] {
+            assert_eq!(redact_text(text), text);
+        }
+        assert_eq!(redact_text("db_pass=hunter2"), "db_pass=<redacted>");
+        assert_eq!(redact_text("x-ghp_abcdefghijklmnop"), "x-<redacted>");
     }
 
     #[test]
