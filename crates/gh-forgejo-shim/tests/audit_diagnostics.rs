@@ -356,7 +356,6 @@ fn audit_diag_trace_concurrent_jsonl() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D19: fails until gh-forgejo-shim-jko.30 is fixed"]
 fn audit_diag_summary_invalid_utf8_tail() -> TestResult {
     let f = Fixture::new()?;
     let path = f.root.join("partial.jsonl");
