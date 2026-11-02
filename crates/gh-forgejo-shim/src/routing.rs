@@ -119,6 +119,11 @@ where
     ) {
         return code;
     }
+    // Not a credential request: the variable the run directory's script set must not reach
+    // anything this call starts, or a later `auth git-credential` would be answered from a
+    // launcher's file instead of delegating (§3). Single-threaded here.
+    #[cfg(unix)]
+    std::env::remove_var(crate::launcher::credentials::CREDENTIALS_VAR);
     // Guards 2 and 3 (launcher spec §8) come before routing, so a loop stops at once.
     let entry_env = routing_env();
     if let Some(code) = crate::launcher::recursion_guard(&entry_env) {
