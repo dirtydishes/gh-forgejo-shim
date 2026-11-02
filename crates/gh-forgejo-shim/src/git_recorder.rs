@@ -379,7 +379,7 @@ fn resolve_real_git(real_git: Option<&Path>, env: &HashMap<String, String>) -> R
     // spelled: that file either doesn't exist yet or is a recorder.
     if !is_executable_file(&path) {
         return Err(ShimError::new(format!(
-            "{} is not an executable file; set {REAL_GIT_ENV} to the real git",
+            "{} is not an executable file; pass the real git with --real-git or {REAL_GIT_ENV}",
             path.display()
         )));
     }
@@ -391,7 +391,7 @@ fn resolve_real_git(real_git: Option<&Path>, env: &HashMap<String, String>) -> R
 
 fn not_real_git(path: &Path) -> ShimError {
     ShimError::new(format!(
-        "{} is a gh-forgejo-shim git recorder, not the real git; set {REAL_GIT_ENV}",
+        "{} is a gh-forgejo-shim git recorder, not the real git; pass the real git with --real-git or {REAL_GIT_ENV}",
         path.display()
     ))
 }
