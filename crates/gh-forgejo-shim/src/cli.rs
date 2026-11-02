@@ -1062,13 +1062,24 @@ fn auth_logout(
     Ok(0)
 }
 
+/// A host `auth login` may send a token to: never a GitHub host, which would get the Forgejo
+/// token in its Authorization header during validation.
+fn forgejo_login_host(host: &str) -> Result<String> {
+    let host = config::normalize_host(host);
+    if host.is_empty() {
+        return Err(ShimError::new("Forgejo host is required"));
+    }
+    if config::is_known_github_host(Some(&host)) {
+        return Err(ShimError::new(format!(
+            "{host} is a GitHub host; use `gh auth login` for GitHub"
+        )));
+    }
+    Ok(host)
+}
+
 fn prompt_host(host_arg: Option<&String>, runtime: &mut dyn Runtime) -> Result<String> {
     if let Some(host) = host_arg {
-        let host = config::normalize_host(host);
-        if host.is_empty() {
-            return Err(ShimError::new("Forgejo host is required"));
-        }
-        return Ok(host);
+        return forgejo_login_host(host);
     }
 
     let config_path = config::config_path(runtime.home());
@@ -1089,11 +1100,7 @@ fn prompt_host(host_arg: Option<&String>, runtime: &mut dyn Runtime) -> Result<S
     } else {
         entered.trim().to_string()
     };
-    let host = config::normalize_host(&selected);
-    if host.is_empty() {
-        return Err(ShimError::new("Forgejo host is required"));
-    }
-    Ok(host)
+    forgejo_login_host(&selected)
 }
 
 fn status_hosts(host_arg: Option<&String>, runtime: &dyn Runtime) -> Result<Vec<String>> {
@@ -1638,6 +1645,38 @@ mod tests {
             Some("old-token")
         );
         fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_github_host_before_asking_for_a_token() -> Result<()> {
+        for host in ["github.com", "api.github.com", "acme.ghe.com"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            runtime.token_prompts.push("forgejo-token".to_string());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["auth", "login", host]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+
+            assert_eq!(code, 1, "{host}");
+            assert!(
+                runtime.validated.is_empty(),
+                "{host}: the token was sent for validation"
+            );
+            assert_eq!(
+                runtime.token_prompts.len(),
+                1,
+                "{host}: the token was asked for"
+            );
+            fs::remove_dir_all(home).ok();
+        }
         Ok(())
     }
 
