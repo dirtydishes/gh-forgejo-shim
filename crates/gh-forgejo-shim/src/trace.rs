@@ -385,8 +385,9 @@ fn expand_home(value: &str, env: &HashMap<String, String>) -> PathBuf {
 }
 
 /// Appends `record` as one line. Concurrent writers (parallel `gh` calls, the git recorder) stay
-/// whole records: the line goes out in one append-mode write, under an exclusive lock in case
-/// the write comes up short. A filesystem without locks still gets the single write.
+/// whole records because the line goes out in one append-mode write, which local filesystems
+/// keep whole. NFS doesn't promise that. No lock: one taken by another process could hang every
+/// traced call after its command has already run.
 pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
     create_parent_dirs(path)?;
 
@@ -411,7 +412,6 @@ pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
     }
-    let _ = file.lock();
     file.write_all(&line)
 }
 
