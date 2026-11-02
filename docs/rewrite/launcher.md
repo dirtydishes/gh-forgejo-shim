@@ -69,7 +69,8 @@ client ── exec ──> ~/.local/bin/gh  (sh wrapper, shim.rs)
                                         current-thread tokio runtime on P's main thread:
                                           serve the gateway on the socket
                                           wait for C
-                                          forward SIGTERM and SIGHUP to C (§6)
+                                          forward SIGTERM, SIGHUP, and SIGINT/SIGQUIT
+                                            sent without a terminal, to C (§6)
                                         C exits: stop serving, remove run dir, write trace
                                         exit with C's status, or die by C's signal (§6)
 ```
@@ -551,10 +552,13 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    placeholder, and gets 421 without any upstream contact. No request carries the GitHub token.
    With `GH_ENTERPRISE_TOKEN` set, the Forgejo host still gets its own token.
 4. **Signals (§6).** SIGTERM to the launcher: gh gets SIGTERM, the launcher dies by SIGTERM, and
-   the run directory is gone. SIGINT to the process group: when gh dies by SIGINT, so does the
-   launcher, and the directory is gone. In `gh pr list | head -1`, when gh dies of SIGPIPE, the
-   launcher dies of SIGPIPE too, and its directory is gone. A gh that kills itself with SIGTERM: the launcher dies by SIGTERM (R6's test,
-   on the launch path).
+   the run directory is gone. SIGINT to the process group, as a terminal's Ctrl-C sends it: when
+   gh dies by SIGINT, so does the launcher, and the directory is gone. SIGINT to the launcher's pid
+   with no controlling terminal, as ChatGPT or `timeout -s INT` sends it: the launcher forwards it,
+   gh dies by SIGINT, and so does the launcher. In `gh pr list | head -1`, when gh dies of SIGPIPE,
+   the launcher dies of SIGPIPE too, and its directory is gone. A gh that kills itself with
+   SIGTERM: the launcher dies by SIGTERM (R6's test, on the launch path). SIGQUIT cases run on
+   Linux only.
 5. **Stale directories (§4).** After a SIGKILL'd launch, the next launch removes the leftover
    directory. A live launcher's directory survives another launcher's sweep. A directory with an
    unknown file in it stays.
