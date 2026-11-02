@@ -107,6 +107,18 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let argv = args.into_iter().collect::<Vec<_>>();
+    // The launcher's git credential helper is answered before anything else, ahead of the guards
+    // and routing, and never launches (launcher spec §3).
+    #[cfg(unix)]
+    if let Some(code) = crate::launcher::credentials::answer(
+        std::env::var_os(crate::launcher::credentials::CREDENTIALS_VAR).as_deref(),
+        &argv,
+        &mut io::stdin().lock(),
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
+    ) {
+        return code;
+    }
     // `std::env::vars` panics on a value that isn't UTF-8 (audit R7). Routing reads only named
     // variables, so one it can't read is left out of the map.
     let env = std::env::vars_os()
