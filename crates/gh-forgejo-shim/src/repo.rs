@@ -1,5 +1,6 @@
 //! Repository parsing and host detection for the native dispatcher.
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,6 +100,11 @@ enum DefaultSource {
 }
 
 impl GhHosts {
+    /// What plain gh knows: the user's own `hosts.yml` alone.
+    pub fn user(env: &HashMap<String, String>) -> Self {
+        Self::load(env, &[])
+    }
+
     /// `forgejo_hosts` are the shim's allowlist entries. gh keeps only the hostname of a remote
     /// URL, never its port, so the entries count without theirs.
     pub fn load(env: &HashMap<String, String>, forgejo_hosts: &[String]) -> Self {
@@ -131,10 +137,29 @@ pub fn gh_hostname(host: &str) -> String {
     url_hostname(&host).to_string()
 }
 
+/// A checkout's remotes, read from git at most once, and only if a resolution needs them.
+pub struct Checkout<'a> {
+    cwd: Option<&'a Path>,
+    remotes: OnceCell<Vec<Remote>>,
+}
+
+impl<'a> Checkout<'a> {
+    pub fn new(cwd: Option<&'a Path>) -> Self {
+        Self {
+            cwd,
+            remotes: OnceCell::new(),
+        }
+    }
+
+    fn remotes(&self) -> &[Remote] {
+        self.remotes.get_or_init(|| git_remotes(self.cwd))
+    }
+}
+
 pub fn detect_repo(
     invocation: &Invocation,
     env: &HashMap<String, String>,
-    cwd: Option<&Path>,
+    checkout: &Checkout<'_>,
     hosts: &GhHosts,
 ) -> Detection {
     if let Some(repo_arg) = invocation.repo_override.as_deref() {
@@ -162,9 +187,45 @@ pub fn detect_repo(
             .map_or_else(Detection::unknown, |repo| Detection::found(repo, "GH_REPO"));
     }
 
-    base_repo_from_remotes(cwd, hosts).map_or_else(Detection::unknown, |(repo, source)| {
-        Detection::found(repo, source)
-    })
+    let saved_default = honors_saved_default(&invocation.command);
+    base_repo_from_remotes(checkout.remotes(), hosts, saved_default)
+        .map_or_else(Detection::unknown, |(repo, source)| {
+            Detection::found(repo, source)
+        })
+}
+
+/// gh reads `gh repo set-default` only in the commands it builds with `SmartBaseRepoFunc`
+/// (`gh/pkg/cmd/root/root.go:161-178`). The groups added before that line take the first ranked
+/// remote (`gh/pkg/cmd/factory/default.go:83-90`). A command the wrapper doesn't know, such as an
+/// alias, is taken to be a smart one: most aliases expand to `pr` or `issue`.
+fn honors_saved_default(command: &str) -> bool {
+    !matches!(
+        command.split_whitespace().next().unwrap_or_default(),
+        "version"
+            | "accessibility"
+            | "actions"
+            | "alias"
+            | "auth"
+            | "attestation"
+            | "config"
+            | "gist"
+            | "gpg-key"
+            | "completion"
+            | "extension"
+            | "search"
+            | "secret"
+            | "variable"
+            | "ssh-key"
+            | "codespace"
+            | "project"
+            | "preview"
+            | "skills"
+            | "copilot"
+            | "status"
+            | "credits"
+            | "licenses"
+            | "send-telemetry"
+    )
 }
 
 /// The first remote that parses, `origin` first. `doctor` and `bootstrap` report it; routing uses
@@ -191,8 +252,11 @@ pub fn detect_from_git(cwd: Option<&Path>) -> Option<RepoRef> {
 /// (`go-gh/pkg/repository/repository.go` `ParseWithHost`).
 fn override_repo(spec: &str, hosts: &GhHosts) -> Option<RepoRef> {
     if spec.starts_with("git@") || is_supported_protocol(spec) {
+        // go-gh's `RepoInfoFromURL` drops `www.` after lowercasing (`go-gh/internal/git/url.go:78`),
+        // then `ghrepo.NewWithHost` drops it again (`gh_repo`), so `WWW.` goes too.
         let url = GitUrl::parse(spec)?;
-        return url.repo(&url.host);
+        let host = url.host.to_ascii_lowercase();
+        return url.repo(host.strip_prefix("www.").unwrap_or(&host));
     }
     let parts = spec.splitn(4, '/').collect::<Vec<_>>();
     if parts.iter().any(|part| part.is_empty()) {
@@ -209,13 +273,17 @@ fn override_repo(spec: &str, hosts: &GhHosts) -> Option<RepoRef> {
 /// (`gh/pkg/cmd/factory/remote_resolver.go`, `gh/context/context.go` `BaseRepo`). With several
 /// candidates and a terminal, gh would also ask the API about the repository network; the
 /// wrapper takes the first candidate, which is what gh does without a terminal.
-fn base_repo_from_remotes(cwd: Option<&Path>, hosts: &GhHosts) -> Option<(RepoRef, &'static str)> {
-    let mut remotes = git_remotes(cwd);
-    remotes.sort_by_key(|remote| std::cmp::Reverse(remote_rank(&remote.name)));
+fn base_repo_from_remotes(
+    remotes: &[Remote],
+    hosts: &GhHosts,
+    saved_default: bool,
+) -> Option<(RepoRef, &'static str)> {
     let mut remotes = remotes
-        .into_iter()
+        .iter()
         .filter(|remote| hosts.known.contains(&remote.repo.host))
+        .cloned()
         .collect::<Vec<_>>();
+    remotes.sort_by_key(|remote| std::cmp::Reverse(remote_rank(&remote.name)));
     if hosts.default_source != DefaultSource::Fallback {
         let on_default = remotes
             .iter()
@@ -227,7 +295,7 @@ fn base_repo_from_remotes(cwd: Option<&Path>, hosts: &GhHosts) -> Option<(RepoRe
         }
     }
 
-    for remote in &remotes {
+    for remote in remotes.iter().filter(|_| saved_default) {
         match remote.resolved.as_deref() {
             Some("base") => return Some((remote.repo.clone(), "repo set-default")),
             Some(value) if !value.is_empty() => {
@@ -286,13 +354,18 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
         cwd,
     )
     .unwrap_or_default();
-    let resolved_for = |name: &str| {
-        resolved.lines().find_map(|line| {
-            let (key, value) = line.split_once(' ')?;
-            let remote = key.strip_prefix("remote.")?.strip_suffix(".gh-resolved")?;
-            (remote == name).then(|| value.trim().to_string())
-        })
-    };
+    // gh's `populateResolvedRemotes` (`gh/git/client.go:1050-1068`): the name is the text between
+    // the first two dots, so a remote with a dot in its name never matches, and a later line for
+    // the same remote replaces an earlier one.
+    let mut saved = HashMap::<&str, &str>::new();
+    for line in resolved.lines() {
+        let Some((key, value)) = line.split_once(' ') else {
+            continue;
+        };
+        if let Some(name) = key.split('.').nth(1) {
+            saved.insert(name, value);
+        }
+    }
 
     let mut ssh = SshHosts::default();
     urls.into_iter()
@@ -301,7 +374,7 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
                 .into_iter()
                 .flatten()
                 .find_map(|url| remote_repo(&url, &mut ssh))?;
-            let resolved = resolved_for(&name);
+            let resolved = saved.get(name.as_str()).map(|value| (*value).to_string());
             Some(Remote {
                 name,
                 repo,
@@ -399,6 +472,10 @@ fn url_hostname(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);
     }
+    // More than one colon and no brackets: a bare IPv6 address, which carries no port.
+    if authority.matches(':').count() > 1 {
+        return authority;
+    }
     authority.split(':').next().unwrap_or(authority)
 }
 
@@ -428,7 +505,7 @@ impl SshHosts {
             return resolved.clone();
         }
         let resolved = Command::new("ssh")
-            .args(["-G", host])
+            .args(["-G", "--", host])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()
@@ -663,7 +740,7 @@ mod tests {
                 "git+ssh://git@WWW.example.com:22/o/r.git",
                 &hosts
             )),
-            Some(("www.example.com".into(), "o".into(), "r".into()))
+            Some(("example.com".into(), "o".into(), "r".into()))
         );
         assert_eq!(
             repo_tuple(override_repo("git@www.example.com:o/r.git", &hosts)),
@@ -694,5 +771,7 @@ mod tests {
     fn ipv6_hostnames_lose_brackets_and_port() {
         assert_eq!(url_hostname("[::1]:3000"), "::1");
         assert_eq!(url_hostname("forge.test:3443"), "forge.test");
+        assert_eq!(url_hostname("::1"), "::1");
+        assert_eq!(gh_hostname("[::1]:3000"), "::1");
     }
 }
