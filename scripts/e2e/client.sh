@@ -62,6 +62,8 @@ api --get --data-urlencode 'head=e2e:s/pass' --data state=closed \
 curl -sS -o /artifacts/missing-token.json -w '%{http_code}' https://forge.test/api/v3/user >/artifacts/missing-token.status
 curl -sS -H 'Authorization: bearer invalid-test-token' -o /artifacts/bad-token.json -w '%{http_code}' https://forge.test/api/v3/user >/artifacts/bad-token.status
 curl -sS -H "Authorization: bearer $token" -o /artifacts/unknown-repo.json -w '%{http_code}' https://forge.test/api/v3/repos/e2e/missing >/artifacts/unknown-repo.status
+# gh's socket delivers every host's requests to the gateway; another host's token must stop there.
+curl -sS -k --connect-to api.github.com:443:forge.test:443 -H "Authorization: token $token" -o /artifacts/other-host.json -w '%{http_code}' https://api.github.com/user >/artifacts/other-host.status
 curl -sS -H "Authorization: token $token" -o /artifacts/unknown-route.json -w '%{http_code}' https://forge.test/api/v3/unsupported >/artifacts/unknown-route.status
 api -d '{"query":"{ viewer { unsupported } }"}' -o /artifacts/validation.json -w '%{http_code}' https://forge.test/api/graphql >/artifacts/validation.status
 api -d '{"query":"{ repository(owner:\"e2e\",name:\"missing\") { pullRequest(number:1) { number } } }"}' -o /artifacts/not-found-graphql.json -w '%{http_code}' https://forge.test/api/graphql >/artifacts/not-found-graphql.status
