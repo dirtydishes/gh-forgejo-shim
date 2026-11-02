@@ -34,7 +34,8 @@ move commit `b5f0c62`.
 Nothing in this repo or its beads records the decision below yet, which is finding 0. This section
 writes it down.
 
-**History.** The 2026-10-30 plan was a contract-first emulator of the gh CLI. The shim parsed gh's argv,
+**History.** The [2026-10-30 plan](rewrite-plan.md), which follows the [assessment](assessment.md), was a
+contract-first emulator of the gh CLI. The shim parsed gh's argv,
 called Forgejo, and reproduced gh's output, `--json`, `--jq` and error text. That work was split into
 tiers T0 to T3 and phases:
 
@@ -43,14 +44,15 @@ tiers T0 to T3 and phases:
 - C: operations work packages C1 to C5
 - D: T3
 
-Client captures taken the same day changed the picture.
+Client captures taken the same day ([`clients.md`](clients.md)) changed the picture.
 
 - **ChatGPT desktop (build 22943)** reads PR state through six fixed GraphQL documents. It uses `pr list`
   only to map a branch to a PR.
 - **Claude desktop and Claude Code** run `gh auth token --hostname <forge>`. They then call GitHub
   Enterprise REST directly at `https://<forge>/api/v3/repos/{o}/{r}` and `…/pulls?head=…`. No gh
   process is involved in those calls.
-- **Real gh 2.103.3**, pointed at a GitHub Enterprise-shaped host, ran all of T0 to T2. That needed 21
+- **Real gh 2.103.3**, pointed at a GitHub Enterprise-shaped host, ran all of T0 to T2
+  ([`gateway-spike.md`](gateway-spike.md)). That needed 21
   named GraphQL operations, including schema introspection, and 7 REST routes.
 
 A separate gateway repo, forgejo-github-api, was built after that. It is a Rust GraphQL and REST server
@@ -88,7 +90,7 @@ pre-move audit merged as its PR #6 (`22c0b69`).
   - the branch-protection paging fix
   - credential hardening
 - The move is **built and gated but unmerged**. It is local merge commit `b5f0c62` on
-  `foreman/gateway-move`, with parents `e17a07e` and forgejo-github-api `22c0b69`. It changes the
+  `build/gateway-move`, with parents `e17a07e` and forgejo-github-api `22c0b69`. It changes the
   following:
   - adds `crates/fga-core`, `crates/fga-server`, `fixtures/`, `scripts/e2e*`, `scripts/oracle/` and
     `docs/gateway/`, each at its original path, so `git log` follows the history;
@@ -110,8 +112,8 @@ calls over real HTTPS.
 ### F0. Nothing records option B, and the backlog still commissions an emulator (high, confirmed)
 
 No plan document, bead, README or gateway doc mentions option B, the unix socket or the move. The epic is
-titled "Core rewrite: contract-first gh emulation", and its description links to the old plan in a
-private repo. The open children still ask for emulator work:
+titled "Core rewrite: contract-first gh emulation", and its description linked to the old plan in a
+private repo. That plan now lives here as [`rewrite-plan.md`](rewrite-plan.md). The open children still ask for emulator work:
 
 - `cwe.8` (R3) wants "strict errors; never delegate Forgejo ops". The merged R3 code validates argv
   before anything else runs (`crates/gh-forgejo-shim/src/routing.rs:267`).
@@ -226,7 +228,7 @@ server mode. Server mode gets real weight rather than a secondary README section
 
 **Fix.** Build server mode as its own work package, `cwe.42`. It covers the container image, proxy
 snippets that include the `/pull/N` redirect, and tests for real gh and Claude's REST lookups against
-fga-server. Acceptance is the Claude footer and Claude desktop showing the PR on clover. Release notes
+fga-server. Acceptance is the Claude footer and Claude desktop showing the PR on a test Mac. Release notes
 and the README state support per mode.
 
 ### F6. Client-only mode can't make ChatGPT's PR links work (high, confirmed; decided D2)
@@ -534,8 +536,9 @@ One reviewer argued that gateway deadlines don't bound the gh process, and rated
 - The merge retry loops are bounded and don't reset the deadline: three inner retries
   (`crates/fga-core/src/forgejo/writes.rs:237`) and one base-race retry (`graphql/mutations.rs:398`).
 
-What remains is wording. The plan's "shared per-command deadline" (and R4's "slow server finishes within
-the deadline plus 0.5 s") was written for an emulator. Restate it as a per-gateway-request deadline, and
+What remains is wording. The "shared per-command deadline" ([assessment](assessment.md) §4, item 7)
+and R4's gate "slow server finishes within the deadline plus 0.5 s" ([rewrite plan](rewrite-plan.md)
+§4) were written for an emulator. Restate it as a per-gateway-request deadline, and
 say the wrapper doesn't kill gh.
 
 ### F24. Old turn logs contain local paths (low, confirmed)
@@ -630,7 +633,7 @@ The freeze doesn't cover `main` itself. A patch release cut from `main` is open 
 A separate audit of the code that survives the restructure found 34 bugs. It covered credentials and
 config, routing and the `gh` wrapper, and diagnostics, tracing and install. Each bug has a failing,
 `#[ignore]`d test. The audit tracks them under epic `jko` and documents them in
-`docs/audits/2026-11-01-surviving-shell.md`, both on local branch `audit/shell-sweep` at `8d2bfd9`,
+`docs/audits/2026-11-01-surviving-shell.md`, both on local branch `test/shell-audit` at `8d2bfd9`,
 which isn't merged yet. This section says what happens to each bug under option B.
 
 **On `main`** means the file is byte-identical on `main` and `rewrite`, so released users have the bug
@@ -697,7 +700,7 @@ in `repo.rs`.
 
 ### Fix or drop with `trace smoke`
 
-- **D11, `jko.28`, and D12, `jko.29`** (`codex_smoke.rs`). The 2026-10-30 assessment proposed dropping
+- **D11, `jko.28`, and D12, `jko.29`** (`codex_smoke.rs`). The [assessment](assessment.md) (§4, "Drop") proposed dropping
   `codex_smoke.rs`, because contract tests supersede it. If `trace smoke` survives, fix both. If it's
   dropped, the tests go with it. Decide this at cutover (`cwe.19`).
 
