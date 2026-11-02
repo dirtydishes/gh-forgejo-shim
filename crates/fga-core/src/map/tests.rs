@@ -775,6 +775,14 @@ fn pull_web_urls_take_githubs_layout() {
             "https://forge.test/pulls/9/pulls/6",
             "https://forge.test/pulls/9/pull/6",
         ),
+        (
+            "https://forge.test/o/r/pulls/2/commits/abc",
+            "https://forge.test/o/r/pull/2/commits/abc",
+        ),
+        (
+            "https://forge.test/o/r/pulls/2/",
+            "https://forge.test/o/r/pull/2/",
+        ),
     ] {
         assert_eq!(pull_web_url(forgejo), github, "{forgejo}");
     }
@@ -785,6 +793,10 @@ fn pull_web_urls_take_githubs_layout() {
         "https://forge.test/o/r",
         "https://forge.test/pulls/1",
         "https://forge.test/o/r/commit/abc#pulls/1",
+        // A query before any path, and an owner `pulls` with a numeric repository under a subpath.
+        "https://forge.test?x/o/r/pulls/1",
+        "https://forge.test/a/b/pulls/5/issues/3",
+        "https://forge.test/o/r/pulls/5/unknown",
         "not a url",
         "",
     ] {
