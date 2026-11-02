@@ -268,7 +268,12 @@ fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
             )))
         }
     };
-    document["hosts"] = toml_edit::value(config.hosts.iter().collect::<toml_edit::Array>());
+    let mut hosts = toml_edit::Value::from(config.hosts.iter().collect::<toml_edit::Array>());
+    // The old value's decor holds a comment at the end of the `hosts` line.
+    if let Some(old) = document.get("hosts").and_then(Item::as_value) {
+        *hosts.decor_mut() = old.decor().clone();
+    }
+    document["hosts"] = Item::Value(hosts);
     if let (Some(removed), Some(tables)) = (
         removed,
         document.get_mut("host").and_then(Item::as_table_like_mut),
@@ -493,7 +498,7 @@ gh = "/bin/gh#real"
         fs::write(
             &path,
             r#"# my forges
-hosts = ["git.example.com"]
+hosts = ["git.example.com"] # the allowlist
 future = "keep"
 
 [host."Old.Example.com"]
@@ -510,7 +515,7 @@ future_setting = "keep" # why
         assert_eq!(
             fs::read_to_string(&path)?,
             r#"# my forges
-hosts = ["git.example.com", "new.example.com"]
+hosts = ["git.example.com", "new.example.com"] # the allowlist
 future = "keep"
 
 [host."git.example.com"]
