@@ -195,7 +195,7 @@ fn addressed_to(public: &Url, req: &HttpRequest) -> bool {
     named
 }
 
-/// Hosts compare as parsed values, so `[::1]` names `[0:0:0:0:0:0:0:1]` and case doesn't matter.
+/// Case doesn't matter, and `[::1]` names `[0:0:0:0:0:0:0:1]`.
 /// `Host` never carries userinfo (RFC 9110 §7.2), and an explicit port must be a real one.
 fn names(authority: &[u8], host: &url::Host, port: u16, default: u16) -> bool {
     let Ok(authority) = Authority::try_from(authority) else {
@@ -213,7 +213,14 @@ fn names(authority: &[u8], host: &url::Host, port: u16, default: u16) -> bool {
         },
         _ => return false,
     };
-    explicit == port && url::Host::parse(authority.host()).is_ok_and(|parsed| parsed == *host)
+    // `url` reads IPv4 the way browsers do (`127.1`, `2130706433`), but gh keys tokens by host
+    // text, so only the spelling `url` writes back names a host; IPv6 compares as a value.
+    let text = authority.host();
+    explicit == port
+        && url::Host::parse(text).is_ok_and(|parsed| {
+            (matches!(parsed, url::Host::Ipv6(_)) || parsed.to_string().eq_ignore_ascii_case(text))
+                && parsed == *host
+        })
 }
 
 async fn graphql_request(

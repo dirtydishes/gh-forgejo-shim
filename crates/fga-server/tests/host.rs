@@ -170,6 +170,38 @@ async fn ports_and_addresses_compare_as_values() {
             "GET /api/v3/user HTTP/1.1\r\nHost: [::2]",
             421,
         ),
+        // A missing port follows the request's own scheme (Opus o1#2), and a port is digits only (o1#3).
+        (
+            "https://forge.test",
+            "GET http://forge.test/api/v3/user HTTP/1.1\r\nHost: forge.test",
+            421,
+        ),
+        (
+            "https://forge.test",
+            "GET /api/v3/user HTTP/1.1\r\nHost: forge.test:+443",
+            421,
+        ),
+        // Only an address's canonical spelling names it: gh keys tokens by host text (Opus o1#1).
+        (
+            "https://127.0.0.1",
+            "GET /api/v3/user HTTP/1.1\r\nHost: 127.0.0.1",
+            200,
+        ),
+        (
+            "https://127.0.0.1",
+            "GET /api/v3/user HTTP/1.1\r\nHost: 127.1",
+            421,
+        ),
+        (
+            "https://127.0.0.1",
+            "GET /api/v3/user HTTP/1.1\r\nHost: 2130706433",
+            421,
+        ),
+        (
+            "https://127.0.0.1",
+            "GET /api/v3/user HTTP/1.1\r\nHost: 0x7f.0.0.1",
+            421,
+        ),
     ] {
         let (addr, seen) = gateway(public).await;
         let status = send(addr, &format!("{head}\r\nAuthorization: token t")).await;
