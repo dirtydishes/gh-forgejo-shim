@@ -92,6 +92,14 @@ gfj doctor
 
 For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
+## Server Mode For Claude
+
+Claude Code and Claude desktop show pull request status by calling your forge's GitHub API themselves,
+outside of any `gh` process, so the client-side wrapper can't answer them. If you use Claude, run the
+gateway in server mode: it mounts the GitHub Enterprise API on your forge's own hostname, and a plain
+`gh auth login --hostname <forge>` is then all a client needs. It requires access to the forge's
+reverse proxy. See [docs/gateway/server-mode.md](docs/gateway/server-mode.md).
+
 ## Manual Setup
 
 If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
