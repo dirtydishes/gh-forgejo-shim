@@ -1,4 +1,5 @@
-# The forge's site with the gateway mounted. Caddy passes the client's Host through by default.
+# The forge's site with the gateway mounted; keep the gateway's routes in this site only. Caddy
+# passes the client's Host through by default.
 # Set the three values below, or export FORGE_SITE, FGA_UPSTREAM and FORGEJO_UPSTREAM.
 {$FORGE_SITE:forge.example.com} {
 	handle /api/v3/* {
