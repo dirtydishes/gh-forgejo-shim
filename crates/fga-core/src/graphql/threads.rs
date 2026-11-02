@@ -110,6 +110,8 @@ pub struct PullRequestReviewThread {
     comments: Vec<PullRequestReviewComment>,
     /// The pull request's author, who may resolve any of its conversations.
     pr_author: Arc<str>,
+    /// The pull request's head commit, which the thread's line must have been read on.
+    head_sha: Arc<str>,
 }
 impl PullRequestReviewThread {
     /// Forgejo lets the PR's author or a repository writer resolve a conversation
@@ -164,8 +166,12 @@ impl PullRequestReviewThread {
             DiffSide::Right
         }
     }
+    /// GitHub's current line, null once the thread is outdated. Forgejo keeps a comment's
+    /// position after a push moves or deletes its line and doesn't report the comment outdated
+    /// (`services/convert/pull_review.go`), so only a thread on the head commit has a current line.
     async fn line(&self) -> Option<i32> {
         self.line_number()
+            .filter(|_| self.first().source.commit_id == *self.head_sha)
     }
     async fn original_line(&self) -> Option<i32> {
         self.line_number()
@@ -198,10 +204,12 @@ pub(super) async fn review_threads(
     repo: &str,
     number: i32,
     pr_author: &str,
+    head_sha: &str,
 ) -> async_graphql::Result<Vec<PullRequestReviewThread>> {
     let session = ctx.data_unchecked::<Session>();
     let reviews = session.reviews(owner, repo, number).await.map_err(error)?;
     let pr_author: Arc<str> = pr_author.into();
+    let head_sha: Arc<str> = head_sha.into();
     let mut threads: Vec<PullRequestReviewThread> = Vec::new();
     for source in reviews
         .into_iter()
@@ -227,6 +235,7 @@ pub(super) async fn review_threads(
                 None => threads.push(PullRequestReviewThread {
                     comments: vec![comment],
                     pr_author: pr_author.clone(),
+                    head_sha: head_sha.clone(),
                 }),
             }
         }

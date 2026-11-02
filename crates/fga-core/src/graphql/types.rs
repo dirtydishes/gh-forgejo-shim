@@ -94,7 +94,8 @@ pub(super) fn listed(review: &forgejo::Review, viewer: &str) -> bool {
 }
 
 /// Whether the viewer may write to the repository, which is what lets them edit or close others'
-/// pull requests and comments.
+/// pull requests and comments. Forgejo checks write access to its pull request or issue unit, but
+/// its API reports only code access, which stands in for both (MAPPING §7).
 pub(super) async fn viewer_can_write(
     ctx: &Context<'_>,
     owner: &str,
