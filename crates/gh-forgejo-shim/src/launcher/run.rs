@@ -282,28 +282,11 @@ async fn serve_gh(
         }
     };
     let pid = child.id().and_then(|id| Pid::from_raw(id as i32));
-    // A signal that landed between the check above and the spawn reached no gh, even from a
-    // terminal: gh didn't exist yet. Forward it whatever the terminal rule says.
-    // That signal also reached its stream, which was listening before the check above, so the
-    // stream's next notification is the same delivery: skip it, or gh would get it twice.
-    let mut already_forwarded: Option<Signal> = None;
-    let late = caught.swap(0, Ordering::SeqCst);
-    if late != 0 {
-        if let Some(signal) = SIGNALS
-            .into_iter()
-            .find(|signal| signal.as_raw() as usize == late)
-        {
-            forward(pid, signal);
-            already_forwarded = Some(signal);
-        }
-    }
-    let mut deliver = |signal: Signal, terminal_rule: bool| {
-        if already_forwarded == Some(signal) {
-            already_forwarded = None;
-        } else if !terminal_rule || !in_terminal_foreground() {
-            forward(pid, signal);
-        }
-    };
+    // A signal between the check above and the spawn reaches its stream below and is handled
+    // like any other. One case is lost: a terminal's Ctrl-C or Ctrl-\ in that window, which gh
+    // missed and the terminal rule doesn't forward. Pressing it again works. Forwarding from the
+    // flag instead can't tell that window from the moment after the spawn, when the terminal
+    // already reached gh, so it would duplicate or swallow deliveries (spec §6).
 
     let serve = axum::serve(PeerChecked::new(listener), router).into_future();
     tokio::pin!(serve);
@@ -311,10 +294,10 @@ async fn serve_gh(
     let status: io::Result<ExitStatus> = loop {
         tokio::select! {
             status = child.wait() => break status,
-            _ = signals.term.recv() => deliver(Signal::TERM, false),
-            _ = signals.hup.recv() => deliver(Signal::HUP, false),
-            _ = signals.int.recv() => deliver(Signal::INT, true),
-            _ = signals.quit.recv() => deliver(Signal::QUIT, true),
+            _ = signals.term.recv() => forward(pid, Signal::TERM),
+            _ = signals.hup.recv() => forward(pid, Signal::HUP),
+            _ = signals.int.recv() => if !in_terminal_foreground() { forward(pid, Signal::INT) },
+            _ = signals.quit.recv() => if !in_terminal_foreground() { forward(pid, Signal::QUIT) },
             // The accept loop never ends on its own; if it somehow does, keep waiting for gh.
             _ = &mut serve, if serving => serving = false,
         }

@@ -584,7 +584,10 @@ without forwarding, gh would keep running. The rule:
 - forward in every other case.
 
 One case is lost. A process that signals a launcher which is in the foreground of a terminal
-isn't forwarded, and gh keeps running. That is rare, and SIGTERM still works.
+isn't forwarded, and gh keeps running. That is rare, and SIGTERM still works. A second: a
+terminal's Ctrl-C or Ctrl-\ in the instant between the launcher's last pre-spawn check and gh's
+spawn reaches no gh and isn't forwarded; pressing it again works. Forwarding it from the
+pre-spawn flag can't tell that instant from the next, when the terminal already reached gh.
 
 The handlers are installed before the run directory exists. Any of these four signals arriving
 before gh is spawned aborts the launch. The launcher cleans up what it made and dies by that

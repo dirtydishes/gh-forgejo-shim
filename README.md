@@ -225,7 +225,7 @@ export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"
 export FJ_SHIM_TRACE_BODY=1
 ```
 
-`FJ_SHIM_TRACE` is opt-in. With it unset, runtime behavior is unchanged. Trace records include timestamp, cwd, argv, route decision, host/repo, duration, exit code, stdout/stderr byte counts, relevant environment keys, and redacted excerpts when `FJ_SHIM_TRACE_BODY=1` is also set. Sensitive auth material is not logged; `gh auth token` stdout is always suppressed in trace excerpts.
+`FJ_SHIM_TRACE` is opt-in. With it unset, runtime behavior is unchanged. Trace records include timestamp, cwd, argv, route decision, host/repo, duration, exit code, stdout/stderr byte counts, relevant environment keys, and redacted excerpts when `FJ_SHIM_TRACE_BODY=1` is also set. Sensitive auth material is not logged; `gh auth token` stdout is always suppressed in trace excerpts. A new trace file is created owner-only (0600), and an existing one is narrowed to 0600 before records are added. If the file belongs to another user, so it can't be narrowed, no records are written to it.
 
 Summarize a trace file:
 

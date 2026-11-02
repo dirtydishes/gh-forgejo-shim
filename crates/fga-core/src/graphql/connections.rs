@@ -90,6 +90,8 @@ connection!(PullRequestReviewConnection, PullRequestReview);
 connection!(ReviewRequestConnection, ReviewRequest);
 connection!(IssueCommentConnection, IssueComment);
 connection!(PullRequestCommitConnection, PullRequestCommit);
+connection!(PullRequestReviewCommentConnection, PullRequestReviewComment);
+connection!(PullRequestReviewThreadConnection, PullRequestReviewThread);
 connection!(GitActorConnection, GitActor);
 connection!(ProjectV2ItemConnection, ProjectV2Item);
 

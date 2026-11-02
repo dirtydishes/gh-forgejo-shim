@@ -1,7 +1,7 @@
 //! Minimal JSONL tracing for native dispatcher decisions.
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -384,7 +384,11 @@ fn expand_home(value: &str, env: &HashMap<String, String>) -> PathBuf {
     PathBuf::from(value)
 }
 
-fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
+/// Appends `record` as one line. Concurrent writers (parallel `gh` calls, the git recorder) stay
+/// whole records because the line goes out in one append-mode write, which local filesystems
+/// keep whole. NFS doesn't promise that. No lock: one taken by another process could hang every
+/// traced call after its command has already run.
+pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
     create_parent_dirs(path)?;
 
     let mut options = OpenOptions::new();
@@ -395,10 +399,45 @@ fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
         options.mode(0o600);
     }
 
+    let mut line = serde_json::to_vec(record)?;
+    line.push(b'\n');
     let mut file = options.open(path)?;
-    serde_json::to_writer(&mut file, record)?;
-    file.write_all(b"\n")?;
-    Ok(())
+    // The mode above applies only to a new file. Records can hold repo paths and command lines,
+    // so an existing file others can read is narrowed before anything is added to it. Only a
+    // regular file: a trace sent to /dev/null or a terminal leaves that device's mode alone.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = file.metadata()?;
+        if metadata.is_file() && metadata.permissions().mode() & 0o077 != 0 {
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    write_once(&mut file, &line)
+}
+
+/// Appends `line` in one `write(2)`, so concurrent O_APPEND writers can't land inside it. A short
+/// write isn't retried, as `write_all` would: the rest would land after whatever another writer
+/// appended meanwhile, splitting this record around theirs. The cut-off part stays (jko.37) and
+/// the call fails. An interrupted call wrote nothing, so it's tried again.
+fn write_once(out: &mut impl Write, line: &[u8]) -> io::Result<()> {
+    loop {
+        match out.write(line) {
+            Ok(written) if written == line.len() => return Ok(()),
+            Ok(written) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    format!(
+                        "trace record cut off after {written} of {} bytes",
+                        line.len()
+                    ),
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn create_parent_dirs(path: &Path) -> io::Result<()> {
@@ -419,6 +458,47 @@ fn timestamp_unix_ms() -> u128 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A writer whose `write` calls return `results` in turn, recording the bytes of each call.
+    struct ScriptedWriter {
+        results: Vec<io::Result<usize>>,
+        calls: Vec<Vec<u8>>,
+    }
+
+    impl Write for ScriptedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.calls.push(buf.to_vec());
+            self.results.remove(0)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_short_trace_write_fails_without_appending_the_rest() {
+        let mut out = ScriptedWriter {
+            results: vec![Ok(4), Ok(100)],
+            calls: Vec::new(),
+        };
+        let error = write_once(&mut out, b"{\"a\":1}\n").expect_err("short write");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert_eq!(out.calls.len(), 1, "the rest of the record was written");
+    }
+
+    #[test]
+    fn an_interrupted_trace_write_is_tried_again_whole() {
+        let mut out = ScriptedWriter {
+            results: vec![Err(io::ErrorKind::Interrupted.into()), Ok(8)],
+            calls: Vec::new(),
+        };
+        write_once(&mut out, b"{\"a\":1}\n").expect("second try writes it");
+        assert_eq!(
+            out.calls,
+            [b"{\"a\":1}\n".to_vec(), b"{\"a\":1}\n".to_vec()]
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -460,6 +540,20 @@ mod tests {
         assert!(!redacted.contains("hunter2"), "{redacted}");
         assert!(!redacted.contains("plain-secret"), "{redacted}");
         assert!(redacted.contains(REDACTED), "{redacted}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_trace_sent_to_a_device_leaves_its_mode_alone() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let null = Path::new("/dev/null");
+        let before = fs::metadata(null)?.permissions().mode();
+
+        append_jsonl(null, &json!({"kind": "gh"}))?;
+
+        assert_eq!(fs::metadata(null)?.permissions().mode(), before);
+        Ok(())
     }
 
     #[test]

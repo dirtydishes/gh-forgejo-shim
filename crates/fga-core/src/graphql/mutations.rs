@@ -134,6 +134,7 @@ impl Mutation {
                 node: Some(IssueComment {
                     source,
                     owner: id.owner,
+                    repo: id.repository,
                     viewer: session.viewer.login.clone(),
                 }),
             }),
