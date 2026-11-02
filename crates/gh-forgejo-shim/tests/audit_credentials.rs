@@ -259,7 +259,6 @@ fn audit_cred_config_update_preserves_unknown_settings() -> TestResult {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "audit C5: fails until gh-forgejo-shim-jko.21 is fixed"]
 fn audit_cred_failed_config_write_preserves_original_file() -> TestResult {
     let fixture = Fixture::new()?;
     let before = "hosts = [\"git.example.com\"]\n";

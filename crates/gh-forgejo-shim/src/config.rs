@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, ShimError};
+use crate::{shim, Result, ShimError};
 
 pub type EnvMap = BTreeMap<String, String>;
 
@@ -267,12 +267,25 @@ pub fn write_config(config: &Config) -> Result<()> {
     }
     lines.push(String::new());
 
-    fs::write(&config.path, lines.join("\n")).map_err(|error| {
-        ShimError::new(format!(
-            "could not write {}: {error}",
-            config.path.display()
-        ))
-    })
+    replace_config_file(&config.path, lines.join("\n").as_bytes())
+}
+
+/// Writes a new file and renames it into place, so a failed write leaves the old config whole.
+/// A symlinked config is replaced at its target, so a dotfiles link survives, and the file keeps
+/// its mode.
+fn replace_config_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let could_not_write = |error: &dyn std::fmt::Display| {
+        ShimError::new(format!("could not write {}: {error}", path.display()))
+    };
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let permissions = fs::metadata(&target)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    shim::replace_file(&target, contents, false).map_err(|error| could_not_write(&error))?;
+    if let Some(permissions) = permissions {
+        fs::set_permissions(&target, permissions).map_err(|error| could_not_write(&error))?;
+    }
+    Ok(())
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -600,6 +613,27 @@ gh = "/bin/gh#real"
             fs::read_to_string(&path).unwrap_or_default(),
             "hosts = [\"git.example.com\", \"new.example.com\"]\n\n[paths]\ngh = \"/bin/gh\"\n"
         );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_edits_keep_a_symlinked_config_and_its_mode() -> Result<()> {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = temp_root()?;
+        let target = root.join("dotfiles-config.toml");
+        fs::write(&target, "hosts = [\"git.example.com\"]\n")?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+        let path = root.join("config.toml");
+        symlink(&target, &path)?;
+
+        add_host("new.example.com", Some(&path))?;
+
+        assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
+        assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o600);
+        assert!(fs::read_to_string(&target)?.contains("new.example.com"));
         fs::remove_dir_all(root).ok();
         Ok(())
     }
