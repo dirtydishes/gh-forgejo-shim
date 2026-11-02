@@ -190,7 +190,6 @@ fn executable(path: &Path, contents: &str) -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "audit R1: fails until gh-forgejo-shim-jko.15 is fixed"]
 fn audit_route_copied_dispatcher_on_path() -> TestResult {
     let fixture = Fixture::new()?;
     fs::copy(
@@ -210,7 +209,6 @@ fn audit_route_copied_dispatcher_on_path() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R1: fails until gh-forgejo-shim-jko.15 is fixed"]
 fn audit_route_hardlinked_real_gh_override() -> TestResult {
     let fixture = Fixture::new()?;
     // Keep both hardlink names on the temp filesystem, including in Docker.
