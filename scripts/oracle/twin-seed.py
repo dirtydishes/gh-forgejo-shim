@@ -135,12 +135,15 @@ class Twin:
         header = 'Authorization: Basic ' + base64.b64encode(f'dirtydishes:{self.token}'.encode()).decode()
         # Nothing inherited may point git at another repository or bring back user config.
         inherited = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        # git would also carry the header to wherever a redirect points, so it follows none.
         env = dict(inherited, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0',
-                   GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.extraHeader', GIT_CONFIG_VALUE_0=header)
+                   GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='http.extraHeader', GIT_CONFIG_VALUE_0=header,
+                   GIT_CONFIG_KEY_1='http.followRedirects', GIT_CONFIG_VALUE_1='false')
         result = subprocess.run(['git', *args], cwd=cwd, env=env, capture_output=True, text=True)
         if result.returncode:
-            stderr = result.stderr.replace(self.token, '<token>').replace(header, '<header>')
-            raise SystemExit(f'git {args[0]} failed ({result.returncode}): {stderr.strip()}')
+            # Some reasons, such as "nothing to commit", arrive on stdout.
+            output = (result.stderr + result.stdout).replace(self.token, '<token>').replace(header, '<header>')
+            raise SystemExit(f'git {args[0]} failed ({result.returncode}): {output.strip()}')
         return result.stdout.strip()
 
 
@@ -192,6 +195,8 @@ def push_branch(twin, checkout, item):
 
 
 def message(item, n):
+    """A commit's message. A resumed run recognises its own pushes by it (`pushed_all`), so changing
+    this format makes a resume push the later commits again."""
     return item['title'].removeprefix('WIP: ') + f' ({n})'
 
 
