@@ -135,6 +135,82 @@ fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
 }
 
 #[test]
+fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
+    let f = Fixture::new()?;
+    let fresh_tmp = f.root.join("fresh/tmp");
+    // Under umask 000 a plain create_dir_all makes 0777 directories, so this fails on any
+    // runner unless each directory the shim creates gets its own mode.
+    let run = |args: &[&str]| -> io::Result<std::process::Output> {
+        Command::new("/bin/sh")
+            .args(["-c", "umask 000 && exec \"$0\" \"$@\""])
+            .arg(env!("CARGO_BIN_EXE_gfj"))
+            .args(args)
+            .env_clear()
+            .envs(f.env())
+            .env("TMPDIR", &fresh_tmp)
+            .env("FJ_SHIM_TRACE", f.root.join("fresh-trace/gh.jsonl"))
+            .current_dir(&f.root)
+            .stdin(Stdio::null())
+            .output()
+    };
+    let real_git = f.bin.join("git");
+    let trace = f.root.join("git.jsonl");
+    let mut commands = vec![
+        vec!["install-shim"],
+        vec!["gh", "--version"],
+        vec!["config", "add-host", "git.example.test"],
+        vec![
+            "trace",
+            "git-recorder",
+            "create",
+            trace.to_str().ok_or("trace path")?,
+            "--real-git",
+            real_git.to_str().ok_or("git path")?,
+        ],
+    ];
+    if cfg!(target_os = "macos") {
+        commands.push(vec![
+            "install-gui-path",
+            "--path",
+            "/usr/bin:/bin",
+            "--no-apply",
+        ]);
+    }
+    for args in commands {
+        let output = run(&args)?;
+        assert!(output.status.success(), "{args:?} failed: {output:?}");
+    }
+    let recorder = fs::read_dir(&fresh_tmp)?
+        .next()
+        .ok_or("no recorder directory")??
+        .path();
+    let mode = |path: &Path| fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
+    let mut created = vec![
+        (f.root.join("fresh-trace"), 0o700),
+        (f.home.join(".local"), 0o755),
+        (f.home.join(".local/bin"), 0o755),
+        (f.home.join(".config"), 0o700),
+        (f.home.join(".config/gh-forgejo-shim"), 0o700),
+        (f.root.join("fresh"), 0o755),
+        (fresh_tmp.clone(), 0o755),
+        (recorder, 0o755),
+    ];
+    if cfg!(target_os = "macos") {
+        created.push((f.home.join("Library/LaunchAgents"), 0o755));
+    }
+    for (path, allowed) in created {
+        let mode = mode(&path)?;
+        assert_eq!(
+            mode & !allowed,
+            0,
+            "{} was created {mode:o}, more open than {allowed:o}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_diag_recorder_recreate_prevents_self_recursion() -> TestResult {
     let f = Fixture::new()?;
     let directory = f.root.join("recorder");
