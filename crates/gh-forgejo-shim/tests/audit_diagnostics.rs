@@ -382,7 +382,6 @@ fn audit_diag_summary_invalid_utf8_tail() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D1: fails until gh-forgejo-shim-jko.3 is fixed"]
 fn audit_diag_recorder_remove_preserves_unrelated_files() -> TestResult {
     let f = Fixture::new()?;
     let directory = f.root.join("existing-bin");
