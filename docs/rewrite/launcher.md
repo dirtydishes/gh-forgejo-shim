@@ -530,9 +530,15 @@ ChatGPT's own "Open pull request in browser" link doesn't go through gh. In clie
   included (`crates/fga-core/src/forgejo.rs:143,194-200`). The deadline starts after
   authentication, though, and the `/user` lookup that authenticates has its own 10 s client
   timeout. A request that has to authenticate can therefore take up to about 20 s before gh gets
-  a 504: a 9 s `/user`, then a stalled call. Later requests in the same call reuse the cached
-  session, so they're bounded by about 10 s. Putting both steps under one deadline would be a
+  its error: a 9 s `/user`, then a stalled call. Requests that find the session cached are bounded
+  by about 10 s. The cache keeps a session for 60 s from its lookup, with no extension on use
+  (`crates/fga-core/src/forgejo/cache.rs:11`), so a long `gh run watch` authenticates again each
+  minute and can hit the 20 s bound then too. Putting both steps under one deadline would be a
   gateway change, not a launcher one.
+- What gh gets for a timeout depends on the API. A REST request gets 504. A GraphQL request,
+  which is what `gh pr view` and most `pr` commands send, gets HTTP 200 with an `errors` body
+  naming the timeout: the gateway's GraphQL handler always answers 200 (`graphql_request` in
+  `crates/fga-server/src/lib.rs`). Either way gh prints the error and exits 1.
 - The launcher has no process-wide deadline and never kills gh on its own. `gh run watch` and
   `gh pr checks --watch` poll for as long as gh likes. An interactive `gh pr create` sits in the
   editor for as long as the user likes. Plain gh against GitHub behaves the same way.
@@ -541,8 +547,9 @@ ChatGPT's own "Open pull request in browser" link doesn't go through gh. In clie
   (section 6). SIGKILL leaves gh to fail on its next request.
 
 R4's old gate, "a slow server finishes within the deadline plus 0.5 s", becomes a gateway test.
-A stalled upstream gets a 504 within 10.5 s once the session is cached, and within 20.5 s when
-`/user` is slow too. The launcher keeps running until gh exits.
+A stalled upstream answers within 10.5 s once the session is cached, and within 20.5 s when
+`/user` is slow too: a 504 for REST, a 200 with an `errors` body for GraphQL. The launcher keeps
+running until gh exits.
 
 **Concurrency.** Each invocation has its own run directory, socket, config copy, gateway and
 session cache. ChatGPT polls about every 60 s per thread, so several launchers run at once and share
@@ -555,8 +562,9 @@ remaining shared writes are:
   launcher writes trace records the same way, and adds no lock;
 - the sweep, which only touches directories whose lock it holds (section 4).
 
-Each launched call pays one extra upstream request, the `/user` lookup that authenticates gh's
-first request. The session cache lives in the process and doesn't outlast it. Within one call, gh
+Each launched call pays one `/user` lookup per served token per minute of activity: the first
+request, then one more each time the 60 s cache entry lapses. The session cache lives in the
+process and doesn't outlast it. Within one call, gh
 sends requests in parallel (for example `gh pr status`, or `gh auth status` across hosts), and the
 runtime serves them concurrently.
 
@@ -612,9 +620,10 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     token, a launched `gh pr view` exits 4 with the login hint.
 12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
     `gh config set` in a Forgejo checkout changes the user's real `config.yml`.
-13. **Timeout (§10).** A stalled upstream gets gh a 504 within 10.5 s once the session is cached.
-    A slow `/user` (9 s) followed by a stalled call gets the 504 within 20.5 s. The launcher
-    doesn't kill gh in either case.
+13. **Timeout (§10).** Once the session is cached, a stalled upstream answers within 10.5 s:
+    a REST request (`gh api repos/{owner}/{repo}`) with 504, and a GraphQL request (`gh pr view`)
+    with 200 and an `errors` body. A slow `/user` (9 s) followed by a stalled call answers within
+    20.5 s. gh exits 1 in every case, and the launcher doesn't kill it.
 
 ## 12. Ownership
 
