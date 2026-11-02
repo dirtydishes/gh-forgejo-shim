@@ -304,17 +304,22 @@ fn replace_config_file(path: &Path, contents: &[u8]) -> Result<()> {
 }
 
 /// The file a config write replaces: the end of any symlink chain, so a dotfiles link survives.
-/// A dangling link is followed one step and its target created, rather than the link replaced.
+/// A dangling chain is followed to its missing end, which is created, rather than a link in it
+/// being replaced. Like the kernel, it gives up after 40 links.
 fn config_file_target(path: &Path) -> PathBuf {
     if let Ok(target) = fs::canonicalize(path) {
         return target;
     }
-    match fs::read_link(path) {
-        Ok(link) => path
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        let Ok(link) = fs::read_link(&target) else {
+            break;
+        };
+        target = target
             .parent()
-            .map_or(link.clone(), |parent| parent.join(&link)),
-        Err(_) => path.to_path_buf(),
+            .map_or(link.clone(), |parent| parent.join(&link));
     }
+    target
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -752,11 +757,18 @@ future_setting = "keep" # why
 
         let root = temp_root()?;
         let path = root.join("config.toml");
-        symlink("dotfiles-config.toml", &path)?;
+        symlink("middle.toml", &path)?;
+        symlink("dotfiles-config.toml", root.join("middle.toml"))?;
 
         add_host("new.example.com", Some(&path))?;
 
-        assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
+        for link in [&path, &root.join("middle.toml")] {
+            assert!(
+                fs::symlink_metadata(link)?.file_type().is_symlink(),
+                "{}",
+                link.display()
+            );
+        }
         assert!(fs::read_to_string(root.join("dotfiles-config.toml"))?.contains("new.example.com"));
         fs::remove_dir_all(root).ok();
         Ok(())
