@@ -160,11 +160,10 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     })?;
     let target_bin_dir = setup_model.target_bin_dir.clone();
     let target_shim = setup_model.target_shim_path.clone();
-    let repo_is_github = left_to_gh;
     let mut checks = Vec::new();
 
     if let Some(repo) = repo.as_ref() {
-        if repo_is_github {
+        if left_to_gh {
             let mut message = format!(
                 "detected GitHub repository {}/{}/{}; leaving {} out of the Forgejo allowlist",
                 repo.host, repo.owner, repo.name, repo.host
@@ -198,25 +197,29 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                 ),
                 Vec::<String>::new(),
             ));
-        } else if options.dry_run {
-            checks.push(BootstrapCheck::plan(
-                "repository",
-                format!(
-                    "would allowlist {} for {}/{}",
-                    repo.host, repo.owner, repo.name
-                ),
-            ));
         } else {
-            config = config::add_host(&repo.host, Some(&config_path))?;
-            checks.push(BootstrapCheck::new(
-                "repository",
-                true,
-                format!(
-                    "detected {}/{}/{} and allowlisted {}",
-                    repo.host, repo.owner, repo.name, repo.host
-                ),
-                Vec::<String>::new(),
-            ));
+            // gh drops a remote's port. When an entry with one already routes this host, write
+            // that entry: gh's spelling beside it would leave two entries for one hostname, and
+            // the wrapper routes neither.
+            let entry =
+                doctor::allowlist_entry(&config, &repo.host).unwrap_or_else(|| repo.host.clone());
+            if options.dry_run {
+                checks.push(BootstrapCheck::plan(
+                    "repository",
+                    format!("would allowlist {entry} for {}/{}", repo.owner, repo.name),
+                ));
+            } else {
+                config = config::add_host(&entry, Some(&config_path))?;
+                checks.push(BootstrapCheck::new(
+                    "repository",
+                    true,
+                    format!(
+                        "detected {}/{}/{} and allowlisted {entry}",
+                        repo.host, repo.owner, repo.name
+                    ),
+                    Vec::<String>::new(),
+                ));
+            }
         }
     } else {
         checks.push(BootstrapCheck::new(
@@ -289,7 +292,7 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
 
     let gui_path_apply = gui_path_action(&setup_model, &options, &mut checks)?;
 
-    if repo_is_github {
+    if left_to_gh {
         checks.push(BootstrapCheck::new(
             "auth",
             true,

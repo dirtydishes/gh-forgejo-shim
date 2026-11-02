@@ -288,10 +288,47 @@ fn doctor_names_no_repository_where_gh_host_finds_none() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
 
-    for env in [("GH_HOST", "github.com"), ("GH_REPO", "not a repository")] {
+    // A GH_HOST of spaces pins gh to that host just the same.
+    for env in [
+        ("GH_HOST", "github.com"),
+        ("GH_HOST", " "),
+        ("GH_REPO", "not a repository"),
+    ] {
         let stdout = doctor(&fixture, &[env])?;
         assert!(!stdout.contains("current repo host"), "{env:?}: {stdout}");
     }
+    Ok(())
+}
+
+#[test]
+fn bootstrap_keeps_the_port_of_an_allowlisted_host() -> TestResult {
+    // gh drops the remote's port, so gh's spelling is git.example.com; adding that beside
+    // git.example.com:3000 would leave two entries for one hostname, and neither would route.
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.git([
+        "remote",
+        "set-url",
+        "origin",
+        "https://git.example.com:3000/owner/repo.git",
+    ])?;
+    let config_dir = fixture.home().join(".config/gh-forgejo-shim");
+    fs::create_dir_all(&config_dir)?;
+    fs::write(
+        config_dir.join("config.toml"),
+        "hosts = [\"git.example.com:3000\"]\n",
+    )?;
+
+    let stdout = bootstrap(&fixture)?;
+
+    assert!(
+        stdout.contains("allowlisted git.example.com:3000"),
+        "{stdout}"
+    );
+    assert_eq!(
+        shim_config(&fixture)?,
+        "hosts = [\"git.example.com:3000\"]\n"
+    );
     Ok(())
 }
 
