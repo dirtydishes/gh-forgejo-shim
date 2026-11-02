@@ -124,8 +124,9 @@ thread_local! {
     static CHILD_SIGNAL: Cell<i32> = const { Cell::new(0) };
 }
 
-/// [`exit_code`] for a child that shares this process's terminal. A signal that killed it is
-/// remembered, so [`exit_like_child`] can end this process with the same signal.
+/// [`exit_code`] for a child this process stands in for, such as real gh or real git. A signal
+/// that killed it is remembered, so [`exit_like_child`] can end this process with the same
+/// signal.
 pub fn inherited_exit_code(status: ExitStatus) -> i32 {
     #[cfg(unix)]
     {
