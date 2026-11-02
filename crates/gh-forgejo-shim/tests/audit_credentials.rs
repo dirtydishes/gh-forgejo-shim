@@ -157,6 +157,30 @@ fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult
 }
 
 #[test]
+fn audit_cred_github_subdomains_never_receive_the_forgejo_token() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.write(
+        &fixture.config_path(),
+        "hosts = [\"api.github.com\", \"gist.github.com\"]\n",
+    )?;
+    let env = config::EnvMap::from([("FJ_SHIM_TOKEN".into(), "audit-forgejo-token".into())]);
+    let loaded = config::load_config_with_env(Some(&fixture.config_path()), &env)?;
+
+    assert!(
+        loaded.hosts.is_empty(),
+        "GitHub subdomains allowlisted: {:?}",
+        loaded.hosts
+    );
+    for host in ["api.github.com", "gist.github.com"] {
+        assert!(
+            auth::resolve_token(host, &loaded, &env, Some(&fixture.home), Some("linux")).is_none(),
+            "Forgejo token resolved for {host}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_cred_import_rejects_github_default_port() -> TestResult {
     let fixture = Fixture::new()?;
     let path = fixture.home.join(".config/tea/config.yml");
