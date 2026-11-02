@@ -445,10 +445,11 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
     // executable by others but not by its owner, this user (0655); or sits at a path with a
     // newline, which the wrapper's exec line must still be read back from. As root, 0655 is
     // runnable, so that case only means something otherwise.
-    let probe = std::env::temp_dir().join(format!("gfj-audit-uid-{}", std::process::id()));
+    // The fixture's root is private and new, so nothing else can be at this path.
+    let probe_fixture = Fixture::new()?;
+    let probe = probe_fixture.root.join("uid-probe");
     fs::write(&probe, "")?;
     let root = std::os::unix::fs::MetadataExt::uid(&fs::metadata(&probe)?) == 0;
-    fs::remove_file(&probe)?;
     let mut cases = vec![
         ("release/gfj", None),
         ("release/gfj", Some(0o644)),
