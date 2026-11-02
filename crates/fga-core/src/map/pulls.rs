@@ -206,8 +206,8 @@ pub fn merge_state(
     {
         return MergeStateStatus::Blocked;
     }
-    // Rules this caller can't read may still block.
-    if protection.is_some_and(|p| p.partial) {
+    // Rules this caller can't read, or protected files the gateway can't match, may still block.
+    if protection.is_some_and(|p| p.partial || p.protects_files()) {
         return MergeStateStatus::Unknown;
     }
     if rollup(checks).is_some_and(|state| state != StatusState::Success) {

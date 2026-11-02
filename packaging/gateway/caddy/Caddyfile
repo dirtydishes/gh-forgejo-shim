@@ -1,0 +1,27 @@
+# The forge's site with the gateway mounted; keep the gateway's routes in this site only.
+# Set the three values below, or export FORGE_SITE, FGA_UPSTREAM and FORGEJO_UPSTREAM.
+
+# The gateway checks the client's host and port, so send them as the client did. Caddy keeps Host
+# for an HTTP upstream but rewrites it to the upstream's own name for an HTTPS one.
+(fga) {
+	reverse_proxy {$FGA_UPSTREAM:127.0.0.1:8080} {
+		header_up Host {hostport}
+	}
+}
+
+{$FORGE_SITE:forge.example.com} {
+	handle /api/v3/* {
+		import fga
+	}
+	handle /api/graphql {
+		import fga
+	}
+	# gh and ChatGPT link pull requests as /{owner}/{repo}/pull/{n}; the gateway redirects them.
+	@pull_link path_regexp ^/[^/]+/[^/]+/pull/[0-9]+(/.*)?$
+	handle @pull_link {
+		import fga
+	}
+	handle {
+		reverse_proxy {$FORGEJO_UPSTREAM:127.0.0.1:3000}
+	}
+}

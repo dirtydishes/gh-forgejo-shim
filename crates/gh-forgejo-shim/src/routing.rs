@@ -10,7 +10,7 @@ use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::invocation::Invocation;
 use crate::read_only;
-use crate::repo::{detect_repo, RepoRef};
+use crate::repo::{detect_repo, expand_alias, gh_hostname, Checkout, GhHosts, RepoRef};
 use crate::trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,26 @@ pub struct DispatcherConfig {
 impl DispatcherConfig {
     pub fn is_forgejo_host(&self, host: Option<&str>) -> bool {
         config::is_forgejo_host(&self.hosts, host)
+    }
+
+    /// The allowlist entry that serves `host`. gh drops the port from a remote URL, so a host
+    /// without a port is served by the one entry with that hostname, port or not. A host with a
+    /// port needs an entry with that exact port. A hostname that two entries share serves
+    /// neither, under any spelling: gh's API client looks up tokens by hostname alone
+    /// (`gh/api/http_client.go:284-290`), so a launched gh could present neither entry's token.
+    pub fn forgejo_host(&self, host: &str) -> Option<String> {
+        let host = normalize_host(host);
+        let hostname = gh_hostname(&host);
+        let mut entries = self
+            .hosts
+            .iter()
+            .map(|entry| normalize_host(entry))
+            .filter(|entry| gh_hostname(entry) == hostname && self.is_forgejo_host(Some(entry)));
+        let entry = entries.next()?;
+        if entries.next().is_some() {
+            return None;
+        }
+        (host == hostname || entry == host).then_some(entry)
     }
 }
 
@@ -87,7 +107,11 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let argv = args.into_iter().collect::<Vec<_>>();
-    let env = std::env::vars().collect::<HashMap<_, _>>();
+    // `std::env::vars` panics on a value that isn't UTF-8 (audit R7). Routing reads only named
+    // variables, so one it can't read is left out of the map.
+    let env = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect::<HashMap<_, _>>();
     let cwd = std::env::current_dir().ok();
     run_gh(argv, env, cwd.as_deref(), DelegateMode::Inherit)
 }
@@ -113,8 +137,16 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    let invocation = Invocation::parse(argv);
-    decide_invocation_route(&invocation, config, env, cwd)
+    decide_invocation_route(&routing_invocation(argv, env), config, env, cwd)
+}
+
+/// The invocation routing decides on: `argv` with a plain gh alias expanded as gh expands it, so
+/// an alias's own flags and arguments count. gh itself still gets the original `argv`.
+fn routing_invocation(argv: &[String], env: &HashMap<String, String>) -> Invocation {
+    match expand_alias(argv, env) {
+        Some(expanded) => Invocation::parse(&expanded),
+        None => Invocation::parse(argv),
+    }
 }
 
 fn decide_invocation_route(
@@ -123,6 +155,21 @@ fn decide_invocation_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
+    // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
+    // (`gh/pkg/cmd/api/http.go:19-21`).
+    if invocation.command == "api" {
+        if let Some((_, rest)) = invocation
+            .positionals
+            .first()
+            .and_then(|path| path.split_once("://"))
+        {
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            return host_route(host, config);
+        }
+    }
     if invocation.command.starts_with("auth ") || invocation.command == "api" {
         if let Some(host) = invocation
             .flag("hostname")
@@ -132,7 +179,33 @@ fn decide_invocation_route(
             return host_route(host, config);
         }
     }
-    let detection = detect_repo(invocation, env, cwd);
+    let checkout = Checkout::new(cwd);
+    let detection = detect_repo(
+        invocation,
+        env,
+        &checkout,
+        &GhHosts::load(env, &config.hosts),
+    );
+    // A launched gh knows the user's hosts plus the allowlist hosts, so routing models that.
+    // Plain gh knows only the user's hosts. Before delegating, check that plain gh wouldn't pick a
+    // Forgejo host itself: it does when the user's own hosts.yml lists one. Such a call launches
+    // with the user's key set instead, which the launched gh then resolves exactly as plain gh.
+    if detection
+        .repo
+        .as_ref()
+        .is_none_or(|repo| config.forgejo_host(&repo.host).is_none())
+    {
+        let plain = detect_repo(invocation, env, &checkout, &GhHosts::user(env));
+        if let Some(repo) = plain.repo {
+            if let Some(host) = config.forgejo_host(&repo.host) {
+                return RouteDecision::forgejo(
+                    format!("{}, user's gh hosts", plain.source),
+                    Some(repo),
+                    Some(host),
+                );
+            }
+        }
+    }
     let Some(repo) = detection.repo else {
         if let Some(host) = env.get("GH_HOST").filter(|host| !host.trim().is_empty()) {
             return host_route(host, config);
@@ -146,22 +219,22 @@ fn decide_invocation_route(
             None,
         );
     };
-    if !config.is_forgejo_host(Some(repo.host.as_str())) {
+    let Some(host) = config.forgejo_host(&repo.host) else {
         return RouteDecision::delegate(
             format!("host {} is not allowlisted", repo.host),
             Some(repo),
         );
-    }
-    let host = repo.host.clone();
+    };
     RouteDecision::forgejo(detection.source, Some(repo), Some(host))
 }
 
 fn host_route(host: &str, config: &DispatcherConfig) -> RouteDecision {
-    let host = normalize_host(host);
-    if config.is_forgejo_host(Some(&host)) {
-        RouteDecision::forgejo("host", None, Some(host))
-    } else {
-        RouteDecision::delegate(format!("host {host} is not allowlisted"), None)
+    match config.forgejo_host(host) {
+        Some(host) => RouteDecision::forgejo("host", None, Some(host)),
+        None => RouteDecision::delegate(
+            format!("host {} is not allowlisted", normalize_host(host)),
+            None,
+        ),
     }
 }
 
@@ -196,7 +269,7 @@ fn run_gh(
             return 1;
         }
     };
-    let decision = decide_invocation_route(&invocation, &config, &env, cwd);
+    let decision = decide_invocation_route(&routing_invocation(&argv, &env), &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
     let exit_code = match decision.kind {

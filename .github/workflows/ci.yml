@@ -76,6 +76,9 @@ jobs:
       - name: Run gh against the gateway and a real Forgejo
         run: scripts/e2e.sh
 
+      - name: Run gh and Claude's lookups through the server-mode image and nginx snippet
+        run: scripts/e2e-server.sh
+
       - name: Upload e2e results
         if: always()
         uses: actions/upload-artifact@v4

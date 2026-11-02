@@ -190,7 +190,6 @@ fn executable(path: &Path, contents: &str) -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "audit R1: fails until gh-forgejo-shim-jko.15 is fixed"]
 fn audit_route_copied_dispatcher_on_path() -> TestResult {
     let fixture = Fixture::new()?;
     fs::copy(
@@ -210,7 +209,69 @@ fn audit_route_copied_dispatcher_on_path() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R1: fails until gh-forgejo-shim-jko.15 is fixed"]
+fn audit_route_copied_sibling_entry_point_on_path() -> TestResult {
+    // gfj and gh-forgejo-shim are both dispatchers but differ in bytes.
+    let fixture = Fixture::new()?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = fixture.gh(&["--version"]);
+    command.env_remove("FJ_SHIM_REAL_GH").env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not be selected as real gh"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
+    // Run through a symlink in a directory with no gfj beside it, as a symlinked install does.
+    let fixture = Fixture::new()?;
+    let linked = fixture.root.join("linked");
+    fs::create_dir(&linked)?;
+    symlink(
+        env!("CARGO_BIN_EXE_gh-forgejo-shim"),
+        linked.join("gh-forgejo-shim"),
+    )?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = Command::new(linked.join("gh-forgejo-shim"));
+    fixture.isolate(&mut command);
+    command
+        .args(["gh", "--version"])
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not pass as real gh when the dispatcher runs through a symlink"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_unreadable_dispatcher_copy_on_path() -> TestResult {
+    // A copy that can be executed but not read can't be shown to differ, so it's skipped.
+    let fixture = Fixture::new()?;
+    let copy = fixture.bin.join("gh");
+    fs::copy(env!("CARGO_BIN_EXE_gh-forgejo-shim"), &copy)?;
+    fs::set_permissions(&copy, fs::Permissions::from_mode(0o111))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = fixture.gh(&["--version"]);
+    command.env_remove("FJ_SHIM_REAL_GH").env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "an unreadable dispatcher copy must not be selected as real gh"
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_route_hardlinked_real_gh_override() -> TestResult {
     let fixture = Fixture::new()?;
     // Keep both hardlink names on the temp filesystem, including in Docker.
@@ -249,7 +310,6 @@ fn audit_route_version_in_forgejo_checkout() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R2: fails until gh-forgejo-shim-jko.2 is fixed"]
 fn audit_route_short_repo_override() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.origin(&format!("https://{HOST}/local/project.git"))?;
@@ -262,7 +322,6 @@ fn audit_route_short_repo_override() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R2: fails until gh-forgejo-shim-jko.2 is fixed"]
 fn audit_route_short_gh_repo_override() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.origin(&format!("https://{HOST}/local/project.git"))?;
@@ -275,7 +334,6 @@ fn audit_route_short_gh_repo_override() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R5: fails until gh-forgejo-shim-jko.6 is fixed"]
 fn audit_route_https_port_allowlist() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.origin(&format!("https://{HOST}:3443/owner/repo.git"))?;
@@ -290,7 +348,6 @@ fn audit_route_https_port_allowlist() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R6: fails until gh-forgejo-shim-jko.16 is fixed"]
 fn audit_route_signal_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     executable(&fixture.real_gh, "#!/bin/sh\nkill -TERM $$\n")?;
@@ -301,6 +358,37 @@ fn audit_route_signal_passthrough() -> TestResult {
         "the wrapper must preserve real gh's SIGTERM; observed status={}",
         output.status
     );
+    Ok(())
+}
+
+#[test]
+fn audit_route_signal_passthrough_restores_default_actions() -> TestResult {
+    // Rust ignores SIGPIPE and handles SIGSEGV itself; real-time signals are outside
+    // signal-hook's table. SIGSEGV and SIGRTMIN run on Linux only: macOS shows a crash
+    // dialog for every process that dies of SIGSEGV.
+    let signals: &[i32] = if cfg!(target_os = "linux") {
+        // 29 is SIGIO, which signal-hook lists as ignored but terminates on Linux.
+        &[13, 11, 29, 34]
+    } else {
+        &[13]
+    };
+    for &signal in signals {
+        let fixture = Fixture::new()?;
+        executable(&fixture.real_gh, &format!("#!/bin/sh\nkill -{signal} $$\n"))?;
+        // A signal ignored on entry can't be reset by sh (Docker leaves SIGRTMIN ignored), so
+        // the fake gh can't die of it there and the case doesn't run.
+        if Command::new(&fixture.real_gh).status()?.signal() != Some(signal) {
+            eprintln!("skipped signal {signal}: this environment starts processes with it ignored");
+            continue;
+        }
+        let output = fixture.run(&mut fixture.gh(&["--version"]))?;
+        assert_eq!(
+            output.status.signal(),
+            Some(signal),
+            "the wrapper must die of real gh's signal {signal}; observed status={}",
+            output.status
+        );
+    }
     Ok(())
 }
 
@@ -324,7 +412,6 @@ fn audit_route_force_install_symlink() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R7: fails until gh-forgejo-shim-jko.7 is fixed"]
 fn audit_route_non_utf8_environment_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     let mut command = fixture.gh(&["--version"]);

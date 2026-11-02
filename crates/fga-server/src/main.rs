@@ -1,15 +1,16 @@
 use fga_core::forgejo::Forgejo;
-use fga_server::{AppState, app, config::Config};
+use fga_server::{AppState, Host, app, config::Config};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
-    let state = AppState::new(
-        Forgejo::new(config.forgejo_url)?,
+    // Server mode serves one forge and lets Forgejo judge every user's token.
+    let host = Host::new(
         config.public_url,
-        config.ghes_version,
+        Forgejo::new(config.forgejo_url)?,
         config.wip_prefixes,
     );
+    let state = AppState::new(vec![host], config.ghes_version)?;
     let router = app(state);
     if let Some((cert, key)) = config.tls {
         rustls::crypto::ring::default_provider()

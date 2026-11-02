@@ -1,10 +1,12 @@
 //! External command discovery and delegation helpers.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
@@ -88,7 +90,7 @@ pub fn run_program_capture(
 ) -> io::Result<ProgramOutput> {
     let output = command_with_env(path, argv, env, cwd).output()?;
     Ok(ProgramOutput {
-        code: output.status.code().unwrap_or(1),
+        code: exit_code(output.status),
         stdout: output.stdout,
         stderr: output.stderr,
     })
@@ -101,7 +103,61 @@ pub fn run_program_inherit(
     cwd: Option<&Path>,
 ) -> io::Result<i32> {
     let status = command_with_env(path, argv, env, cwd).status()?;
-    Ok(status.code().unwrap_or(1))
+    Ok(inherited_exit_code(status))
+}
+
+/// The status a shell reports for a child: its exit code, or 128 plus the signal that killed it.
+fn exit_code(status: ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    status.code().unwrap_or(1)
+}
+
+thread_local! {
+    /// The signal that killed the last child this thread waited on in the foreground, or 0.
+    static CHILD_SIGNAL: Cell<i32> = const { Cell::new(0) };
+}
+
+/// [`exit_code`] for a child this process stands in for, such as real gh or real git. A signal
+/// that killed it is remembered, so [`exit_like_child`] can end this process with the same
+/// signal.
+pub fn inherited_exit_code(status: ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        CHILD_SIGNAL.set(status.signal().unwrap_or(0));
+    }
+    exit_code(status)
+}
+
+/// Returns `code`, unless it is the one [`inherited_exit_code`] gave for a child killed by a
+/// signal on this thread. Then this process dies of that signal too, so its parent sees the death
+/// that the child's parent saw. Call it last, once traces are written.
+///
+/// signal-hook puts the signal's default action back and unblocks it first: Rust ignores SIGPIPE
+/// and handles SIGSEGV and SIGBUS itself, and a parent may have left the signal ignored or
+/// blocked. It returns without raising for a signal missing from its table (Linux real-time
+/// ones) or listed there as ignored (SIGIO, which terminates on Linux), so those are raised as
+/// they are. An init process (pid 1, also inside a PID namespace such as a container) never gets
+/// a signal it sends itself under the default action, and signal-hook would then abort, so it
+/// returns `code` instead. So does any process that survives.
+pub fn exit_like_child(code: i32) -> i32 {
+    #[cfg(unix)]
+    {
+        let signal = CHILD_SIGNAL.get();
+        if signal != 0 && code == 128 + signal && std::process::id() != 1 {
+            let _ = signal_hook::low_level::emulate_default_handler(signal);
+            let _ = signal_hook::low_level::raise(signal);
+        }
+    }
+    code
 }
 
 pub fn git_output(args: &[&str], cwd: Option<&Path>) -> Option<String> {
@@ -250,14 +306,62 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
     is_managed_shim(path) || is_current_executable(path)
 }
 
+/// Whether `path` may run this dispatcher: the running binary or its sibling entry point (`gfj`
+/// beside `gh-forgejo-shim`, which differs in bytes), under any name or as a copy. Only copies of
+/// this build are caught; a copy left by an older install differs and passes. The launcher's own
+/// recursion guards cover that case.
 fn is_current_executable(path: &Path) -> bool {
     let Ok(current) = std::env::current_exe() else {
         return false;
     };
-    same_file(path, &current)
+    // macOS returns the path as exec'd, so a symlinked install would look for its sibling in the
+    // wrong directory.
+    let current = fs::canonicalize(&current).unwrap_or(current);
+    // On Linux the running binary stays readable here even after its file is deleted.
+    let running = if cfg!(target_os = "linux") {
+        PathBuf::from("/proc/self/exe")
+    } else {
+        current.clone()
+    };
+    [
+        running,
+        current.with_file_name("gh-forgejo-shim"),
+        current.with_file_name("gfj"),
+    ]
+    .iter()
+    .any(|reference| may_be_same_binary(path, reference))
 }
 
-fn same_file(left: &Path, right: &Path) -> bool {
+/// Whether `candidate` is `reference` or may be a copy of it. A candidate of another size costs a
+/// `stat` of each and no reads. A same-length candidate that can't be read counts as a copy: it
+/// may still be executable, and it can't be shown to differ.
+fn may_be_same_binary(candidate: &Path, reference: &Path) -> bool {
+    let (Ok(candidate_meta), Ok(reference_meta)) = (candidate.metadata(), reference.metadata())
+    else {
+        return false;
+    };
+    if same_file(candidate, &candidate_meta, reference, &reference_meta) {
+        return true;
+    }
+    if candidate_meta.len() != reference_meta.len() {
+        return false;
+    }
+    match (fs::read(candidate), fs::read(reference)) {
+        (Ok(candidate), Ok(reference)) => candidate == reference,
+        _ => true,
+    }
+}
+
+/// Whether both paths reach one file, through symlinks or as hardlinks.
+#[cfg(unix)]
+fn same_file(_: &Path, left: &fs::Metadata, _: &Path, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    (left.dev(), left.ino()) == (right.dev(), right.ino())
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &Path, _: &fs::Metadata, right: &Path, _: &fs::Metadata) -> bool {
     let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) else {
         return false;
     };

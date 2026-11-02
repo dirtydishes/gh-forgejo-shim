@@ -1,7 +1,7 @@
-use crate::{AppState, rest_error};
+use crate::{Host, rest_error};
 use axum::{
     Extension, Json,
-    extract::{Path, Query, State},
+    extract::{Path, Query},
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
@@ -11,6 +11,7 @@ use fga_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,7 +32,7 @@ fn invalid() -> Response {
         .into_response()
 }
 fn links(
-    state: &AppState,
+    host: &Host,
     owner: &str,
     repo: &str,
     resource: &str,
@@ -41,7 +42,7 @@ fn links(
 ) -> HeaderMap {
     let (page, limit) = pagination;
     let mut headers = HeaderMap::new();
-    let mut url = state.public_url.clone();
+    let mut url = host.public_url.clone();
     url.path_segments_mut()
         .expect("validated public URL")
         .pop_if_empty()
@@ -71,7 +72,7 @@ fn links(
 }
 
 pub async fn runs(
-    State(state): State<AppState>,
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo)): Path<(String, String)>,
     query: Result<Query<RunQuery>, axum::extract::rejection::QueryRejection>,
@@ -134,7 +135,7 @@ pub async fn runs(
             .collect();
         Ok((
             links(
-                &state,
+                &host,
                 &owner,
                 &repo,
                 "runs",
@@ -157,7 +158,7 @@ pub struct WorkflowQuery {
     per_page: Option<usize>,
 }
 pub async fn workflows(
-    State(state): State<AppState>,
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo)): Path<(String, String)>,
     query: Result<Query<WorkflowQuery>, axum::extract::rejection::QueryRejection>,
@@ -179,15 +180,7 @@ pub async fn workflows(
             .take(limit)
             .collect();
         Ok((
-            links(
-                &state,
-                &owner,
-                &repo,
-                "workflows",
-                (page, limit),
-                total,
-                &[],
-            ),
+            links(&host, &owner, &repo, "workflows", (page, limit), total, &[]),
             Json(json!({"total_count":total,"workflows":workflows})),
         )
             .into_response())

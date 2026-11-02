@@ -525,6 +525,12 @@ fn merge_state_precedence_table() {
         block_on_outdated_branch: true,
         ..Default::default()
     };
+    // Forgejo refuses a merge that changes a protected file (`services/pull/merge.go:544-547`), and
+    // the gateway can't tell which files those are.
+    let files = Protection {
+        protected_file_patterns: " ; *.lock".into(),
+        ..Default::default()
+    };
     let failing = mapped(&[status("external", S::Failure, "")]);
     let passing = mapped(&[status("external", S::Success, "")]);
     for (closed, conflict, draft, behind, checks, protection, decision, expected) in [
@@ -627,6 +633,26 @@ fn merge_state_precedence_table() {
             None,
             None,
             MergeStateStatus::Clean,
+        ),
+        (
+            false,
+            false,
+            false,
+            false,
+            &passing[..],
+            Some(&files),
+            None,
+            MergeStateStatus::Unknown,
+        ),
+        (
+            false,
+            false,
+            false,
+            false,
+            &passing[..],
+            Some(&files),
+            Some(PullRequestReviewDecision::ChangesRequested),
+            MergeStateStatus::Blocked,
         ),
     ] {
         let mut p = pr();

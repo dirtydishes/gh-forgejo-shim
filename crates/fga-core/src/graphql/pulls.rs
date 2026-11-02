@@ -416,8 +416,11 @@ impl PullRequest {
             .commits(&self.owner, &self.repo, self.source.number)
             .await
             .map_err(error)?;
+        // Forgejo lists `git log base..head`, newest first; GitHub lists oldest first, so
+        // gh's `commits(last: 1)` reads the head.
         let nodes = commits
             .into_iter()
+            .rev()
             .map(|source| PullRequestCommit {
                 commit: Commit {
                     owner: self.owner.clone(),

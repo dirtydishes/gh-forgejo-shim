@@ -19,6 +19,9 @@ import writes
 spec = importlib.util.spec_from_file_location('compare_writes', Path(__file__).with_name('compare-writes.py'))
 compare_writes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compare_writes)
+spec = importlib.util.spec_from_file_location('compare_viewers', Path(__file__).with_name('compare-viewers.py'))
+compare_viewers = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(compare_viewers)
 
 
 class OracleTests(unittest.TestCase):
@@ -131,9 +134,13 @@ class OracleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=root) as temp:
             expected, actual = Path(temp) / 'expected', Path(temp) / 'actual'
             expected.mkdir(); actual.mkdir()
+            backend = Path(temp) / 'forgejo-pulls.json'
+            backend.write_text(json.dumps([{'number': 1, 'head': {'sha': 'a' * 40}}]))
             for case in run.CASES:
                 for ext in ('stdout', 'stderr', 'exit'):
                     output = '{"title":"scenario: draft","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE"}\n' if ext == 'stdout' else '0\n' if ext == 'exit' else ''
+                    if ext == 'stdout' and case['id'] == 'wide-1':
+                        output = json.dumps({'number': 1, 'headRefOid': 'a' * 40, 'url': 'https://forge.test/dirtydishes/gfj-oracle/pulls/1'}) + '\n'
                     (expected / f"{case['id']}.{ext}").write_text(output)
                     if ext == 'stdout' and case['id'] == 'probe-4':
                         output = output.replace('CLEAN', 'UNKNOWN').replace('MERGEABLE', 'UNKNOWN')
@@ -141,7 +148,7 @@ class OracleTests(unittest.TestCase):
             def check():
                 with contextlib.redirect_stdout(io.StringIO()):
                     with patch.object(compare, 'EXPECTED_FAILURES', {'probe-4': compare.EXPECTED_FAILURES['probe-4']}):
-                        return compare.main(expected, actual)
+                        return compare.main(expected, actual, backend)
             self.assertEqual(check(), 0)
             draft = actual / 'probe-4.stdout'
             original = draft.read_text()
@@ -163,6 +170,85 @@ class OracleTests(unittest.TestCase):
             self.assertEqual(check(), 1, 'missing JSON must produce an unexpected result, not crash')
             report = json.loads((actual / 'report.json').read_text())
             self.assertEqual(next(c for c in report if c['id'] == 'probe-4')['result'], 'unexpected')
+
+    def test_raw_invariants_check_values_the_normalizers_replace(self):
+        head = 'a' * 40
+        backend = [{'number': 1, 'head': {'sha': head}}]
+        def outputs(oid=head, commits=(head,), url='https://forge.test/dirtydishes/gfj-oracle/pull/1'):
+            return {'wide-1': json.dumps({'number': 1, 'headRefOid': oid, 'commits': [{'oid': c} for c in commits]}),
+                    'list-me-head': json.dumps([{'number': 1, 'url': url}])}
+        self.assertEqual(compare.invariants(outputs(), backend), {'head-oid': [], 'pr-urls': []})
+        # The SHA normalizer would hide a base SHA served as the head, or commits in Forgejo's order.
+        self.assertTrue(compare.invariants(outputs(oid='b' * 40), backend)['head-oid'])
+        self.assertTrue(compare.invariants(outputs(commits=(head, 'b' * 40)), backend)['head-oid'])
+        # The URL normalizer would hide Forgejo's /pulls/N, which ChatGPT ignores.
+        self.assertTrue(compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls'])
+        # A check with nothing to check fails rather than passing vacuously.
+        self.assertTrue(compare.invariants({}, backend)['head-oid'])
+        self.assertTrue(compare.invariants({}, backend)['pr-urls'])
+        # A link to the wrong host is its own problem, which the /pulls/N expected failure doesn't cover.
+        wrong_host = compare.invariants(outputs(url='https://github.com/dirtydishes/gfj-oracle/pull/1'), backend)['pr-urls']
+        self.assertEqual(wrong_host, ['host list-me-head: https://github.com/dirtydishes/gfj-oracle/pull/1'])
+        known = compare.INVARIANT_KNOWN['pr-urls']
+        self.assertTrue(all(map(known, compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls'])))
+        self.assertFalse(all(map(known, wrong_host)))
+        self.assertFalse(all(map(known, compare.invariants({}, backend)['pr-urls'])))
+        self.assertEqual([compare.classify(*args) for args in [(True, True, False), (True, True, True), (False, True, True), (False, False, True), (False, True, False)]],
+                         ['pass', 'unexpected', 'xfail', 'unexpected', 'unexpected'])
+
+    def test_viewer_comparison_allows_only_an_empty_me(self):
+        with tempfile.TemporaryDirectory() as temp:
+            admin, reader = Path(temp) / 'admin', Path(temp) / 'reader'
+            admin.mkdir(); reader.mkdir()
+            status = 'Created by you\n  #1  mine\n\nRequesting a code review from you\n'
+            for case in run.CASES:
+                for ext, value in (('exit', '0\n'), ('stderr', ''), ('stdout', '[{"number":1}]\n')):
+                    if ext == 'stdout' and case['id'] == 'status': value = status
+                    for root in (admin, reader): (root / f"{case['id']}.{ext}").write_text(value)
+            def check():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    return compare_viewers.main(admin, reader)
+            self.assertEqual(check(), 1, 'a declared viewer case that no longer differs must be removed')
+            (reader / 'list-me-head.stdout').write_text('[]\n')
+            (reader / 'issues-author.stdout').write_text('[]\n')
+            (reader / 'status.stdout').write_text(status.replace('  #1  mine', '  You have no open pull requests'))
+            self.assertEqual(check(), 0)
+            (reader / 'list-me-head.stdout').write_text('[{"number":2}]\n')
+            self.assertEqual(check(), 1, 'a viewer case may only become empty')
+            (reader / 'list-me-head.stdout').write_text('[]\n')
+            (reader / 'list-me-head.exit').write_text('1\n')
+            self.assertEqual(check(), 1, 'exit codes must still match')
+            (reader / 'list-me-head.exit').write_text('0\n')
+            (reader / 'wide-1.stdout').write_text('[]\n')
+            self.assertEqual(check(), 1, 'any other case must match exactly')
+
+    def test_protected_viewer_comparison_allows_only_unknown_for_clean_or_unstable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            admin, reader = Path(temp) / 'admin', Path(temp) / 'reader'
+            admin.mkdir(); reader.mkdir()
+            states = {'probe-1': 'CLEAN', 'probe-2': 'BLOCKED'}
+            for case in run.CASES:
+                for ext, value in (('exit', '0\n'), ('stderr', ''), ('stdout', '{"number":1}\n')):
+                    if ext == 'stdout' and case['id'] in states:
+                        value = json.dumps({'number': 1, 'mergeStateStatus': states[case['id']]}) + '\n'
+                    if ext == 'stdout' and case['id'] in compare_viewers.VIEWER_CASES:
+                        value = '[]\n' if case['id'] != 'status' else 'Created by you\n  You have no open pull requests\n\nRequesting\n'
+                    (admin / f"{case['id']}.{ext}").write_text(value)
+                    (reader / f"{case['id']}.{ext}").write_text(value)
+            for case in ('list-me-head', 'issues-author'):
+                (admin / f'{case}.stdout').write_text('[{"number":1}]\n')
+            (admin / 'status.stdout').write_text('Created by you\n  #1  mine\n\nRequesting\n')
+            def check():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    return compare_viewers.main(admin, reader, protected=True)
+            self.assertEqual(check(), 1, 'the branch summary must show: no UNKNOWN means it went unread')
+            (reader / 'probe-1.stdout').write_text('{"number": 1, "mergeStateStatus": "UNKNOWN"}\n')
+            self.assertEqual(check(), 0)
+            (reader / 'probe-2.stdout').write_text('{"number": 1, "mergeStateStatus": "UNKNOWN"}\n')
+            self.assertEqual(check(), 1, 'a failing required check must block the reader too')
+            (reader / 'probe-2.stdout').write_text('{"number": 1, "mergeStateStatus": "BLOCKED"}\n')
+            (reader / 'probe-1.stdout').write_text('{"number": 2, "mergeStateStatus": "UNKNOWN"}\n')
+            self.assertEqual(check(), 1, 'only the merge state may differ')
 
 
 if __name__ == '__main__':

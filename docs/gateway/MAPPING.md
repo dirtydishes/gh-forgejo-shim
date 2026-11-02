@@ -79,6 +79,10 @@ Forgejo has commit statuses only. Reads return the state in the field **`status`
 - **Non-Actions statuses** become `StatusContext {context, state, targetUrl, description, createdAt}`,
   with `state` mapped pending→PENDING, success→SUCCESS, error→ERROR, and failure and
   warning→FAILURE. StatusState has no "warning", and FAILURE is how Forgejo's own gate treats it.
+- **Checks belong to the head commit.** gh reads them through `commits(last: 1)`. Forgejo lists PR
+  commits newest first (`git log base..head`, `modules/git/repo_compare.go`), so reverse them into
+  GitHub's oldest-first order; otherwise `last: 1` is the oldest commit and a fix pushed on a failing
+  commit still reports the failure.
 - **Latest per context only.** Forgejo returns status history, so keep the newest `updated_at` per
   `context`. gh dedupes too, but the rollup state must not count stale entries.
 - **`isRequired(pullRequestId:)`** is true when the base branch's protection has `enable_status_check`
@@ -134,7 +138,11 @@ merged → `UNKNOWN`):
 5. Protection requirements unmet → `BLOCKED`. That means either `reviewDecision` ∈
    {REVIEW_REQUIRED, CHANGES_REQUESTED}, or required status contexts that are missing, pending or
    failing.
-6. Only the partial protection summary was readable (§4) → `UNKNOWN`.
+6. Only the partial protection summary was readable (§4), **or** the rule has protected-file patterns
+   → `UNKNOWN`. Forgejo refuses a merge that changes a protected file (`services/pull/merge.go:544-547`),
+   but the API doesn't say which files those are, and its matcher lowercases names and globs with both
+   `.` and `/` as separators (`models/git/protected_branch.go:214`). Until a port of that matcher can
+   report `BLOCKED` exactly, any non-blank pattern means `UNKNOWN`.
 7. Any context non-passing (rollup ≠ SUCCESS, and not null) → `UNSTABLE`.
 8. Otherwise → `CLEAN`.
 
@@ -149,8 +157,31 @@ implemented: the schema has no such field, and `Protection` doesn't read `apply_
 | head mismatch | Forgejo returns 409. The gateway returns the GraphQL error `{"type":"UNPROCESSABLE","path":["mergePullRequest"],"message":"Head branch was modified. Review and try the merge again."}`. **Confirmed 2026-10-30** against the GitHub twin: gh prints `GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)` and exits 1 |
 | `enablePullRequestAutoMerge` | `POST pulls/{n}/merge {..., merge_when_checks_succeed: true}` |
 | `disablePullRequestAutoMerge` | `DELETE pulls/{n}/merge` (cancel scheduled merge) |
-| `autoMergeRequest` | **Open:** Forgejo's API has no "get scheduled merge". Candidates are the PR timeline (scheduled-merge comment type) or the issue comments API. Until verified, return `null`. G3 must solve this, because ChatGPT shows auto-merge state |
+| `autoMergeRequest` | The latest `pull_scheduled_merge` or `pull_cancel_scheduled_merge` event on the issue timeline. Non-null only for an open PR whose latest such event is a schedule ([G3 findings](G3-FINDINGS.md)). Forgejo's API has no read for the schedule itself |
 | REST `PUT pulls/{n}/merge` | The same mapping (not needed by any captured client yet) |
+
+**Limit: auto-merge can stay enabled after Forgejo drops the schedule (F16).** Forgejo's worker deletes
+the schedule before it tries the merge, and writes no event when that merge fails
+(`services/automerge/automerge.go:227-236`). It fails, for example, when the scheduled merge style was
+disallowed in the meantime, or when the base moves under it. The timeline's latest event is then still
+the schedule, so `autoMergeRequest` stays non-null for as long as the PR is open. Forgejo's own UI has the
+same blind spot (the FIXME at `automerge.go:231`).
+
+The gateway can't prove a schedule still exists. Forgejo 15 has no read for it, and the worker deletes it
+only after passing statuses and `CheckPullMergeable`, which the gateway can't reproduce exactly. A guess
+would trade a rare stale "enabled" for a wrong "disabled" on schedules that are still waiting.
+
+`gh pr merge --disable-auto` doesn't clear it either. With no schedule, Forgejo answers the cancel with
+404 and writes no cancel event (`RemoveScheduledAutoMerge`, `automerge.go:71-78`). The gateway reports
+that 404 as success, so gh says auto-merge is disabled while `autoMergeRequest` still shows it.
+
+To clear it, run `gh pr merge --auto` again. The gateway tries the merge at once (`merge` in
+`crates/fga-core/src/graphql/mutations.rs`), so one of three things happens:
+
+- the PR merges;
+- gh shows the error the worker hit, such as a disallowed merge style, which the user can then fix;
+- Forgejo refuses for a reason a later event can lift (branch protection, conflicts), and the gateway
+  schedules afresh. A later `--disable-auto` then writes the cancel event.
 
 ## 7. IDs
 
