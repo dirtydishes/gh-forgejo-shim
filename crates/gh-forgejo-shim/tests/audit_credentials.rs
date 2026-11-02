@@ -106,7 +106,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-#[ignore = "audit C3: fails until gh-forgejo-shim-jko.8 is fixed"]
 fn audit_cred_malformed_hosts_does_not_reset_store() -> TestResult {
     let fixture = Fixture::new()?;
     let path = auth::auth_file_path(Some(&fixture.home));
@@ -133,7 +132,6 @@ fn audit_cred_malformed_hosts_does_not_reset_store() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C1: fails until gh-forgejo-shim-jko.18 is fixed"]
 fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(&fixture.config_path(), "hosts = [\"github.com:443\"]\n")?;
@@ -159,7 +157,6 @@ fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult
 }
 
 #[test]
-#[ignore = "audit C1: fails until gh-forgejo-shim-jko.18 is fixed"]
 fn audit_cred_import_rejects_github_default_port() -> TestResult {
     let fixture = Fixture::new()?;
     let path = fixture.home.join(".config/tea/config.yml");
@@ -184,7 +181,6 @@ fn audit_cred_import_rejects_github_default_port() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C2: fails until gh-forgejo-shim-jko.19 is fixed"]
 fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(
@@ -204,7 +200,6 @@ fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C4: fails until gh-forgejo-shim-jko.20 is fixed"]
 fn audit_cred_failed_import_preserves_previous_token() -> TestResult {
     let fixture = Fixture::new()?;
     auth::write_stored_token(
@@ -240,7 +235,6 @@ fn audit_cred_failed_import_preserves_previous_token() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C6: fails until gh-forgejo-shim-jko.22 is fixed"]
 fn audit_cred_config_update_preserves_unknown_settings() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(
@@ -259,7 +253,6 @@ fn audit_cred_config_update_preserves_unknown_settings() -> TestResult {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "audit C5: fails until gh-forgejo-shim-jko.21 is fixed"]
 fn audit_cred_failed_config_write_preserves_original_file() -> TestResult {
     let fixture = Fixture::new()?;
     let before = "hosts = [\"git.example.com\"]\n";

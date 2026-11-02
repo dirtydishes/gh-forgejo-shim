@@ -960,9 +960,10 @@ fn auth_login(
     let login = runtime.validate_token(&host, &token)?;
     let home = runtime.home().map(Path::to_path_buf);
     let platform = runtime.platform().to_string();
-    let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
+    // The config first: when it is corrupt, the command fails before replacing a stored token.
     let config_path = config::config_path(home.as_deref());
     config::add_host(&host, Some(&config_path))?;
+    let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
 
     writeln!(
         stdout,
@@ -1003,13 +1004,14 @@ fn auth_import(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtim
         runtime.env(),
         runtime.platform(),
     )?;
+    // The config first: when it is corrupt, the command fails before replacing a stored token.
+    config::add_host(&imported.host, Some(&config::config_path(Some(&home))))?;
     let storage = auth::write_stored_token(
         &imported.host,
         &imported.token,
         Some(&home),
         Some(runtime.platform()),
     )?;
-    config::add_host(&imported.host, Some(&config::config_path(Some(&home))))?;
     writeln!(
         stdout,
         "imported auth for {} from {}",
@@ -1649,6 +1651,36 @@ mod tests {
         assert_eq!(
             runtime.validated,
             vec![("git.example.com".to_string(), "bad-token".to_string())]
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_corrupt_config_keeps_the_previous_token() -> Result<()> {
+        let home = temp_root()?;
+        auth::write_stored_token("git.example.com", "old-token", Some(&home), Some("linux"))?;
+        let config_path = config::config_path(Some(&home));
+        fs::write(&config_path, "hosts = [\"git.example.com\"\n")?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("new-token".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .as_deref(),
+            Some("old-token")
         );
         fs::remove_dir_all(home).ok();
         Ok(())

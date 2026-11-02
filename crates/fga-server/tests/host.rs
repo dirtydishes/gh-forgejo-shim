@@ -431,3 +431,64 @@ async fn no_presented_token_ever_matches_an_expected_one() {
     }
     assert_eq!(*seen.lock().unwrap(), Vec::<String>::new());
 }
+
+/// gh and ChatGPT link PRs as GitHub does, `/{o}/{r}/pull/{n}`, which Forgejo doesn't serve, so the
+/// gateway redirects a browser there to Forgejo's `/pulls/{n}` without asking for a token
+/// (MAPPING §8, D2).
+#[tokio::test]
+async fn pull_links_redirect_to_forgejo_without_a_token() {
+    let (addr, seen) = gateway("https://forge.test").await;
+    for (target, location) in [
+        ("/o/r/pull/12", "/o/r/pulls/12"),
+        ("/o/r/pull/12/files?w=1", "/o/r/pulls/12/files?w=1"),
+        ("/Some-Org/repo.x_y/pull/3", "/Some-Org/repo.x_y/pulls/3"),
+        ("/o/r/pull/12/", "/o/r/pulls/12/"),
+    ] {
+        let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
+        assert!(
+            response.starts_with("HTTP/1.1 301 "),
+            "{target}: {response}"
+        );
+        assert!(
+            response.to_ascii_lowercase().contains(&format!(
+                "\r\nlocation: {}\r\n",
+                location.to_ascii_lowercase()
+            )),
+            "{target}: {response}"
+        );
+    }
+    // Not a PR number, or another host: no redirect, and still no upstream contact.
+    assert_eq!(
+        send(addr, "GET /o/r/pull/abc HTTP/1.1\r\nHost: forge.test").await,
+        404
+    );
+    // Never a Location that leaves the forge: an empty, encoded or backslashed owner or repo would
+    // make it protocol-relative (Opus o1#1), and `api` is Forgejo's own (o1#8).
+    for target in [
+        "//evil.com/pull/1",
+        "//evil.com/pull/1/x%2F..%2F..%2Fa%2Fb%2Fpull%2F1",
+        "/\\evil.com/r/pull/1",
+        "/%2F%2Fevil.com/r/pull/1",
+        "/o/%2e%2e/pull/1",
+        "/./r/pull/1",
+        "/../r/pull/1",
+        "/api/v3/pull/1",
+        // After the number too: no dot, empty, encoded or backslashed segment (Opus interim o2#4).
+        "/o/r/pull/12/files/../../../../../admin",
+        "/o/r/pull/12/%2e%2e/%2e%2e/user/logout",
+        "/o/r/pull/12/./files",
+        "/o/r/pull/12//files",
+        "/o/r/pull/12/a\\b",
+    ] {
+        let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
+        assert!(
+            !response.to_ascii_lowercase().contains("\r\nlocation:"),
+            "{target}: {response}"
+        );
+    }
+    assert_eq!(
+        send(addr, "GET /o/r/pull/12 HTTP/1.1\r\nHost: api.github.com").await,
+        421
+    );
+    assert_eq!(*seen.lock().unwrap(), Vec::<String>::new());
+}

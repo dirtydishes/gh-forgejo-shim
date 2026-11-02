@@ -2,11 +2,13 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use toml_edit::{Array, DocumentMut, Item, Value};
 
-use crate::{Result, ShimError};
+use crate::{shim, Result, ShimError};
 
 pub type EnvMap = BTreeMap<String, String>;
 
@@ -20,13 +22,10 @@ pub struct PathsConfig {
 
 /// Per-host tables use `host`, singular, so they can coexist with the legacy
 /// `hosts = [...]` array. A table also adds its key to the host allowlist.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct HostConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_env: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_file: Option<PathBuf>,
 }
 
@@ -94,12 +93,7 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         let text = fs::read_to_string(&config_path).map_err(|error| {
             ShimError::new(format!("could not read {}: {error}", config_path.display()))
         })?;
-        raw = toml::from_str(&text).map_err(|error| {
-            ShimError::new(format!(
-                "could not parse {}: {error}",
-                config_path.display()
-            ))
-        })?;
+        raw = toml::from_str(&text).map_err(|error| parse_error(&config_path, &text, &error))?;
     }
 
     let mut hosts = raw
@@ -187,92 +181,209 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
     })
 }
 
+/// Names the line and the start of the parser's message, but never any text it quotes. The
+/// parser only quotes user text: serde puts a mistyped value in double quotes, and the parser puts
+/// a key or a table path in backticks. A quoted key can itself hold escaped newlines or quotes, so
+/// the message is cut at its first quote of either kind, and nothing after it is shown.
+fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
+    let full = error.message();
+    let message = match full.find(['"', '`']) {
+        Some(quote) => format!("{}...", full[..quote].trim_end_matches([' ', '\n'])),
+        None => full.trim_end().to_string(),
+    };
+    match error.span().and_then(|span| text.get(..span.start)) {
+        Some(before) => ShimError::new(format!(
+            "could not parse {} at line {}: {message}",
+            path.display(),
+            before.matches('\n').count() + 1
+        )),
+        None => ShimError::new(format!("could not parse {}: {message}", path.display())),
+    }
+}
+
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
-    let config = load_config_with_env(path, &EnvMap::new())?;
-    let mut hosts = config.hosts;
+    let mut config = load_config_with_env(path, &EnvMap::new())?;
     if let Some(normalized) = normalized_forgejo_host(host) {
-        if !hosts.iter().any(|configured| configured == &normalized) {
-            hosts.push(normalized);
+        if !config.hosts.contains(&normalized) {
+            config.hosts.push(normalized);
         }
     }
-    hosts.sort();
-
-    let updated = Config {
-        hosts,
-        host: config.host,
-        paths: config.paths,
-        path: config.path,
-    };
-    write_config(&updated)?;
-    Ok(updated)
+    config.hosts.sort();
+    write_hosts(&config, None)?;
+    Ok(config)
 }
 
 pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
     let mut config = load_config_with_env(path, &EnvMap::new())?;
     let normalized = normalize_host(host);
     config.host.remove(&normalized);
-    let hosts = config
+    config
         .hosts
-        .into_iter()
-        .filter(|configured| normalize_host(configured) != normalized)
-        .collect();
-    let updated = Config {
-        hosts,
-        host: config.host,
-        paths: config.paths,
-        path: config.path,
-    };
-    write_config(&updated)?;
-    Ok(updated)
+        .retain(|configured| normalize_host(configured) != normalized);
+    write_hosts(&config, Some(&normalized))?;
+    Ok(config)
 }
 
-pub fn write_config(config: &Config) -> Result<()> {
-    let parent = config.path.parent().ok_or_else(|| {
+/// Rewrites the `hosts` allowlist in the file at `config.path`, and drops the `[host.…]` table
+/// for `removed`. Everything else stays as the user wrote it: comments, `[paths]`, and keys and
+/// tables this version doesn't know.
+fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
+    let path = &config.path;
+    let parent = path.parent().ok_or_else(|| {
         ShimError::new(format!(
             "could not determine parent directory for {}",
-            config.path.display()
+            path.display()
         ))
     })?;
     fs::create_dir_all(parent).map_err(|error| {
         ShimError::new(format!("could not create {}: {error}", parent.display()))
     })?;
 
-    let mut lines = Vec::new();
-    let hosts = config
-        .hosts
-        .iter()
-        .map(|host| toml_string(host))
-        .collect::<Vec<_>>()
-        .join(", ");
-    lines.push(format!("hosts = [{hosts}]"));
-    for (host, settings) in &config.host {
-        lines.push(String::new());
-        lines.push(format!("[host.{}]", toml_string(host)));
-        lines.push(
-            toml::to_string(settings)
-                .map_err(|error| ShimError::new(error.to_string()))?
-                .trim_end()
-                .to_string(),
-        );
-    }
-    if config.paths.gh.is_some() || config.paths.fj.is_some() {
-        lines.push(String::new());
-        lines.push("[paths]".to_string());
-        if let Some(gh) = &config.paths.gh {
-            lines.push(format!("gh = {}", toml_string(gh)));
+    let mut document = match fs::read_to_string(path) {
+        // The caller has already loaded this file, so its parse errors were reported there.
+        Ok(text) => text
+            .parse::<DocumentMut>()
+            .map_err(|_| ShimError::new(format!("could not parse {}", path.display())))?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(error) => {
+            return Err(ShimError::new(format!(
+                "could not read {}: {error}",
+                path.display()
+            )))
         }
-        if let Some(fj) = &config.paths.fj {
-            lines.push(format!("fj = {}", toml_string(fj)));
+    };
+    set_hosts(&mut document, &config.hosts);
+    if let (Some(removed), Some(tables)) = (
+        removed,
+        document.get_mut("host").and_then(Item::as_table_like_mut),
+    ) {
+        let keys = tables
+            .iter()
+            .map(|(key, _)| key.to_string())
+            .filter(|key| normalize_host(key) == removed)
+            .collect::<Vec<_>>();
+        for key in keys {
+            tables.remove(&key);
         }
     }
-    lines.push(String::new());
 
-    fs::write(&config.path, lines.join("\n")).map_err(|error| {
-        ShimError::new(format!(
-            "could not write {}: {error}",
-            config.path.display()
-        ))
-    })
+    replace_config_file(path, document.to_string().as_bytes())
+}
+
+/// Makes the `hosts` array hold `hosts`. An existing array is edited in place, so its comments,
+/// spellings and order stay with the hosts they describe: dropped hosts are removed, new ones
+/// appended.
+fn set_hosts(document: &mut DocumentMut, hosts: &[String]) {
+    let Some(array) = document.get_mut("hosts").and_then(Item::as_array_mut) else {
+        document["hosts"] = toml_edit::value(hosts.iter().collect::<Array>());
+        return;
+    };
+    let mut kept = Vec::<String>::new();
+    let mut dropped = Vec::new();
+    for (index, value) in array.iter().enumerate() {
+        match value.as_str().and_then(normalized_forgejo_host) {
+            Some(host) if hosts.contains(&host) && !kept.contains(&host) => kept.push(host),
+            _ => dropped.push(index),
+        }
+    }
+    // Last first, so a run of removals hands each line's comment along in turn.
+    for index in dropped.into_iter().rev() {
+        remove_keeping_line_comments(array, index);
+    }
+    for host in hosts.iter().filter(|host| !kept.contains(host)) {
+        let trailing = array.trailing().as_str().unwrap_or_default().to_string();
+        if !trailing.contains('\n') {
+            array.push(host.as_str());
+            continue;
+        }
+        // One host per line: indent like the last one, after any comment that ended its line.
+        let indent = array
+            .iter()
+            .last()
+            .and_then(|value| value.decor().prefix())
+            .and_then(|prefix| prefix.as_str())
+            .and_then(|prefix| prefix.rsplit('\n').next())
+            .unwrap_or("  ")
+            .to_string();
+        let mut value = Value::from(host.as_str());
+        value.decor_mut().set_prefix(format!(
+            "{}{indent}",
+            trailing.trim_end_matches([' ', '\t'])
+        ));
+        array.push_formatted(value);
+        array.set_trailing("\n");
+    }
+}
+
+/// Removes element `index`, keeping the line-end comment of the element before it. In a
+/// multi-line array, the text up to the first line break of an element's prefix ends the line
+/// above: it holds that element's `# comment`. Removing the element would lose it, and leave the
+/// removed element's own comment, held by whatever follows, on the line above instead.
+fn remove_keeping_line_comments(array: &mut Array, index: usize) {
+    let removed = array.remove(index);
+    let prefix = removed
+        .decor()
+        .prefix()
+        .and_then(|prefix| prefix.as_str())
+        .unwrap_or_default();
+    let Some(line_end) = prefix.find('\n') else {
+        return;
+    };
+    let carried = &prefix[..=line_end];
+    // With no line break there (`"b"]`, or another host on the same line), the comment goes first.
+    let replace_head = |text: &str| match text.find('\n') {
+        Some(end) => format!("{carried}{}", &text[end + 1..]),
+        None => format!("{carried}{text}"),
+    };
+    if let Some(next) = array.get_mut(index) {
+        let text = next
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or_default()
+            .to_string();
+        next.decor_mut().set_prefix(replace_head(&text));
+    } else {
+        let text = array.trailing().as_str().unwrap_or_default().to_string();
+        array.set_trailing(replace_head(&text));
+    }
+}
+
+/// Writes a new file and renames it into place, so a failed write leaves the old config whole.
+/// A symlinked config is replaced at its target, so a dotfiles link survives, and the file keeps
+/// its mode.
+fn replace_config_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let could_not_write = |error: &dyn std::fmt::Display| {
+        ShimError::new(format!("could not write {}: {error}", path.display()))
+    };
+    let target = config_file_target(path);
+    let permissions = fs::metadata(&target)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    shim::replace_file(&target, contents, false).map_err(|error| could_not_write(&error))?;
+    if let Some(permissions) = permissions {
+        fs::set_permissions(&target, permissions).map_err(|error| could_not_write(&error))?;
+    }
+    Ok(())
+}
+
+/// The file a config write replaces: the end of any symlink chain, so a dotfiles link survives.
+/// A dangling chain is followed to its missing end, which is created, rather than a link in it
+/// being replaced. Like the kernel, it gives up after 40 links.
+fn config_file_target(path: &Path) -> PathBuf {
+    if let Ok(target) = fs::canonicalize(path) {
+        return target;
+    }
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        let Ok(link) = fs::read_link(&target) else {
+            break;
+        };
+        target = target
+            .parent()
+            .map_or(link.clone(), |parent| parent.join(&link));
+    }
+    target
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -300,7 +411,13 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
         return false;
     };
     let normalized = normalize_host(host);
-    KNOWN_GITHUB_HOSTS.contains(&normalized.as_str())
+    // Userinfo, a port or a trailing dot still reach GitHub, so none of them may make it a
+    // Forgejo host that receives the Forgejo token.
+    let name = normalized
+        .rsplit_once('@')
+        .map_or(normalized.as_str(), |(_, name)| name);
+    let name = name.rsplit_once(':').map_or(name, |(name, _)| name);
+    KNOWN_GITHUB_HOSTS.contains(&name.trim_end_matches('.'))
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {
@@ -336,22 +453,6 @@ fn dedupe(values: Vec<String>) -> Vec<String> {
 fn optional_string(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
     (!value.is_empty()).then(|| value.to_string())
-}
-
-fn toml_string(value: &str) -> String {
-    let mut escaped = String::from("\"");
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            other => escaped.push(other),
-        }
-    }
-    escaped.push('"');
-    escaped
 }
 
 fn home_dir(home: Option<&Path>) -> PathBuf {
@@ -454,6 +555,106 @@ gh = "/bin/gh#real"
     }
 
     #[test]
+    fn host_edits_keep_comments_and_unknown_settings() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            r#"# my forges
+hosts = ["git.example.com"] # the allowlist
+future = "keep"
+
+[host."Old.Example.com"]
+future_setting = "goes with its host"
+
+[host."git.example.com"]
+future_setting = "keep" # why
+"#,
+        )?;
+
+        add_host("new.example.com", Some(&path))?;
+        remove_host("old.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            r#"# my forges
+hosts = ["git.example.com", "new.example.com"] # the allowlist
+future = "keep"
+
+[host."git.example.com"]
+future_setting = "keep" # why
+"#
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn host_edits_keep_comments_inside_a_multiline_hosts_array() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\n  # keep this forge\n  \"git.example.com\", # important reason\n]\n",
+        )?;
+
+        add_host("new.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "hosts = [\n  # keep this forge\n  \"git.example.com\", # important reason\n  \"new.example.com\",\n]\n"
+        );
+        assert_eq!(
+            load_config_with_env(Some(&path), &EnvMap::new())?.hosts,
+            ["git.example.com", "new.example.com"]
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn removing_a_host_keeps_the_comments_of_the_hosts_that_stay() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [ # forges\n  \"a.example.com\", # a reason\n  # about b\n  \"b.example.com\", # b reason\n  \"c.example.com\", # c reason\n  \"d.example.com\", # d reason\n]\n",
+        )?;
+
+        remove_host("b.example.com", Some(&path))?;
+        remove_host("d.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "hosts = [ # forges\n  \"a.example.com\", # a reason\n  \"c.example.com\", # c reason\n]\n"
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn removing_a_host_keeps_comments_when_the_array_ends_on_its_line() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\n  \"a.example.com\", # a reason\n  \"b.example.com\", \"c.example.com\"]\n",
+        )?;
+
+        remove_host("b.example.com", Some(&path))?;
+        remove_host("c.example.com", Some(&path))?;
+
+        let text = fs::read_to_string(&path)?;
+        assert!(text.contains("\"a.example.com\" # a reason\n"), "{text}");
+        assert_eq!(
+            load_config_with_env(Some(&path), &EnvMap::new())?.hosts,
+            ["a.example.com"]
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn rejects_invalid_base_urls_and_duplicate_normalized_tables() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");
@@ -490,6 +691,44 @@ gh = "/bin/gh#real"
     }
 
     #[test]
+    fn parse_errors_name_the_line_without_quoting_values() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        for (text, line) in [
+            (
+                "hosts = []\nhost = \"https://user:secret@git.example.com\"\n",
+                2,
+            ),
+            ("hosts = []\n[paths]\ngh = \"/bin/secret\n", 3),
+            // A mistyped value made only of punctuation is still a value.
+            ("hosts = []\nhost = \"!@#$%^&*\"\n", 2),
+            // A key can hold escaped newlines and quotes, which the parser decodes.
+            ("[\"head\\nSYNTHETIC_secret\\ntail\"]\nx = 1\nx = 2\n", 3),
+            ("[\"a\\nexpected \\\"secret\\\"\\nb\"]\nx = 1\nx = 2\n", 3),
+            // A key made only of TOML syntax characters is still the user's text.
+            ("'[{},]' = 1\n'[{},]' = 1\n", 2),
+            // The parser puts duplicate keys in backticks, and a key can hold backticks too.
+            (
+                "'`https://u:secret@x.com`' = 1\n'`https://u:secret@x.com`' = 1\n",
+                2,
+            ),
+            (
+                "[host]\n'https://u:secret@x.com' = {}\n'https://u:secret@x.com' = {}\n",
+                3,
+            ),
+        ] {
+            fs::write(&path, text)?;
+            let error = load_config_with_env(Some(&path), &EnvMap::new())
+                .expect_err("invalid config")
+                .to_string();
+            assert!(error.contains(&format!("at line {line}:")), "{error}");
+            assert!(!error.contains("secret"), "{error}");
+        }
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn env_hosts_replace_config_hosts() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");
@@ -517,6 +756,28 @@ gh = "/bin/gh#real"
         assert!(!config.is_forgejo_host(Some("github.com")));
         fs::remove_dir_all(root).ok();
         Ok(())
+    }
+
+    #[test]
+    fn github_with_userinfo_a_port_or_a_trailing_dot_is_still_github() {
+        for host in [
+            "github.com:443",
+            "GitHub.com:8443",
+            "github.com.",
+            "www.github.com.:443",
+            "user@github.com",
+            "https://github.com:443/owner/repo",
+        ] {
+            assert!(is_known_github_host(Some(host)), "{host}");
+        }
+        for host in [
+            "github.com.example.org",
+            "notgithub.com",
+            "github.com@git.example.com",
+            "git.example.com:443",
+        ] {
+            assert!(!is_known_github_host(Some(host)), "{host}");
+        }
     }
 
     #[test]
@@ -600,6 +861,51 @@ gh = "/bin/gh#real"
             fs::read_to_string(&path).unwrap_or_default(),
             "hosts = [\"git.example.com\", \"new.example.com\"]\n\n[paths]\ngh = \"/bin/gh\"\n"
         );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_edits_keep_a_symlinked_config_and_its_mode() -> Result<()> {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = temp_root()?;
+        let target = root.join("dotfiles-config.toml");
+        fs::write(&target, "hosts = [\"git.example.com\"]\n")?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+        let path = root.join("config.toml");
+        symlink(&target, &path)?;
+
+        add_host("new.example.com", Some(&path))?;
+
+        assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
+        assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o600);
+        assert!(fs::read_to_string(&target)?.contains("new.example.com"));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_edits_through_a_dangling_symlink_create_its_target() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        symlink("middle.toml", &path)?;
+        symlink("dotfiles-config.toml", root.join("middle.toml"))?;
+
+        add_host("new.example.com", Some(&path))?;
+
+        for link in [&path, &root.join("middle.toml")] {
+            assert!(
+                fs::symlink_metadata(link)?.file_type().is_symlink(),
+                "{}",
+                link.display()
+            );
+        }
+        assert!(fs::read_to_string(root.join("dotfiles-config.toml"))?.contains("new.example.com"));
         fs::remove_dir_all(root).ok();
         Ok(())
     }

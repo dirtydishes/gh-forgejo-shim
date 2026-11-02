@@ -310,7 +310,6 @@ fn audit_route_version_in_forgejo_checkout() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R2: fails until gh-forgejo-shim-jko.2 is fixed"]
 fn audit_route_short_repo_override() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.origin(&format!("https://{HOST}/local/project.git"))?;
@@ -323,7 +322,6 @@ fn audit_route_short_repo_override() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R2: fails until gh-forgejo-shim-jko.2 is fixed"]
 fn audit_route_short_gh_repo_override() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.origin(&format!("https://{HOST}/local/project.git"))?;
@@ -336,7 +334,6 @@ fn audit_route_short_gh_repo_override() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R5: fails until gh-forgejo-shim-jko.6 is fixed"]
 fn audit_route_https_port_allowlist() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.origin(&format!("https://{HOST}:3443/owner/repo.git"))?;
@@ -415,7 +412,6 @@ fn audit_route_force_install_symlink() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R7: fails until gh-forgejo-shim-jko.7 is fixed"]
 fn audit_route_non_utf8_environment_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     let mut command = fixture.gh(&["--version"]);
