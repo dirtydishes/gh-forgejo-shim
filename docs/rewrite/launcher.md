@@ -231,9 +231,14 @@ launcher answers every git in the call itself:
   `#!/bin/sh` and `FJ_SHIM_CREDENTIALS='<run dir>/credentials' exec '<shim>' gh "$@"`, with the
   shim path single-quoted. `GH_PATH` names it, so gh's own helper invocations run it.
 - **Every git in the call uses it.** The launcher appends two entries to `GIT_CONFIG_PARAMETERS`,
-  after any value it inherited (§7): `credential.helper=` and
-  `credential.helper=!<run dir>/gh auth git-credential`. The run directory's path is shell-safe
-  (§4), so the helper needs no quoting. git reads its config files, then `GIT_CONFIG_COUNT`, then
+  after any value it inherited (§7): `'credential.helper='` and
+  `'credential.helper=!<run dir>/gh auth git-credential'`. It uses git's older `'key=value'`
+  quoting, which every git version parses; git before 2.31 rejects the whole variable in the
+  `'key'='value'` form. Like git's own code, it puts a space before the new entries only when
+  the inherited value is non-empty. git rejects a value with leading whitespace ("bogus format
+  in GIT_CONFIG_PARAMETERS"), so an unset or empty inherited value is replaced, not appended to.
+  The run directory's path is shell-safe (§4) and has no `'`, so the helper needs no quoting
+  beyond the entry's own. git reads its config files, then `GIT_CONFIG_COUNT`, then
   `GIT_CONFIG_PARAMETERS` in order, and a `-c` on its own command line last. git gathers every
   helper that matches a URL, scoped `credential.<url>.helper` entries included, into one list in
   that order, and an empty value clears the list. So the launcher's helper is the first one any
@@ -581,7 +586,7 @@ the launcher never converts the environment to `String`.
 |---|---|
 | `GH_CONFIG_DIR` | the run directory |
 | `GH_PATH` | the run directory's `gh` script, so gh's git credential helper is the launcher's (section 3, "Git's credentials") |
-| `GIT_CONFIG_PARAMETERS` | the inherited value, if any, then `'credential.helper'=''` and `'credential.helper'='!<run dir>/gh auth git-credential'` (section 3, "Git's credentials") |
+| `GIT_CONFIG_PARAMETERS` | the inherited value and a space, if that value is non-empty, then `'credential.helper=' 'credential.helper=!<run dir>/gh auth git-credential'` (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
 | `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
@@ -601,10 +606,11 @@ name in `FJ_SHIM_SAVED`, it restores the variable from `FJ_SHIM_ORIG_<NAME>`, or
 there's no saved value. It skips any variable whose current state no longer matches what the
 launcher left: a different value from `FJ_SHIM_SET_<NAME>`, or, for a removed variable, any value
 at all. Something in between changed it on purpose. `GIT_CONFIG_PARAMETERS` is the one
-exception: a git that runs a child with `-c` appends its own entries to it, so when its value
-starts with `FJ_SHIM_SET_GIT_CONFIG_PARAMETERS`, the wrapper replaces that prefix with the
-original value, or with nothing if it was unset, and keeps the rest. A value left empty is
-unset. It then removes the
+exception: a git that runs a child with `-c` appends a space and its own entries to it. So when
+the value is `FJ_SHIM_SET_GIT_CONFIG_PARAMETERS`, a space, and a rest, the wrapper keeps the rest:
+it sets the variable to the original value, a space and the rest when the original was
+non-empty, and to the rest alone otherwise, never with leading whitespace. Any other value that
+differs from the one the launcher set is skipped like any changed variable. It then removes the
 bookkeeping variables, except `FJ_SHIM_DEPTH`. A shell alias that runs
 `gh api https://api.github.com/user` therefore runs plain gh with the user's own config and token.
 
@@ -784,8 +790,10 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     `GIT_CONFIG_PARAMETERS` entry. The test runs once with those naming the wrapper and once
     naming real gh by absolute path. `GIT_TRACE` shows only the launcher's helper ran. The push
     gets the real token for the served forge, and none for `gist.forge.test` or GitHub. A `gh` run by a
-    `git -c x.y=z` alias inside the call sees the user's own `GIT_CONFIG_PARAMETERS` followed by
-    `'x.y'='z'`. `gh sg`, with alias
+    `git -c x.y=z` alias inside the call sees the user's own `GIT_CONFIG_PARAMETERS`, a space and
+    `'x.y'='z'`. Each of these runs three times: with the user's `GIT_CONFIG_PARAMETERS` unset,
+    set but empty, and set. With it unset or empty, that nested `gh` sees exactly `'x.y'='z'`,
+    and every git in the call and in the nested `gh` runs without a config parse error. `gh sg`, with alias
     `sg: auth setup-git`, delegates and writes real gh's path, not the run directory's, into
     `~/.gitconfig`. `gh auth token --hostname <forge>` still prints the real token.
 15. **Stepping aside (§2).** With the user's own `hosts.yml` holding a login for a served forge,
