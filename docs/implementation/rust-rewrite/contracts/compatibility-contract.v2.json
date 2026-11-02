@@ -1,9 +1,11 @@
 {
-  "schema": "gh-forgejo-shim.compatibility-contract.v1",
+  "schema": "gh-forgejo-shim.compatibility-contract.v2",
   "bead": "gh-forgejo-shim-3sl",
   "parent_epic": "gh-forgejo-shim-d60",
   "phase": "01",
   "phase_title": "freeze compatibility contract",
+  "supersedes": "gh-forgejo-shim.compatibility-contract.v1",
+  "migration": "Pull request web URLs use GitHub's /{owner}/{repo}/pull/{number} layout, not Forgejo's /pulls/{number} (decision D2, bead gh-forgejo-shim-65s, docs/gateway/MAPPING.md section 8). Only the three golden probes' url values change.",
   "frozen_runtime": {
     "implementation": "python",
     "package_version": "0.1.1",
@@ -1260,7 +1262,7 @@
             "headRefName": "feature",
             "number": 12,
             "title": "Ship it",
-            "url": "https://git.example.com/owner/repo/pulls/12"
+            "url": "https://git.example.com/owner/repo/pull/12"
           },
           "needsReview": []
         },
@@ -1335,7 +1337,7 @@
             ],
             "title": "Make Codex happy",
             "updatedAt": "2026-05-31T01:00:00Z",
-            "url": "https://git.example.com/owner/repo/pulls/8"
+            "url": "https://git.example.com/owner/repo/pull/8"
           }
         ],
         "stderr": ""
@@ -1378,7 +1380,7 @@
           "headRefName": "feature",
           "number": 12,
           "title": "Ship it",
-          "url": "https://git.example.com/owner/repo/pulls/12"
+          "url": "https://git.example.com/owner/repo/pull/12"
         },
         "stderr": ""
       }
