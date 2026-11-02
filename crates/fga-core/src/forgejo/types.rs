@@ -245,6 +245,11 @@ pub struct BranchSummary {
     pub enable_status_check: bool,
     #[serde(default, deserialize_with = "null_as_default")]
     pub status_check_contexts: Vec<String>,
+    /// Whether the caller may merge into the branch: code write access, or the rule's merge
+    /// allowlist when it has one, as Forgejo's own merge and auto-merge checks decide
+    /// (`IsUserAllowedToMerge`, Forgejo v15.0.0 `services/pull/merge.go`).
+    #[serde(default)]
+    pub user_can_merge: bool,
 }
 
 /// A code comment in a review (`modules/structs/pull_review.go` PullReviewComment).
@@ -257,6 +262,9 @@ pub struct ReviewComment {
     pub pull_request_review_id: i64,
     pub created_at: String,
     pub path: String,
+    /// The commit the comment's position was read on.
+    #[serde(default)]
+    pub commit_id: String,
     pub diff_hunk: String,
     /// The new-side line, or 0 when the comment is on the old side.
     pub position: u64,

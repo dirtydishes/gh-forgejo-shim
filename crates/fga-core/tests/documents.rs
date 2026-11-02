@@ -21,10 +21,24 @@ fn forge(push: bool, author: &'static str, state: &'static str) -> Router {
 
 /// The same forge for any PR, optionally with an auto-merge scheduled by the viewer.
 fn forge_with(push: bool, pull: Value, scheduled: bool) -> Router {
-    let timeline = if scheduled {
-        json!([{"id":1,"type":"pull_scheduled_merge","created_at":"2026-11-01T00:00:00Z","user":user("e2e")}])
-    } else {
-        json!([])
+    forge_full(push, push, false, pull, scheduled.then_some("e2e"))
+}
+
+/// The same forge where the viewer may merge into `main` only if `can_merge` (a writer outside a
+/// merge allowlist may not), in a repository that may be archived, with an auto-merge scheduled
+/// by `scheduler`.
+fn forge_full(
+    push: bool,
+    can_merge: bool,
+    archived: bool,
+    pull: Value,
+    scheduler: Option<&'static str>,
+) -> Router {
+    let timeline = match scheduler {
+        Some(login) => {
+            json!([{"id":1,"type":"pull_scheduled_merge","created_at":"2026-11-01T00:00:00Z","user":user(login)}])
+        }
+        None => json!([]),
     };
     Router::new()
         .route("/api/v1/user", get(|| async { Json(user("e2e")) }))
@@ -33,7 +47,7 @@ fn forge_with(push: bool, pull: Value, scheduled: bool) -> Router {
             get(move || async move {
                 Json(json!({"id":1,"name":"oracle","full_name":"e2e/oracle","owner":user("e2e"),
                     "private":false,"html_url":"https://forge.test/e2e/oracle","default_branch":"main",
-                    "fork":false,"archived":false,"permissions":{"admin":false,"push":push,"pull":true}}))
+                    "fork":false,"archived":archived,"permissions":{"admin":false,"push":push,"pull":true}}))
             }),
         )
         .route("/api/v1/repos/e2e/oracle/pulls/1", get(move || async move { Json(pull) }))
@@ -67,7 +81,7 @@ fn forge_with(push: bool, pull: Value, scheduled: bool) -> Router {
         )
         .route("/api/v1/repos/e2e/oracle/issues/1/timeline", get(move || async move { Json(timeline) }))
         // Forgejo's conversations: review 7 has a reply on a.rs:3 (new side); the viewer's pending
-        // review 8 has a resolved comment on old-side line 5 of b.rs.
+        // review 8 has a resolved comment on old-side line 5 of b.rs, read on an older commit.
         .route(
             "/api/v1/repos/e2e/oracle/pulls/1/reviews/7/comments",
             // Forgejo's order varies between requests; this one is newest first.
@@ -88,14 +102,18 @@ fn forge_with(push: bool, pull: Value, scheduled: bool) -> Router {
         )
         .route(
             "/api/v1/repos/e2e/oracle/pulls/1/reviews/8/comments",
-            get(|| async { Json(json!([review_comment(80, 8, "e2e", "b.rs", 0, 5, Some("other"))])) }),
+            get(|| async {
+                let mut comment = review_comment(80, 8, "e2e", "b.rs", 0, 5, Some("other"));
+                comment["commit_id"] = json!("older");
+                Json(json!([comment]))
+            }),
         )
         // A required check still pending keeps the PR BLOCKED, so auto-merge can be enabled.
         .route(
             "/api/v1/repos/e2e/oracle/branches/main",
-            get(|| async {
+            get(move || async move {
                 Json(json!({"name":"main","protected":true,"required_approvals":0,
-                    "enable_status_check":true,"status_check_contexts":["ci"]}))
+                    "enable_status_check":true,"status_check_contexts":["ci"],"user_can_merge":can_merge}))
             }),
         )
         .route(
@@ -262,6 +280,8 @@ async fn review_threads_follow_forgejo_conversations() {
             "url":format!("https://forge.test/e2e/oracle/pulls/1/files#issuecomment-{id}"),
             "pullRequestReview":{"id":review(review_id)},"viewerCanUpdate":login == "e2e"})
     };
+    // b.rs's thread was read on an older commit than the head: Forgejo keeps its position after
+    // the line moves, so it has no current line, as an outdated thread on GitHub.
     assert_eq!(
         pull["reviewThreads"],
         json!({"totalCount":2,"nodes":[
@@ -270,7 +290,7 @@ async fn review_threads_follow_forgejo_conversations() {
              "isResolved":false,"viewerCanResolve":false,"viewerCanUnresolve":false,
              "comments":{"nodes":[comment(70, "other", 7, "SUBMITTED"), comment(71, "e2e", 7, "SUBMITTED")]}},
             {"id":fga_core::ids::node_id("PullRequestReviewThread", "e2e/oracle", 80),"path":"b.rs",
-             "diffSide":"LEFT","line":5,"originalLine":5,"startLine":null,
+             "diffSide":"LEFT","line":null,"originalLine":5,"startLine":null,
              "isResolved":true,"viewerCanResolve":false,"viewerCanUnresolve":false,
              "comments":{"nodes":[comment(80, "e2e", 8, "PENDING")]}}
         ]})
@@ -335,4 +355,48 @@ async fn viewer_can_covers_schedules_merged_and_draft_prs_and_writers_reviews() 
         reviews["reviews"]["nodes"],
         json!([{"viewerCanUpdate":true},{"viewerCanUpdate":true},{"viewerCanUpdate":true}])
     );
+}
+
+/// Scheduling or cancelling a merge needs permission to merge into the base branch, which a merge
+/// allowlist can withhold from a writer, and Forgejo refuses both in an archived repository.
+#[tokio::test]
+async fn auto_merge_follows_the_merge_allowlist_and_archiving() {
+    let flags = |pull: Value| {
+        json!([
+            pull["viewerCanEnableAutoMerge"],
+            pull["viewerCanDisableAutoMerge"]
+        ])
+    };
+    let open = || pull("other", "open");
+    // A writer outside the allowlist: no enabling, and no cancelling another user's schedule.
+    let outside = query(forge_full(true, false, false, open(), None), VIEWER_CAN).await;
+    assert_eq!(flags(outside), json!([false, false]));
+    let outside = query(
+        forge_full(true, false, false, open(), Some("other")),
+        VIEWER_CAN,
+    )
+    .await;
+    assert_eq!(flags(outside), json!([false, false]));
+    // On the allowlist without push access: a schedule by someone else can be cancelled.
+    let listed = query(
+        forge_full(false, true, false, open(), Some("other")),
+        VIEWER_CAN,
+    )
+    .await;
+    assert_eq!(flags(listed), json!([false, true]));
+    // Its scheduler may cancel it without being allowed to merge, unless the repository is archived.
+    let own = query(
+        forge_full(false, false, false, open(), Some("e2e")),
+        VIEWER_CAN,
+    )
+    .await;
+    assert_eq!(flags(own), json!([false, true]));
+    let archived = query(
+        forge_full(true, true, true, open(), Some("e2e")),
+        VIEWER_CAN,
+    )
+    .await;
+    assert_eq!(flags(archived), json!([false, false]));
+    let archived = query(forge_full(true, true, true, open(), None), VIEWER_CAN).await;
+    assert_eq!(flags(archived), json!([false, false]));
 }

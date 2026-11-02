@@ -401,14 +401,9 @@ impl Session {
                 Err(e) => return Err(e),
             }
         }
-        // Everyone else gets the branch's summary of its effective rule. The route's `*` takes the
-        // branch's slashes literally.
-        let mut segments = vec!["repos", owner, repo, "branches"];
-        segments.extend(branch.split('/'));
-        let summary: BranchSummary = match self.get(&segments, &[]).await {
-            Ok(summary) => summary,
-            Err(Error::NotFound) => return Ok(None),
-            Err(e) => return Err(e),
+        // Everyone else gets the branch's summary of its effective rule.
+        let Some(summary) = self.branch_summary(owner, repo, branch).await? else {
+            return Ok(None);
         };
         Ok(summary.protected.then(|| Protection {
             enable_status_check: summary.enable_status_check,
@@ -417,6 +412,23 @@ impl Session {
             partial: true,
             ..Protection::default()
         }))
+    }
+
+    /// The branch's summary for the caller, or `None` if it doesn't exist. The route's `*` takes the
+    /// branch's slashes literally.
+    pub async fn branch_summary(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Option<BranchSummary>, Error> {
+        let mut segments = vec!["repos", owner, repo, "branches"];
+        segments.extend(branch.split('/'));
+        match self.get(&segments, &[]).await {
+            Ok(summary) => Ok(Some(summary)),
+            Err(Error::NotFound) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn behind(

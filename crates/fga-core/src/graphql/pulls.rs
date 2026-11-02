@@ -28,6 +28,28 @@ impl PullRequest {
         Ok(self.source.user.login.eq_ignore_ascii_case(viewer)
             || viewer_can_write(ctx, &self.owner, &self.repo).await?)
     }
+    async fn archived(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        let session = ctx.data_unchecked::<Session>();
+        let repository = session
+            .repository(&self.owner, &self.repo)
+            .await
+            .map_err(error)?;
+        Ok(repository.archived)
+    }
+    /// Whether the viewer may schedule or cancel a merge: Forgejo refuses both in an archived
+    /// repository, and otherwise asks whether the viewer may merge into the base branch, which the
+    /// branch's summary answers for them.
+    async fn viewer_can_merge(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        if self.archived(ctx).await? {
+            return Ok(false);
+        }
+        Ok(ctx
+            .data_unchecked::<Session>()
+            .branch_summary(&self.owner, &self.repo, &self.source.base.ref_name)
+            .await
+            .map_err(error)?
+            .is_some_and(|summary| summary.user_can_merge))
+    }
     async fn checks(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<map::Check>> {
         let statuses = ctx
             .data_unchecked::<Session>()
@@ -276,7 +298,7 @@ impl PullRequest {
     async fn viewer_can_enable_auto_merge(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         if self.source.state != "open"
             || self.source.draft
-            || !viewer_can_write(ctx, &self.owner, &self.repo).await?
+            || !self.viewer_can_merge(ctx).await?
             || self.auto_merge_request(ctx).await?.is_some()
         {
             return Ok(false);
@@ -286,7 +308,9 @@ impl PullRequest {
             map::MergeStateStatus::Blocked | map::MergeStateStatus::Behind
         ))
     }
-    /// Forgejo lets whoever scheduled the merge, or anyone who may merge, cancel it.
+    /// Forgejo lets whoever scheduled the merge, or anyone who may merge, cancel it, unless the
+    /// repository is archived (`RemoveScheduledAutoMerge`, Forgejo v15.0.0
+    /// `services/automerge/automerge.go`).
     async fn viewer_can_disable_auto_merge(
         &self,
         ctx: &Context<'_>,
@@ -296,7 +320,10 @@ impl PullRequest {
         };
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
         let scheduler = matches!(&request.enabled_by, Some(Actor::User(user)) if user.0.login.eq_ignore_ascii_case(viewer));
-        Ok(scheduler || viewer_can_write(ctx, &self.owner, &self.repo).await?)
+        if scheduler {
+            return Ok(!self.archived(ctx).await?);
+        }
+        self.viewer_can_merge(ctx).await
     }
     async fn is_merge_queue_enabled(&self) -> bool {
         false
@@ -461,6 +488,7 @@ impl PullRequest {
             &self.repo,
             self.source.number,
             &self.source.user.login,
+            &self.source.head.sha,
         )
         .await?;
         Ok(page(nodes, first, last, after, before)?.into())
