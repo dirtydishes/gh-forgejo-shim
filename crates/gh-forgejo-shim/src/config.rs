@@ -313,7 +313,13 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
         return false;
     };
     let normalized = normalize_host(host);
-    KNOWN_GITHUB_HOSTS.contains(&normalized.as_str())
+    // Userinfo, a port or a trailing dot still reach GitHub, so none of them may make it a
+    // Forgejo host that receives the Forgejo token.
+    let name = normalized
+        .rsplit_once('@')
+        .map_or(normalized.as_str(), |(_, name)| name);
+    let name = name.rsplit_once(':').map_or(name, |(name, _)| name);
+    KNOWN_GITHUB_HOSTS.contains(&name.trim_end_matches('.'))
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {
@@ -530,6 +536,28 @@ gh = "/bin/gh#real"
         assert!(!config.is_forgejo_host(Some("github.com")));
         fs::remove_dir_all(root).ok();
         Ok(())
+    }
+
+    #[test]
+    fn github_with_userinfo_a_port_or_a_trailing_dot_is_still_github() {
+        for host in [
+            "github.com:443",
+            "GitHub.com:8443",
+            "github.com.",
+            "www.github.com.:443",
+            "user@github.com",
+            "https://github.com:443/owner/repo",
+        ] {
+            assert!(is_known_github_host(Some(host)), "{host}");
+        }
+        for host in [
+            "github.com.example.org",
+            "notgithub.com",
+            "github.com@git.example.com",
+            "git.example.com:443",
+        ] {
+            assert!(!is_known_github_host(Some(host)), "{host}");
+        }
     }
 
     #[test]

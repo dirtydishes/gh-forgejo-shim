@@ -132,7 +132,6 @@ fn audit_cred_malformed_hosts_does_not_reset_store() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C1: fails until gh-forgejo-shim-jko.18 is fixed"]
 fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(&fixture.config_path(), "hosts = [\"github.com:443\"]\n")?;
@@ -158,7 +157,6 @@ fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult
 }
 
 #[test]
-#[ignore = "audit C1: fails until gh-forgejo-shim-jko.18 is fixed"]
 fn audit_cred_import_rejects_github_default_port() -> TestResult {
     let fixture = Fixture::new()?;
     let path = fixture.home.join(".config/tea/config.yml");
