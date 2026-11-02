@@ -35,7 +35,9 @@ pub enum Error {
     #[error("Forgejo returned an invalid response")]
     Upstream,
     #[error(
-        "Forgejo's reply is too large: the gateway reads at most 16 MiB per response and 64 MiB per request"
+        "Forgejo's reply is too large: the gateway reads at most {} MiB per response and {} MiB per request",
+        MAX_RESPONSE_BYTES >> 20,
+        MAX_REQUEST_BYTES >> 20
     )]
     TooLarge,
 }
@@ -196,6 +198,13 @@ impl Forgejo {
                 .is_ok_and(|h| h.split(',').any(|link| link.contains("rel=\"next\"")))
         });
         let status = response.status();
+        // A declared length past the cap fails before any of the body is read.
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(Error::TooLarge);
+        }
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             if body.len() + chunk.len() > MAX_RESPONSE_BYTES
@@ -584,6 +593,42 @@ mod tests {
         upstream.join().unwrap();
     }
 
+    /// A chunked reply declares no length, so the read itself stops at the per-reply cap.
+    #[tokio::test]
+    async fn a_chunked_reply_stops_at_the_response_cap() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _ = socket.read(&mut [0; 4096]).unwrap();
+            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+            let chunk = vec![b'd'; 1024 * 1024];
+            for _ in 0..17 {
+                let sent = socket
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .and_then(|()| socket.write_all(&chunk))
+                    .and_then(|()| socket.write_all(b"\r\n"));
+                if sent.is_err() {
+                    return;
+                }
+            }
+            let _ = socket.write_all(b"0\r\n\r\n");
+        });
+        let session = Session {
+            forgejo: Forgejo::new(base.parse().unwrap()).unwrap(),
+            authorization: "token disposable".into(),
+            viewer: serde_json::from_value(serde_json::json!({"id":1,"login":"t","avatar_url":""}))
+                .unwrap(),
+            memo: Memo::default(),
+            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
+        };
+        let result = session.text(&["big.diff"], &[]).await;
+        assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
+        drop(session);
+        upstream.join().unwrap();
+    }
+
     /// The identity lookup on a cache miss counts toward the request's budget (parallax r1#1).
     #[tokio::test]
     async fn authentication_draws_on_the_request_budget() {
@@ -606,7 +651,8 @@ mod tests {
         server.abort();
     }
 
-    /// Every upstream read in one incoming request, memoized or concurrent, draws on one budget.
+    /// Every upstream read in one incoming request, memoized or concurrent, draws on one budget, and
+    /// a read that concurrent callers share is charged once.
     #[tokio::test]
     async fn one_request_reads_at_most_its_byte_budget() {
         let upstream = axum::Router::new().route(
@@ -623,8 +669,15 @@ mod tests {
                 .unwrap(),
             memo: Memo::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
-            budget: Arc::new(AtomicUsize::new(12)),
+            budget: Arc::new(AtomicUsize::new(20)),
         };
+        let other = session.clone();
+        let (a, b) = tokio::join!(
+            session.get::<serde_json::Value>(&["same"], &[]),
+            other.get::<serde_json::Value>(&["same"], &[])
+        );
+        assert_eq!((a.unwrap(), b.unwrap()), (12345678.into(), 12345678.into()));
+        assert_eq!(session.budget.load(Ordering::Relaxed), 12);
         assert_eq!(session.text(&["one"], &[]).await.unwrap(), "12345678");
         let result = session.clone().text(&["two"], &[]).await;
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
