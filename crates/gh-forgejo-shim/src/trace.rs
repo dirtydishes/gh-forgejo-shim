@@ -28,6 +28,16 @@ const SENSITIVE_KEY_PARTS: &[&str] = &[
     "secret",
     "token",
 ];
+/// Authorization schemes. A first word that isn't one of these is part of the credential.
+const AUTH_SCHEMES: &[&str] = &[
+    "aws4-hmac-sha256",
+    "basic",
+    "bearer",
+    "digest",
+    "negotiate",
+    "ntlm",
+    "token",
+];
 /// Token prefixes, each with the shortest suffix that makes a match a token rather than a word.
 const TOKEN_PREFIXES: &[(&str, usize)] = &[
     ("github_pat_", 20),
@@ -180,16 +190,20 @@ fn redact_url_credentials(value: &str, replacement: &str) -> String {
                 character.is_whitespace() || matches!(character, '/' | '?' | '#')
             })
             .map_or(value.len(), |offset| credential_start + offset);
+        // A password can hold a literal `?`, `#` or `@`, so the userinfo runs to the last `@`
+        // before the path.
+        let userinfo_end = value[credential_start..]
+            .find(|character: char| character.is_whitespace() || character == '/')
+            .map_or(value.len(), |offset| credential_start + offset);
 
-        // The host follows the last `@`; an `@` before it is part of the password.
-        if let Some(relative_at) = value[credential_start..authority_end].rfind('@') {
+        index = authority_end;
+        if let Some(relative_at) = value[credential_start..userinfo_end].rfind('@') {
             let at = credential_start + relative_at;
             if at > credential_start {
                 ranges.push((credential_start, at));
             }
+            index = index.max(at + 1);
         }
-
-        index = authority_end;
     }
 
     replace_ranges(value, &ranges, replacement)
@@ -229,6 +243,14 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
     let (first_offset, first) = value[value_start..].char_indices().next()?;
     value_start += first_offset;
 
+    // JSON inside a JSON string: the value runs to the next escaped quote.
+    if value[value_start..].starts_with("\\\"") {
+        let quoted_start = value_start + 2;
+        let quoted_end = value[quoted_start..]
+            .find("\\\"")
+            .map_or(value.len(), |offset| quoted_start + offset);
+        return Some((quoted_start, quoted_end));
+    }
     if matches!(first, '"' | '\'') {
         let quoted_start = value_start + first.len_utf8();
         return Some((quoted_start, closing_quote(value, quoted_start, first)));
@@ -374,7 +396,8 @@ fn replace_ranges(value: &str, ranges: &[(usize, usize)], replacement: &str) -> 
 }
 
 /// An Authorization value runs to the end of its line. A leading scheme word (`token`,
-/// `Bearer`) stays readable when a credential follows it on that line.
+/// `Bearer`) stays readable when a credential follows it on that line; any other first word is
+/// part of the credential.
 fn authorization_credential_range(value: &str, start: usize) -> (usize, usize) {
     let line = value[start..]
         .split(['\n', '\r'])
@@ -383,6 +406,7 @@ fn authorization_credential_range(value: &str, start: usize) -> (usize, usize) {
         .trim_end();
     let credential = line
         .find(char::is_whitespace)
+        .filter(|&space| AUTH_SCHEMES.contains(&line[..space].to_ascii_lowercase().as_str()))
         .map_or(0, |space| line.len() - line[space..].trim_start().len());
     (start + credential, start + line.len())
 }
@@ -599,6 +623,24 @@ mod tests {
         assert_eq!(
             redact_text(text),
             "> Authorization: <redacted>\nnext line\n> authorization=Bearer <redacted>\n"
+        );
+    }
+
+    #[test]
+    fn redacts_schemeless_authorization_url_passwords_and_nested_json() {
+        for (text, secret) in [
+            ("-c http.extraHeader=Authorization: abc123 foo", "abc123"),
+            ("Authorization: s3cr3tvalue (expired)", "s3cr3tvalue"),
+            ("https://alice:pa#ss@host/x", "pa#ss"),
+            ("https://alice:pa?ss@host/x", "pa?ss"),
+            (r#"{"body": "{\"token\": \"sec ret,tail\"}"}"#, "ret,tail"),
+        ] {
+            let redacted = redact_text_with(text, "[REDACTED]");
+            assert!(!redacted.contains(secret), "{text} -> {redacted}");
+        }
+        assert_eq!(
+            redact_text("Authorization: Bearer abc"),
+            "Authorization: Bearer <redacted>"
         );
     }
 
