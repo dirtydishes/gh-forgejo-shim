@@ -1,7 +1,7 @@
 //! Minimal JSONL tracing for native dispatcher decisions.
 
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -406,7 +406,7 @@ fn create_parent_dirs(path: &Path) -> io::Result<()> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent)?;
+        crate::shim::create_dirs(parent, 0o700)?;
     }
     Ok(())
 }

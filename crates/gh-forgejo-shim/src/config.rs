@@ -180,7 +180,9 @@ pub fn write_config(config: &Config) -> Result<()> {
             config.path.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| {
+    // The auth store shares this directory, and a config others could swap could point api_url
+    // at their own host and collect the token.
+    crate::shim::create_dirs(parent, 0o700).map_err(|error| {
         ShimError::new(format!("could not create {}: {error}", parent.display()))
     })?;
 
