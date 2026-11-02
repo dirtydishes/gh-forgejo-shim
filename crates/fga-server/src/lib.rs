@@ -34,7 +34,7 @@ pub struct Host {
     pub public_url: Url,
     pub forgejo: Forgejo,
     pub wip_prefixes: WipPrefixes,
-    /// The scheme and authority requests are matched against; `public_url` unless overridden.
+    /// Another scheme and authority requests may name, besides `public_url`'s.
     name: Url,
     /// When set, the only credential accepted for this host. A launcher hands each host's token
     /// over; server mode leaves it unset and lets Forgejo judge every user's token.
@@ -52,8 +52,9 @@ impl Host {
         }
     }
 
-    /// Answer to `authority` instead of the public URL's, keeping `public_url` for links. gh drops
-    /// a remote's port, so a forge on `:3443` is asked for as plain `forge.test`.
+    /// Also answer to `authority`, keeping `public_url` for links. gh drops a remote's port, so a
+    /// forge on `:3443` is asked for as plain `forge.test`, and as `forge.test:3443` when the user
+    /// writes the port.
     pub fn answering_to(self, authority: &str) -> Result<Self, url::ParseError> {
         let name = Url::parse(&format!("{}://{authority}", self.public_url.scheme()))?;
         if name.host().is_none() || name.path() != "/" || !name.username().is_empty() {
@@ -101,19 +102,22 @@ impl AppState {
     /// Refuses an empty set, and two hosts answering to the same host and port: the second could
     /// never be reached.
     pub fn new(hosts: Vec<Host>, ghes_version: String) -> Result<Self, &'static str> {
-        let key = |host: &Host| {
-            (
-                host.name.host().map(|h| h.to_owned()),
-                host.name.port_or_known_default(),
-            )
+        let keys = |host: &Host| {
+            [&host.name, &host.public_url].map(|url| {
+                (
+                    url.host().map(|h| h.to_owned()),
+                    url.port_or_known_default(),
+                )
+            })
         };
+        let overlap = |a: &Host, b: &Host| keys(a).iter().any(|key| keys(b).contains(key));
         if hosts.is_empty() {
             return Err("the gateway needs at least one host");
         }
         if hosts
             .iter()
             .enumerate()
-            .any(|(i, a)| hosts[..i].iter().any(|b| key(a) == key(b)))
+            .any(|(i, a)| hosts[..i].iter().any(|b| overlap(a, b)))
         {
             return Err("two hosts answer to the same host and port");
         }
@@ -167,7 +171,7 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
     let Some(host) = state
         .hosts
         .iter()
-        .find(|host| addressed_to(&host.name, &req))
+        .find(|host| addressed_to(&host.name, &req) || addressed_to(&host.public_url, &req))
         .cloned()
     else {
         let served: Vec<_> = state
