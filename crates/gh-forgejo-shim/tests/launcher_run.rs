@@ -1,16 +1,28 @@
-//! `launcher::run` end to end with a fake gh: files, socket, exit status and cleanup. Its own
-//! test binary, because the launcher installs process-wide signal handlers.
+//! `launcher::run` end to end with a fake gh: files, socket, exit status and cleanup, and the
+//! installed wrapper forwarding signals. Its own test binary, because the launcher installs
+//! process-wide signal handlers.
 #![cfg(unix)]
 
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use fga_core::map::WipPrefixes;
 use gh_forgejo_shim::launcher::gateway::GatewayHost;
 use gh_forgejo_shim::launcher::run::{run, Files, Launch};
+
+/// One test at a time: a test that writes its fake gh while another forks can see ETXTBSY on
+/// Linux (jko.42), which `run` reports as a failed spawn.
+fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn scratch() -> PathBuf {
     let mut bytes = [0u8; 8];
@@ -78,6 +90,7 @@ fn entries(dir: &Path) -> Vec<String> {
 
 #[test]
 fn exit_code_passes_through_and_the_run_directory_goes() {
+    let _serial = serial();
     let dir = scratch();
     let parent = dir.join("p");
     fs::create_dir(&parent).expect("parent");
@@ -123,6 +136,7 @@ fn a_signal_death_becomes_128_plus_the_signal() {
 
 #[test]
 fn the_gateway_answers_on_the_socket_and_refuses_other_hosts() {
+    let _serial = serial();
     let dir = scratch();
     let parent = dir.join("p");
     fs::create_dir(&parent).expect("parent");
@@ -152,4 +166,90 @@ fn a_missing_gh_exits_127_and_cleans_up() {
     );
     assert!(entries(&parent).is_empty());
     fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+/// Runs the installed wrapper as a launched `gh pr view` against a configured forge, with a fake
+/// gh that reports which signal reached it, in its own process group so no terminal owns it.
+fn forwarded(signal: &str) -> (Option<i32>, String) {
+    let dir = scratch();
+    let home = dir.join("home");
+    let config = home.join(".config/gh-forgejo-shim");
+    fs::create_dir_all(&config).expect("config dir");
+    fs::write(
+        config.join("config.toml"),
+        "hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\n",
+    )
+    .expect("config");
+    let report = dir.join("report");
+    let ready = dir.join("ready");
+    let gh = fake_gh(
+        &dir,
+        r#"for name in TERM HUP INT; do trap "echo $name > \"\$REPORT\"; exit 3" $name; done
+: > "$READY"
+while :; do sleep 0.05; done"#,
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gh-forgejo-shim"))
+        .args(["gh", "pr", "view", "1", "-R", "forge.test/o/r"])
+        .current_dir(&dir)
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("TMPDIR", "/tmp")
+        .env("FJ_SHIM_AUTH_STORE", "file")
+        .env("FJ_SHIM_REAL_GH", &gh)
+        .env("HOST_TOKEN", "host-secret")
+        .env("REPORT", &report)
+        .env("READY", &ready)
+        .stdin(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("spawn wrapper");
+    let started = Instant::now();
+    while !ready.exists() {
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("the wrapper exited before gh was ready: {status}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "gh never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Command::new("/bin/kill")
+        .args([&format!("-{signal}"), &child.id().to_string()])
+        .status()
+        .expect("kill");
+    // A launcher that didn't forward would leave gh looping: fail instead of hanging.
+    let signalled = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if signalled.elapsed() > Duration::from_secs(10) {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .status();
+            let _ = child.wait();
+            panic!("SIG{signal} never reached gh");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let seen = fs::read_to_string(&report).unwrap_or_default();
+    fs::remove_dir_all(&dir).expect("cleanup");
+    (status.code(), seen.trim().to_string())
+}
+
+#[test]
+fn sigterm_and_sighup_reach_gh_and_its_exit_code_comes_back() {
+    let _serial = serial();
+    for signal in ["TERM", "HUP"] {
+        assert_eq!(forwarded(signal), (Some(3), signal.to_string()), "{signal}");
+    }
+}
+
+#[test]
+fn sigint_without_a_terminal_reaches_gh() {
+    let _serial = serial();
+    // Agents and `timeout -s INT` signal the wrapper's pid directly, with no terminal (spec §6).
+    assert_eq!(forwarded("INT"), (Some(3), "INT".to_string()));
 }
