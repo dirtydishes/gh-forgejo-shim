@@ -152,6 +152,14 @@ On macOS, the shim first tries to store tokens in Keychain with the system `secu
 
 The fallback file is written with owner-only permissions.
 
+Stored tokens are protected at rest and from other users on the machine. They
+aren't protected from programs running as your own user, which is also true of
+the GitHub token plain `gh` keeps. The Keychain item trusts the `security` tool
+that created it, as `gh`'s does, so any process running as you can read it with
+`security find-generic-password` without a prompt. `gh auth token` also prints
+the token for a Forgejo host to any caller, as plain `gh` does for GitHub,
+because agents and scripts rely on it.
+
 The shim checks token environment variables in this order:
 
 ```text
