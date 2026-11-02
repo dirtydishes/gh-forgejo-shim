@@ -330,14 +330,14 @@ async fn set_draft(
     // Forgejo decides draft by its own configured prefixes, which no API exposes
     // (`models/issues/pull.go:798`). A title the gateway's prefixes leave alone can't change it,
     // and a changed draft state is checked, with the title put back if it didn't flip.
-    let unchanged = || {
-        async_graphql::Error::new(
-            "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's",
-        )
+    let unchanged = |outcome: &str| {
+        async_graphql::Error::new(format!(
+            "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's{outcome}"
+        ))
         .extend_with(|_, e| e.set("type", "UNPROCESSABLE"))
     };
     if title == source.title {
-        return Err(unchanged());
+        return Err(unchanged(""));
     }
     let session = ctx.data_unchecked::<Session>();
     let retitle = |title: String| {
@@ -351,10 +351,20 @@ async fn set_draft(
             },
         )
     };
-    let edited = retitle(title).await.map_err(write_error)?;
+    let edited = retitle(title.clone()).await.map_err(write_error)?;
     if edited.draft != draft {
-        retitle(source.title.clone()).await.map_err(write_error)?;
-        return Err(unchanged());
+        // Put the title back only while it is still the one written here; never over another edit.
+        if edited.title != title {
+            return Err(unchanged(
+                "; the title has since changed, so it was left as it is",
+            ));
+        }
+        if retitle(source.title.clone()).await.is_err() {
+            return Err(unchanged(&format!(
+                "; putting the title back failed, so it is still {title:?}"
+            )));
+        }
+        return Err(unchanged(""));
     }
     Ok(PullRequest::new(edited, &id.owner, &id.repository))
 }
