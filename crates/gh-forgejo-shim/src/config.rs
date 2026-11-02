@@ -183,12 +183,24 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
 
 /// Names the line but never quotes the source, which can hold a URL password. The message itself
 /// can quote it too: serde puts a mistyped value in double quotes, and the parser puts a
-/// duplicate key or a table path in backticks. Both are cut.
+/// duplicate key or a table path in backticks. So every line's quoted text is cut, except the
+/// parser's own hint lines, which start with `expected ` (`` expected `]` ``) and never hold
+/// user text.
 fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
-    let mut message = error.message().to_string();
-    for quote in ['"', '`'] {
-        cut_quoted(&mut message, quote);
-    }
+    let message = error
+        .message()
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("expected ") {
+                line.to_string()
+            } else {
+                ['"', '`']
+                    .iter()
+                    .fold(line.to_string(), |line, &quote| cut_quoted(line, quote))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     match error.span().and_then(|span| text.get(..span.start)) {
         Some(before) => ShimError::new(format!(
             "could not parse {} at line {}: {message}",
@@ -200,21 +212,14 @@ fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
 }
 
 /// Replaces everything between the first and last `quote` with `...`. Pairing quotes up would let
-/// a value with quotes of its own slip through. Double quotes always hold a value, so they're
-/// always cut. Backticks also hold the parser's expected tokens (`` expected `]` ``), kept when the
-/// text is nothing but TOML syntax characters.
-fn cut_quoted(message: &mut String, quote: char) {
-    let (Some(start), Some(end)) = (message.find(quote), message.rfind(quote)) else {
-        return;
-    };
-    let inner = start + quote.len_utf8()..end;
-    let syntax_only = quote == '`'
-        && message[inner.clone()]
-            .chars()
-            .all(|character| "[]{}=,.`'\" ".contains(character));
-    if start < end && !syntax_only {
-        message.replace_range(inner, "...");
+/// a value with quotes of its own slip through.
+fn cut_quoted(mut line: String, quote: char) -> String {
+    if let (Some(start), Some(end)) = (line.find(quote), line.rfind(quote)) {
+        if start < end {
+            line.replace_range(start + quote.len_utf8()..end, "...");
+        }
     }
+    line
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
@@ -695,6 +700,8 @@ future_setting = "keep" # why
             ("hosts = []\n[paths]\ngh = \"/bin/secret\n", 3),
             // A mistyped value made only of punctuation is still a value.
             ("hosts = []\nhost = \"!@#$%^&*\"\n", 2),
+            // A key made only of TOML syntax characters is still the user's text.
+            ("'[{},]' = 1\n'[{},]' = 1\n", 2),
             // The parser puts duplicate keys in backticks, and a key can hold backticks too.
             (
                 "'`https://u:secret@x.com`' = 1\n'`https://u:secret@x.com`' = 1\n",
