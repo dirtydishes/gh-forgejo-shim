@@ -429,6 +429,13 @@ fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
         shell_status, 143,
         "recorder must preserve SIGTERM's shell exit status instead of returning generic failure"
     );
+    let trace = fs::read_to_string(f.root.join("git.jsonl"))?;
+    let record: serde_json::Value =
+        serde_json::from_str(trace.lines().last().ok_or("no git trace record")?)?;
+    assert_eq!(
+        record["exit_code"], 143,
+        "the recorder must write its trace record before dying of the signal"
+    );
     Ok(())
 }
 
