@@ -6,7 +6,11 @@ use async_graphql::Request;
 use axum::{
     Extension, Json, Router,
     extract::{Request as HttpRequest, State},
-    http::{StatusCode, header::AUTHORIZATION},
+    http::{
+        StatusCode,
+        header::{AUTHORIZATION, HOST},
+        uri::Authority,
+    },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -81,6 +85,16 @@ pub fn app(state: AppState) -> Router {
 }
 
 async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next: Next) -> Response {
+    // gh's socket setting sends every host's requests here, each with that host's token, so a
+    // request for another host is refused before its token is used.
+    if !addressed_to(&state.public_url, &req) {
+        let host = state.public_url.host_str().unwrap_or_default();
+        return (
+            StatusCode::MISDIRECTED_REQUEST,
+            Json(json!({"message": format!("This gateway serves only {host}")})),
+        )
+            .into_response();
+    }
     let auth = req
         .headers()
         .get(AUTHORIZATION)
@@ -97,6 +111,29 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
         }
         Err(error) => rest_error(error),
     }
+}
+
+/// Whether every authority the request names (its target's and each `Host`) is the public URL's
+/// host and port, and it names at least one. A missing port is the public URL's default port.
+fn addressed_to(public: &Url, req: &HttpRequest) -> bool {
+    let (Some(host), Some(port)) = (public.host_str(), public.port_or_known_default()) else {
+        return false;
+    };
+    let target = req.uri().authority().map(|a| a.as_str().as_bytes());
+    let headers = req.headers().get_all(HOST).iter().map(|v| v.as_bytes());
+    let mut named = false;
+    for authority in target.into_iter().chain(headers) {
+        named = true;
+        let Ok(authority) = Authority::try_from(authority) else {
+            return false;
+        };
+        if !authority.host().eq_ignore_ascii_case(host)
+            || authority.port_u16().unwrap_or(port) != port
+        {
+            return false;
+        }
+    }
+    named
 }
 
 async fn graphql_request(
