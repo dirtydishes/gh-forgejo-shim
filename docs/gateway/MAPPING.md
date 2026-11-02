@@ -138,8 +138,8 @@ merged → `UNKNOWN`):
 7. Any context non-passing (rollup ≠ SUCCESS, and not null) → `UNSTABLE`.
 8. Otherwise → `CLEAN`.
 
-Never emit `HAS_HOOKS`. `isMergeQueueEnabled` is always false. `viewerCanMergeAsAdmin` ←
-`apply_to_admins == false` and the viewer is a repo admin (G3).
+Never emit `HAS_HOOKS`. `isMergeQueueEnabled` is always false. `viewerCanMergeAsAdmin` is not
+implemented: the schema has no such field, and `Protection` doesn't read `apply_to_admins`.
 
 ## 6. Merge and auto-merge (G3)
 
