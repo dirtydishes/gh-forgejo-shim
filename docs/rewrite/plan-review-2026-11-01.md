@@ -74,7 +74,8 @@ pre-move audit merged as its PR #6 (`22c0b69`).
 - D1: client-only mode supports Claude's agent running gh, and server mode becomes first-class.
 - D2: PR URLs use `/pull/N`.
 - D3: the minimum gh is v2.103.3, and install and upgrade refuse anything older.
-- D4: still open.
+- D4: no interim release from `rewrite`. The shim's `pr checks --required` path is deleted in the
+  restructure, and the rule is that nothing ships from `rewrite` until the launcher slice (L3) passes.
 - D5: seeding the Forgejo twin and adding a non-admin e2e user are approved.
 
 **State on 2026-11-01:**
@@ -334,11 +335,14 @@ This was found by the gateway thread and two reviewers independently. It only af
 
 fga-core already handles all three (`Session::protection`, `Protection::for_branch`).
 
-D4 is still open with Kell, so this stays fix-or-delete (`cwe.40`).
+**Decision D4.** Delete, don't patch. Nothing ships from `rewrite` before the launcher slice, so no
+release will ever carry this path.
 
-**Fix.** If anything ships from `rewrite` before the launcher, switch this path to
-`fga_core::forgejo::Session::protection`, which the move makes available by path. Otherwise delete it in
-the restructure. Either way, add a non-admin `--required` case.
+**Fix.** `cwe.40` owns deleting the shim's `pr checks --required` path once L3 serves `pr checks` through
+real gh and the gateway. That covers `get_branch_protection` in `forgejo.rs`, the `--required` branch in
+`read_only.rs`, and the protection handling in `checks.rs`. The gateway's `Session::protection` replaces
+it. A non-admin `--required` test stays, run against the new path as the non-admin e2e user approved
+under D5. C5 (`cwe.19`) depends on `cwe.40`, so the old path can't survive by accident.
 
 ### F12. The older ChatGPT epic is still an active queue for the old architecture (medium, confirmed)
 
@@ -595,8 +599,15 @@ Kell, recorded as bead comments.
 8. **C-tier acceptance** (rewritten C1 to C4), then **R. Release and retirement** (F14, D3), then
    **C5 cutover**.
 
-F11 only matters if a release ships from `rewrite` before L3. If that happens, it becomes a small fix
-right after M1.
+### Release freeze on `rewrite` (D4)
+
+Nothing ships from `rewrite` until the launcher slice (L3, `cwe.28`) passes. That means no release, no
+tag, and no merge to `main`. Code may land on `rewrite` before then, including the audit fixes in
+section 4, but it reaches users only after L3. The freeze is a blocking note on C5 (`cwe.19`) and on the
+release bead (`cwe.39`), and both already depend on `cwe.28`. Lifting it early takes a new decision from
+Kell.
+
+The freeze doesn't cover `main` itself. A patch release cut from `main` is open question D6 in section 4.
 
 ### Decisions (Kell, 2026-11-01)
 
@@ -608,8 +619,9 @@ right after M1.
   mode. (F6)
 - **D3: the minimum supported gh is v2.103.3.** Install and upgrade refuse with a clear message when gh
   is missing or older. This is in the release bead `cwe.39`. (F14)
-- **D4: open.** Kell is still deciding whether anything ships from `rewrite` before the launcher slice.
-  F11 (`cwe.40`) stays fix-or-delete until then.
+- **D4: no interim release from `rewrite`.** F11's path is deleted in the restructure (`cwe.40`), not
+  patched, and the release freeze above applies. A non-admin `--required` test runs against the new path.
+  (F11)
 - **D5: approved.** Seeding PR states on `dirtydishes/gfj-oracle` and adding a non-admin e2e user are
   both OK. Both are build work for their beads (`cwe.32`, `cwe.31`), not part of this review. (F15)
 
@@ -624,6 +636,12 @@ which isn't merged yet. This section says what happens to each bug under option 
 **On `main`** means the file is byte-identical on `main` and `rewrite`, so released users have the bug
 today. For files that differ between the branches, nobody has run the tests against `main` yet. Those
 rows say "not checked".
+
+The audit's finding IDs (R, C or D plus a number) are its own labels for routing, credentials and
+diagnostics. They're unrelated to the decisions D1 to D6. Audit D6 (trace concurrency) and decision D6
+(a patch from `main`) are different things.
+
+Because of the release freeze (D4), fixes made now on `rewrite` reach users only after L3.
 
 ### Fix now
 
@@ -665,8 +683,8 @@ These two survive, and option B makes them matter more. L3 (`cwe.28`) now depend
 ### Absorbed by L2 (routing parity)
 
 L2 (`cwe.27`) replaces repo resolution in `repo.rs`, so these two are fixed there. Their tests become
-part of L2's acceptance. Fix them in `repo.rs` first only if a release ships from `rewrite` before L2
-(D4).
+part of L2's acceptance. Under D4 nothing ships from `rewrite` before L3, so neither gets a separate fix
+in `repo.rs`.
 
 - **R2, `jko.2`.** `-R owner/repo` and `GH_REPO=owner/repo` are ignored inside a checkout.
 - **R5, `jko.6`.** HTTPS remotes lose their port.
@@ -685,6 +703,7 @@ part of L2's acceptance. Fix them in `repo.rs` first only if a release ships fro
 
 ### Open question for Kell (D6)
 
-R3, D1 and D18 are high, and they ship in released code today. Should they go out as a patch release
-from `main` ahead of the restructure? This is separate from D4, which is about shipping from `rewrite`.
-The fixes are small and don't touch code the restructure replaces.
+Audit bugs R3, D1 and D18 are high, and they ship in released code today. Should they go out as a patch
+release cut from `main` ahead of the restructure? D4 freezes releases from `rewrite`, so without a patch
+from `main`, released users keep these three until after L3. The fixes are small and don't touch code the
+restructure replaces. They would be cherry-picked to `rewrite` afterwards.
