@@ -75,7 +75,8 @@ impl Host {
 
     /// Send `token` to Forgejo in place of the admitted one. For a forge on a custom port, gh's API
     /// calls present a random per-call token, while git keeps the real one under the host:port key
-    /// (launcher spec §3); only that per-call token is admitted, and the real one goes upstream.
+    /// (launcher spec §3); the per-call token and the real one are admitted, and the real one goes
+    /// upstream.
     /// `AppState::new` refuses it without an expected token, which would admit any caller.
     pub fn upstream_token(self, token: String) -> Self {
         Self {
@@ -102,11 +103,20 @@ impl Host {
             return false;
         }
         let presented: [u8; 32] = Sha256::digest(presented).into();
-        presented
-            .iter()
-            .zip(expected)
-            .fold(0, |diff, (a, b)| diff | (a ^ b))
-            == 0
+        let same = |other: &[u8; 32]| {
+            presented
+                .iter()
+                .zip(other)
+                .fold(0, |diff, (a, b)| diff | (a ^ b))
+                == 0
+        };
+        // A host that sends its real token upstream also admits that token: gh presents it itself
+        // for commands such as `gh auth status --hostname <host:port>` (launcher spec §3).
+        let real = self
+            .upstream_token
+            .as_ref()
+            .map(|token| Sha256::digest(token).into());
+        same(expected) | real.is_some_and(|real: [u8; 32]| same(&real))
     }
 }
 
