@@ -299,8 +299,8 @@ async fn each_host_links_to_its_own_web_ui() {
     assert!(!body.contains("a.test"), "{body}");
 }
 
-/// gh drops a remote's port, so a forge on :3443 is asked for as plain `forge.test`; the host
-/// answers to that name while its links keep the port.
+/// gh drops a remote's port, so a forge on :3443 is asked for as plain `forge.test`, or with the
+/// port when the user writes it; the host answers to both while its links keep the port.
 #[tokio::test]
 async fn a_host_can_answer_to_its_portless_name_and_link_with_its_port() {
     let (forge, seen) = forgejo().await;
@@ -317,7 +317,7 @@ async fn a_host_can_answer_to_its_portless_name_and_link_with_its_port() {
     for (host, expected) in [
         ("forge.test", 200),
         ("FORGE.test:443", 200),
-        ("forge.test:3443", 421),
+        ("forge.test:3443", 200),
         ("forge.test:8443", 421),
         ("api.github.com", 421),
     ] {
