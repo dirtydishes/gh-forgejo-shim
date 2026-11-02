@@ -103,7 +103,7 @@ enum DefaultSource {
 
 impl GhHosts {
     /// gh compares hosts with `strings.EqualFold` (`gh/context/remote.go` `FilterByHosts`).
-    fn knows(&self, host: &str) -> bool {
+    pub(crate) fn knows(&self, host: &str) -> bool {
         self.known
             .iter()
             .any(|known| known.eq_ignore_ascii_case(host))

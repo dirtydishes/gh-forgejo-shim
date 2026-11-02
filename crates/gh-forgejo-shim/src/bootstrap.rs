@@ -138,17 +138,8 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         .clone()
         .unwrap_or_else(|| config::config_path(options.home.as_deref()));
     let mut config = config::load_config_with_env(Some(&config_path), &options.env)?;
-    // The repository the wrapper would route, or, if gh resolves none, the first remote: see
-    // `doctor::current_repo`.
-    let current = doctor::current_repo(options.cwd.as_deref(), &options.env, &config);
-    // A repository gh resolves on a host the allowlist doesn't name is real gh's: github.com, or a
-    // GitHub Enterprise host from the user's own gh hosts. Only an unresolved first remote is a
-    // Forgejo host bootstrap hasn't met yet.
-    let left_to_gh = current.as_ref().is_some_and(|current| {
-        config::is_known_github_host(Some(&current.repo.host))
-            || (current.resolved_by_gh && !doctor::routes_to_forgejo(&config, &current.repo.host))
-    });
-    let repo = current.map(|current| current.repo);
+    let plan = plan_repo(options.cwd.as_deref(), &options.env, &config);
+    let left_to_gh = matches!(plan, Some(RepoPlan::LeaveToGh { .. }));
     let setup_model = setup::inspect(SetupInspectOptions {
         env: options.env.clone(),
         home: options.home.clone(),
@@ -162,47 +153,8 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     let target_shim = setup_model.target_shim_path.clone();
     let mut checks = Vec::new();
 
-    if let Some(repo) = repo.as_ref() {
-        if left_to_gh {
-            let mut message = format!(
-                "detected GitHub repository {}/{}/{}; leaving {} out of the Forgejo allowlist",
-                repo.host, repo.owner, repo.name, repo.host
-            );
-            // Say so when a Forgejo-looking first remote loses to it, as when a forge origin has a
-            // GitHub upstream, which gh ranks first.
-            if let Some(first) = repo::detect_from_git(options.cwd.as_deref()).filter(|first| {
-                first.host != repo.host && !config::is_known_github_host(Some(&first.host))
-            }) {
-                // The user's other checkouts on that forge can still take it in one step.
-                message.push_str(&format!(
-                    "; {} was left out too, because gh, and so the wrapper, acts on {}/{}/{} \
-                     here; to allowlist it for other checkouts, run gh-forgejo-shim config \
-                     add-host {}",
-                    first.host, repo.host, repo.owner, repo.name, first.host
-                ));
-            }
-            checks.push(BootstrapCheck::new(
-                "repository",
-                true,
-                message,
-                Vec::<String>::new(),
-            ));
-        } else if config::normalized_forgejo_host(&repo.host).is_none() {
-            checks.push(BootstrapCheck::new(
-                "repository",
-                false,
-                format!(
-                    "{} isn't a host name the shim can use; leaving it out of the Forgejo allowlist",
-                    repo.host
-                ),
-                Vec::<String>::new(),
-            ));
-        } else {
-            // gh drops a remote's port. When an entry with one already routes this host, write
-            // that entry: gh's spelling beside it would leave two entries for one hostname, and
-            // the wrapper routes neither.
-            let entry =
-                doctor::allowlist_entry(&config, &repo.host).unwrap_or_else(|| repo.host.clone());
+    let repo = match plan {
+        Some(RepoPlan::Allowlist { repo, entry }) => {
             if options.dry_run {
                 checks.push(BootstrapCheck::plan(
                     "repository",
@@ -220,20 +172,74 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                     Vec::<String>::new(),
                 ));
             }
+            Some(repo)
         }
-    } else {
-        checks.push(BootstrapCheck::new(
-            "repository",
-            false,
-            "could not detect a Forgejo repository from git remotes",
-            [
-                "git remote add origin https://git.example.com/owner/repo.git",
-                "git fetch origin",
-                "git remote set-head origin -a",
-                "gh-forgejo-shim config add-host git.example.com",
-            ],
-        ));
-    }
+        Some(RepoPlan::LeaveToGh { repo, hint }) => {
+            let mut message = if doctor::is_github_host(&options.env, &repo.host) {
+                format!(
+                    "detected GitHub repository {}/{}/{}",
+                    repo.host, repo.owner, repo.name
+                )
+            } else {
+                format!(
+                    "detected {}/{}/{}, which gh keeps",
+                    repo.host, repo.owner, repo.name
+                )
+            };
+            message.push_str(&format!(
+                "; leaving {} out of the Forgejo allowlist",
+                repo.host
+            ));
+            // Allowlisting the hint wouldn't move this checkout, but the user's other checkouts on
+            // that host can still take it in one step.
+            if let Some(hint) = hint {
+                if hint != repo.host {
+                    message.push_str(&format!(
+                        "; {hint} was left out too, because gh, and so the wrapper, acts on \
+                         {}/{}/{} here",
+                        repo.host, repo.owner, repo.name
+                    ));
+                }
+                message.push_str(&format!(
+                    "; to allowlist it for other checkouts, run gh-forgejo-shim config add-host \
+                     {hint}"
+                ));
+            }
+            checks.push(BootstrapCheck::new(
+                "repository",
+                true,
+                message,
+                Vec::<String>::new(),
+            ));
+            Some(repo)
+        }
+        Some(RepoPlan::Unusable { repo }) => {
+            checks.push(BootstrapCheck::new(
+                "repository",
+                false,
+                format!(
+                    "{} isn't a host name the shim can use; leaving it out of the Forgejo allowlist",
+                    repo.host
+                ),
+                Vec::<String>::new(),
+            ));
+            Some(repo)
+        }
+        None => {
+            checks.push(BootstrapCheck::new(
+                "repository",
+                false,
+                "could not detect a Forgejo repository from git remotes",
+                [
+                    "git remote add origin https://git.example.com/owner/repo.git",
+                    "git fetch origin",
+                    "git remote set-head origin -a",
+                    "gh-forgejo-shim config add-host git.example.com",
+                ],
+            ));
+            None
+        }
+    };
 
     checks.push(real_gh_check(&setup_model, &options.platform));
 
@@ -317,6 +323,76 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         checks,
         dry_run: options.dry_run,
         gui_path_apply,
+    })
+}
+
+/// What bootstrap does with the checkout's repository.
+enum RepoPlan {
+    /// Allowlist `entry`: the wrapper routes `repo` to it, or will once it's allowlisted.
+    Allowlist { repo: RepoRef, entry: String },
+    /// Real gh keeps `repo`. `hint` is a host that allowlisting wouldn't route this checkout to,
+    /// but that the user's other checkouts could use.
+    LeaveToGh { repo: RepoRef, hint: Option<String> },
+    /// `repo`'s host isn't a host name the shim can use.
+    Unusable { repo: RepoRef },
+}
+
+/// Asks the resolver itself which host, if any, to allowlist. The candidate is the repository gh
+/// resolves, or else the first remote, whichever isn't GitHub's (`doctor::is_github_host`, which
+/// counts GitHub Enterprise hosts from the user's hosts.yml). Bootstrap allowlists it only if
+/// the wrapper would then route this checkout to it: whether it does depends on what else gh
+/// knows, such as a hosts.yml that names github.com.
+fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPlan> {
+    let current = doctor::current_repo(cwd, env, config)?.repo;
+    // Already routed: write the entry that routes it. gh drops a remote's port, and its spelling
+    // beside an entry with one would leave two entries for one hostname, which routes neither.
+    if let Some(entry) = doctor::allowlist_entry(config, &current.host) {
+        return Some(RepoPlan::Allowlist {
+            repo: current,
+            entry,
+        });
+    }
+    let Some(candidate) = [Some(current.clone()), repo::detect_from_git(cwd)]
+        .into_iter()
+        .flatten()
+        .find(|repo| !doctor::is_github_host(env, &repo.host))
+    else {
+        return Some(RepoPlan::LeaveToGh {
+            repo: current,
+            hint: None,
+        });
+    };
+    let Some(entry) = config::normalized_forgejo_host(&candidate.host) else {
+        return Some(if candidate.host == current.host {
+            RepoPlan::Unusable { repo: current }
+        } else {
+            RepoPlan::LeaveToGh {
+                repo: current,
+                hint: None,
+            }
+        });
+    };
+    let allowlisted = doctor::allowlist_entry(config, &candidate.host);
+    let mut trial = config.clone();
+    if allowlisted.is_none() {
+        trial.hosts.push(entry.clone());
+    }
+    let routed = doctor::current_repo(cwd, env, &trial)
+        .map(|trial| trial.repo)
+        .filter(|repo| {
+            doctor::routes_to_forgejo(&trial, &repo.host)
+                && repo::gh_hostname(&repo.host) == repo::gh_hostname(&candidate.host)
+        });
+    Some(match routed {
+        Some(repo) => RepoPlan::Allowlist {
+            repo,
+            entry: allowlisted.unwrap_or(entry),
+        },
+        // An allowlisted host needs no hint: there's nothing to add.
+        None => RepoPlan::LeaveToGh {
+            repo: current,
+            hint: allowlisted.is_none().then_some(entry),
+        },
     })
 }
 

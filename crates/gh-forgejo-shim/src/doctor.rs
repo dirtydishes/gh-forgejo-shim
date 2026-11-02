@@ -206,10 +206,7 @@ pub(crate) fn current_repo(
     env: &EnvMap,
     config: &Config,
 ) -> Option<CurrentRepo> {
-    let env = env
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect::<HashMap<_, _>>();
+    let env = gh_env(env);
     // A command gh resolves a base repository for, with no -R and no URL to select another.
     let invocation = Invocation::parse(&["pr".to_string(), "status".to_string()]);
     let checkout = Checkout::new(cwd);
@@ -251,6 +248,22 @@ pub(crate) fn current_repo(
         repo,
         resolved_by_gh: false,
     })
+}
+
+/// `env` in the form the repo module takes.
+fn gh_env(env: &EnvMap) -> HashMap<String, String> {
+    env.iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Whether `host` is GitHub's: github.com, ghe.com and the names under them, or a host in the
+/// user's own gh `hosts.yml`, such as a GitHub Enterprise server. `GH_HOST` doesn't count: it
+/// names a host for gh to use, not one the user has logged in to.
+pub(crate) fn is_github_host(env: &EnvMap, host: &str) -> bool {
+    let mut env = gh_env(env);
+    env.remove("GH_HOST");
+    config::is_known_github_host(Some(host)) || GhHosts::user(&env).knows(host)
 }
 
 /// Whether the wrapper routes a repository on `host` to Forgejo.
