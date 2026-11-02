@@ -289,7 +289,6 @@ fn audit_diag_git_trace_query_token() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D4: fails until gh-forgejo-shim-jko.10 is fixed"]
 fn audit_diag_git_trace_multiple_authorization_headers() -> TestResult {
     let f = Fixture::new()?;
     f.tool(
