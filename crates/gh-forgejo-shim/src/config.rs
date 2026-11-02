@@ -12,7 +12,10 @@ use crate::{shim, Result, ShimError};
 
 pub type EnvMap = BTreeMap<String, String>;
 
-pub const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com"];
+/// GitHub-owned domains. Each one and every name under it (api.github.com, gist.github.com, a GitHub
+/// Enterprise Cloud tenant's acme.ghe.com) is GitHub, never a Forgejo host. githubusercontent.com
+/// and github.io are left out on purpose: they serve content, not git remotes or the API.
+pub const KNOWN_GITHUB_HOSTS: &[&str] = &["github.com", "ghe.com"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathsConfig {
@@ -124,6 +127,12 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
                 || url.fragment().is_some()
             {
                 return Err(ShimError::new(format!("invalid api_url for {host}: expected an HTTP or HTTPS base URL without credentials, query, or fragment")));
+            }
+            // api_url decides where this host's token goes, so it can't be GitHub either.
+            if url.host_str().is_some_and(is_github_name) {
+                return Err(ShimError::new(format!(
+                    "invalid api_url for {host}: it points at GitHub, which never gets the Forgejo token"
+                )));
             }
             settings.api_url = Some(base.trim_end_matches('/').to_string());
         }
@@ -432,10 +441,46 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
         .rsplit_once('@')
         .map_or(normalized.as_str(), |(_, name)| name);
     let name = name.rsplit_once(':').map_or(name, |(name, _)| name);
+    // The token goes wherever the URL parser sends it, and it decodes `%2e`, maps full-width
+    // letters to ASCII, drops tabs and soft hyphens, and ends the host at `\`, `?` or `#`. So
+    // both the spelling and the host a request would reach are checked.
+    is_github_name(name) || url_host(&normalized).is_some_and(|host| is_github_name(&host))
+}
+
+fn is_github_name(name: &str) -> bool {
     let name = name.trim_end_matches('.');
-    // Every github.com subdomain is GitHub's (api., gist., uploads. and so on), so none is a
-    // Forgejo host either.
-    KNOWN_GITHUB_HOSTS.contains(&name) || name.ends_with(".github.com")
+    KNOWN_GITHUB_HOSTS
+        .iter()
+        .any(|domain| name == *domain || name.ends_with(&format!(".{domain}")))
+}
+
+/// The host an HTTPS request for `spelling` would reach, as the URL parser reads it.
+fn url_host(spelling: &str) -> Option<String> {
+    reqwest::Url::parse(&format!("https://{spelling}"))
+        .ok()?
+        .host_str()
+        .map(ToOwned::to_owned)
+}
+
+/// Whether the URL parser reads `normalized` back as itself: no userinfo, path, query or fragment,
+/// and the same host text. Anything else names a different host from the one it seems to.
+fn is_canonical_host(normalized: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(&format!("https://{normalized}")) else {
+        return false;
+    };
+    let host = match normalized.strip_prefix('[') {
+        Some(_) => normalized.split_inclusive(']').next().unwrap_or(normalized),
+        None => normalized
+            .rsplit_once(':')
+            .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+            .map_or(normalized, |(host, _)| host),
+    };
+    url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.host_str() == Some(host)
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {
@@ -449,7 +494,10 @@ pub fn split_hosts(value: &str) -> Vec<String> {
 
 fn normalized_forgejo_host(host: &str) -> Option<String> {
     let normalized = normalize_host(host);
-    if normalized.is_empty() || is_known_github_host(Some(&normalized)) {
+    if normalized.is_empty()
+        || is_known_github_host(Some(&normalized))
+        || !is_canonical_host(&normalized)
+    {
         None
     } else {
         Some(normalized)
@@ -761,6 +809,16 @@ future_setting = "keep" # why
             "api.github.com",
             "GIST.GitHub.com.:443",
             "https://uploads.github.com/repos/o/r",
+            "acme.ghe.com",
+            "api.acme.ghe.com",
+            // Spellings the URL parser turns into a GitHub host.
+            "api.\u{ff47}\u{ff49}\u{ff54}\u{ff48}\u{ff55}\u{ff42}.com",
+            "api.github%2ecom",
+            "api.git\u{ad}hub.com",
+            "api.git\thub.com",
+            "api.github.com\\x",
+            "api.github.com?x",
+            "api.github.com#x",
         ] {
             assert!(is_known_github_host(Some(host)), "{host}");
         }
@@ -773,6 +831,31 @@ future_setting = "keep" # why
         ] {
             assert!(!is_known_github_host(Some(host)), "{host}");
         }
+    }
+
+    #[test]
+    fn a_host_spelled_differently_from_where_it_leads_is_never_allowlisted() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\"git.example.com\", \"forge.example%2ecom\", \"user@git.example.org\", \"git.example.net?x\", \"git.example.com:3000\", \"[::1]:3000\"]\n",
+        )?;
+
+        let hosts = load_config_with_env(Some(&path), &EnvMap::new())?.hosts;
+
+        assert_eq!(
+            hosts,
+            ["git.example.com", "git.example.com:3000", "[::1]:3000"]
+        );
+        fs::write(
+            &path,
+            "[host.\"git.example.com\"]\napi_url = \"https://api.github.com\"\n",
+        )?;
+        let error = load_config_with_env(Some(&path), &EnvMap::new()).expect_err("GitHub api_url");
+        assert!(error.to_string().contains("points at GitHub"), "{error}");
+        fs::remove_dir_all(root).ok();
+        Ok(())
     }
 
     #[test]
