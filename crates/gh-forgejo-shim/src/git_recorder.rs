@@ -11,6 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+use crate::trace::append_jsonl;
 use crate::{external, shim, Result, ShimError};
 
 pub const MARKER: &str = "managed by gh-forgejo-shim git recorder";
@@ -452,26 +453,6 @@ fn is_recorder_wrapper(path: &Path) -> bool {
             .windows(MARKER.len())
             .any(|window| window == MARKER.as_bytes())
     })
-}
-
-fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-    let mut options = fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    serde_json::to_writer(&mut file, record)?;
-    file.write_all(b"\n")?;
-    Ok(())
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf> {
