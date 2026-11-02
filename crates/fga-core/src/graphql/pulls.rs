@@ -414,6 +414,7 @@ impl PullRequest {
                 source,
                 owner: self.owner.clone(),
                 repo: self.repo.clone(),
+                number: self.source.number,
             })
             .collect();
         Ok(Some(page(nodes, first, last, after, before)?.into()))
@@ -437,9 +438,21 @@ impl PullRequest {
                 source: source.clone(),
                 owner: self.owner.clone(),
                 repo: self.repo.clone(),
+                number: self.source.number,
             })
             .collect();
         Ok(Some(page(nodes, first, last, after, before)?.into()))
+    }
+    async fn review_threads(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<PullRequestReviewThreadConnection> {
+        let nodes = review_threads(ctx, &self.owner, &self.repo, self.source.number).await?;
+        Ok(page(nodes, first, last, after, before)?.into())
     }
     async fn comments(
         &self,

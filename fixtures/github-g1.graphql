@@ -159,6 +159,11 @@ type CreatePullRequestPayload {
 
 scalar DateTime
 
+enum DiffSide {
+  LEFT
+  RIGHT
+}
+
 input DisablePullRequestAutoMergeInput {
   pullRequestId: ID!
   clientMutationId: String
@@ -477,6 +482,7 @@ type PullRequest implements Node {
   reviewRequests( after: String before: String first: Int last: Int ): ReviewRequestConnection
   reviews( after: String author: String before: String first: Int last: Int states: [PullRequestReviewState!] ): PullRequestReviewConnection
   latestReviews( after: String before: String first: Int last: Int ): PullRequestReviewConnection
+  reviewThreads( after: String before: String first: Int last: Int ): PullRequestReviewThreadConnection!
   comments( after: String before: String first: Int last: Int orderBy: IssueCommentOrder ): IssueCommentConnection!
   commits( after: String before: String first: Int last: Int ): PullRequestCommitConnection!
   projectItems( after: String before: String first: Int includeArchived: Boolean = true last: Int ): ProjectV2ItemConnection!
@@ -521,7 +527,32 @@ type PullRequestReview implements Node {
   body: String!
   state: PullRequestReviewState!
   commit: Commit
+  comments( after: String before: String first: Int last: Int ): PullRequestReviewCommentConnection!
   reactionGroups: [ReactionGroup!]
+}
+
+type PullRequestReviewComment implements Node {
+  id: ID!
+  author: Actor
+  body: String!
+  createdAt: DateTime!
+  diffHunk: String!
+  state: PullRequestReviewCommentState!
+  pullRequestReview: PullRequestReview
+  url: URI!
+  viewerCanUpdate: Boolean!
+  viewerCanDelete: Boolean!
+}
+
+type PullRequestReviewCommentConnection {
+  nodes: [PullRequestReviewComment]
+  totalCount: Int!
+  pageInfo: PageInfo!
+}
+
+enum PullRequestReviewCommentState {
+  PENDING
+  SUBMITTED
 }
 
 type PullRequestReviewConnection {
@@ -542,6 +573,27 @@ enum PullRequestReviewState {
   COMMENTED
   DISMISSED
   PENDING
+}
+
+type PullRequestReviewThread implements Node {
+  id: ID!
+  comments( after: String before: String first: Int last: Int skip: Int ): PullRequestReviewCommentConnection!
+  path: String!
+  diffSide: DiffSide!
+  line: Int
+  originalLine: Int
+  startLine: Int
+  originalStartLine: Int
+  startDiffSide: DiffSide
+  isResolved: Boolean!
+  viewerCanResolve: Boolean!
+  viewerCanUnresolve: Boolean!
+}
+
+type PullRequestReviewThreadConnection {
+  nodes: [PullRequestReviewThread]
+  totalCount: Int!
+  pageInfo: PageInfo!
 }
 
 enum PullRequestState {

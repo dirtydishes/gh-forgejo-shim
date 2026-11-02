@@ -247,6 +247,35 @@ pub struct BranchSummary {
     pub status_check_contexts: Vec<String>,
 }
 
+/// A code comment in a review (`modules/structs/pull_review.go` PullReviewComment).
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReviewComment {
+    pub id: i64,
+    pub body: String,
+    pub user: Option<User>,
+    pub resolver: Option<User>,
+    pub pull_request_review_id: i64,
+    pub created_at: String,
+    pub path: String,
+    pub diff_hunk: String,
+    /// The new-side line, or 0 when the comment is on the old side.
+    pub position: u64,
+    /// The old-side line, or 0 when the comment is on the new side.
+    pub original_position: u64,
+    pub html_url: String,
+}
+
+impl ReviewComment {
+    /// Forgejo's own signed line: negative on the old side (`services/convert/pull_review.go:99-103`).
+    pub fn line(&self) -> i64 {
+        if self.original_position > 0 {
+            -(self.original_position as i64)
+        } else {
+            self.position as i64
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Review {
     pub id: i64,

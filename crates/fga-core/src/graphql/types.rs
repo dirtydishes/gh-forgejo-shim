@@ -220,10 +220,12 @@ pub fn no_reactions() -> Option<Vec<ReactionGroup>> {
     )
 }
 
+#[derive(Clone)]
 pub struct PullRequestReview {
     pub source: forgejo::Review,
     pub owner: String,
     pub repo: String,
+    pub number: i32,
 }
 #[Object]
 impl PullRequestReview {
@@ -287,6 +289,17 @@ impl PullRequestReview {
             &self.repo,
             &self.source.commit_id,
         ))
+    }
+    async fn comments(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<PullRequestReviewCommentConnection> {
+        let nodes = review_comments(ctx, self).await?;
+        Ok(page(nodes, first, last, after, before)?.into())
     }
     async fn reaction_groups(&self) -> Option<Vec<ReactionGroup>> {
         no_reactions()

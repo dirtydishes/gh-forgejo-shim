@@ -8,6 +8,7 @@ mod mutations;
 mod pulls;
 mod query;
 mod search;
+mod threads;
 mod types;
 use checks::*;
 use connections::*;
@@ -16,6 +17,7 @@ use mutation_inputs::*;
 pub use mutations::Mutation;
 use pulls::*;
 pub use query::{Query, Repository, SearchResultItem};
+use threads::*;
 pub use types::*;
 
 pub type GithubSchema = Schema<Query, Mutation, EmptySubscription>;
