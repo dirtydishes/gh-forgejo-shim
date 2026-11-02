@@ -151,7 +151,8 @@ async fn timeline_fields_for_reviews_comments_and_commits() {
             author{login avatarUrl(size:48)}
             pending:reviews(first:1,author:"E2E",states:PENDING){nodes{body state}}
             reviews(first:10){nodes{author{login} createdAt url isMinimized viewerCanUpdate}}
-            comments(first:10){nodes{viewerCanDelete viewerCanUpdate}}
+            comments(first:10){nodes{viewerCanDelete viewerCanUpdate bodyHTML}}
+            bodyHTML
         }}}"#,
     )
     .await;
@@ -176,10 +177,11 @@ async fn timeline_fields_for_reviews_comments_and_commits() {
     assert_eq!(
         pull["comments"]["nodes"],
         json!([
-            {"viewerCanDelete":true,"viewerCanUpdate":true},
-            {"viewerCanDelete":false,"viewerCanUpdate":false}
+            {"viewerCanDelete":true,"viewerCanUpdate":true,"bodyHTML":"<p>hi</p>"},
+            {"viewerCanDelete":false,"viewerCanUpdate":false,"bodyHTML":"<p>hi</p>"}
         ])
     );
+    assert_eq!(pull["bodyHTML"], "");
 }
 
 #[tokio::test]
@@ -212,7 +214,7 @@ async fn review_threads_follow_forgejo_conversations() {
             reviews(first:10){nodes{comments(first:1){totalCount}}}
             reviewThreads(first:10){totalCount nodes{id path diffSide line originalLine startLine
                 isResolved viewerCanResolve viewerCanUnresolve
-                comments(first:10){nodes{author{login} body diffHunk state url
+                comments(first:10){nodes{author{login} body bodyHTML diffHunk state url
                     pullRequestReview{id} viewerCanUpdate}}}}
         }}}"#,
     )
@@ -223,7 +225,8 @@ async fn review_threads_follow_forgejo_conversations() {
     );
     let review = |id| fga_core::ids::node_id("PullRequestReview", "e2e/oracle", id);
     let comment = |id: i64, login: &str, review_id: i64, state: &str| {
-        json!({"author":{"login":login},"body":format!("c{id}"),"diffHunk":"@@ -1 +1 @@","state":state,
+        json!({"author":{"login":login},"body":format!("c{id}"),"bodyHTML":format!("<p>c{id}</p>"),
+            "diffHunk":"@@ -1 +1 @@","state":state,
             "url":format!("https://forge.test/e2e/oracle/pulls/1/files#issuecomment-{id}"),
             "pullRequestReview":{"id":review(review_id)},"viewerCanUpdate":login == "e2e"})
     };

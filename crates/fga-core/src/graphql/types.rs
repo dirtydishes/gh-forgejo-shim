@@ -27,6 +27,7 @@ string_scalar!(GitSshRemote, "GitSSHRemote");
 string_scalar!(DateTime, "DateTime");
 string_scalar!(GitObjectId, "GitObjectID");
 string_scalar!(BigInt, "BigInt");
+string_scalar!(Html, "HTML");
 
 #[derive(Clone, Interface)]
 #[graphql(
@@ -336,6 +337,10 @@ impl IssueComment {
     }
     async fn body(&self) -> &str {
         &self.source.body
+    }
+    #[graphql(name = "bodyHTML")]
+    async fn body_html(&self) -> Html {
+        Html(map::body_html(&self.source.body))
     }
     async fn created_at(&self) -> DateTime {
         DateTime(self.source.created_at.clone())
