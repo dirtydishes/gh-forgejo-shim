@@ -20,6 +20,7 @@ const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", 
 const SENSITIVE_KEY_PARTS: &[&str] = &[
     "api-key",
     "api_key",
+    "authorization",
     "credential",
     "pass",
     "private-key",
@@ -159,13 +160,12 @@ fn redact_text(value: &str) -> String {
 }
 
 /// Replaces each credential in free text with `replacement`: URL userinfo, the value of a
-/// sensitive `key=value`, `key: value` or `"key": "value"`, known token prefixes and
-/// Authorization headers. The gh and git traces use different replacements.
+/// sensitive `key=value`, `key: value` or `"key": "value"` (every Authorization header among
+/// them), and known token prefixes. The gh and git traces use different replacements.
 pub(crate) fn redact_text_with(value: &str, replacement: &str) -> String {
-    let mut result = redact_url_credentials(value, replacement);
-    result = redact_sensitive_key_values(&result, replacement);
-    result = redact_token_prefixes(&result, replacement);
-    redact_authorization_header(&result, replacement)
+    let result = redact_url_credentials(value, replacement);
+    let result = redact_sensitive_key_values(&result, replacement);
+    redact_token_prefixes(&result, replacement)
 }
 
 fn redact_url_credentials(value: &str, replacement: &str) -> String {
@@ -234,6 +234,9 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
             .find(first)
             .map_or(value.len(), |offset| quoted_start + offset);
         return Some((quoted_start, quoted_end));
+    }
+    if key.to_ascii_lowercase().contains("authorization") {
+        return Some(authorization_credential_range(value, value_start));
     }
 
     let value_end = value[value_start..]
@@ -356,27 +359,18 @@ fn replace_ranges(value: &str, ranges: &[(usize, usize)], replacement: &str) -> 
     redacted
 }
 
-fn redact_authorization_header(value: &str, replacement: &str) -> String {
-    let lower = value.to_ascii_lowercase();
-    let Some(index) = lower.find("authorization:") else {
-        return value.to_string();
-    };
-    let after_name = index + "authorization:".len();
-    let scheme_start = value[after_name..]
-        .find(|character: char| !character.is_whitespace())
-        .map_or(value.len(), |offset| after_name + offset);
-    let scheme_end = value[scheme_start..]
+/// An Authorization value runs to the end of its line. A leading scheme word (`token`,
+/// `Bearer`) stays readable when a credential follows it on that line.
+fn authorization_credential_range(value: &str, start: usize) -> (usize, usize) {
+    let line = value[start..]
+        .split(['\n', '\r'])
+        .next()
+        .unwrap_or_default()
+        .trim_end();
+    let credential = line
         .find(char::is_whitespace)
-        .map_or(value.len(), |offset| scheme_start + offset);
-    let credential_start = value[scheme_end..]
-        .find(|character: char| !character.is_whitespace())
-        .map_or(scheme_start, |offset| scheme_end + offset);
-    let credential_end = value[credential_start..]
-        .find(|character: char| character.is_whitespace() || matches!(character, ',' | ';'))
-        .map_or(value.len(), |offset| credential_start + offset);
-    let mut redacted = value.to_string();
-    redacted.replace_range(credential_start..credential_end, replacement);
-    redacted
+        .map_or(0, |space| line.len() - line[space..].trim_start().len());
+    (start + credential, start + line.len())
 }
 
 fn trace_path(env: &HashMap<String, String>) -> Option<PathBuf> {
@@ -517,6 +511,16 @@ mod tests {
         assert_eq!(
             redact_text_with(text, "[REDACTED]"),
             "push [REDACTED]\napi_key: [REDACTED]\n"
+        );
+    }
+
+    #[test]
+    fn redacts_every_authorization_header_within_its_line() {
+        let text = "> Authorization: plain-one\nnext line\n> authorization=Bearer two three\n";
+
+        assert_eq!(
+            redact_text(text),
+            "> Authorization: <redacted>\nnext line\n> authorization=Bearer <redacted>\n"
         );
     }
 
