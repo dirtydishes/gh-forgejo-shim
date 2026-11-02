@@ -85,6 +85,10 @@ pub fn resolve_token(
     platform: Option<&str>,
 ) -> Option<TokenDiscovery> {
     let host = normalize_host(host);
+    // Checked before the store, so a token stored for a GitHub host is never handed out either.
+    if config::is_known_github_host(Some(&host)) {
+        return None;
+    }
     if let Some(stored) = read_stored_token(&host, home, platform) {
         return Some(TokenDiscovery {
             token: stored.token,

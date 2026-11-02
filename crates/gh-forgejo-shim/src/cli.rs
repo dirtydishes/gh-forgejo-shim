@@ -541,6 +541,7 @@ fn run_config(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) ->
     let path = config::config_path(runtime.home());
     match args {
         [command, host] if command == "add-host" => {
+            forgejo_host_arg(host)?;
             let config = config::add_host(host, Some(&path))?;
             writeln!(stdout, "added Forgejo host: {host}")?;
             print_hosts(&config.hosts, stdout)?;
@@ -948,7 +949,8 @@ fn auth_login(
     stdout: &mut dyn Write,
     runtime: &mut dyn Runtime,
 ) -> Result<i32> {
-    let host = prompt_host(host_arg, runtime)?;
+    // Logout shares prompt_host, so it can still remove a token for any host an older version took.
+    let host = forgejo_host_arg(&prompt_host(host_arg, runtime)?)?;
     let token = runtime
         .prompt_token(&format!("Forgejo access token for {host}: "))?
         .trim()
@@ -1072,6 +1074,22 @@ fn auth_logout(
         writeln!(stdout, "no stored shim auth for {host}")?;
     }
     Ok(0)
+}
+
+/// A host `auth login` may send a token to and `config add-host` may allowlist, by the
+/// allowlist's own rule: never a GitHub host, and spelled the way the URL parser reads it back,
+/// so the token goes to the host named.
+fn forgejo_host_arg(host: &str) -> Result<String> {
+    if config::is_known_github_host(Some(host)) {
+        return Err(ShimError::new(format!(
+            "{host} is a GitHub host; the shim leaves GitHub to the real gh"
+        )));
+    }
+    config::normalized_forgejo_host(host).ok_or_else(|| {
+        ShimError::new(format!(
+            "{host} isn't a host name the shim can use; write it as HOST or HOST:PORT"
+        ))
+    })
 }
 
 fn prompt_host(host_arg: Option<&String>, runtime: &mut dyn Runtime) -> Result<String> {
@@ -1683,6 +1701,98 @@ mod tests {
             Some("old-token")
         );
         fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_github_host_before_asking_for_a_token() -> Result<()> {
+        for host in ["github.com", "api.github.com", "acme.ghe.com"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            runtime.token_prompts.push("forgejo-token".to_string());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["auth", "login", host]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+
+            assert_eq!(code, 1, "{host}");
+            assert!(
+                runtime.validated.is_empty(),
+                "{host}: the token was sent for validation"
+            );
+            assert_eq!(
+                runtime.token_prompts.len(),
+                1,
+                "{host}: the token was asked for"
+            );
+            fs::remove_dir_all(home).ok();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_misspelled_host_and_logout_still_clears_github() -> Result<()> {
+        let home = temp_root()?;
+        // `local%68ost` reaches localhost, though the allowlist would drop the spelling.
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("forgejo-token".to_string());
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "local%68ost:3000"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+        assert_eq!(code, 1);
+        assert!(
+            runtime.validated.is_empty(),
+            "the token was sent for validation"
+        );
+
+        // An older version may have stored a token for a GitHub host; logout still removes it.
+        auth::write_stored_token("api.github.com", "old-token", Some(&home), Some("linux"))?;
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "logout", "api.github.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+        assert_eq!(code, 0);
+        assert!(auth::read_stored_token("api.github.com", Some(&home), Some("linux")).is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn config_add_host_refuses_a_host_it_would_not_keep() -> Result<()> {
+        for host in ["acme.ghe.com", "local%68ost:3000"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["config", "add-host", host]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+            assert_eq!(code, 1, "{host}");
+            assert!(
+                !String::from_utf8_lossy(&stdout).contains("added"),
+                "{host} reported as added"
+            );
+            assert!(!config::config_path(Some(&home)).exists(), "{host}");
+            fs::remove_dir_all(home).ok();
+        }
         Ok(())
     }
 

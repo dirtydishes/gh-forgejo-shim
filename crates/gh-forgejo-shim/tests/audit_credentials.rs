@@ -157,6 +157,39 @@ fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult
 }
 
 #[test]
+fn audit_cred_github_subdomains_never_receive_the_forgejo_token() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.write(
+        &fixture.config_path(),
+        "hosts = [\"api.github.com\", \"gist.github.com\"]\n",
+    )?;
+    let env = config::EnvMap::from([("FJ_SHIM_TOKEN".into(), "audit-forgejo-token".into())]);
+    let loaded = config::load_config_with_env(Some(&fixture.config_path()), &env)?;
+    // A token stored for a GitHub host, say by an older version, stays where it is.
+    for host in ["gist.github.com", "api.github.com:443"] {
+        auth::write_stored_token(
+            host,
+            "audit-stored-token",
+            Some(&fixture.home),
+            Some("linux"),
+        )?;
+    }
+
+    assert!(
+        loaded.hosts.is_empty(),
+        "GitHub subdomains allowlisted: {:?}",
+        loaded.hosts
+    );
+    for host in ["api.github.com", "gist.github.com", "api.github.com:443"] {
+        assert!(
+            auth::resolve_token(host, &loaded, &env, Some(&fixture.home), Some("linux")).is_none(),
+            "Forgejo token resolved for {host}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_cred_import_rejects_github_default_port() -> TestResult {
     let fixture = Fixture::new()?;
     let path = fixture.home.join(".config/tea/config.yml");
@@ -176,6 +209,31 @@ fn audit_cred_import_rejects_github_default_port() -> TestResult {
     assert!(
         result.is_err(),
         "GitHub token accepted as a Forgejo import through the default HTTPS port"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_cred_import_rejects_a_misspelled_host() -> TestResult {
+    // The token would go to forge.example.com, but the allowlist would drop the spelling.
+    let fixture = Fixture::new()?;
+    let path = fixture.home.join(".config/tea/config.yml");
+    fixture.write(
+        &path,
+        "logins:\n  - url: https://forge.example%2ecom\n    token: audit-import-token\n",
+    )?;
+
+    let result = auth_import::read_import(
+        auth_import::ImportSource::Tea,
+        None,
+        &fixture.home,
+        &config::EnvMap::new(),
+        "linux",
+    );
+
+    assert!(
+        result.is_err(),
+        "a host spelled differently from where it leads was imported"
     );
     Ok(())
 }
