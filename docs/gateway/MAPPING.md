@@ -134,7 +134,11 @@ merged → `UNKNOWN`):
 5. Protection requirements unmet → `BLOCKED`. That means either `reviewDecision` ∈
    {REVIEW_REQUIRED, CHANGES_REQUESTED}, or required status contexts that are missing, pending or
    failing.
-6. Only the partial protection summary was readable (§4) → `UNKNOWN`.
+6. Only the partial protection summary was readable (§4), **or** the rule has protected-file patterns
+   → `UNKNOWN`. Forgejo refuses a merge that changes a protected file (`services/pull/merge.go:544-547`),
+   but the API doesn't say which files those are, and its matcher lowercases names and globs with both
+   `.` and `/` as separators (`models/git/protected_branch.go:214`). Until a port of that matcher can
+   report `BLOCKED` exactly, any non-blank pattern means `UNKNOWN`.
 7. Any context non-passing (rollup ≠ SUCCESS, and not null) → `UNSTABLE`.
 8. Otherwise → `CLEAN`.
 
