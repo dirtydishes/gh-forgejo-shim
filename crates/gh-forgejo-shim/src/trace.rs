@@ -477,7 +477,30 @@ pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
     }
-    file.write_all(&line)
+    write_once(&mut file, &line)
+}
+
+/// Appends `line` in one `write(2)`, so concurrent O_APPEND writers can't land inside it. A short
+/// write isn't retried, as `write_all` would: the rest would land after whatever another writer
+/// appended meanwhile, splitting this record around theirs. The cut-off part stays (jko.37) and
+/// the call fails. An interrupted call wrote nothing, so it's tried again.
+fn write_once(out: &mut impl Write, line: &[u8]) -> io::Result<()> {
+    loop {
+        match out.write(line) {
+            Ok(written) if written == line.len() => return Ok(()),
+            Ok(written) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    format!(
+                        "trace record cut off after {written} of {} bytes",
+                        line.len()
+                    ),
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn create_parent_dirs(path: &Path) -> io::Result<()> {
@@ -498,6 +521,47 @@ fn timestamp_unix_ms() -> u128 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A writer whose `write` calls return `results` in turn, recording the bytes of each call.
+    struct ScriptedWriter {
+        results: Vec<io::Result<usize>>,
+        calls: Vec<Vec<u8>>,
+    }
+
+    impl Write for ScriptedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.calls.push(buf.to_vec());
+            self.results.remove(0)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_short_trace_write_fails_without_appending_the_rest() {
+        let mut out = ScriptedWriter {
+            results: vec![Ok(4), Ok(100)],
+            calls: Vec::new(),
+        };
+        let error = write_once(&mut out, b"{\"a\":1}\n").expect_err("short write");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert_eq!(out.calls.len(), 1, "the rest of the record was written");
+    }
+
+    #[test]
+    fn an_interrupted_trace_write_is_tried_again_whole() {
+        let mut out = ScriptedWriter {
+            results: vec![Err(io::ErrorKind::Interrupted.into()), Ok(8)],
+            calls: Vec::new(),
+        };
+        write_once(&mut out, b"{\"a\":1}\n").expect("second try writes it");
+        assert_eq!(
+            out.calls,
+            [b"{\"a\":1}\n".to_vec(), b"{\"a\":1}\n".to_vec()]
+        );
+    }
+
     use super::*;
 
     #[test]
