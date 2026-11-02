@@ -94,20 +94,48 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(NoRedirects)
 
 
+class TwinError(Exception):
+    """An API error, its body and message redacted of the token; `code` is the HTTP status."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 class Twin:
     def __init__(self, base, token):
         self.base, self.token = base.rstrip('/'), token
         self.api_root = self.base + '/api/v1/'
 
-    def api(self, method, route, body=None, sudo=None):
-        """Every write is checked against the plan; reads stay inside the repository or the reviewer."""
+    def allowed(self, method, route, body, sudo):
+        """The fence: reads stay inside the repository or the reviewer; each write must have the
+        exact route, body and identity the plan uses."""
         repo = f'repos/{REPO}'
-        allowed = (route == repo or route.startswith(repo + '/') or route.startswith(repo + '?')
-                   or route == f'users/{REVIEWER}') if method == 'GET' else (
-            (method, route) in {('POST', f'{repo}/pulls'), ('POST', f'{repo}/issues'), ('POST', 'admin/users')}
-            or re.fullmatch(rf'{repo}/pulls/\d+/(merge|reviews)', route) and method == 'POST'
-            or re.fullmatch(rf'{repo}/(pulls|issues)/\d+', route) and method == 'PATCH' and body == {'state': 'closed'})
-        if not allowed or (sudo not in (None, REVIEWER)) or (route == 'admin/users' and body.get('username') != REVIEWER):
+        if method == 'GET':
+            return sudo is None and (route == repo or route.startswith(repo + '/') or route.startswith(repo + '?')
+                                     or route == f'users/{REVIEWER}')
+        body = body if isinstance(body, dict) else {}
+        if re.fullmatch(rf'{repo}/pulls/\d+/reviews', route):
+            return method == 'POST' and sudo == REVIEWER
+        if sudo is not None:
+            return False
+        if (method, route) == ('POST', f'{repo}/pulls'):
+            return set(body) == {'base', 'head', 'title', 'body'} and body['base'] == 'main' and body['head'] in BRANCHES
+        if (method, route) == ('POST', f'{repo}/issues'):
+            return set(body) == {'title', 'body'}
+        if (method, route) == ('POST', 'admin/users'):
+            return body.get('username') == REVIEWER
+        if re.fullmatch(rf'{repo}/pulls/\d+/merge', route):
+            return method == 'POST' and body == {'Do': 'merge', 'delete_branch_after_merge': False}
+        if re.fullmatch(rf'{repo}/(pulls|issues)/\d+', route):
+            return method == 'PATCH' and body == {'state': 'closed'}
+        return False
+
+    def redact(self, text):
+        return text.replace(self.token, '<token>')
+
+    def api(self, method, route, body=None, sudo=None):
+        if not self.allowed(method, route, body, sudo):
             raise SystemExit(f'refusing {method} {route}: outside the twin-seed fence')
         headers = {'Authorization': 'token ' + self.token, 'Content-Type': 'application/json'}
         if sudo: headers['Sudo'] = sudo
@@ -118,14 +146,15 @@ class Twin:
                 raw = response.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as error:
-            error.msg = f'{error.msg} for {method} {route}: {error.read()[:300]!r}'
-            raise
+            # A reply, or a redirect target, can echo what it received; nothing of it may carry the token.
+            detail = error.read()[:300].decode(errors='replace')
+            raise TwinError(error.code, self.redact(f'HTTP {error.code} {error.msg} for {method} {route}: {detail}')) from None
 
     def exists(self, route):
         try:
             self.api('GET', route)
             return True
-        except urllib.error.HTTPError as error:
+        except TwinError as error:
             if error.code == 404: return False
             raise
 
@@ -185,6 +214,14 @@ def commit(twin, checkout, changes, message):
 def push(twin, checkout, item):
     if item['branch'] not in BRANCHES: raise SystemExit('branch outside the plan')
     twin.git('push', '-q', 'origin', f'refs/heads/{item["branch"]}:refs/heads/{item["branch"]}', cwd=checkout)
+
+
+def owned(twin, item):
+    """Whether an existing branch is this plan's: its head is one of the commits the plan pushes to
+    it. A branch of the same name with anything else stays untouched, and the run stops."""
+    head = twin.api('GET', f'repos/{REPO}/branches/{item["branch"]}')['commit']['message'].strip()
+    total = len(item['commits']) + len(item['then'][1] if item.get('then') else [])
+    return head in {message(item, n) for n in range(len(item['commits']), total + 1)}
 
 
 def push_branch(twin, checkout, item):
@@ -254,6 +291,8 @@ def seed(twin, checkout):
             else:
                 if not twin.exists(f'repos/{REPO}/branches/{item["branch"]}'):
                     push_branch(twin, checkout, item)
+                elif not owned(twin, item):
+                    raise SystemExit(f'branch {item["branch"]} exists with commits outside the plan; refusing to open #{number} on it')
                 created = twin.api('POST', f'repos/{REPO}/pulls', dict(base='main', head=item['branch'],
                                    title=item['title'], body=item['body']))
             if created['number'] != number:
