@@ -73,5 +73,21 @@ for auth in missing invalid; do
     curl -sS "${headers[@]}" -H 'Content-Type: application/json' -d '{"query":"{ viewer { login } }"}' \
         -o "/artifacts/$auth-graphql.json" -w '%{http_code}' https://forge.test/api/graphql >"/artifacts/$auth-graphql.status"
 done
+# A fix pushed on a failing commit: gh reads checks from commits(last: 1), which must be the head.
+git checkout -qb s/two main
+for step in first second; do
+    printf '%s\n' "$step" >> two.txt
+    git add . && git commit -qm "two: $step"
+done
+git rev-parse s/two~1 s/two >/artifacts/two-shas.txt
+git -c "http.extraHeader=Authorization: token $token" push -q http://forgejo:3000/e2e/oracle.git s/two
+api -d '{"base":"main","head":"s/two","title":"scenario: fixed on top"}' "$forgejo/repos/e2e/oracle/pulls" > /tmp/pr3.json
+jq -e '.number == 3' /tmp/pr3.json >/dev/null
+api -d '{"context":"ci","state":"failure"}' "$forgejo/repos/e2e/oracle/statuses/$(git rev-parse s/two~1)" >/dev/null
+api -d '{"context":"ci","state":"success"}' "$forgejo/repos/e2e/oracle/statuses/$(git rev-parse s/two)" >/dev/null
+gh pr view 3 -R e2e/oracle --json commits,statusCheckRollup >/artifacts/pr3.json
+status=0
+gh pr checks 3 -R e2e/oracle >/artifacts/checks3.txt || status=$?
+printf '%s' "$status" >/artifacts/checks3.exit
 gh --version | head -n 1 >/artifacts/gh-version.txt
 E2E_TOKEN="$token" python3 /test/assert.py

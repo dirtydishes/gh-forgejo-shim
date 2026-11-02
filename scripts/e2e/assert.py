@@ -35,6 +35,11 @@ for name, kind in [('validation', 'GRAPHQL_VALIDATION_FAILED'), ('not-found-grap
     error = read(f'{name}.json')['errors'][0]
     check((root / f'{name}.status').read_text() == '200' and error['type'] == kind and isinstance(error['path'], list) and 'message' in error, f'GraphQL {name}: HTTP 200 and GitHub error shape')
 check(read('page1.json')[0]['number'] == 2 and read('page2.json')[0]['number'] == 1 and 'rel="next"' in (root / 'page1.headers').read_text(), 'REST pagination and next Link')
+first, head = (root / 'two-shas.txt').read_text().split()
+pr3 = read('pr3.json')
+check([c['oid'] for c in pr3['commits']] == [first, head], 'PR 3 commits: oldest first, head last')
+check([(c['context'], c['state']) for c in pr3['statusCheckRollup']] == [('ci', 'SUCCESS')], 'PR 3 statusCheckRollup: the head commit passes, not the failed first commit')
+check((root / 'checks3.exit').read_text() == '0' and (root / 'checks3.txt').read_text().split('\t')[:2] == ['ci', 'pass'], 'gh pr checks 3: pass from the head commit')
 check(all(os.environ['E2E_TOKEN'] not in p.read_text() for p in root.glob('*.debug')), 'gh debug logs redact the disposable token')
 requests = []
 queries = []
