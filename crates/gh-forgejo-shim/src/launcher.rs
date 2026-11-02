@@ -29,6 +29,12 @@ pub fn launches(invocation: &Invocation) -> bool {
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && invocation.is_native()
+        // gh reads a PR URL only as `/pull/N`, and Forgejo's own URLs say `/pulls/N`; a URL
+        // selector keeps the built-in path, which reads both, until the launcher rewrites it.
+        && !invocation
+            .positionals
+            .iter()
+            .any(|positional| positional.contains("://"))
         // Until the browser helper (§9) lands, `--web` keeps the built-in path, which already
         // opens Forgejo's `/pulls/N`.
         && !invocation.flags.contains_key("web")
@@ -95,6 +101,16 @@ mod tests {
             "--gfjs-unknown"
         ])));
         assert!(!launches(&invocation(&["pr", "checks", "1", "--watch"])));
+        assert!(!launches(&invocation(&[
+            "pr",
+            "view",
+            "https://forge.test/o/r/pulls/1"
+        ])));
+        assert!(!launches(&invocation(&[
+            "pr",
+            "checks",
+            "https://forge.test/o/r/pull/1"
+        ])));
     }
 
     #[test]
