@@ -595,3 +595,56 @@ async fn non_admins_read_protection_from_the_branch_and_team_requests_parse() {
         server.abort();
     }
 }
+
+/// Forgejo clamps every page to its `MAX_RESPONSE_ITEMS` (`services/convert/utils.go:15-20`), which
+/// may be below the 50 the gateway asks for.
+#[tokio::test]
+async fn paging_follows_the_forges_item_cap() {
+    const CAP: usize = 20;
+    let clamp = |query: &HashMap<String, String>| query["limit"].parse::<usize>().unwrap().min(CAP);
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/settings/api",
+            get(|| async { Json(json!({"max_response_items":CAP,"default_paging_num":30})) }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/actions/runs",
+            get(move |Query(query): Query<HashMap<String, String>>| async move {
+                let page: usize = query["page"].parse().unwrap();
+                let runs: Vec<Value> = (1..=clamp(&query))
+                    .map(|i| json!({"id":(page - 1) * CAP + i,"workflow_id":"ci.yml","index_in_repo":1,"title":"x","prettyref":"main","commit_sha":"abc","status":"waiting","event":"push","html_url":"","created":"","updated":"","started":""}))
+                    .collect();
+                Json(json!({"total_count":100,"workflow_runs":runs}))
+            }),
+        )
+        // No Link header: the list ends on a page shorter than the forge's cap.
+        .route(
+            "/api/v1/repos/e2e/oracle/commits/short/statuses",
+            get(move |Query(query): Query<HashMap<String, String>>| async move {
+                let page: i64 = query["page"].parse().unwrap();
+                let count = if page < 3 { clamp(&query) as i64 } else { 5 };
+                Json(Value::Array((1..=count).map(|i| status((page - 1) * 20 + i)).collect()))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = Forgejo::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let session = forgejo.authenticate("token good").await.unwrap();
+    let runs = session
+        .action_runs("e2e", "oracle", &[], 60, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        runs.workflow_runs.iter().map(|r| r.id).collect::<Vec<_>>(),
+        (61..=70).collect::<Vec<_>>()
+    );
+    let statuses = session.statuses("e2e", "oracle", "short").await.unwrap();
+    assert_eq!(statuses.len(), 45);
+    server.abort();
+}
