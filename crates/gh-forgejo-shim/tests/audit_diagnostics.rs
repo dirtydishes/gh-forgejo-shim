@@ -441,14 +441,29 @@ fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
 
 #[test]
 fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
-    // The wrapper's binary is missing (a moved release), or exists but isn't executable.
-    for executable in [false, true] {
+    // The wrapper's binary is missing (a moved release); exists but isn't executable; is
+    // executable by others but not by its owner, this user (0655); or sits at a path with a
+    // newline, which the wrapper's exec line must still be read back from. As root, 0655 is
+    // runnable, so that case only means something otherwise.
+    let probe = std::env::temp_dir().join(format!("gfj-audit-uid-{}", std::process::id()));
+    fs::write(&probe, "")?;
+    let root = std::os::unix::fs::MetadataExt::uid(&fs::metadata(&probe)?) == 0;
+    fs::remove_file(&probe)?;
+    let mut cases = vec![
+        ("release/gfj", None),
+        ("release/gfj", Some(0o644)),
+        ("new\nline/gfj", None),
+    ];
+    if !root {
+        cases.push(("release/gfj", Some(0o655)));
+    }
+    for (name, mode) in cases {
         let f = Fixture::new()?;
-        let target = f.root.join("release/gfj");
-        if executable {
-            fs::create_dir_all(f.root.join("release"))?;
+        let target = f.root.join(name);
+        if let Some(mode) = mode {
+            fs::create_dir_all(target.parent().ok_or("no parent")?)?;
             fs::write(&target, "#!/bin/sh\nexit 0\n")?;
-            fs::set_permissions(&target, fs::Permissions::from_mode(0o644))?;
+            fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
         }
         let managed_dir = f.home.join(".local/bin");
         shim::install_shim(Some(&managed_dir), Some(&f.home), &target, false)?;
@@ -485,7 +500,7 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
             .ok_or("no managed gh check")?;
         assert!(
             !managed.ok,
-            "doctor reported a broken wrapper as healthy (target exists: {executable}): {}",
+            "doctor reported a broken wrapper as healthy ({name:?}, {mode:?}): {}",
             managed.detail
         );
     }

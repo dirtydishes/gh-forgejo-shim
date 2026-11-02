@@ -43,6 +43,7 @@ rpassword = "7.3"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = { version = "0.3", default-features = false }
+rustix = { version = "1.1", features = ["fs"] }
 
 [lints]
 workspace = true

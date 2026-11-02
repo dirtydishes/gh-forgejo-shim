@@ -43,18 +43,29 @@ pub fn is_managed_shim(path: &Path) -> bool {
 /// any other file, including a wrapper from the old Python release.
 pub fn wrapper_target(path: &Path) -> Option<PathBuf> {
     let text = read_head(path)?;
-    if !text.contains(MARKER) || !text.contains(RUST_WRAPPER_MARKER) {
+    if !is_rust_wrapper_text(&text) {
         return None;
     }
-    let quoted = text
-        .lines()
-        .find_map(|line| line.strip_prefix("exec ")?.strip_suffix(" gh \"$@\""))?;
+    // A single-quoted path can hold a newline, so the exec line may span lines.
+    let exec = text
+        .strip_prefix("exec ")
+        .or_else(|| text.split_once("\nexec ").map(|(_, rest)| rest))?;
+    let quoted = exec.rsplit_once(" gh \"$@\"")?.0;
     // The inverse of `shell_quote`: a safe path is bare, any other is single-quoted.
     let target = match quoted.strip_prefix('\'') {
         Some(rest) => rest.strip_suffix('\'')?.replace("'\\''", "'"),
         None => quoted.to_string(),
     };
     Some(PathBuf::from(target))
+}
+
+/// Whether `path` is a wrapper written by [`shim_script`], whose target can be read back.
+pub fn is_rust_wrapper(path: &Path) -> bool {
+    read_head(path).is_some_and(|text| is_rust_wrapper_text(&text))
+}
+
+fn is_rust_wrapper_text(text: &str) -> bool {
+    text.contains(MARKER) && text.contains(RUST_WRAPPER_MARKER)
 }
 
 fn read_head(path: &Path) -> Option<String> {
@@ -322,7 +333,7 @@ mod tests {
     #[test]
     fn wrapper_target_reads_back_the_exec_path() -> io::Result<()> {
         let path = unique_path("gh-forgejo-shim-wrapper-target");
-        for target in ["/opt/gfj", "/tmp/it's here/gfj"] {
+        for target in ["/opt/gfj", "/tmp/it's here/gfj", "/tmp/new\nline/gfj"] {
             fs::write(&path, shim_script(Path::new(target)))?;
             assert_eq!(wrapper_target(&path), Some(PathBuf::from(target)));
         }
@@ -383,23 +394,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn install_refuses_unmanaged_target_without_force() -> Result<()> {
-        let root = unique_path("gh-forgejo-shim-install-refuses");
-        fs::create_dir(&root)?;
-        let target = root.join("gh");
-        fs::write(&target, "#!/bin/sh\n")?;
-
-        let error = install_shim(Some(&root), None, Path::new("/tmp/gh-forgejo-shim"), false)
-            .expect_err("unmanaged target should fail");
-
-        assert!(error
-            .message()
-            .contains("exists and is not managed by gh-forgejo-shim"));
-        fs::remove_dir_all(root).ok();
-        Ok(())
-    }
-
     #[cfg(unix)]
     #[test]
     fn default_uninstall_refuses_a_symlink_in_the_default_dir() -> Result<()> {
@@ -425,6 +419,23 @@ mod tests {
         assert!(outside.join("gh").exists());
         fs::remove_dir_all(home).ok();
         fs::remove_dir_all(outside).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn install_refuses_unmanaged_target_without_force() -> Result<()> {
+        let root = unique_path("gh-forgejo-shim-install-refuses");
+        fs::create_dir(&root)?;
+        let target = root.join("gh");
+        fs::write(&target, "#!/bin/sh\n")?;
+
+        let error = install_shim(Some(&root), None, Path::new("/tmp/gh-forgejo-shim"), false)
+            .expect_err("unmanaged target should fail");
+
+        assert!(error
+            .message()
+            .contains("exists and is not managed by gh-forgejo-shim"));
+        fs::remove_dir_all(root).ok();
         Ok(())
     }
 
