@@ -109,7 +109,13 @@ gh would write to a throwaway copy (section 3):
   has no stored token;
 - `config …`, `alias …`;
 - `auth login`, `auth logout`, `auth switch`, `auth refresh`, `auth setup-git`;
-- `extension …`, because install, upgrade, browse and search call github.com.
+- `extension …`, because install, upgrade, browse and search call github.com;
+- `codespace …`, `copilot …`, `skills …` and `agent-task …`, which serve only github.com and,
+  for `codespace ssh --config`, write `GH_PATH` into a lasting file;
+- `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials").
+
+The list applies to the command gh will run: routing expands a plain alias first (L2), so
+`gh sg` with alias `sg: auth setup-git` delegates too.
 
 **Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
 `--hostname`, don't use the checkout's repository to pick a host. They use gh's default host
@@ -164,7 +170,7 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     so a fetch from `https://forge.test:3443/…` finds `forge.test:3443`.
     - The `host:port` entry gets the real token, which `gh auth token --hostname
       forge.test:3443` prints. gh's API never looks up `host:port`, and git never reads
-      `hosts.yml` (below). In an `auth status` call this entry gets the per-call token instead
+      `hosts.yml` (§3, "Git's credentials"). In an `auth status` call this entry gets the per-call token instead
       (§5).
     - The portless entry gets a random token instead, 32 bytes from the OS RNG as hex, made for
       this call. The gateway accepts it for the host and authenticates upstream with the real
@@ -196,7 +202,8 @@ Keychain token two ways:
   only the local gateway, which refuses it with 421 and forwards nothing (§5).
 - **Not through git.** gh's own credential helper would find it, and would also retry a
   `gist.<host>` request as `<host>` (`gh/pkg/cmd/auth/gitcredential/helper.go:123-126`). The
-  launcher replaces that helper with its own, which knows only the served hosts (below).
+  launcher replaces that helper with its own, which knows only the served hosts ("Git's
+  credentials", below).
 
 So a token goes only to the local gateway, which refuses it. That is the guarantee: the
 launcher never sends a login to a site it doesn't belong to. Kell accepted it (§13,
@@ -204,21 +211,44 @@ decision 2).
 
 ### Git's credentials
 
-gh installs its credential helper, `!"$GH_PATH" auth git-credential`, for every host on its
-fetches and pushes (`gh/git/client.go:148-155,905-913`). That helper reads `hosts.yml` and the
-Keychain, and retries `gist.<host>` as `<host>`. A push to a `gist.forge.test` remote would get
-the real `forge.test` token. So the launcher points `GH_PATH` at its own helper, a script `gh` in
-the run directory that runs `<shim> gh "$@"` (§7). Under a launcher, the wrapper answers
-`auth git-credential` itself instead of routing it:
-- `get` answers only for an `https` request whose `host` exactly matches a served host as git
-  reaches it: the hostname for a default-port entry, `host:port` for a ported one. The answer is
-  `username=x-access-token` and that host's real token, read from the run directory's
-  `credentials` file. Every other host, a `gist.` one included, gets no answer, and git goes on
-  without a credential.
-- `store` and `erase` do nothing, as gh's helper does.
+gh installs its credential helper for every host on its fetches and pushes, as
+`!%q auth git-credential` built from `GH_PATH` (`gh/git/client.go:148-155,905-913`). That helper
+reads `hosts.yml` and the Keychain, and retries `gist.<host>` as `<host>`. A push to a
+`gist.forge.test` remote would get the real `forge.test` token. A git that gh doesn't start,
+from an alias shell or an editor, can reach the same helper through the user's own git config,
+which often names real gh's absolute path. So the launcher supplies the only helper any git in
+a launched call can use:
+- **The script.** The run directory holds `gh`, mode 0700:
+  `#!/bin/sh` and `FJ_SHIM_CREDENTIALS='<run dir>/credentials' exec '<shim>' gh "$@"`, with the
+  shim path single-quoted. `GH_PATH` names it, so gh's own helper invocations run it.
+- **Every git.** gh's environment also gets `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and
+  `GIT_CONFIG_VALUE_<n>`, appended after any the user already set. They add
+  `credential.helper=` (empty), which clears every helper from the user's config files, then
+  `credential.helper=!'<run dir>/gh' auth git-credential`. Every git process in the tree reads
+  them, including one an alias shell or an editor starts. gh's own `-c` options come later, and
+  name the same script.
+- **The answer.** Before anything else, ahead of guard 2 and the §7 revert, the wrapper checks
+  for `FJ_SHIM_CREDENTIALS` and an argv of `auth git-credential <op>`. It then answers from that
+  file and exits, never routing or launching:
+  - It reads `key=value` lines until a blank line or EOF, as gh's helper does
+    (`gh/pkg/cmd/auth/gitcredential/helper.go:77-102`), and ignores keys it doesn't use, such as
+    `capability[]`, `wwwauth[]`, `state[]` and `path`. It advertises no capabilities.
+  - `get` answers only for `protocol=https` with a `host` exactly matching a served host as git
+    reaches it: the hostname for a default-port entry, `host:port` for a ported one. The answer
+    is `protocol`, `host`, `username=x-access-token` and `password=<real token>`. Any other
+    host, a `gist.` one included, gets no answer. git then tries its next source, which may be
+    a terminal prompt, so tests set `GIT_TERMINAL_PROMPT=0`.
+  - `store` and `erase` do nothing, as gh's helper does. Any other operation fails, as gh's does.
 
-Installed extensions run through plain gh (§2), so nothing else in a launched call uses
-`GH_PATH`.
+Any other `auth git-credential` call, from a git outside a launched call, delegates to plain gh
+(§2), which answers from the user's own config. It never launches.
+
+Only a few gh paths write `GH_PATH` somewhere that outlasts the call: `auth setup-git`,
+`auth login` and `auth refresh` write it into `~/.gitconfig`
+(`gh/pkg/cmd/auth/shared/gitcredentials/helper_config.go:41-55`), and `codespace ssh --config`
+writes it into the ssh config (`gh/pkg/cmd/codespace/ssh.go:653`). Every one of them delegates
+(§2), aliases included, because routing decides on the expanded alias (L2). Installed extensions
+delegate too, so their `GH_PATH` is plain gh's.
 
 The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
 `repo::GhHosts::load`) assumes gh knows. A launched gh therefore resolves the same default host
@@ -235,7 +265,7 @@ with the placeholder. The launched gh then resolves exactly as plain gh would.
 When this launch serves an entry with a port, the served hostname's key holds the per-call
 token, as in any launch. No `host:port` key is added, so the key count, and gh's default host,
 stay plain gh's. Git gets its credentials from the launcher's helper, not from `hosts.yml`
-(below), so a portless remote on that hostname gets nothing.
+("Git's credentials", above), so a portless remote on that hostname gets nothing.
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
 token and doesn't share its hostname with another entry, so the status reports all of them.
@@ -251,8 +281,8 @@ What this guarantees:
 - **The launcher never sends a login to a site it doesn't belong to.** Every host in the user's
   own `hosts.yml` other than *S* has the placeholder, which no server accepts, and the gateway
   refuses any request for another host with 421, without contacting any upstream (L1). A
-  Keychain login the placeholders don't cover goes only to its own site, or to the gateway,
-  which refuses it (below).
+  Keychain login the placeholders don't cover reaches only the gateway, which refuses it, and
+  no git in the call can use it (§3, "Git's credentials").
 
 The cost:
 
@@ -270,7 +300,9 @@ The cost:
   credential only for a served host. gh's fetch also clears the user's own git credential helpers
   for every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
   `gh/pkg/cmd/pr/checkout/checkout.go:369-370`). A private GitHub submodule fetched by
-  `gh pr checkout` in a Forgejo repo therefore fails to authenticate.
+  `gh pr checkout` in a Forgejo repo therefore fails to authenticate. So does any git a launched
+  call's children start, such as an alias shell pushing to GitHub: the launcher's helper
+  replaces the user's for every git in the call.
 
 Rejected:
 
@@ -337,6 +369,11 @@ The order is fixed:
 4. Bind the socket.
 
 The token is never on disk without a held lock named `lock` beside it.
+
+**Path characters.** gh builds its git credential helper from the run directory path with Go's
+`%q`, which isn't shell quoting (`gh/git/client.go:148`), and git hands it to `sh`. So the run
+directory's full path may hold only ASCII letters, digits, `/`, `.`, `_` and `-`. A `TMPDIR` or
+`XDG_RUNTIME_DIR` with anything else stops the launch with exit 1 and a message naming it.
 
 **Path length.** `sun_path` holds 104 bytes on macOS and 108 on Linux, including the terminating
 NUL. A typical macOS `$TMPDIR` (`/var/folders/xx/…/T/`, about 49 bytes) plus `gfj-<16>/s` comes to
@@ -509,7 +546,7 @@ The exec path in section 2 needs none of this: after exec, gh's death is the wra
 | no real gh found, every candidate is the shim, or guard 2 or 3 tripped (section 8) | 127 |
 | real gh found but not executable | 126 |
 | routed host has no token | 4 |
-| run directory, socket path length, bind, unreadable or unparseable user config | 1 |
+| run directory, path characters or length, bind, unreadable or unparseable user config | 1 |
 
 After gh starts, the launcher writes nothing to the terminal. A cleanup failure is recorded in the
 trace when tracing is on, and is otherwise silent. Its leftovers fall to the next sweep.
@@ -527,6 +564,7 @@ the launcher never converts the environment to `String`.
 | `GH_PATH` | the run directory's `gh` script, so gh's git credential helper is the launcher's (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
 | `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
+| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | two entries appended after the user's own: an empty `credential.helper`, then the launcher's helper (section 3, "Git's credentials") |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
@@ -583,9 +621,10 @@ stop it:
    earlier draft did, would exec the same script again. Legitimate nesting, an alias shell
    running gh that runs another alias, stays far below 8.
 
-The run directory's `gh` script, which `GH_PATH` names, runs the wrapper too. Under a launcher,
-the wrapper answers `auth git-credential` itself and never launches for it (§3), so the helper
-can't start a chain. Anything else reaching that script is a nested call like any other.
+The run directory's `gh` script, which `GH_PATH` and every git's helper name, runs the wrapper
+too. It sets `FJ_SHIM_CREDENTIALS`, and the wrapper answers `auth git-credential` from that
+before any guard or the §7 revert, never launching (§3), so the helper can't start a chain.
+Anything else reaching that script is a nested call like any other.
 
 Guard 2 runs before the environment revert in section 7, which keeps `FJ_SHIM_DEPTH` for guard 3.
 
@@ -714,10 +753,13 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     a REST request (`gh api repos/{owner}/{repo}`) with 504, and a GraphQL request (`gh pr view`)
     with 200 and an `errors` body. A slow `/user` (9 s) followed by a stalled call answers within
     20.5 s. gh exits 1 in every case, and the launcher doesn't kill it.
-14. **Git's credentials (§3).** In a launched `gh pr checkout`, git fetching from the served
-    forge, with or without a custom port, gets the real token. A push to
-    `https://gist.forge.test/…` gets no credential. So does a fetch from a GitHub remote, even
-    with a GitHub token in the Keychain.
+14. **Git's credentials (§3).** With `GIT_TERMINAL_PROMPT=0`: in a launched `gh pr checkout`, git
+    fetching from the served forge, with or without a custom port, gets the real token. A push
+    to `https://gist.forge.test/…` gets no credential. So does a fetch from a GitHub remote, even
+    with a GitHub token in the Keychain. A shell alias that runs `git push` to `gist.forge.test`,
+    with the user's git config naming real gh as a generic helper, gets no credential either.
+    `gh sg`, with alias `sg: auth setup-git`, delegates and writes real gh's path, not the run
+    directory's, into `~/.gitconfig`.
 
 ## 12. Ownership
 
