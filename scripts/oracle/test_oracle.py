@@ -194,6 +194,15 @@ class OracleTests(unittest.TestCase):
                       {16: ('beyond the plan', None)}, {1: planned[1], 3: planned[3]}):
             with self.assertRaises(SystemExit, msg=str(found)): twin_seed.check_resumable(found)
 
+    def test_twin_seed_never_follows_a_redirect_with_its_token(self):
+        request = twin_seed.urllib.request.Request('https://git.dirtydishes.dev/api/v1/user',
+                                                   headers={'Authorization': 'token secret'})
+        with self.assertRaises(twin_seed.urllib.error.HTTPError):
+            twin_seed.NoRedirects().redirect_request(request, None, 302, 'Found', {}, 'https://elsewhere.invalid/')
+        handlers = [type(h) for h in twin_seed.OPENER.handlers]
+        self.assertIn(twin_seed.NoRedirects, handlers)
+        self.assertNotIn(twin_seed.urllib.request.HTTPRedirectHandler, handlers)
+
     def test_twin_seed_rehearses_only_on_loopback(self):
         with patch.dict(twin_seed.os.environ, {'TWIN_TOKEN': 'disposable'}), \
                 patch.object(twin_seed.subprocess, 'run', side_effect=AssertionError('no git')), \

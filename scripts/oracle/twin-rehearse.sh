@@ -65,6 +65,12 @@ expect 'pulls?state=all&limit=50' '[.[] | [.number, .state, .merged, .draft]] | 
 expect 'issues?state=all&type=issues' '[.[] | [.number, .state]] | sort == [[11,"open"],[12,"closed"]]'
 expect 'pulls/13/commits' 'length == 2'
 expect 'pulls/13/files' '[.[].filename] == []'
+# The PR opened on a failing commit, and the fix landed on top of it (F4): the oldest commit
+# failed and the head didn't.
+oldest=$(api 'pulls/13/commits' | jq -r '.[-1].sha')
+head=$(api 'pulls/13/commits' | jq -r '.[0].sha')
+expect "commits/$oldest/statuses" 'any(.[]; .context == "ci / check (pull_request)" and .status == "failure")'
+expect "commits/$head/statuses" 'all(.[]; .status != "failure")'
 expect 'pulls/3/commits' 'length == 2'
 expect 'pulls/3/files' '[.[].filename] | sort == ["ci/slow","notes/pending.txt"]'
 expect 'pulls/14/reviews' '[.[] | [.user.login, .state, .comments_count]] == [["gfj-e2e","APPROVED",1]]'
