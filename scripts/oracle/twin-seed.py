@@ -15,6 +15,9 @@ here: a fix pushed on a failing commit (F4), and reviews by a non-admin user. Th
 official (gfj-e2e can't write), so they feed review lists and threads, not reviewDecision, which
 the GitHub twin can't show either: it has no branch protection.
 
+#3 shows its checks passing until the end of the run, when its 45-minute job starts; it is pending
+only while that job waits and runs, so live captures of a pending PR must fall in that window.
+
 The token never reaches argv or error output: git gets it through GIT_CONFIG_* variables, and the
 user's own git config is ignored, so no insteadOf rule can reroute the push over SSH.
 """
@@ -81,6 +84,16 @@ PLAN = [
 BRANCHES = {item['branch'] for item in PLAN if item['kind'] == 'pr'}
 
 
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """urllib copies Authorization and Sudo onto any redirect target, so a redirect is an error."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f'refusing redirect to {newurl}', headers, fp)
+
+
+OPENER = urllib.request.build_opener(NoRedirects)
+
+
 class Twin:
     def __init__(self, base, token):
         self.base, self.token = base.rstrip('/'), token
@@ -101,7 +114,7 @@ class Twin:
         request = urllib.request.Request(self.api_root + route, method=method, headers=headers,
                                          data=None if body is None else json.dumps(body).encode())
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with OPENER.open(request, timeout=60) as response:
                 raw = response.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as error:
@@ -120,7 +133,9 @@ class Twin:
         """git without the user's config (no insteadOf to SSH, no hooks or signing), with the token
         in the environment, never in argv or in an error message."""
         header = 'Authorization: Basic ' + base64.b64encode(f'dirtydishes:{self.token}'.encode()).decode()
-        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0',
+        # Nothing inherited may point git at another repository or bring back user config.
+        inherited = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env = dict(inherited, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0',
                    GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.extraHeader', GIT_CONFIG_VALUE_0=header)
         result = subprocess.run(['git', *args], cwd=cwd, env=env, capture_output=True, text=True)
         if result.returncode:
@@ -172,18 +187,28 @@ def push(twin, checkout, item):
 def push_branch(twin, checkout, item):
     twin.git('switch', '-q', '-C', item['branch'], 'origin/main', cwd=checkout)
     for i, changes in enumerate(item['commits']):
-        commit(twin, checkout, changes, item['title'].removeprefix('WIP: ') + f' ({i + 1})')
+        commit(twin, checkout, changes, message(item, i + 1))
     push(twin, checkout, item)
+
+
+def message(item, n):
+    return item['title'].removeprefix('WIP: ') + f' ({n})'
+
+
+def pushed_all(twin, item):
+    """Whether the branch head is already the plan's last commit. The branch updates at once; a
+    PR's commit list lags behind a push."""
+    head = twin.api('GET', f'repos/{REPO}/branches/{item["branch"]}')['commit']['message'].strip()
+    return head == message(item, len(item['commits']) + len(item['then'][1]))
 
 
 def push_then(twin, checkout, item):
     """Push the commits that come after the PR opens, unless a resumed run finds them pushed."""
-    pushed = twin.api('GET', f'repos/{REPO}/pulls/{item["number"]}/commits')
-    if len(pushed) > len(item['commits']): return
+    if pushed_all(twin, item): return
     twin.git('fetch', '-q', 'origin', f'refs/heads/{item["branch"]}', cwd=checkout)
     twin.git('switch', '-q', '-C', item['branch'], 'FETCH_HEAD', cwd=checkout)
     for i, changes in enumerate(item['then'][1]):
-        commit(twin, checkout, changes, item['title'].removeprefix('WIP: ') + f' ({len(item["commits"]) + i + 1})')
+        commit(twin, checkout, changes, message(item, len(item['commits']) + i + 1))
     push(twin, checkout, item)
     print(f'pushed the later commits of #{item["number"]}')
 
@@ -232,8 +257,9 @@ def seed(twin, checkout):
         kind = 'issues' if item['kind'] == 'issue' else 'pulls'
         current = twin.api('GET', f'repos/{REPO}/{kind}/{number}')
         if item.get('then') and item['then'][0] == 'failed':
-            wait(lambda: failed(twin, number) or len(twin.api('GET', f'repos/{REPO}/pulls/{number}/commits')) > 1,
-                 f"#{number}'s first run to fail", timeout=1800)
+            if not pushed_all(twin, item):
+                print(f"waiting for #{number}'s first run to fail (up to 30 minutes)", flush=True)
+                wait(lambda: failed(twin, number), f"#{number}'s first run to fail", timeout=1800)
             push_then(twin, checkout, item)
         if item.get('after') == 'merge' and not current.get('merged'):
             wait(lambda: twin.api('GET', f'repos/{REPO}/pulls/{number}')['mergeable'], f'#{number} to become mergeable', 120)
@@ -254,6 +280,8 @@ def seed(twin, checkout):
 
 
 def main(argv):
+    # Every line reaches a pipe at once, so an interrupted run shows which one-way writes landed.
+    sys.stdout.reconfigure(line_buffering=True)
     base = LIVE
     if argv[:1] == ['--rehearse']:
         base = argv[1]
