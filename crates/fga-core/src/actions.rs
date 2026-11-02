@@ -101,8 +101,14 @@ impl Session {
         owner: &str,
         repo: &str,
     ) -> Result<BTreeMap<String, Workflow>, Error> {
+        // Forgejo reads the first of these directories that exists, even if it holds no workflows
+        // (`modules/actions/workflows.go:62-102`).
         let mut workflows = BTreeMap::new();
-        for directory in [".forgejo/workflows", ".github/workflows"] {
+        for directory in [
+            ".forgejo/workflows",
+            ".gitea/workflows",
+            ".github/workflows",
+        ] {
             let entries: serde_json::Value = match self
                 .get(&["repos", owner, repo, "contents", directory], &[])
                 .await
@@ -132,9 +138,7 @@ impl Session {
                     },
                 );
             }
-            if !workflows.is_empty() {
-                break;
-            }
+            break;
         }
         Ok(workflows)
     }

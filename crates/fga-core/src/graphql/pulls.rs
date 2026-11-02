@@ -106,7 +106,7 @@ impl PullRequest {
         self.source.allow_maintainer_edit
     }
     async fn head_ref_name(&self) -> &str {
-        &self.source.head.ref_name
+        self.source.head.name()
     }
     async fn base_ref_name(&self) -> &str {
         &self.source.base.ref_name
@@ -156,6 +156,7 @@ impl PullRequest {
             name: self.source.base.ref_name.clone(),
             branch_protection_rule: p.map(|p| BranchProtectionRule {
                 requires_strict_status_checks: p.block_on_outdated_branch,
+                required_approving_review_count: Some(p.required_approvals),
             }),
         }))
     }
@@ -171,7 +172,7 @@ impl PullRequest {
             .protection(&self.owner, &self.repo, &self.source.base.ref_name)
             .await
             .map_err(error)?;
-        let Some(p) = p.filter(|p| p.required_approvals > 0 || p.block_on_rejected_reviews) else {
+        let Some(p) = p.filter(|p| p.gates_reviews()) else {
             return Ok(None);
         };
         let reviews = session
@@ -345,8 +346,10 @@ impl PullRequest {
             .reviews(&self.owner, &self.repo, self.source.number)
             .await
             .map_err(error)?;
+        // Forgejo lists review requests as reviews; GitHub keeps them in reviewRequests.
         let nodes = reviews
             .into_iter()
+            .filter(|review| review.state != "REQUEST_REVIEW")
             .map(|source| PullRequestReview {
                 source,
                 owner: self.owner.clone(),

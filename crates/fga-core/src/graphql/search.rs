@@ -24,8 +24,8 @@ pub async fn search(
         )
         .await
         .map_err(error)?;
-    // Forgejo's labels parameter ORs labels and discards unknown names. GitHub
-    // requires every qualifier, so verify against returned names as well.
+    // Forgejo drops unknown label names (`routers/api/v1/repo/issue.go:447-462`), so a query
+    // naming only unknown labels would match everything. Check returned names too.
     let issues: Vec<_> = issues
         .into_iter()
         .filter(|issue| {

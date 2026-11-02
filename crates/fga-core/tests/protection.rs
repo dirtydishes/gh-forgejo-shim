@@ -93,9 +93,10 @@ fn globs_match_like_forgejo() {
             branch.unwrap_or(pattern == name),
             "branch rule {pattern:?} against {name:?}"
         );
+        // A second, valid pattern keeps Forgejo off its no-valid-pattern fallback.
         let protection = Protection {
             enable_status_check: true,
-            status_check_contexts: vec![pattern.into()],
+            status_check_contexts: vec![pattern.into(), "never-matches".into()],
             ..Protection::default()
         };
         assert_eq!(
@@ -122,4 +123,14 @@ fn plain_names_fold_case_like_go() {
             "{rule_name:?}"
         );
     }
+}
+
+/// Go encodes a nil context list as `null` (`routers/api/v1/repo/branch.go:680`).
+#[test]
+fn null_status_contexts_read_as_none() {
+    let rule: Protection = serde_json::from_value(
+        serde_json::json!({"rule_name":"main","status_check_contexts":null}),
+    )
+    .unwrap();
+    assert!(rule.status_check_contexts.is_empty());
 }

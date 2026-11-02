@@ -35,6 +35,7 @@ type Bot implements Actor & Node {
 
 type BranchProtectionRule implements Node {
   requiresStrictStatusChecks: Boolean!
+  requiredApprovingReviewCount: Int
 }
 
 enum CheckConclusionState {

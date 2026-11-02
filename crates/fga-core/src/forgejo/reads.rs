@@ -11,8 +11,9 @@ impl Session {
     ) -> Result<Option<TimelineEvent>, Error> {
         // Forgejo pages the timeline before dropping code comments and hidden references and sends
         // no links, so a short page proves nothing; without `page` it returns every event, and
-        // `null` for none (`routers/api/v1/repo/issue_comment.go:199-233`).
-        let events: Option<Vec<TimelineEvent>> = self
+        // `null` for none, and a `null` entry for an event it failed to convert
+        // (`routers/api/v1/repo/issue_comment.go:199-233`).
+        let events: Option<Vec<Option<TimelineEvent>>> = self
             .get(
                 &[
                     "repos",
@@ -27,6 +28,7 @@ impl Session {
             .await?;
         let latest = events
             .into_iter()
+            .flatten()
             .flatten()
             .filter(|event| {
                 matches!(

@@ -121,12 +121,39 @@ impl Check {
     }
 }
 
+/// Whether `context` counts toward Forgejo's status gate. With checks enabled but no valid
+/// pattern, every status does (`services/pull/commit_status.go:23-71`).
 pub fn required(context: &str, protection: Option<&Protection>) -> bool {
     protection.is_some_and(|p| {
-        p.required_contexts()
-            .iter()
-            .any(|glob| glob.is_match(context))
+        let globs = p.required_contexts();
+        p.enable_status_check
+            && (globs.is_empty() || globs.iter().any(|glob| glob.is_match(context)))
     })
+}
+
+/// Forgejo's status gate (`services/pull/commit_status.go:23-91`), on raw states: only `success`
+/// passes, so a required `warning` blocks. Each pattern needs a match. When no pattern matched,
+/// Forgejo combines every status instead, and no statuses at all fail.
+pub fn required_checks_pass(checks: &[Check], protection: Option<&Protection>) -> bool {
+    let Some(p) = protection.filter(|p| p.enable_status_check) else {
+        return true;
+    };
+    let success = |c: &&Check| matches!(c.source().state, CommitStatusState::Success);
+    let mut matched = false;
+    for glob in p.required_contexts() {
+        let mut matching = checks
+            .iter()
+            .filter(|c| glob.is_match(&c.source().context))
+            .peekable();
+        if matching.peek().is_none() {
+            return false;
+        }
+        matched = true;
+        if !matching.all(|c| success(&c)) {
+            return false;
+        }
+    }
+    matched || (!checks.is_empty() && checks.iter().all(|c| success(&c)))
 }
 
 pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) -> Vec<Check> {
@@ -137,6 +164,14 @@ pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) 
             *entry = status;
         }
     }
+    // Actions link jobs under the repository's path, below any subpath Forgejo is served from
+    // (`services/actions/commit_status.go:141`, `models/repo/repo.go:598`).
+    let mut runs = public.clone();
+    runs.path_segments_mut()
+        .expect("validated HTTP URL")
+        .pop_if_empty()
+        .extend([owner, repo, "actions", "runs", ""]);
+    let runs = runs.path().to_lowercase();
     latest
         .into_values()
         .map(|source| {
@@ -152,42 +187,40 @@ pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) 
                     return None;
                 }
                 let url = target.as_ref()?;
-                if !url
-                    .path()
-                    .starts_with(&format!("/{owner}/{repo}/actions/runs/"))
-                    || url.origin() != public.origin()
+                if !url.path().to_lowercase().starts_with(&runs) || url.origin() != public.origin()
                 {
                     return None;
                 }
                 Some((workflow, job, event, url.clone()))
             });
             if let Some((workflow, job, event, details_url)) = action {
+                // The descriptions carry what the commit state drops
+                // (`services/actions/commit_status.go:88-110,153-163`).
+                let description = source.description.as_deref().unwrap_or("");
                 let (status, conclusion) = match source.state {
                     CommitStatusState::Pending => (
-                        if source.description.as_deref() == Some("Waiting to run") {
-                            CheckStatusState::Queued
-                        } else {
-                            CheckStatusState::InProgress
+                        match description {
+                            "Waiting to run" => CheckStatusState::Queued,
+                            "Blocked by required conditions" => CheckStatusState::Waiting,
+                            _ => CheckStatusState::InProgress,
                         },
                         None,
                     ),
                     CommitStatusState::Success => (
                         CheckStatusState::Completed,
-                        Some(
-                            if source
-                                .description
-                                .as_deref()
-                                .is_some_and(|d| d.to_lowercase().contains("skipped"))
-                            {
-                                CheckConclusionState::Skipped
-                            } else {
-                                CheckConclusionState::Success
-                            },
-                        ),
+                        Some(if description == "Has been skipped" {
+                            CheckConclusionState::Skipped
+                        } else {
+                            CheckConclusionState::Success
+                        }),
                     ),
                     CommitStatusState::Failure | CommitStatusState::Error => (
                         CheckStatusState::Completed,
-                        Some(CheckConclusionState::Failure),
+                        Some(if description == "Has been cancelled" {
+                            CheckConclusionState::Cancelled
+                        } else {
+                            CheckConclusionState::Failure
+                        }),
                     ),
                     CommitStatusState::Warning => (
                         CheckStatusState::Completed,

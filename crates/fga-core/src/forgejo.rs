@@ -359,11 +359,37 @@ impl Session {
         repo: &str,
         branch: &str,
     ) -> Result<Option<Protection>, Error> {
-        // No query parameters in swagger: one request returns every rule.
-        let rules = self
-            .get(&["repos", owner, repo, "branch_protections"], &[])
-            .await?;
-        Ok(Protection::for_branch(rules, branch))
+        // `/branch_protections` is admin-only (`routers/api/v1/api.go:864-872`) and unpaged.
+        let admin = self
+            .repository(owner, repo)
+            .await?
+            .permissions
+            .is_some_and(|p| p.admin);
+        if admin {
+            let rules = self
+                .get(&["repos", owner, repo, "branch_protections"], &[])
+                .await?;
+            return Ok(Protection::for_branch(rules, branch));
+        }
+        // Everyone else gets the branch's summary of its effective rule. The flags it omits read
+        // as off, so a non-admin never sees a block Forgejo might not apply. The route's `*`
+        // takes the branch's slashes literally.
+        let mut segments = vec!["repos", owner, repo, "branches"];
+        segments.extend(branch.split('/'));
+        let summary: BranchSummary = match self.get(&segments, &[]).await {
+            Ok(summary) => summary,
+            Err(Error::NotFound) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        Ok(
+            (!summary.effective_branch_protection_name.is_empty()).then(|| Protection {
+                rule_name: summary.effective_branch_protection_name,
+                enable_status_check: summary.enable_status_check,
+                status_check_contexts: summary.status_check_contexts,
+                required_approvals: summary.required_approvals,
+                ..Protection::default()
+            }),
+        )
     }
 
     pub async fn behind(
@@ -454,11 +480,8 @@ impl Session {
                 state == "all" || (if pr.merged { "closed" } else { &pr.state }) == state;
             state_matches && head.is_none_or(|filter| pr.head.matches(filter))
         });
-        pulls.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| b.number.cmp(&a.number))
-        });
+        // Numbers follow creation order; timestamps carry the server's offset and don't sort as text.
+        pulls.sort_by_key(|pr| std::cmp::Reverse(pr.number));
         Ok(pulls)
     }
 }

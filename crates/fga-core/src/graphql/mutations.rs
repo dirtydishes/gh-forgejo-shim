@@ -64,7 +64,7 @@ impl Mutation {
         } else {
             input.title
         };
-        let source = session
+        let mut source = session
             .create_pull(
                 &id.owner,
                 &id.repository,
@@ -73,11 +73,32 @@ impl Mutation {
                     head: &input.head_ref_name,
                     title: &title,
                     body: input.body.as_deref().unwrap_or(""),
-                    allow_maintainer_edit: input.maintainer_can_modify.unwrap_or(true),
                 },
             )
             .await
             .map_err(write_error)?;
+        // Forgejo's create ignores maintainer edits (`modules/structs/pull.go:80-91`), which only
+        // matter for a fork. The PR exists now, so a refused edit returns it as it stands rather
+        // than an error that invites creating it again.
+        let fork = source.head.repo.as_ref().is_some_and(|head| {
+            !head.owner.login.eq_ignore_ascii_case(&id.owner)
+                || head
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name != &id.repository)
+        });
+        if fork && input.maintainer_can_modify.unwrap_or(true) {
+            let edit = forgejo::EditPull {
+                allow_maintainer_edit: Some(true),
+                ..Default::default()
+            };
+            if let Ok(edited) = session
+                .edit_pull(&id.owner, &id.repository, source.number, edit)
+                .await
+            {
+                source = edited;
+            }
+        }
         Ok(Some(CreatePullRequestPayload {
             client_mutation_id: input.client_mutation_id,
             pull_request: Some(PullRequest::new(source, &id.owner, &id.repository)),
@@ -286,14 +307,15 @@ async fn set_draft(
     let title = if draft {
         draft_title(ctx, &source.title)?
     } else {
+        // Remove only the draft marker. A title that still starts with a WIP prefix would stay a
+        // draft in Forgejo (`models/issues/pull.go:799`), and the rest is the user's text.
         let prefixes = ctx.data_unchecked::<map::WipPrefixes>();
-        let mut title = source.title.as_str();
-        loop {
-            let stripped = prefixes.strip(title);
-            if stripped == title {
-                break;
-            }
-            title = stripped;
+        let title = prefixes.strip(&source.title);
+        if prefixes.strip(title) != title {
+            return Err(async_graphql::Error::new(
+                "The title still starts with a WIP prefix, so Forgejo would keep this a draft",
+            )
+            .extend_with(|_, e| e.set("type", "UNPROCESSABLE")));
         }
         title.to_owned()
     };
@@ -319,21 +341,25 @@ async fn merge(
 ) -> async_graphql::Result<PullRequest> {
     let id = id(value, "PullRequest")?;
     let session = ctx.data_unchecked::<Session>();
-    // Forgejo's scheduler does not pass head_commit_id to its later merge worker.
-    if auto && let Some(expected) = &expected {
-        let source = session
-            .pull_request(&id.owner, &id.repository, id.number)
-            .await
-            .map_err(error)?;
-        if source.head.sha != expected.0 {
-            return Err(write_error(forgejo::WriteError::HeadMismatch));
+    let method = method.unwrap_or(PullRequestMergeMethod::Merge);
+    // Forgejo schedules an auto-merge without checking the style, and its worker later drops a
+    // disallowed one silently (`services/automerge/automerge.go:227`, `services/pull/merge.go:239`).
+    let repository = session
+        .repository(&id.owner, &id.repository)
+        .await
+        .map_err(error)?;
+    let (method, allowed, style) = match method {
+        PullRequestMergeMethod::Merge => ("merge", repository.allow_merge_commits, "Merge commits"),
+        PullRequestMergeMethod::Squash => {
+            ("squash", repository.allow_squash_merge, "Squash merges")
         }
-    }
-    let method = match method.unwrap_or(PullRequestMergeMethod::Merge) {
-        PullRequestMergeMethod::Merge => "merge",
-        PullRequestMergeMethod::Squash => "squash",
-        PullRequestMergeMethod::Rebase => "rebase",
+        PullRequestMergeMethod::Rebase => ("rebase", repository.allow_rebase, "Rebase merges"),
     };
+    if !allowed {
+        return Err(write_error(forgejo::WriteError::DisallowedMergeStyle(
+            style,
+        )));
+    }
     let source = session
         .merge_pull(
             &id.owner,
@@ -343,13 +369,23 @@ async fn merge(
                 method,
                 headline,
                 body,
-                head_commit_id: expected.map(|s| s.0),
+                head_commit_id: expected.as_ref().map(|e| e.0.clone()),
                 merge_when_checks_succeed: auto,
                 delete_branch_after_merge: false,
             },
         )
         .await
         .map_err(write_error)?;
+    // A merge checks the expected head itself, but a schedule stores none and later merges
+    // whatever head the PR has (`routers/api/v1/repo/pull.go:993-1009`). Check after scheduling,
+    // so a push that raced the request cancels it.
+    if auto && !source.merged && expected.is_some_and(|e| source.head.sha != e.0) {
+        session
+            .cancel_auto_merge(&id.owner, &id.repository, id.number)
+            .await
+            .map_err(write_error)?;
+        return Err(write_error(forgejo::WriteError::HeadMismatch));
+    }
     Ok(PullRequest::new(source, &id.owner, &id.repository))
 }
 

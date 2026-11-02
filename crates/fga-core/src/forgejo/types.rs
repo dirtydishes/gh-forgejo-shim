@@ -1,5 +1,14 @@
 use super::glob;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// Go encodes a nil slice as `null`, which `#[serde(default)]` alone rejects.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct User {
@@ -64,10 +73,21 @@ pub struct Branch {
 }
 
 impl Branch {
+    /// The branch name. Forgejo's `ref` becomes `refs/pull/N/head` once the head branch is
+    /// deleted, while `label` keeps the name (`services/convert/pull.go:96-106,210-226`); `label`
+    /// is empty for AGit PRs.
+    pub fn name(&self) -> &str {
+        if self.ref_name.starts_with("refs/pull/") && !self.label.is_empty() {
+            &self.label
+        } else {
+            &self.ref_name
+        }
+    }
+
     pub fn label(&self) -> String {
         match &self.repo {
-            Some(repo) => format!("{}:{}", repo.owner.login, self.ref_name),
-            None => self.label.clone(),
+            Some(repo) => format!("{}:{}", repo.owner.login, self.name()),
+            None => self.name().to_owned(),
         }
     }
 
@@ -77,9 +97,9 @@ impl Branch {
                 self.label()
                     .split_once(':')
                     .is_some_and(|(login, _)| login.eq_ignore_ascii_case(owner))
-                    && self.ref_name == branch
+                    && self.name() == branch
             }
-            None => self.ref_name == filter,
+            None => self.name() == filter,
         }
     }
 }
@@ -154,11 +174,12 @@ pub enum CommitStatusState {
 pub struct Protection {
     pub rule_name: String,
     pub enable_status_check: bool,
+    #[serde(deserialize_with = "null_as_default")]
     pub status_check_contexts: Vec<String>,
     pub required_approvals: i32,
     pub block_on_rejected_reviews: bool,
-    pub dismiss_stale_approvals: bool,
-    pub enable_approvals_whitelist: bool,
+    pub ignore_stale_approvals: bool,
+    pub block_on_official_review_requests: bool,
     pub block_on_outdated_branch: bool,
 }
 
@@ -187,6 +208,13 @@ impl Protection {
         rules.into_iter().find(|rule| rule.matches_branch(branch))
     }
 
+    /// Whether Forgejo's merge gate reads reviews under this rule (`models/issues/pull.go:901-952`).
+    pub fn gates_reviews(&self) -> bool {
+        self.required_approvals > 0
+            || self.block_on_rejected_reviews
+            || self.block_on_official_review_requests
+    }
+
     /// Required status contexts are separator-free globs; an invalid one never matches
     /// (`services/pull/commit_status.go:28-41`).
     pub fn required_contexts(&self) -> Vec<regex::Regex> {
@@ -200,10 +228,25 @@ impl Protection {
     }
 }
 
+/// The effective rule as `GET /branches/{name}` summarizes it for anyone who can read code
+/// (`services/convert/convert.go:58-112`). It omits the review and outdated-branch flags.
+#[derive(Debug, Deserialize)]
+pub struct BranchSummary {
+    #[serde(default)]
+    pub effective_branch_protection_name: String,
+    #[serde(default)]
+    pub required_approvals: i32,
+    #[serde(default)]
+    pub enable_status_check: bool,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub status_check_contexts: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Review {
     pub id: i64,
-    pub user: User,
+    /// Null for a team review request (`models/issues/review.go:175-189`).
+    pub user: Option<User>,
     pub body: String,
     pub state: String,
     pub submitted_at: Option<String>,

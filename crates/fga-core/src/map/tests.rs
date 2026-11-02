@@ -295,6 +295,84 @@ fn required_context_glob_table() {
     }
 }
 #[test]
+fn status_gate_matches_forgejo() {
+    let gate = |contexts: &[&str]| Protection {
+        enable_status_check: true,
+        status_check_contexts: contexts.iter().map(|c| (*c).into()).collect(),
+        ..Default::default()
+    };
+    let external = gate(&["external"]);
+    let any = gate(&[]);
+    for (protection, rows, passes) in [
+        (None, vec![status("x", S::Failure, "")], true),
+        (
+            Some(&external),
+            vec![status("external", S::Success, "")],
+            true,
+        ),
+        (
+            Some(&external),
+            vec![status("external", S::Warning, "")],
+            false,
+        ),
+        (
+            Some(&external),
+            vec![status("other", S::Success, "")],
+            false,
+        ),
+        // Checks enabled with no pattern: every status counts, and none at all fails.
+        (Some(&any), vec![], false),
+        (Some(&any), vec![status("x", S::Success, "")], true),
+        (Some(&any), vec![status("x", S::Failure, "")], false),
+    ] {
+        let mut rows = rows;
+        for (id, row) in rows.iter_mut().enumerate() {
+            row.id = id as i64;
+        }
+        assert_eq!(required_checks_pass(&mapped(&rows), protection), passes);
+    }
+    assert!(required("anything", Some(&any)));
+}
+#[test]
+fn action_descriptions_and_subpath_links() {
+    let action = |state, description: &str| {
+        let row = status("ci / test (push)", state, description);
+        match &checks(&[row], "o", "r", &"https://forge.test".parse().unwrap())[0] {
+            Check::Action {
+                status, conclusion, ..
+            } => (*status, *conclusion),
+            Check::Status { .. } => panic!("not an action"),
+        }
+    };
+    use CheckConclusionState as C;
+    use CheckStatusState as T;
+    assert_eq!(
+        action(S::Failure, "Has been cancelled"),
+        (T::Completed, Some(C::Cancelled))
+    );
+    assert_eq!(
+        action(S::Failure, "Failing after 3s"),
+        (T::Completed, Some(C::Failure))
+    );
+    assert_eq!(
+        action(S::Pending, "Blocked by required conditions"),
+        (T::Waiting, None)
+    );
+    assert_eq!(action(S::Pending, "Waiting to run"), (T::Queued, None));
+    assert_eq!(
+        action(S::Success, "Has been skipped"),
+        (T::Completed, Some(C::Skipped))
+    );
+
+    let mut row = status("ci / test (push)", S::Success, "Successful in 3s");
+    row.target_url = "/forge/O/R/actions/runs/5/jobs/1".into();
+    let public = "https://forge.test/forge/".parse().unwrap();
+    assert!(matches!(
+        checks(&[row], "o", "r", &public)[0],
+        Check::Action { .. }
+    ));
+}
+#[test]
 fn review_state_and_latest_per_user_table() {
     for (source, dismissed, expected) in [
         ("APPROVED", false, PullRequestReviewState::Approved),
@@ -326,21 +404,29 @@ fn review_state_and_latest_per_user_table() {
     );
 }
 #[test]
-fn review_decision_protection_table() {
+fn review_decision_counts_only_official_reviews_like_forgejo() {
     let p = Protection {
         required_approvals: 1,
         ..Default::default()
     };
-    let approve = review(1, 1, "APPROVED");
+    let official = |mut r: Review| {
+        r.official = true;
+        r
+    };
+    let approve = official(review(1, 1, "APPROVED"));
     let mut stale = approve.clone();
     stale.stale = true;
     let mut dismissed = approve.clone();
     dismissed.dismissed = true;
-    let mut official = approve.clone();
-    official.official = true;
-    let reject = review(2, 1, "REQUEST_CHANGES");
-    let mut official_reject = reject.clone();
-    official_reject.official = true;
+    let unofficial = review(1, 1, "APPROVED");
+    let reject = official(review(2, 2, "REQUEST_CHANGES"));
+    let unofficial_reject = review(2, 2, "REQUEST_CHANGES");
+    let mut team_request = official(review(3, 0, "REQUEST_REVIEW"));
+    team_request.user = None;
+    let blocking = Protection {
+        block_on_rejected_reviews: true,
+        ..p.clone()
+    };
     for (protection, reviews, expected) in [
         (None, vec![reject.clone()], None),
         (Some(Protection::default()), vec![reject.clone()], None),
@@ -354,52 +440,60 @@ fn review_decision_protection_table() {
             vec![approve.clone()],
             Some(PullRequestReviewDecision::Approved),
         ),
+        // Forgejo counts only official approvals, whitelist or not.
         (
             Some(p.clone()),
-            vec![approve.clone(), reject.clone()],
+            vec![unofficial],
             Some(PullRequestReviewDecision::ReviewRequired),
-        ),
-        (
-            Some(Protection {
-                block_on_rejected_reviews: true,
-                ..p.clone()
-            }),
-            vec![reject],
-            Some(PullRequestReviewDecision::ChangesRequested),
-        ),
-        (
-            Some(p.clone()),
-            vec![official_reject],
-            Some(PullRequestReviewDecision::ChangesRequested),
         ),
         (
             Some(p.clone()),
             vec![dismissed],
             Some(PullRequestReviewDecision::ReviewRequired),
         ),
+        // A rejection blocks only under block_on_rejected_reviews, and only when official.
+        (
+            Some(p.clone()),
+            vec![approve.clone(), reject.clone()],
+            Some(PullRequestReviewDecision::Approved),
+        ),
+        (
+            Some(blocking.clone()),
+            vec![approve.clone(), reject],
+            Some(PullRequestReviewDecision::ChangesRequested),
+        ),
+        (
+            Some(blocking),
+            vec![approve.clone(), unofficial_reject],
+            Some(PullRequestReviewDecision::Approved),
+        ),
+        // Stale approvals count unless ignore_stale_approvals.
+        (
+            Some(p.clone()),
+            vec![stale.clone()],
+            Some(PullRequestReviewDecision::Approved),
+        ),
         (
             Some(Protection {
-                dismiss_stale_approvals: true,
+                ignore_stale_approvals: true,
                 ..p.clone()
             }),
             vec![stale],
             Some(PullRequestReviewDecision::ReviewRequired),
         ),
+        // An outstanding official request, even a team's, blocks under its flag alone.
         (
-            Some(Protection {
-                enable_approvals_whitelist: true,
-                ..p.clone()
-            }),
-            vec![approve],
-            Some(PullRequestReviewDecision::ReviewRequired),
+            Some(p.clone()),
+            vec![approve.clone(), team_request.clone()],
+            Some(PullRequestReviewDecision::Approved),
         ),
         (
             Some(Protection {
-                enable_approvals_whitelist: true,
-                ..p
+                block_on_official_review_requests: true,
+                ..Default::default()
             }),
-            vec![official],
-            Some(PullRequestReviewDecision::Approved),
+            vec![approve, team_request],
+            Some(PullRequestReviewDecision::ReviewRequired),
         ),
     ] {
         assert_eq!(review_decision(&reviews, protection.as_ref()), expected);
@@ -545,8 +639,11 @@ fn merge_state_precedence_table() {
 fn review_requests_missing_empty_and_populated_table() {
     for count in [None, Some(0), Some(2)] {
         let mut p = pr();
-        p.requested_reviewers =
-            count.map(|n| (1..=n).map(|id| review(id, id, "COMMENT").user).collect());
+        p.requested_reviewers = count.map(|n| {
+            (1..=n)
+                .map(|id| review(id, id, "COMMENT").user.unwrap())
+                .collect()
+        });
         assert_eq!(review_requests(&p).len(), count.unwrap_or(0) as usize);
     }
 }
@@ -580,7 +677,7 @@ fn captured_forgejo15_response_uses_status_not_state() {
 #[test]
 fn review_requests_keep_users_and_teams() {
     let mut p = pr();
-    p.requested_reviewers = Some(vec![review(1, 1, "COMMENT").user]);
+    p.requested_reviewers = Some(vec![review(1, 1, "COMMENT").user.unwrap()]);
     p.requested_reviewers_teams = Some(vec![crate::forgejo::RequestedTeam {
         name: "reviewers".into(),
         organization: crate::forgejo::TeamOrganization {
@@ -592,5 +689,14 @@ fn review_requests_keep_users_and_teams() {
     assert!(matches!(&reviewers[0],Reviewer::User(u) if u.id==1));
     assert!(
         matches!(&reviewers[1],Reviewer::Team(t) if t.name=="reviewers" && t.organization.name=="org")
+    );
+}
+#[test]
+fn deleted_head_branches_keep_their_name() {
+    let pr: PullRequest = serde_json::from_value(json!({"number":1,"title":"t","state":"closed","merged":true,"draft":false,"html_url":"","head":{"label":"topic","ref":"refs/pull/1/head","sha":"abc","repo":null},"base":{"label":"main","ref":"main","sha":"def","repo":null},"user":{"id":1,"login":"o","avatar_url":""},"merged_at":null})).unwrap();
+    assert_eq!(pr.head.name(), "topic");
+    assert_eq!(
+        pull_request(&pr, &WipPrefixes::default())["head"]["ref"],
+        "topic"
     );
 }

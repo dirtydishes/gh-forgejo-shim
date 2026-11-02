@@ -204,10 +204,15 @@ impl PullRequestReview {
         ))
     }
     async fn author(&self) -> Option<Actor> {
-        Some(User(self.source.user.clone()).into())
+        self.source.user.clone().map(|user| User(user).into())
     }
     async fn author_association(&self) -> CommentAuthorAssociation {
-        if self.source.user.login.eq_ignore_ascii_case(&self.owner) {
+        if self
+            .source
+            .user
+            .as_ref()
+            .is_some_and(|user| user.login.eq_ignore_ascii_case(&self.owner))
+        {
             CommentAuthorAssociation::Owner
         } else {
             CommentAuthorAssociation::None
@@ -302,6 +307,7 @@ pub struct Ref {
 #[derive(Clone, SimpleObject)]
 pub struct BranchProtectionRule {
     pub requires_strict_status_checks: bool,
+    pub required_approving_review_count: Option<i32>,
 }
 #[derive(SimpleObject)]
 #[graphql(complex)]

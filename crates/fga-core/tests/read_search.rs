@@ -43,7 +43,7 @@ async fn applies_search_filters_across_upstream_pages_before_github_pagination()
                 assert_eq!(q["created_by"], "viewer");
                 assert_eq!(q["assigned_by"], "viewer");
                 assert_eq!(q["labels"], "needs work");
-                assert_eq!(q["q"], "needle");
+                assert_eq!(q["q"], "+\"needle\"");
                 assert_eq!(q["sort"], "latest");
                 match q["page"].as_str() {
                     "1" => (

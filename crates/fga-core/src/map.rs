@@ -47,7 +47,7 @@ pub fn pull_request(pr: &forgejo::PullRequest, prefixes: &WipPrefixes) -> Value 
         "state": if pr.merged { "closed" } else { &pr.state },
         "draft": pr.draft,
         "html_url": pr.html_url,
-        "head": {"ref": pr.head.ref_name, "sha": pr.head.sha, "label": pr.head.label()},
+        "head": {"ref": pr.head.name(), "sha": pr.head.sha, "label": pr.head.label()},
         "base": {"ref": pr.base.ref_name, "sha": pr.base.sha, "label": pr.base.label()},
         "user": {"login": pr.user.login},
         "merged_at": if pr.merged { pr.merged_at.as_ref() } else { None },
