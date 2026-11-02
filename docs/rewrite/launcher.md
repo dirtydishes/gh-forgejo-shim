@@ -438,8 +438,12 @@ bookkeeping variables, except `FJ_SHIM_DEPTH`. A shell alias that runs
 ## 8. Recursion
 
 R1 (`jko.15`): `external.rs:260` compares canonical paths, so a copy or hardlink of the shim passes
-the "real gh" check. Under option B the launcher spawns that copy as gh. The copy sees a Forgejo
-invocation and launches again, and so on. Three guards stop it:
+the "real gh" check. Under option B the launcher spawns that copy as gh. A bare copy of the binary
+can't loop: `cli::run_from_env` routes only a `gh` first argument to the wrapper and never checks
+its own program name, so the copy gets gh's arguments and fails with a usage error. The loop needs
+a script that runs a shim build as `<shim> gh "$@"`, which is what the managed wrapper itself
+looks like. Such a script sees a Forgejo invocation and launches again, and so on. Three guards
+stop it:
 
 1. **Identity.** Real-gh discovery (`external::find_program("gh", ..)`, R1 fix in survivor-fixes
    PR #44) skips managed wrapper scripts. It also skips any candidate that may be either shim
@@ -550,8 +554,15 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    unknown file in it stays.
 6. **Concurrency (§10).** Eight parallel launched `gh pr view` calls all succeed, each with its own
    directory, and none is left afterwards.
-7. **Recursion (§8).** `FJ_SHIM_REAL_GH` pointing at a copy of the shim, and a copy on PATH: exit
-   127 with the message, and only one gateway ever ran. R1's two audit tests pass.
+7. **Recursion (§8).** Each case uses a shim build that differs from the running one, such as an
+   older or patched build, so guard 1 can't see it, and runs it from an unmarked script:
+   - `FJ_SHIM_REAL_GH` names `#!/bin/sh` + `exec <other build> gh "$@"`: guard 2 trips, the wrapper
+     exits 127 with its message, and only one gateway ever ran;
+   - the same script without `exec`: guard 3 stops the chain at depth 8 with exit 127, and no
+     launch runs past that depth.
+   Separately, an identical copy as `FJ_SHIM_REAL_GH`, with no real gh reachable on PATH or in the
+   fallback directories, exits 127 with "could not find the real gh". Guard 1 skips the copy, and
+   nothing else is left. R1's two audit tests pass.
 8. **Environment (§7).** A non-UTF-8 variable reaches gh byte for byte (R7's test, on the launch
    path). gh's environment has none of the four token variables.
 9. **Socket path (§4).** A `TMPDIR` long enough to overflow `sun_path`: exit 1, a message naming
