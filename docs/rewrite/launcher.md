@@ -200,7 +200,8 @@ Keychain token two ways:
   sends it to GitHub directly, as plain gh would.
 
 Either way, a token only ever goes to its own site, or to the local gateway, which refuses it.
-§13 decision 2 records this.
+That is the guarantee: the launcher never sends a login to a site it doesn't belong to. Kell
+accepted it (§13, decision 2).
 
 The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
 `repo::GhHosts::load`) assumes gh knows. A launched gh therefore resolves the same default host
@@ -233,9 +234,11 @@ What this guarantees:
 - **Concurrent invocations can't collide**, because each one has its own directory and socket.
 - **Aliases and settings work inside a Forgejo checkout.** Installed extensions run through plain
   gh (§2), so the ones that talk to GitHub keep working there.
-- **The launched gh holds credentials only for the hosts in *S*.** github.com and every other host
-  have the placeholder, which no server accepts, and the gateway rejects their requests with 421
-  without contacting any upstream (L1).
+- **The launcher never sends a login to a site it doesn't belong to.** Every host in the user's
+  own `hosts.yml` other than *S* has the placeholder, which no server accepts, and the gateway
+  refuses any request for another host with 421, without contacting any upstream (L1). A
+  Keychain login the placeholders don't cover goes only to its own site, or to the gateway,
+  which refuses it (below).
 
 The cost:
 
@@ -728,6 +731,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
      made elsewhere. But routing would then treat github.com as known for every user, so a
      two-part `-R` would default to github.com even for someone with only a forge. Other hosts
      stay as in (a).
+
+   Kell, 2026-11-02: (a). The guarantee is "the launcher never sends a login to a site it
+   doesn't belong to", with no github.com placeholder.
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
 4. **`gh api` and `gh auth token` without `--hostname`, inside a Forgejo checkout** (§2). gh
