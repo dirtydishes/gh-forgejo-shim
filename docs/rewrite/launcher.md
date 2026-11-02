@@ -202,8 +202,12 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     (`gh/pkg/cmd/auth/status/status.go:258,363`). A per-call token there would print a value
     that dies with the call. That command does call the API, so for that call the gateway
     expects the real token in place of a per-call one (§5). It runs no git and starts nothing
-    (`status.go` imports nothing that spawns a process). No other call puts the real token in
-    `hosts.yml`.
+    (`status.go` imports nothing that spawns a process). The wrapper decides "with
+    `--show-token`" on the argv after alias expansion (L2's `expand_alias`), parsed as gh's
+    pflag declaration does (`BoolVarP(…, "show-token", "t", …)`, `status.go:258`): `-t`, `-at`,
+    `-ta`, `--show-token` and `--show-token=true` count, and `--show-token=false` doesn't.
+    A plain scan for `-t` would miss `-at` and print a token that dies with the call. No other
+    call puts the real token in `hosts.yml`.
   - Every other host gets the placeholder `gfj-not-served`.
   - An allowlist entry with a port, such as `forge.test:3443`, always gets two entries, its
     hostname and `host:port`, with the same token. gh's API client drops the port before the
@@ -497,13 +501,15 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
 - `.expecting(per_call).upstream_token(real)` (gateway PR #66), for every served host. gh
   presents §3's per-call token; Forgejo receives only the real one. In a
   `gh auth status --show-token` call, where §3 puts the real token in `hosts.yml`, it is
-  `.expecting(real).upstream_token(real)` instead, and the per-call token is never made. Any other credential for
-  that host gets 401 before any upstream contact: the real token itself, a GitHub token, another
+  `.expecting(real).upstream_token(real)` instead, and the per-call token is never made. Outside
+  that call, any other credential for that host gets 401 before any upstream contact: the real
+  token itself, a GitHub token, another
   forge's token, the placeholder, a `basic` scheme, or none. GraphQL returns 401 too, not 200
   with an error body. `gh auth status --hostname forge.test:3443` sets the Authorization header
   itself from the `host:port` key (`gh/pkg/cmd/auth/status/status.go:500`,
   `gh/pkg/cmd/auth/shared/oauth_scopes.go:39`), and gh's transport keeps it
-  (`gh/api/http_client.go:232-233`). That key holds the per-call token too, so it works.
+  (`gh/api/http_client.go:232-233`). That key holds the same token as the portless key, the
+  per-call one or, in a `--show-token` call, the real one, so it works.
 - For an allowlist entry with a port, `.answering_to(<portless hostname>)`, unless another entry
   in *S* shares that hostname (§3). gh drops the port from
   a remote URL, so a launched gh usually sends `Host: forge.test`. It keeps the port when the user
@@ -813,7 +819,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     through unchanged.
 11. **Tokens (§3).** `gh auth token --hostname <forge>` prints the stored token, and so does
     `gh auth status --show-token --hostname <forge>`, which also reports the forge as logged
-    in. A plain `gh auth status` prints no token, and gh's request carries the per-call one.
+    in. So do `-at` and an alias expanding to `auth status -t`. A plain `gh auth status`, and
+    `gh auth status --show-token=false`, print no token, and gh's request carries the per-call
+    one.
     With no stored token, a launched `gh pr view` exits 4 with the login hint.
 12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
     `gh config set` in a Forgejo checkout changes the user's real `config.yml`.
@@ -861,9 +869,11 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     message naming the user's config directory and the key, and leaves the user's config
     unchanged. The route comes from L2's parity rows: `gh pr view 1` in a checkout with `origin`
     on `forge.test` and `upstream` on github.com, and `gh pr view 1 -R other/target` (or
-    `-R o/r`) in a checkout with only `origin` on `forge.test`. It
-    runs with an entry holding only a `git_protocol`, one keyed `Forge.Test` (the message names
-    `Forge.Test`), and one holding a login under `forge.test:3443`.
+    `-R o/r`) in a checkout with only `origin` on `forge.test`. It runs with an entry holding
+    only a `git_protocol`, and with one keyed `Forge.Test` (the message names `Forge.Test`). A
+    third case has the user's only key `forge.test:3443`, holding a login, with the allowlist
+    `forge.test:3443,other.test` and `gh pr view 1 -R other/target`: the login sits where gh's
+    API client never reads it, so the call is refused too.
 
 ## 12. Ownership
 
