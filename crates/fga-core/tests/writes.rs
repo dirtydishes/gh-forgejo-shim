@@ -1,5 +1,5 @@
 use async_graphql::Request;
-use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
+use axum::{Json, Router, extract::Query, http::StatusCode, response::IntoResponse, routing::get};
 use fga_core::{forgejo::Forgejo, graphql, ids::node_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -540,6 +540,51 @@ async fn draft_changes_fail_and_report_the_title_when_the_forge_uses_another_pre
     let response = execute(app, mutation("markPullRequestReadyForReview")).await;
     assert_eq!(response.errors[0].message, message);
     assert_eq!(*patched.lock().unwrap(), Vec::<String>::new());
+}
+
+/// Forgejo's edit changes the title and state before it checks a new base exists
+/// (`routers/api/v1/repo/pull.go:649-759`), so a missing base must fail before any write.
+#[tokio::test]
+async fn an_edit_to_a_missing_base_changes_nothing() {
+    let patched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = patched.clone();
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            get(|| async { Json(pull()) }).patch(move |Json(body): Json<Value>| async move {
+                log.lock().unwrap().push(body);
+                (StatusCode::CREATED, Json(pull()))
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/r/branches/{*branch}",
+            get(
+                |axum::extract::Path(branch): axum::extract::Path<String>| async move {
+                    if branch == "release/next" {
+                        Json(json!({"name": branch})).into_response()
+                    } else {
+                        (StatusCode::NOT_FOUND, Json(api_error("branch not found"))).into_response()
+                    }
+                },
+            ),
+        );
+    let edit = |base: &str| {
+        format!(
+            r#"mutation {{updatePullRequest(input:{{pullRequestId:"{}",title:"X",state:CLOSED,baseRefName:"{base}"}}){{pullRequest{{number}}}}}}"#,
+            node_id("PullRequest", "o/r", 1)
+        )
+    };
+    let response = execute(app.clone(), edit("missing")).await;
+    assert_eq!(response.errors[0].message, "Not Found");
+    assert_eq!(*patched.lock().unwrap(), Vec::<Value>::new());
+
+    let response = execute(app, edit("release/next")).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        *patched.lock().unwrap(),
+        [json!({"title":"X","state":"closed","base":"release/next"})]
+    );
 }
 
 /// Forgejo's create ignores maintainer edits, so a fork PR gets them in a follow-up edit.

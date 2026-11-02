@@ -145,11 +145,26 @@ impl Mutation {
         input: UpdatePullRequestInput,
     ) -> async_graphql::Result<Option<UpdatePullRequestPayload>> {
         let id = id(&input.pull_request_id, "PullRequest")?;
-        let source = ctx
-            .data_unchecked::<Session>()
+        let session = ctx.data_unchecked::<Session>();
+        let source = session
             .pull_request(&id.owner, &id.repository, id.number)
             .await
             .map_err(error)?;
+        // Forgejo applies title, body and state before it checks that a new base exists, and skips
+        // the check for merged PRs (`routers/api/v1/repo/pull.go:649-759`), so check first. The
+        // route's `*` takes the branch's slashes literally.
+        if let Some(base) = input
+            .base_ref_name
+            .as_deref()
+            .filter(|base| !source.merged && *base != source.base.ref_name)
+        {
+            let mut segments = vec!["repos", &id.owner, &id.repository, "branches"];
+            segments.extend(base.split('/'));
+            session
+                .get::<serde_json::Value>(&segments, &[])
+                .await
+                .map_err(error)?;
+        }
         let title = input
             .title
             .map(|title| {
