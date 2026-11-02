@@ -83,8 +83,17 @@ fn read_head(path: &Path) -> Option<String> {
 /// account in the group rename its own file over one the shim wrote, such as the `gh` wrapper.
 /// Directories that already exist keep their mode: they're the user's to choose.
 pub(crate) fn create_dirs(path: &Path, mode: u32) -> std::io::Result<()> {
+    dir_builder(mode).recursive(true).create(path)
+}
+
+/// `fs::create_dir` with `mode`, as [`create_dirs`]. It fails if `path` exists, so a caller
+/// picking a fresh name can't reuse a directory someone else planted.
+pub(crate) fn create_dir(path: &Path, mode: u32) -> std::io::Result<()> {
+    dir_builder(mode).create(path)
+}
+
+fn dir_builder(mode: u32) -> fs::DirBuilder {
     let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -92,7 +101,7 @@ pub(crate) fn create_dirs(path: &Path, mode: u32) -> std::io::Result<()> {
     }
     #[cfg(not(unix))]
     let _ = mode;
-    builder.create(path)
+    builder
 }
 
 pub fn install_shim(
