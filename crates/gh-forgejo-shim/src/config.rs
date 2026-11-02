@@ -392,7 +392,10 @@ pub fn is_known_github_host(host: Option<&str>) -> bool {
         .rsplit_once('@')
         .map_or(normalized.as_str(), |(_, name)| name);
     let name = name.rsplit_once(':').map_or(name, |(name, _)| name);
-    KNOWN_GITHUB_HOSTS.contains(&name.trim_end_matches('.'))
+    let name = name.trim_end_matches('.');
+    // Every github.com subdomain is GitHub's (api., gist., uploads. and so on), so none is a
+    // Forgejo host either.
+    KNOWN_GITHUB_HOSTS.contains(&name) || name.ends_with(".github.com")
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {
@@ -693,12 +696,16 @@ future_setting = "keep" # why
             "www.github.com.:443",
             "user@github.com",
             "https://github.com:443/owner/repo",
+            "api.github.com",
+            "GIST.GitHub.com.:443",
+            "https://uploads.github.com/repos/o/r",
         ] {
             assert!(is_known_github_host(Some(host)), "{host}");
         }
         for host in [
             "github.com.example.org",
             "notgithub.com",
+            "evilgithub.com",
             "github.com@git.example.com",
             "git.example.com:443",
         ] {
