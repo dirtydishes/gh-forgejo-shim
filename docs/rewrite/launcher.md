@@ -321,10 +321,13 @@ The cost:
   `gh/pkg/cmd/pr/checkout/checkout.go:369-370`). A private GitHub submodule fetched by
   `gh pr checkout` in a Forgejo repo therefore fails to authenticate.
 - A git that a child of a launched gh starts, such as an alias shell or an editor, also gets a
-  credential only for a served host. A shell alias that pushes to GitHub over HTTPS gets none
-  and fails. SSH remotes are unaffected. With the usual gh setup, the push would fail without
-  the launcher's helper too: `gh auth setup-git` names real gh, which reads the call's
-  `hosts.yml` and finds GitHub's placeholder ahead of the Keychain login.
+  credential only for a served forge, and none for any other host over HTTPS: GitHub, GitHub
+  Enterprise, GitLab, or a host the user's Keychain helper would answer. A shell alias that
+  pushes to one of them fails, unless that git names a helper on its own command line (§3). SSH
+  remotes are unaffected. Git outside a launched call is unaffected. For GitHub with the usual
+  gh setup, the push would fail without the launcher's helper too: `gh auth setup-git` names
+  real gh, which reads the call's `hosts.yml` and finds GitHub's placeholder ahead of the
+  Keychain login.
 
 Rejected:
 
@@ -849,9 +852,14 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    an editor, could still reach gh's own helper through the user's git config, and gh's `gist.`
    retry could then give a forge login to a `gist.` host. The launcher now forces its own helper
    on every git in the call through `GIT_CONFIG_PARAMETERS` (§3, §7). That adds a cost the user
-   sees, so it went back to Kell: inside a launched call, a git push to GitHub over HTTPS from an
-   alias shell or an editor gets no credential. With the usual `gh auth setup-git`, that push
-   already failed, because real gh found GitHub's placeholder in the call's `hosts.yml`.
+   sees, so it went back to Kell. Inside a launched call, git that an alias shell or an editor
+   starts gets credentials only for the served forge, and none for any other host over HTTPS.
+   Git that gh itself starts is unchanged by this, and git outside a launched call is
+   unaffected. A nested git that names a helper with `-c` on its own command line still asks
+   that helper after the launcher's declines (§3). The alternative was to keep the user's own
+   helpers for nested git and narrow the guarantee's wording, leaving gh's `gist.` retry open.
+
+   Kell, 2026-11-02: force the launcher's helper, with the cost above.
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
 4. **`gh api` and `gh auth token` without `--hostname`, inside a Forgejo checkout** (§2). gh
