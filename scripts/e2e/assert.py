@@ -43,6 +43,11 @@ first, head = (root / 'two-shas.txt').read_text().split()
 pr3 = read('pr3.json')
 check([c['oid'] for c in pr3['commits']] == [first, head], 'PR 3 commits: oldest first, head last')
 check([(c['context'], c['state']) for c in pr3['statusCheckRollup']] == [('ci', 'SUCCESS')], 'PR 3 statusCheckRollup: the head commit passes, not the failed first commit')
+status3, runs3 = read('status3.json'), read('check-runs3.json')
+check(status3['state'] == 'success' and status3['sha'] == head
+      and [(s['context'], s['state']) for s in status3['statuses']] == [('ci', 'success')],
+      'REST combined status for PR 3: the head commit\'s ci status, success')
+check(runs3 == {'total_count': 0, 'check_runs': []}, 'REST check runs for PR 3: none, since ci is a plain status')
 check((root / 'checks3.exit').read_text() == '0' and (root / 'checks3.txt').read_text().split('\t')[:2] == ['ci', 'pass'], 'gh pr checks 3: pass from the head commit')
 check(all(os.environ['E2E_TOKEN'] not in p.read_text() for p in root.glob('*.debug')), 'gh debug logs redact the disposable token')
 requests = []
