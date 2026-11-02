@@ -73,9 +73,19 @@ The snippet uses `$http_host`, because `$host` drops a non-default port.
 upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. Caddy passes `Host`
 through by default, and its site block answers only the forge's hostname.
 
-**Nginx Proxy Manager.** Open the forge's proxy host, choose **Advanced**, and paste the contents of
-the nginx locations snippet, replacing `http://fga` with the gateway's address, for example
-`http://127.0.0.1:8080`. Leave the host's main forward settings pointing at Forgejo.
+**Nginx Proxy Manager.** NPM's nginx runs inside the NPM container, so the gateway must be on a Docker
+network NPM shares, reached by its container name: run it with `--network <NPM's network>` and
+`--name fga-server`, and no published port. Start it before the next step: nginx looks up that name
+when NPM saves the host, and if it can't, NPM takes the whole proxy host offline, forge included.
+
+Then open the forge's proxy host, choose **Advanced**, and add the contents of the nginx locations
+snippet, with `http://fga` replaced by `http://fga-server:8080`. Add it **below** anything already in
+that field; don't replace it. Leave the host's main forward settings pointing at Forgejo.
+
+NPM's **Access Lists** don't cover locations added in the Advanced field. If the forge relies on an
+Access List to limit who can reach it, the gateway's routes are open to everyone. Restrict them with
+server-level rules in the Advanced field instead (`if`/`return` before the snippet), which run before
+nginx picks a location, or keep the forge behind a network boundary.
 
 ## 3. Check it
 
