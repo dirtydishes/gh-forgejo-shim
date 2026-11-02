@@ -1,0 +1,16 @@
+[
+  {"id":"create","commands":[{"id":"create","args":["pr","create","--base","main","--head","g3/create","--title","T","--body","B"]}]},
+  {"id":"draft","draft":true,"commands":[{"id":"create-draft","args":["pr","create","--draft","--base","main","--head","g3/draft","--title","T","--body","B"]},{"id":"edit-draft","args":["pr","edit","{number}","--title","T2","--body","B2"]}]},
+  {"id":"comment","commands":[{"id":"comment","args":["pr","comment","{number}","--body","x"]}]},
+  {"id":"edit","commands":[{"id":"edit","args":["pr","edit","{number}","--title","T2","--body","B2"]}]},
+  {"id":"ready","commands":[{"id":"draft","args":["pr","ready","{number}","--undo"]},{"id":"ready","args":["pr","ready","{number}"]}]},
+  {"id":"close","commands":[{"id":"close","args":["pr","close","{number}"]},{"id":"reopen","args":["pr","reopen","{number}"]}]},
+  {"id":"merge","wait_checks":true,"commands":[{"id":"merge","args":["pr","merge","{number}","--merge"]}]},
+  {"id":"squash","wait_checks":true,"commands":[{"id":"squash","args":["pr","merge","{number}","--squash","--subject","G3 squash","--body","G3 body"]}]},
+  {"id":"rebase","wait_checks":true,"commands":[{"id":"rebase","args":["pr","merge","{number}","--rebase"]}]},
+  {"id":"head-mismatch","wait_checks":true,"commands":[{"id":"head-mismatch","exit":1,"args":["pr","merge","{number}","--merge","--match-head-commit","0000000000000000000000000000000000000000"]}]},
+  {"id":"auto","pending":true,"commands":[{"id":"auto","args":["pr","merge","{number}","--auto","--merge"]},{"id":"disable-auto","args":["pr","merge","{number}","--disable-auto"]},{"id":"disable-auto-again","args":["pr","merge","{number}","--disable-auto"]}]},
+  {"id":"chatgpt-merge","wait_checks":true,"commands":[{"id":"chatgpt-merge","args":["pr","merge","{number}","--merge","--match-head-commit","{sha}"]}]},
+  {"id":"base","commands":[{"id":"base","args":["pr","edit","{number}","--base","g3/base-target"]}]},
+  {"id":"conflict","conflict":true,"commands":[{"id":"conflict","exit":1,"args":["pr","merge","{number}","--merge"]}]}
+]

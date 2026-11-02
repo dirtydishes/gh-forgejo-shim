@@ -1,0 +1,122 @@
+[
+  {
+    "number": 1,
+    "title": "scenario: checks pass",
+    "body": "Oracle scenario `s/pass`. Do not merge by hand.",
+    "head": {
+      "ref": "s/pass",
+      "sha": "a1c1fca385dee273423b0d5079edd339e08b8eec"
+    },
+    "state": "open",
+    "merged_at": null,
+    "draft": false
+  },
+  {
+    "number": 2,
+    "title": "scenario: checks fail",
+    "body": "Oracle scenario `s/fail`. Do not merge by hand.",
+    "head": {
+      "ref": "s/fail",
+      "sha": "176de0efcfbc30caf6ba02d3ad67f3d8d98497eb"
+    },
+    "state": "open",
+    "merged_at": null,
+    "draft": false
+  },
+  {
+    "number": 3,
+    "title": "scenario: checks pending",
+    "body": "Oracle scenario `s/pending`. Do not merge by hand.",
+    "head": {
+      "ref": "s/pending",
+      "sha": "e2d6ea0d244a3e0650371161a87e3edec0d8c7de"
+    },
+    "state": "open",
+    "merged_at": null,
+    "draft": false
+  },
+  {
+    "number": 4,
+    "title": "scenario: draft",
+    "body": "Oracle scenario `s/draft`. Do not merge by hand.",
+    "head": {
+      "ref": "s/draft",
+      "sha": "289058d69e451db0e0c2a4f858d2c855c536471b"
+    },
+    "state": "open",
+    "merged_at": null,
+    "draft": true
+  },
+  {
+    "number": 5,
+    "title": "scenario: no checks",
+    "body": "Oracle scenario `s/nochecks`. Do not merge by hand.",
+    "head": {
+      "ref": "s/nochecks",
+      "sha": "4b3e7049b6173d786b9c12f7d4d8b5355df8d3d0"
+    },
+    "state": "open",
+    "merged_at": null,
+    "draft": false
+  },
+  {
+    "number": 6,
+    "title": "scenario: merged",
+    "body": "Oracle scenario `s/merged`. Do not merge by hand.",
+    "head": {
+      "ref": "s/merged",
+      "sha": "f9a1bb7269f94f5cf6fe07e76c5364dd69fa191c"
+    },
+    "state": "closed",
+    "merged_at": "2026-10-30T19:02:58Z",
+    "draft": false
+  },
+  {
+    "number": 7,
+    "title": "scenario: closed",
+    "body": "Oracle scenario `s/closed`. Do not merge by hand.",
+    "head": {
+      "ref": "s/closed",
+      "sha": "4cafa6c9f6c9b6c648c7ed7037ef26785b74d0d0"
+    },
+    "state": "closed",
+    "merged_at": null,
+    "draft": false
+  },
+  {
+    "number": 8,
+    "title": "scenario: merge via ChatGPT",
+    "body": "Oracle scenario `s/merge-me`: merged from ChatGPT's Merge button during capture.",
+    "head": {
+      "ref": "s/merge-me",
+      "sha": "e94e6afcc35a2b2547362257817092318b559365"
+    },
+    "state": "closed",
+    "merged_at": "2026-10-30T19:37:30Z",
+    "draft": false
+  },
+  {
+    "number": 9,
+    "title": "scenario: created by ChatGPT agent",
+    "body": "adds notes/nopr.txt with the nopr scenario marker.\n\n## intended effect for end users\n\nrecords the nopr scenario. no application behavior changes.",
+    "head": {
+      "ref": "s/nopr",
+      "sha": "b96bea47eb57574ac5f051d892801df92678135d"
+    },
+    "state": "open",
+    "merged_at": null,
+    "draft": false
+  },
+  {
+    "number": 10,
+    "title": "scenario: gateway spike write flow (edited)",
+    "body": "Created by gh through the GHE-shaped recorder.",
+    "head": {
+      "ref": "s/gw-flow",
+      "sha": "7978d3fb6d7866428f780b617534317f72f5aa0c"
+    },
+    "state": "closed",
+    "merged_at": "2026-10-30T20:10:24Z",
+    "draft": false
+  }
+]

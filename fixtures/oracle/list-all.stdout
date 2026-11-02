@@ -1,0 +1,10 @@
+10	scenario: gateway spike write flow (edited)	s/gw-flow	MERGED	2026-10-30T20:10:17Z
+9	scenario: created by ChatGPT agent	s/nopr	OPEN	2026-10-30T19:41:08Z
+8	scenario: merge via ChatGPT	s/merge-me	MERGED	2026-10-30T19:35:43Z
+7	scenario: closed	s/closed	CLOSED	2026-10-30T19:03:02Z
+6	scenario: merged	s/merged	MERGED	2026-10-30T19:02:50Z
+5	scenario: no checks	s/nochecks	OPEN	2026-10-30T19:02:46Z
+4	scenario: draft	s/draft	DRAFT	2026-10-30T19:02:43Z
+3	scenario: checks pending	s/pending	OPEN	2026-10-30T19:02:31Z
+2	scenario: checks fail	s/fail	OPEN	2026-10-30T19:02:28Z
+1	scenario: checks pass	s/pass	OPEN	2026-10-30T19:02:25Z

@@ -17,3 +17,6 @@ target/
 
 # bd lock file at the repo root
 .beads.gate.lock
+
+# Gateway e2e artifacts
+/.local/

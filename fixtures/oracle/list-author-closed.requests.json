@@ -1,0 +1,21 @@
+[
+  {
+    "query": "fragment pr on PullRequest{number,state}\n    query PullRequestSearch(\n      $q: String!,\n      $type: SearchType!,\n      $limit: Int!,\n      $endCursor: String,\n    ) {\n      search(query: $q, type: $type, first: $limit, after: $endCursor) {\n        issueCount\n        nodes {\n          ...pr\n        }\n        pageInfo {\n          hasNextPage\n          endCursor\n        }\n      }\n    }",
+    "variables": {
+      "limit": 30,
+      "q": "author:dirtydishes repo:dirtydishes/gfj-oracle state:closed type:pr",
+      "type": "ISSUE_ADVANCED"
+    }
+  },
+  {
+    "query": "query SearchType_enumValues{SearchType: __type(name: \"SearchType\"){enumValues(includeDeprecated: true){name}}}"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

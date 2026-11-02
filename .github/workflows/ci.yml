@@ -60,6 +60,29 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
+  gateway-e2e:
+    name: gateway e2e
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Run gh against the gateway and a real Forgejo
+        run: scripts/e2e.sh
+
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-e2e-results
+          path: .local/e2e/
+
   release-package-smoke:
     name: release package smoke
     runs-on: ubuntu-latest

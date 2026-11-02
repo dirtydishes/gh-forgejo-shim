@@ -1,0 +1,14 @@
+[
+  {
+    "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {state,mergedAt,id,number}\n    }\n  }",
+    "variables": {
+      "owner": "dirtydishes",
+      "pr_number": 6,
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

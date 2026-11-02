@@ -1,0 +1,124 @@
+[
+  {
+    "branch": "g3/create-r4",
+    "sha": "e0a7531ab1a7f003dd96fb65c2bb5ac2a8d6fa58",
+    "number": 27,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/27",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/draft-r4",
+    "sha": "3459a65e1822af9e90735fd73c1ce30ee6981dce",
+    "number": 28,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/28",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/comment-r4",
+    "sha": "0a07716765402e6d0fe6c01a3deecb209c8d7590",
+    "number": 29,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/29",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/edit-r4",
+    "sha": "7acf36fb5d0ef553b50ca0eff2b99219a6c448e8",
+    "number": 30,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/30",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/ready-r4",
+    "sha": "44dec1be9ffa2f369266a86b8f7d04cb3017d571",
+    "number": 31,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/31",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/close-r4",
+    "sha": "183ed2d3fdf0d5d5dd818a6f9af6e07d49c299ca",
+    "number": 32,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/32",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/merge-r4",
+    "sha": "142c54b1c66f6d1782a37df00b6aee2c3d2cd445",
+    "number": 33,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/33",
+    "state": "closed",
+    "merged": true
+  },
+  {
+    "branch": "g3/squash-r4",
+    "sha": "418f4629be3344cb247b50046aaa333390b7bc52",
+    "number": 34,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/34",
+    "state": "closed",
+    "merged": true
+  },
+  {
+    "branch": "g3/rebase-r4",
+    "sha": "da444a933409163b7dcd713246669cc0c0f84ca5",
+    "number": 35,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/35",
+    "state": "closed",
+    "merged": true
+  },
+  {
+    "branch": "g3/head-mismatch-r4",
+    "sha": "5b7a97d20015984f1faaa4a8c160af7056ae2368",
+    "number": 36,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/36",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/auto-r4",
+    "sha": "1ae2d9f11b6cd2f0cf676f1d43abfeee650d8df1",
+    "number": 37,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/37",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/chatgpt-merge-r4",
+    "sha": "a42b4affbe2fb7b8c2993bc7c29550f888c2a97c",
+    "number": 38,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/38",
+    "state": "closed",
+    "merged": true
+  },
+  {
+    "branch": "g3/base-r4",
+    "sha": "c94afffdf53a79599c6e4f87310d9d4a9b3110c3",
+    "number": 39,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/39",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/base-target-r4",
+    "sha": "f430a496b0629a80727eddcd85234eaae0df2e78",
+    "number": null
+  },
+  {
+    "branch": "g3/conflict-r4",
+    "sha": "da4d2641ef6efd12ae13e88f99b9ce77695914c4",
+    "number": 40,
+    "url": "https://github.com/dirtydishes/gfj-oracle/pull/40",
+    "state": "open",
+    "merged": false
+  },
+  {
+    "branch": "g3/conflict-base-r4",
+    "sha": "cd3d88083ede05c94dc0384183b4703e043920f8",
+    "number": null
+  }
+]

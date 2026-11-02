@@ -1,0 +1,306 @@
+{
+  "data": {
+    "Issue": {
+      "kind": "OBJECT",
+      "name": "Issue",
+      "interfaces": [
+        {
+          "name": "Assignable"
+        },
+        {
+          "name": "Closable"
+        },
+        {
+          "name": "Comment"
+        },
+        {
+          "name": "Deletable"
+        },
+        {
+          "name": "Labelable"
+        },
+        {
+          "name": "Lockable"
+        },
+        {
+          "name": "Node"
+        },
+        {
+          "name": "ProjectV2Owner"
+        },
+        {
+          "name": "Reactable"
+        },
+        {
+          "name": "RepositoryNode"
+        },
+        {
+          "name": "Subscribable"
+        },
+        {
+          "name": "SubscribableThread"
+        },
+        {
+          "name": "UniformResourceLocatable"
+        },
+        {
+          "name": "Updatable"
+        },
+        {
+          "name": "UpdatableComment"
+        }
+      ],
+      "fields": [
+        {
+          "name": "blockedBy",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "IssueConnection",
+              "ofType": null
+            }
+          },
+          "args": [
+            {
+              "name": "orderBy",
+              "defaultValue": "{field: DEPENDENCY_ADDED_AT, direction: DESC}",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IssueDependencyOrder",
+                "ofType": null
+              }
+            },
+            {
+              "name": "after",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            },
+            {
+              "name": "before",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            },
+            {
+              "name": "first",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int",
+                "ofType": null
+              }
+            },
+            {
+              "name": "last",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int",
+                "ofType": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "blocking",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "IssueConnection",
+              "ofType": null
+            }
+          },
+          "args": [
+            {
+              "name": "orderBy",
+              "defaultValue": "{field: DEPENDENCY_ADDED_AT, direction: DESC}",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IssueDependencyOrder",
+                "ofType": null
+              }
+            },
+            {
+              "name": "after",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            },
+            {
+              "name": "before",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            },
+            {
+              "name": "first",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int",
+                "ofType": null
+              }
+            },
+            {
+              "name": "last",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int",
+                "ofType": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "issueType",
+          "type": {
+            "kind": "OBJECT",
+            "name": "IssueType",
+            "ofType": null
+          },
+          "args": []
+        }
+      ],
+      "enumValues": null
+    },
+    "IssueType": {
+      "kind": "OBJECT",
+      "name": "IssueType",
+      "interfaces": [
+        {
+          "name": "Node"
+        }
+      ],
+      "fields": [
+        {
+          "name": "color",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "ENUM",
+              "name": "IssueTypeColor",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "description",
+          "type": {
+            "kind": "SCALAR",
+            "name": "String",
+            "ofType": null
+          },
+          "args": []
+        },
+        {
+          "name": "id",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "ID",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "name",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          "args": []
+        }
+      ],
+      "enumValues": null
+    },
+    "IssueTypeColor": {
+      "kind": "ENUM",
+      "name": "IssueTypeColor",
+      "interfaces": null,
+      "fields": null,
+      "enumValues": [
+        {
+          "name": "GRAY"
+        },
+        {
+          "name": "BLUE"
+        },
+        {
+          "name": "GREEN"
+        },
+        {
+          "name": "YELLOW"
+        },
+        {
+          "name": "ORANGE"
+        },
+        {
+          "name": "RED"
+        },
+        {
+          "name": "PINK"
+        },
+        {
+          "name": "PURPLE"
+        }
+      ]
+    },
+    "SearchType": {
+      "kind": "ENUM",
+      "name": "SearchType",
+      "interfaces": null,
+      "fields": null,
+      "enumValues": [
+        {
+          "name": "ISSUE"
+        },
+        {
+          "name": "ISSUE_ADVANCED"
+        },
+        {
+          "name": "ISSUE_SEMANTIC"
+        },
+        {
+          "name": "ISSUE_HYBRID"
+        },
+        {
+          "name": "REPOSITORY"
+        },
+        {
+          "name": "USER"
+        },
+        {
+          "name": "DISCUSSION"
+        }
+      ]
+    }
+  }
+}
