@@ -1,0 +1,1770 @@
+{
+  "schema": "gh-forgejo-shim.compatibility-contract.v1",
+  "bead": "gh-forgejo-shim-3sl",
+  "parent_epic": "gh-forgejo-shim-d60",
+  "phase": "01",
+  "phase_title": "freeze compatibility contract",
+  "frozen_runtime": {
+    "implementation": "python",
+    "package_version": "0.1.1",
+    "source_layout": "src/gh_forgejo_shim",
+    "entrypoints": [
+      "gh-forgejo-shim",
+      "gfj",
+      "managed gh wrapper"
+    ]
+  },
+  "contract_rules": [
+    "GitHub and unsupported managed-gh commands delegate to the real gh executable.",
+    "Allowlisted non-GitHub Forgejo repositories route only the supported gh auth, api, repo, pr, and issue subsets.",
+    "Known GitHub hosts github.com and www.github.com are never treated as Forgejo, even if configured.",
+    "Routed JSON output is a GitHub-shaped subset; unsupported requested JSON fields are omitted.",
+    "Secrets must not appear in management command output or trace excerpts except that gh auth token intentionally prints the token to stdout.",
+    "Trace files are opt-in and must preserve the gh and git-recorder schemas separately."
+  ],
+  "command_matrix": [
+    {
+      "id": "management.install_shim",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "install-shim"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0,
+        "unmanaged_target_without_force": 1
+      },
+      "stdout": "installed gh shim at <path>\n",
+      "stderr": "gh-forgejo-shim: <error>\n",
+      "side_effects": [
+        "writes <bin-dir>/gh",
+        "creates parent directory",
+        "chmods wrapper executable",
+        "refuses unmanaged existing gh unless --force"
+      ],
+      "tests": [
+        "tests/test_shim.py::ShimLifecycleTests::test_install_refuses_unrelated_file_without_force",
+        "tests/test_shim.py::ShimLifecycleTests::test_install_force_overwrites_and_uninstall_removes"
+      ]
+    },
+    {
+      "id": "management.uninstall_shim",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "uninstall-shim"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0,
+        "unmanaged_target": 1
+      },
+      "stdout": "removed gh shim at <path>\n",
+      "side_effects": [
+        "removes only managed shim files",
+        "missing shim is a helper-level no-op"
+      ],
+      "tests": [
+        "tests/test_shim.py::ShimLifecycleTests::test_uninstall_refuses_unrelated_file"
+      ]
+    },
+    {
+      "id": "management.doctor",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "doctor"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "all_checks_ok": 0,
+        "any_warning": 1
+      },
+      "stdout_shape": [
+        "gh-forgejo-shim doctor",
+        "[ok|warn] real gh: <detail>",
+        "[ok|warn] fj: <detail>",
+        "[ok|warn] forgejo hosts: <detail>",
+        "[ok|warn] auth token: <detail>",
+        "[ok|warn] current repo host: <detail>",
+        "[ok|warn] shim path: <detail>",
+        "[ok|warn] macOS gui PATH: <detail>"
+      ],
+      "tests": [
+        "tests/test_doctor.py::DoctorTests"
+      ]
+    },
+    {
+      "id": "management.bootstrap",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "bootstrap"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "all_checks_ok": 0,
+        "needs_repairs": 1
+      },
+      "stdout_shape": [
+        "gh-forgejo-shim bootstrap",
+        "repo: <host>/<owner>/<repo>|unknown",
+        "config: <path>",
+        "[ok|fix] <check>: <detail>",
+        "repair commands:|setup looks ready"
+      ],
+      "side_effects": [
+        "allowlists detected non-GitHub repo host",
+        "never allowlists GitHub hosts",
+        "installs managed gh shim",
+        "prints but does not run git repair commands"
+      ],
+      "tests": [
+        "tests/test_bootstrap.py::BootstrapTests"
+      ]
+    },
+    {
+      "id": "management.gui_path_install",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "install-gui-path"
+      ],
+      "status": "supported_on_macos_only",
+      "route": "management",
+      "exit_codes": {
+        "macos_success": 0,
+        "non_macos": 1
+      },
+      "side_effects": [
+        "writes ~/Library/LaunchAgents/com.gh-forgejo-shim.user-gui-path.plist",
+        "optionally runs /bin/launchctl setenv PATH <value>"
+      ],
+      "tests": [
+        "tests/test_gui_path.py::GuiPathTests"
+      ]
+    },
+    {
+      "id": "management.gui_path_uninstall",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "uninstall-gui-path"
+      ],
+      "status": "supported_on_macos_only",
+      "route": "management",
+      "exit_codes": {
+        "macos_success": 0,
+        "non_macos": 1
+      },
+      "side_effects": [
+        "removes the LaunchAgent plist if present"
+      ],
+      "tests": [
+        "tests/test_gui_path.py::GuiPathTests::test_install_and_uninstall_gui_path_plist"
+      ]
+    },
+    {
+      "id": "management.config_add_host",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "config",
+        "add-host",
+        "HOST"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0
+      },
+      "stdout_shape": [
+        "added Forgejo host: <input-host>",
+        "<configured-hosts-or-no-hosts>"
+      ],
+      "side_effects": [
+        "normalizes host by stripping scheme/path and lowercasing",
+        "writes ~/.config/gh-forgejo-shim/config.toml",
+        "does not persist github.com or www.github.com"
+      ],
+      "tests": [
+        "tests/test_config.py::ConfigTests::test_add_and_remove_host",
+        "tests/test_config.py::ConfigTests::test_add_host_does_not_persist_github"
+      ]
+    },
+    {
+      "id": "management.config_remove_host",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "config",
+        "remove-host",
+        "HOST"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0
+      },
+      "tests": [
+        "tests/test_config.py::ConfigTests::test_add_and_remove_host"
+      ]
+    },
+    {
+      "id": "management.config_list",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "config",
+        "list"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0
+      },
+      "stdout_shape": [
+        "one host per line",
+        "no Forgejo hosts configured"
+      ],
+      "tests": [
+        "tests/test_config.py::ConfigTests::test_no_default_hosts"
+      ]
+    },
+    {
+      "id": "management.auth_login",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "auth",
+        "login",
+        "[host]"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0,
+        "error": 1
+      },
+      "stdout_shape": [
+        "logged in to <host> as <login>",
+        "saved auth in <storage>"
+      ],
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/user"
+        }
+      ],
+      "side_effects": [
+        "stores token in macOS Keychain when available, otherwise ~/.config/gh-forgejo-shim/auth.json",
+        "adds host to allowlist",
+        "does not print token"
+      ],
+      "tests": [
+        "tests/test_cli_auth.py::AuthCliTests::test_login_prompts_validates_stores_and_allowlists_host"
+      ]
+    },
+    {
+      "id": "management.auth_import",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "auth",
+        "import",
+        "[host]"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0,
+        "error": 1
+      },
+      "stdout_shape": [
+        "imported auth to <host> as <login>",
+        "source: <source>",
+        "saved auth in <storage>"
+      ],
+      "side_effects": [
+        "discovers tokens from env or common fj/tea/gitea config",
+        "intentionally excludes existing shim-owned auth during import discovery",
+        "does not print token"
+      ],
+      "tests": [
+        "tests/test_cli_auth.py::AuthCliTests::test_import_uses_env_token_without_printing_secret"
+      ]
+    },
+    {
+      "id": "management.auth_status",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "auth",
+        "status",
+        "[host]"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "all_hosts_have_stored_auth": 0,
+        "any_host_missing": 1
+      },
+      "stdout_shape": [
+        "<host>: logged in (<storage>)",
+        "<host>: token available from <source>; run gh-forgejo-shim auth import <host>",
+        "<host>: not logged in"
+      ],
+      "tests": [
+        "tests/test_cli_auth.py::AuthCliTests::test_status_reports_stored_auth_without_secret"
+      ]
+    },
+    {
+      "id": "management.auth_logout",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "auth",
+        "logout",
+        "[host]"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0
+      },
+      "stdout_shape": [
+        "logged out of <host>",
+        "no stored shim auth for <host>"
+      ],
+      "side_effects": [
+        "removes only shim-owned stored auth for the host"
+      ],
+      "tests": [
+        "tests/test_cli_auth.py::AuthCliTests::test_logout_removes_stored_shim_auth"
+      ]
+    },
+    {
+      "id": "management.trace_summarize",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "trace",
+        "summarize",
+        "TRACE_PATH"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0
+      },
+      "stdout_shape": [
+        "Trace records: <n>",
+        "Routes: <counts>|none",
+        "Known Codex probes: <counts>|none",
+        "Failures: <count>|none",
+        "Slow calls: <count>|none",
+        "Unsupported/delegated commands: <count>|none"
+      ],
+      "tests": [
+        "tests/test_trace_summary.py::TraceSummaryTests",
+        "tests/test_cli_trace.py::TraceCliTests::test_trace_summarize_prints_summary"
+      ]
+    },
+    {
+      "id": "management.trace_smoke",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "trace",
+        "smoke"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "required_probes_pass": 0,
+        "required_probe_failure": 1
+      },
+      "stdout_shape": [
+        "Codex probe smoke results:",
+        "[ok|optional-fail|fail] <name>: exit <code>, <ms> ms, stdout <bytes> B, stderr <bytes> B",
+        "Required probes passed.|Required probe failures: <n>"
+      ],
+      "tests": [
+        "tests/test_codex_smoke.py::CodexSmokeTests",
+        "tests/test_cli_trace.py::TraceCliTests::test_trace_smoke_returns_failure_for_required_probe_failure"
+      ]
+    },
+    {
+      "id": "management.trace_git_recorder_create",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "trace",
+        "git-recorder",
+        "create",
+        "TRACE_PATH"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0,
+        "error": 1
+      },
+      "stdout_shape": [
+        "created temporary git recorder at <wrapper-path>",
+        "trace file: <trace-path>",
+        "launch environment:",
+        "  export FJ_SHIM_TRACE=<trace-path>",
+        "  export PATH=<wrapper-dir-plus-path>",
+        "remove with:",
+        "  gfj trace git-recorder remove <wrapper-dir>"
+      ],
+      "tests": [
+        "tests/test_git_recorder.py::GitRecorderTests::test_create_returns_wrapper_paths_and_launch_environment",
+        "tests/test_cli_trace.py::TraceCliTests::test_git_recorder_create_prints_launch_environment"
+      ]
+    },
+    {
+      "id": "management.trace_git_recorder_remove",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "trace",
+        "git-recorder",
+        "remove",
+        "PATH"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0,
+        "unmanaged_directory": 1
+      },
+      "stdout": "removed temporary git recorder at <wrapper-dir>\n",
+      "tests": [
+        "tests/test_git_recorder.py::GitRecorderTests::test_remove_refuses_unmanaged_directory"
+      ]
+    },
+    {
+      "id": "management.version",
+      "surface": "gh-forgejo-shim|gfj",
+      "argv": [
+        "version"
+      ],
+      "status": "supported",
+      "route": "management",
+      "exit_codes": {
+        "success": 0
+      },
+      "stdout": "0.1.1\n",
+      "tests": []
+    },
+    {
+      "id": "managed_gh.version",
+      "surface": "managed gh",
+      "argv": [
+        "--version"
+      ],
+      "status": "delegated",
+      "route": "delegate",
+      "route_reason": "unsupported command",
+      "exit_codes": {
+        "real_gh_exit_code": "preserved",
+        "real_gh_missing": 127
+      },
+      "stdout": "real gh stdout is forwarded",
+      "stderr": "real gh stderr is forwarded"
+    },
+    {
+      "id": "managed_gh.auth_status",
+      "surface": "managed gh",
+      "argv": [
+        "auth",
+        "status"
+      ],
+      "status": "supported_for_forgejo_hosts",
+      "route": "forgejo_or_delegate",
+      "exit_codes": {
+        "token_present": 0,
+        "token_missing": 1
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_forgejo_auth_status_uses_shim_auth_instead_of_real_gh",
+        "tests/test_routing.py::RoutingTests::test_forgejo_auth_status_supports_json_hosts_field"
+      ]
+    },
+    {
+      "id": "managed_gh.auth_token",
+      "surface": "managed gh",
+      "argv": [
+        "auth",
+        "token"
+      ],
+      "status": "supported_for_forgejo_hosts",
+      "route": "forgejo_or_delegate",
+      "exit_codes": {
+        "token_present": 0,
+        "token_missing": 1
+      },
+      "stdout": "<token>\n",
+      "trace_note": "stdout excerpt is always suppressed",
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_forgejo_auth_token_uses_shim_auth_instead_of_real_gh",
+        "tests/test_routing.py::RoutingTests::test_run_gh_trace_suppresses_auth_token_stdout_excerpt"
+      ]
+    },
+    {
+      "id": "managed_gh.api_user",
+      "surface": "managed gh",
+      "argv": [
+        "api",
+        "user"
+      ],
+      "status": "supported_for_forgejo_hosts",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/user"
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "missing_token_or_api_error": 1
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_forgejo_api_user_probe_uses_forgejo_client"
+      ]
+    },
+    {
+      "id": "managed_gh.api_other",
+      "surface": "managed gh",
+      "argv": [
+        "api",
+        "<not user>"
+      ],
+      "status": "delegated",
+      "route": "delegate",
+      "route_reason": "unsupported command"
+    },
+    {
+      "id": "managed_gh.repo_view",
+      "surface": "managed gh",
+      "argv": [
+        "repo",
+        "view"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}"
+        }
+      ],
+      "json_fields": "supported_repo_json_fields",
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_repo_view_outputs_github_shaped_json",
+        "tests/test_routing.py::RoutingTests::test_repo_view_outputs_richer_github_json_fields"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_create",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "create|new"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "POST",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls",
+          "body": {
+            "title": "string",
+            "body": "string",
+            "base": "string",
+            "head": "string",
+            "draft": "boolean"
+          }
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_create_calls_forgejo_client",
+        "tests/test_routing.py::RoutingTests::test_create_default_output_surfaces_url_for_codex_app"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_list",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "list"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls?state={state}"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/statuses/{head_sha}",
+          "when": "statusCheckRollup requested"
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_list_outputs_json_array",
+        "tests/test_routing.py::RoutingTests::test_pr_list_outputs_codex_board_fields",
+        "tests/test_routing.py::RoutingTests::test_pr_list_accepts_merged_state"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_view",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "view"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls/{number}"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls?state=open",
+          "when": "branch/current branch lookup"
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_no_current_branch_view_returns_empty_json_success",
+        "tests/test_routing.py::RoutingTests::test_pr_view_supports_simple_template_url_selection"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_status",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "status"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "stdout_json_shape": {
+        "currentBranch": "object|null",
+        "createdBy": [],
+        "needsReview": []
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_current_branch_status_returns_github_status_envelope",
+        "tests/test_routing.py::RoutingTests::test_no_current_branch_status_returns_empty_status_success"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_checks",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "checks"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls/{number}"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/statuses/{head_sha}"
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_checks_maps_forgejo_statuses_to_github_shaped_json"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_diff",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "diff"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls/{number}.diff|.patch"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/pulls/{number}/files",
+          "when": "--name-only"
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_diff_outputs_forgejo_diff",
+        "tests/test_routing.py::RoutingTests::test_pr_diff_name_only_filters_excluded_files"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_comment",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "comment"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "POST",
+          "path": "/api/v1/repos/{owner}/{repo}/issues/{pull_number}/comments",
+          "body": {
+            "body": "string"
+          }
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_comment_posts_body_to_issue_comments"
+      ]
+    },
+    {
+      "id": "managed_gh.pr_checkout",
+      "surface": "managed gh",
+      "argv": [
+        "pr",
+        "checkout|co"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "git_commands": [
+        "git fetch origin <head-ref>",
+        "git fetch origin refs/pull/<number>/head",
+        "git checkout [--detach|-b|-B] ..."
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_checkout_fetches_and_checks_out_head_branch"
+      ]
+    },
+    {
+      "id": "managed_gh.issue_list",
+      "surface": "managed gh",
+      "argv": [
+        "issue",
+        "list|ls"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/issues?state={state}&type=issues&limit={limit}",
+          "default_limit": 30
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_issue_list_outputs_github_shaped_json"
+      ]
+    },
+    {
+      "id": "managed_gh.issue_view",
+      "surface": "managed gh",
+      "argv": [
+        "issue",
+        "view"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/issues/{number}"
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_issue_view_outputs_github_shaped_json"
+      ]
+    },
+    {
+      "id": "managed_gh.issue_create",
+      "surface": "managed gh",
+      "argv": [
+        "issue",
+        "create|new"
+      ],
+      "status": "supported_for_allowlisted_forgejo_repos",
+      "route": "forgejo_or_delegate",
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/{owner}/{repo}/labels",
+          "when": "non-numeric labels are requested"
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/repos/{owner}/{repo}/issues",
+          "body": {
+            "title": "string",
+            "body": "string",
+            "assignees": "optional string array",
+            "labels": "optional integer array",
+            "milestone": "optional integer"
+          }
+        }
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_issue_create_calls_forgejo_client"
+      ]
+    },
+    {
+      "id": "managed_gh.unsupported_or_github",
+      "surface": "managed gh",
+      "argv": [
+        "<outside supported auth/api/repo/pr/issue subset>"
+      ],
+      "status": "delegated",
+      "route": "delegate",
+      "route_reasons": [
+        "unsupported command",
+        "no repository detected",
+        "host <host> is not allowlisted"
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_delegates_non_pr_command",
+        "tests/test_routing.py::RoutingTests::test_delegates_non_allowlisted_host",
+        "tests/test_routing.py::RoutingTests::test_delegates_github_even_when_accidentally_allowlisted"
+      ]
+    }
+  ],
+  "json_fields": {
+    "pull_request": [
+      "additions",
+      "deletions",
+      "number",
+      "title",
+      "state",
+      "isDraft",
+      "url",
+      "headRefName",
+      "baseRefName",
+      "author",
+      "createdAt",
+      "updatedAt",
+      "mergeable",
+      "mergeStateStatus",
+      "reviewDecision",
+      "reviewRequests",
+      "statusCheckRollup"
+    ],
+    "check": [
+      "bucket",
+      "completedAt",
+      "conclusion",
+      "description",
+      "detailsUrl",
+      "link",
+      "name",
+      "startedAt",
+      "state",
+      "workflow"
+    ],
+    "issue": [
+      "assignees",
+      "author",
+      "body",
+      "closed",
+      "closedAt",
+      "closedByPullRequestsReferences",
+      "comments",
+      "createdAt",
+      "id",
+      "isPinned",
+      "labels",
+      "milestone",
+      "number",
+      "projectCards",
+      "projectItems",
+      "reactionGroups",
+      "state",
+      "stateReason",
+      "title",
+      "updatedAt",
+      "url"
+    ],
+    "repo": [
+      "archivedAt",
+      "assignableUsers",
+      "codeOfConduct",
+      "contactLinks",
+      "createdAt",
+      "defaultBranchRef",
+      "deleteBranchOnMerge",
+      "description",
+      "diskUsage",
+      "forkCount",
+      "fundingLinks",
+      "hasDiscussionsEnabled",
+      "hasIssuesEnabled",
+      "hasProjectsEnabled",
+      "hasWikiEnabled",
+      "homepageUrl",
+      "id",
+      "isArchived",
+      "isBlankIssuesEnabled",
+      "isEmpty",
+      "isFork",
+      "isInOrganization",
+      "isMirror",
+      "isPrivate",
+      "isSecurityPolicyEnabled",
+      "isTemplate",
+      "isUserConfigurationRepository",
+      "issueTemplates",
+      "issues",
+      "labels",
+      "languages",
+      "latestRelease",
+      "licenseInfo",
+      "mentionableUsers",
+      "mergeCommitAllowed",
+      "milestones",
+      "mirrorUrl",
+      "name",
+      "nameWithOwner",
+      "openGraphImageUrl",
+      "owner",
+      "parent",
+      "primaryLanguage",
+      "projects",
+      "projectsV2",
+      "pullRequestTemplates",
+      "pullRequests",
+      "pushedAt",
+      "rebaseMergeAllowed",
+      "repositoryTopics",
+      "securityPolicyUrl",
+      "squashMergeAllowed",
+      "sshUrl",
+      "stargazerCount",
+      "templateRepository",
+      "updatedAt",
+      "url",
+      "usesCustomOpenGraphImage",
+      "viewerCanAdminister",
+      "viewerDefaultCommitEmail",
+      "viewerDefaultMergeMethod",
+      "viewerHasStarred",
+      "viewerPermission",
+      "viewerPossibleCommitEmails",
+      "viewerSubscription",
+      "visibility",
+      "watchers"
+    ]
+  },
+  "quirks": [
+    {
+      "command": [
+        "pr",
+        "list"
+      ],
+      "accepted_but_ignored": [
+        "--author",
+        "--app",
+        "--assignee",
+        "--label",
+        "--search"
+      ],
+      "followup_bead": "gh-forgejo-shim-9r8"
+    },
+    {
+      "command": [
+        "pr",
+        "checks"
+      ],
+      "accepted_but_ignored": [
+        "--template",
+        "-t",
+        "--interval",
+        "-i",
+        "--web",
+        "-w",
+        "--watch",
+        "--fail-fast",
+        "--required"
+      ]
+    },
+    {
+      "command": [
+        "pr",
+        "diff"
+      ],
+      "accepted_but_ignored": [
+        "--color"
+      ]
+    },
+    {
+      "command": [
+        "repo",
+        "view"
+      ],
+      "accepted_but_ignored": [
+        "--branch",
+        "-b"
+      ]
+    },
+    {
+      "command": [
+        "issue",
+        "list"
+      ],
+      "accepted_but_ignored": [
+        "--app"
+      ]
+    },
+    {
+      "command": [
+        "issue",
+        "view"
+      ],
+      "accepted_but_ignored": [
+        "--comments",
+        "-c"
+      ]
+    },
+    {
+      "command": [
+        "auth",
+        "status"
+      ],
+      "accepted_but_ignored": [
+        "--active",
+        "-a"
+      ]
+    },
+    {
+      "command": [
+        "auth",
+        "token"
+      ],
+      "accepted_but_ignored": [
+        "--user",
+        "-u"
+      ]
+    }
+  ],
+  "unsupported_behavior": [
+    {
+      "case": "unsupported top-level managed gh command",
+      "behavior": "delegate to real gh",
+      "route_reason": "unsupported command"
+    },
+    {
+      "case": "supported family but unsupported subcommand, such as gh pr merge",
+      "behavior": "delegate to real gh",
+      "route_reason": "unsupported command"
+    },
+    {
+      "case": "supported routed command with unsupported flag",
+      "behavior": "return 1 with stderr gh-forgejo-shim: unsupported Forgejo ... flag: <flag>"
+    },
+    {
+      "case": "GitHub repository or GH_HOST=github.com",
+      "behavior": "delegate to real gh even if github.com appears in config",
+      "route_reason": "host github.com is not allowlisted"
+    },
+    {
+      "case": "allowlisted Forgejo host but no token for routed api/repo/pr/issue calls",
+      "behavior": "return 1 with stderr telling the user to run gh-forgejo-shim auth login/import"
+    }
+  ],
+  "golden_probes": [
+    {
+      "id": "gh_version_delegated",
+      "command": [
+        "gh",
+        "--version"
+      ],
+      "repo_context": "any",
+      "route": {
+        "kind": "delegate",
+        "reason": "unsupported command"
+      },
+      "expected": {
+        "exit_code": "real gh exit code",
+        "stdout_pattern": "^gh version [0-9]+\\\\.[0-9]+\\\\.[0-9]+",
+        "stderr": "real gh stderr"
+      },
+      "contract": "The shim must not parse or synthesize version output; it forwards the real gh output."
+    },
+    {
+      "id": "gh_auth_status_text",
+      "command": [
+        "gh",
+        "auth",
+        "status"
+      ],
+      "env": {
+        "FJ_SHIM_HOSTS": "git.example.com",
+        "FJ_SHIM_TOKEN": "<secret>",
+        "GH_HOST": "git.example.com"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "host"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": "git.example.com\n  [ok] Logged in to git.example.com using gh-forgejo-shim\n  - Active account: true\n  - Token source: gh-forgejo-shim\n",
+        "stderr": ""
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_forgejo_auth_status_uses_shim_auth_instead_of_real_gh"
+      ]
+    },
+    {
+      "id": "gh_auth_status_json_hosts",
+      "command": [
+        "gh",
+        "auth",
+        "status",
+        "--json",
+        "hosts"
+      ],
+      "env": {
+        "FJ_SHIM_HOSTS": "git.example.com",
+        "FJ_SHIM_TOKEN": "<secret>",
+        "GH_HOST": "git.example.com"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "host"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout_json": {
+          "hosts": {
+            "git.example.com": [
+              {
+                "active": true,
+                "gitProtocol": "https",
+                "host": "git.example.com",
+                "login": "",
+                "scopes": "",
+                "state": "success",
+                "tokenSource": "gh-forgejo-shim"
+              }
+            ]
+          }
+        },
+        "stderr": ""
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_forgejo_auth_status_supports_json_hosts_field"
+      ]
+    },
+    {
+      "id": "gh_api_user_jq_login",
+      "command": [
+        "gh",
+        "api",
+        "user",
+        "--jq",
+        ".login"
+      ],
+      "env": {
+        "FJ_SHIM_HOSTS": "git.example.com",
+        "FJ_SHIM_TOKEN": "<secret>",
+        "GH_HOST": "git.example.com"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "host"
+      },
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/user"
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "alice\n",
+        "stderr": ""
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_forgejo_api_user_probe_uses_forgejo_client"
+      ]
+    },
+    {
+      "id": "gh_repo_view_json_codex",
+      "command": [
+        "gh",
+        "repo",
+        "view",
+        "-R",
+        "git.example.com/owner/repo",
+        "--json",
+        "nameWithOwner,url,defaultBranchRef,sshUrl"
+      ],
+      "route": {
+        "kind": "forgejo",
+        "reason": "-R/--repo"
+      },
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo"
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout_json": {
+          "defaultBranchRef": {
+            "name": "main"
+          },
+          "nameWithOwner": "owner/repo",
+          "sshUrl": "git@git.example.com:owner/repo.git",
+          "url": "https://git.example.com/owner/repo"
+        },
+        "stderr": ""
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_repo_view_outputs_github_shaped_json"
+      ]
+    },
+    {
+      "id": "gh_pr_status_current_branch_json",
+      "command": [
+        "gh",
+        "pr",
+        "status",
+        "--json",
+        "number,title,url,headRefName"
+      ],
+      "repo_context": {
+        "host": "git.example.com",
+        "owner": "owner",
+        "repo": "repo",
+        "current_branch": "feature"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "git remote"
+      },
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo/pulls?state=open"
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout_json": {
+          "createdBy": [],
+          "currentBranch": {
+            "headRefName": "feature",
+            "number": 12,
+            "title": "Ship it",
+            "url": "https://git.example.com/owner/repo/pulls/12"
+          },
+          "needsReview": []
+        },
+        "stderr": ""
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_current_branch_status_returns_github_status_envelope"
+      ]
+    },
+    {
+      "id": "gh_pr_list_codex_board_json",
+      "command": [
+        "gh",
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "10",
+        "--json",
+        "additions,baseRefName,createdAt,deletions,headRefName,isDraft,number,state,title,updatedAt,url,mergeStateStatus,mergeable,statusCheckRollup",
+        "--author",
+        "@me"
+      ],
+      "repo_context": {
+        "host": "git.example.com",
+        "owner": "owner",
+        "repo": "repo"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "git remote or -R/--repo"
+      },
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo/pulls?state=open"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo/statuses/abc123"
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout_json": [
+          {
+            "additions": 0,
+            "baseRefName": "main",
+            "createdAt": "2026-05-31T00:00:00Z",
+            "deletions": 0,
+            "headRefName": "feature",
+            "isDraft": false,
+            "mergeStateStatus": "UNKNOWN",
+            "mergeable": "UNKNOWN",
+            "number": 8,
+            "state": "OPEN",
+            "statusCheckRollup": [
+              {
+                "__typename": "StatusContext",
+                "completedAt": "2026-06-01T00:02:00Z",
+                "conclusion": "success",
+                "context": "ci/test",
+                "description": "tests passed",
+                "detailsUrl": "https://git.example.com/owner/repo/actions/runs/1",
+                "name": "ci/test",
+                "startedAt": "2026-06-01T00:00:00Z",
+                "state": "SUCCESS",
+                "targetUrl": "https://git.example.com/owner/repo/actions/runs/1",
+                "workflowName": "ci/test"
+              }
+            ],
+            "title": "Make Codex happy",
+            "updatedAt": "2026-05-31T01:00:00Z",
+            "url": "https://git.example.com/owner/repo/pulls/8"
+          }
+        ],
+        "stderr": ""
+      },
+      "quirks": [
+        "--author @me is accepted but ignored"
+      ],
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_list_outputs_codex_board_fields"
+      ]
+    },
+    {
+      "id": "gh_pr_view_json",
+      "command": [
+        "gh",
+        "pr",
+        "view",
+        "12",
+        "--json",
+        "number,title,url,headRefName"
+      ],
+      "repo_context": {
+        "host": "git.example.com",
+        "owner": "owner",
+        "repo": "repo"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "-R/--repo or git remote"
+      },
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo/pulls/12"
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout_json": {
+          "headRefName": "feature",
+          "number": 12,
+          "title": "Ship it",
+          "url": "https://git.example.com/owner/repo/pulls/12"
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "id": "gh_pr_checks_json",
+      "command": [
+        "gh",
+        "pr",
+        "checks",
+        "8",
+        "--json",
+        "bucket,description,link,name,workflow"
+      ],
+      "repo_context": {
+        "host": "git.example.com",
+        "owner": "owner",
+        "repo": "repo"
+      },
+      "route": {
+        "kind": "forgejo",
+        "reason": "-R/--repo or git remote"
+      },
+      "api_requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo/pulls/8"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/repo/statuses/abc123"
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout_json": [
+          {
+            "bucket": "pass",
+            "description": "tests passed",
+            "link": "https://git.example.com/owner/repo/actions/runs/1",
+            "name": "ci/test",
+            "workflow": "ci/test"
+          },
+          {
+            "bucket": "pending",
+            "description": "lint is running",
+            "link": null,
+            "name": "lint",
+            "workflow": "lint"
+          }
+        ],
+        "stderr": ""
+      },
+      "tests": [
+        "tests/test_routing.py::RoutingTests::test_pr_checks_maps_forgejo_statuses_to_github_shaped_json"
+      ]
+    },
+    {
+      "id": "git_current_branch_trace",
+      "command": [
+        "git",
+        "branch",
+        "--show-current"
+      ],
+      "recorder": "trace git-recorder",
+      "expected_record_shape": {
+        "schema": "gh-forgejo-shim.git-recorder.v1",
+        "kind": "git",
+        "argv": [
+          "branch",
+          "--show-current"
+        ],
+        "command_argv": [
+          "git",
+          "branch",
+          "--show-current"
+        ],
+        "stdout": {
+          "bytes": "integer",
+          "excerpt": "feature\n when FJ_SHIM_TRACE_BODY=1"
+        },
+        "stderr": {
+          "bytes": "integer"
+        }
+      },
+      "tests": [
+        "tests/test_git_recorder.py::GitRecorderTests::test_wrapper_records_invocation_and_preserves_real_git_result"
+      ]
+    },
+    {
+      "id": "git_default_branch_trace",
+      "command": [
+        "git",
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD"
+      ],
+      "recorder": "trace git-recorder",
+      "expected_probe_classification": "git default branch",
+      "tests": [
+        "tests/test_trace_summary.py::TraceSummaryTests::test_classifies_known_codex_gh_and_git_probes"
+      ]
+    },
+    {
+      "id": "git_upstream_trace",
+      "command": [
+        "git",
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{u}"
+      ],
+      "recorder": "trace git-recorder",
+      "expected_probe_classification": "git upstream",
+      "tests": [
+        "tests/test_codex_smoke.py::CodexSmokeTests::test_probe_sequence_includes_codex_gh_and_git_checks"
+      ]
+    }
+  ],
+  "trace_contract": {
+    "enablement": {
+      "env": "FJ_SHIM_TRACE",
+      "disabled_values": [
+        "",
+        "0",
+        "false",
+        "no",
+        "off"
+      ],
+      "body_env": "FJ_SHIM_TRACE_BODY",
+      "body_enabled_values": [
+        "1",
+        "true",
+        "yes",
+        "on",
+        "any other non-empty non-false value for shim gh traces"
+      ]
+    },
+    "gh_record": {
+      "required_fields": [
+        "timestamp",
+        "cwd",
+        "argv",
+        "route",
+        "host",
+        "repo",
+        "duration_ms",
+        "exit_code",
+        "stdout",
+        "stderr"
+      ],
+      "optional_fields": [
+        "kind"
+      ],
+      "stdout_stderr_shape": {
+        "always": [
+          "bytes"
+        ],
+        "with_body": [
+          "excerpt",
+          "truncated"
+        ]
+      },
+      "redaction_replacement": "<redacted>",
+      "auth_token_stdout_excerpt": "[redacted: gh auth token output]",
+      "tests": [
+        "tests/test_trace.py::TraceTests",
+        "tests/test_routing.py::RoutingTests::test_run_gh_trace_records_forgejo_invocation",
+        "tests/test_routing.py::RoutingTests::test_run_gh_trace_suppresses_auth_token_stdout_excerpt"
+      ]
+    },
+    "git_recorder_record": {
+      "schema": "gh-forgejo-shim.git-recorder.v1",
+      "required_fields": [
+        "schema",
+        "kind",
+        "timestamp",
+        "cwd",
+        "argv",
+        "command_argv",
+        "duration",
+        "duration_ms",
+        "exit_code",
+        "stdout_bytes",
+        "stderr_bytes",
+        "stdout",
+        "stderr"
+      ],
+      "body_excerpt_condition": "FJ_SHIM_TRACE_BODY == \"1\" exactly",
+      "body_excerpt_fields": [
+        "stdout_excerpt",
+        "stderr_excerpt",
+        "stdout.excerpt",
+        "stderr.excerpt"
+      ],
+      "redaction_replacement": "[REDACTED]",
+      "tests": [
+        "tests/test_git_recorder.py::GitRecorderTests"
+      ]
+    }
+  },
+  "codex_smoke_probes": {
+    "required": [
+      [
+        "gh",
+        "--version"
+      ],
+      [
+        "gh",
+        "auth",
+        "status"
+      ],
+      [
+        "gh",
+        "api",
+        "user"
+      ],
+      [
+        "git",
+        "rev-parse",
+        "--show-toplevel"
+      ],
+      [
+        "git",
+        "remote",
+        "-v"
+      ]
+    ],
+    "optional": [
+      [
+        "gh",
+        "pr",
+        "status",
+        "--json",
+        "number,title,url,headRefName,statusCheckRollup"
+      ],
+      [
+        "gh",
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "10",
+        "--json",
+        "additions,baseRefName,createdAt,deletions,headRefName,isDraft,number,state,title,updatedAt,url,mergeStateStatus,mergeable,statusCheckRollup"
+      ],
+      [
+        "git",
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD"
+      ],
+      [
+        "git",
+        "branch",
+        "--show-current"
+      ],
+      [
+        "git",
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{u}"
+      ],
+      [
+        "git",
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "refs/heads",
+        "refs/remotes"
+      ]
+    ]
+  },
+  "performance": {
+    "baseline": {
+      "measured_at": "2026-06-20",
+      "host": "local macOS workstation",
+      "python": "Python 3.14.5",
+      "real_gh": {
+        "path": "/opt/homebrew/bin/gh",
+        "version": "gh version 2.92.0 (2026-04-28)"
+      },
+      "sample_count": 10,
+      "measurements_ms": [
+        {
+          "id": "real_gh_version",
+          "command": [
+            "/opt/homebrew/bin/gh",
+            "--version"
+          ],
+          "return_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 62.9,
+          "mean": 110.1,
+          "median": 70.1,
+          "max": 445.6
+        },
+        {
+          "id": "python_shim_delegate_version",
+          "command": [
+            "python3",
+            "-m",
+            "gh_forgejo_shim",
+            "gh",
+            "--version"
+          ],
+          "return_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 1442.0,
+          "mean": 1957.4,
+          "median": 1765.7,
+          "max": 3094.3
+        },
+        {
+          "id": "python_shim_forgejo_auth_status",
+          "command": [
+            "python3",
+            "-m",
+            "gh_forgejo_shim",
+            "gh",
+            "auth",
+            "status"
+          ],
+          "return_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 397.7,
+          "mean": 506.3,
+          "median": 458.1,
+          "max": 958.3
+        }
+      ]
+    },
+    "rust_budgets": [
+      {
+        "id": "github_delegation",
+        "scope": "GitHub or unsupported managed-gh command that delegates to real gh",
+        "budget": "median overhead over real gh <= 50 ms and p95 overhead <= 100 ms; no Python interpreter startup"
+      },
+      {
+        "id": "forgejo_no_network_routed",
+        "scope": "Routed commands that do not need HTTP, such as gh auth status with env token",
+        "budget": "median <= 100 ms and p95 <= 250 ms"
+      },
+      {
+        "id": "forgejo_network_routed",
+        "scope": "Routed commands with Forgejo API calls",
+        "budget": "local shim overhead <= 50 ms over HTTP latency for Codex-critical read-only probes"
+      },
+      {
+        "id": "trace_overhead",
+        "scope": "Trace enabled with body disabled",
+        "budget": "median overhead <= 25 ms for routed no-network probes"
+      }
+    ]
+  }
+}
