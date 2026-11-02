@@ -161,7 +161,9 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     (`gh/api/http_client.go:284-290`), so it finds the portless key. gh's git credential helper
     looks up the host git passes, port included (`gh/pkg/cmd/auth/gitcredential/helper.go:119`),
     so a fetch from `https://forge.test:3443/…` finds `forge.test:3443`.
-    - The `host:port` entry gets the real token, which git then sends only to that port.
+    - The `host:port` entry gets the real token, which git then sends only to that port. In an
+      `auth status` call it gets the per-call token instead (§5). That call fetches nothing
+      with git, so it needs no real token.
     - The portless entry gets a random token instead, 32 bytes from the OS RNG as hex, made for
       this call. The gateway accepts it for the host and authenticates upstream with the real
       token (§5).
@@ -378,14 +380,15 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   looks up, which is the portless key. Any other credential for that host gets 401 before any
   upstream contact: a GitHub token, another forge's token, the placeholder, a `basic` scheme, or
   none. GraphQL returns 401 too, not 200 with an error body. For a default-port entry, that is the
-  real token, which the gateway forwards upstream. For an entry with a port, gh presents §3's
-  random token on ordinary calls. But `gh auth status --hostname forge.test:3443` reads the real
-  token from the `host:port` key and sends it itself (`gh/pkg/cmd/auth/status/status.go:500`,
-  `gh/pkg/cmd/auth/shared/oauth_scopes.go:39`), and gh's transport keeps an Authorization header
-  the caller set (`gh/api/http_client.go:233`). So the gateway accepts either token for that
-  host, and always sends the real one upstream. That needs one more L1 builder method, say
-  `.upstream_token(real)`, which makes `real` acceptable too. It's requested from the gateway
-  thread for L3.
+  real token, which the gateway forwards upstream. For an entry with a port, it is §3's random
+  per-call token: `Host::new(..).answering_to(hostname)?.expecting(per_call).upstream_token(real)`
+  (gateway PR #66). The gateway accepts only the per-call token, and Forgejo receives only the
+  real one. The real token itself, sent by gh, gets 401. One gh command sends a token it read
+  itself: `gh auth status --hostname forge.test:3443` reads the `host:port` key and sets the
+  Authorization header (`gh/pkg/cmd/auth/status/status.go:500`,
+  `gh/pkg/cmd/auth/shared/oauth_scopes.go:39`), and gh's transport keeps a header the caller set
+  (`gh/api/http_client.go:232-233`). So for an `auth status` call, both keys of a ported served
+  host hold the per-call token (§3).
 - For an allowlist entry with a port, `.answering_to(<portless hostname>)`, unless another entry
   in *S* shares that hostname (§3). gh drops the port from
   a remote URL, so a launched gh usually sends `Host: forge.test`. It keeps the port when the user
