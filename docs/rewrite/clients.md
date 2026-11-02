@@ -3,8 +3,9 @@
 Two sources. The first is a static scan of an installed ChatGPT.app (Opus). The second is a web and
 source survey of other tools (an Opus research subagent, which cites primary sources). Static evidence
 says what a client *can* send. A live capture (rewrite plan, phase A1) says what it actually sends, and
-in what order. The live captures below were taken with
-[`scripts/capture/gh-capture`](../../scripts/capture/gh-capture) on a separate test Mac. The raw captures aren't in this repo yet. They arrive, redacted, with bead A1 (`cwe.1`).
+in what order. The live captures below were taken with gh-capture, a logging gh wrapper, on a
+separate test Mac. The wrapper and the raw captures aren't in this repo yet. They arrive, redacted,
+with bead A1 (`cwe.1`).
 
 ## ChatGPT.app 26.1016.62342 (build 21477): static scan
 

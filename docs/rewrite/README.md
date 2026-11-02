@@ -11,5 +11,5 @@ it, the plan review wins.
 | [`gateway-spike.md`](gateway-spike.md) | 2026-10-30 | The spike that ran real gh against a GitHub Enterprise-shaped host |
 | [`plan-review-2026-11-01.md`](plan-review-2026-11-01.md) | 2026-11-01 | Option B (real gh plus an in-process gateway), the adversarial review of the plan, the amended order of work, and Kell's decisions D1 to D6 |
 
-The client capture tool is [`scripts/capture/gh-capture`](../../scripts/capture/gh-capture). The raw
-captures that `clients.md` describes arrive, redacted, with bead A1 (`cwe.1`).
+The client captures that `clients.md` describes were taken with a logging gh wrapper, gh-capture.
+The wrapper and the raw captures, redacted, arrive with bead A1 (`cwe.1`).
