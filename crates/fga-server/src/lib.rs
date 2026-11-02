@@ -114,26 +114,49 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
 }
 
 /// Whether every authority the request names (its target's and each `Host`) is the public URL's
-/// host and port, and it names at least one. A missing port is the public URL's default port.
+/// host and port, and it names at least one.
 fn addressed_to(public: &Url, req: &HttpRequest) -> bool {
-    let (Some(host), Some(port)) = (public.host_str(), public.port_or_known_default()) else {
+    let (Some(host), Some(port)) = (public.host(), public.port_or_known_default()) else {
         return false;
     };
+    // A missing port is the default for the scheme the client used, not the configured port.
+    let default = match req.uri().scheme_str().unwrap_or(public.scheme()) {
+        "http" => 80,
+        "https" => 443,
+        _ => return false,
+    };
+    let host = host.to_owned();
     let target = req.uri().authority().map(|a| a.as_str().as_bytes());
     let headers = req.headers().get_all(HOST).iter().map(|v| v.as_bytes());
     let mut named = false;
     for authority in target.into_iter().chain(headers) {
         named = true;
-        let Ok(authority) = Authority::try_from(authority) else {
-            return false;
-        };
-        if !authority.host().eq_ignore_ascii_case(host)
-            || authority.port_u16().unwrap_or(port) != port
-        {
+        if !names(authority, &host, port, default) {
             return false;
         }
     }
     named
+}
+
+/// Hosts compare as parsed values, so `[::1]` names `[0:0:0:0:0:0:0:1]` and case doesn't matter.
+/// `Host` never carries userinfo (RFC 9110 §7.2), and an explicit port must be a real one.
+fn names(authority: &[u8], host: &url::Host, port: u16, default: u16) -> bool {
+    let Ok(authority) = Authority::try_from(authority) else {
+        return false;
+    };
+    let Some(rest) = authority.as_str().strip_prefix(authority.host()) else {
+        return false;
+    };
+    let explicit = match rest.strip_prefix(':') {
+        None if rest.is_empty() => default,
+        Some("") => default,
+        Some(digits) if digits.bytes().all(|b| b.is_ascii_digit()) => match digits.parse() {
+            Ok(explicit) => explicit,
+            Err(_) => return false,
+        },
+        _ => return false,
+    };
+    explicit == port && url::Host::parse(authority.host()).is_ok_and(|parsed| parsed == *host)
 }
 
 async fn graphql_request(

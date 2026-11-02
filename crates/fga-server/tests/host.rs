@@ -10,9 +10,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// Start a fake Forgejo that records every Authorization it receives, and a gateway for
-/// `https://forge.test` in front of it.
-async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+/// Start a fake Forgejo that records every Authorization it receives, and a gateway whose public
+/// URL is `public` in front of it.
+async fn gateway(public: &str) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = seen.clone();
     let upstream = Router::new()
@@ -37,7 +37,7 @@ async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
     let state = AppState::new(
         Forgejo::new(upstream_url.parse().unwrap()).unwrap(),
-        "https://forge.test".parse().unwrap(),
+        public.parse().unwrap(),
         "3.19.0".into(),
         WipPrefixes::default(),
     );
@@ -63,7 +63,7 @@ async fn send(addr: SocketAddr, head: &str) -> u16 {
 
 #[tokio::test]
 async fn other_hosts_tokens_never_reach_forgejo() {
-    let (addr, seen) = gateway().await;
+    let (addr, seen) = gateway("https://forge.test").await;
     for head in [
         // `gh api https://api.github.com/user` and gh's github.com GraphQL.
         "GET /user HTTP/1.1\r\nHost: api.github.com\r\nAuthorization: token github-token",
@@ -88,7 +88,7 @@ async fn other_hosts_tokens_never_reach_forgejo() {
 
 #[tokio::test]
 async fn the_public_host_still_reaches_forgejo() {
-    let (addr, seen) = gateway().await;
+    let (addr, seen) = gateway("https://forge.test").await;
     for (head, token) in [
         ("GET /api/v3/user HTTP/1.1\r\nHost: forge.test", "token one"),
         (
@@ -107,4 +107,68 @@ async fn the_public_host_still_reaches_forgejo() {
         *seen.lock().unwrap(),
         ["token one", "token two", "token three"]
     );
+}
+
+/// A missing port is the scheme's default, not the configured port; an explicit port must be a
+/// real one; and equivalent IP spellings are the same host (parallax r1#1-#3).
+#[tokio::test]
+async fn ports_and_addresses_compare_as_values() {
+    for (public, head, expected) in [
+        (
+            "https://forge.test:8443",
+            "GET /api/v3/user HTTP/1.1\r\nHost: forge.test",
+            421,
+        ),
+        (
+            "https://forge.test:8443",
+            "GET https://forge.test/api/v3/user HTTP/1.1\r\nHost: forge.test:8443",
+            421,
+        ),
+        (
+            "https://forge.test:8443",
+            "GET /api/v3/user HTTP/1.1\r\nHost: forge.test:8443",
+            200,
+        ),
+        (
+            "https://forge.test",
+            "GET /api/v3/user HTTP/1.1\r\nHost: forge.test:99999",
+            421,
+        ),
+        (
+            "https://forge.test",
+            "GET /api/v3/user HTTP/1.1\r\nHost: forge.test:abc",
+            421,
+        ),
+        (
+            "https://forge.test",
+            "GET /api/v3/user HTTP/1.1\r\nHost: user@forge.test",
+            421,
+        ),
+        (
+            "https://forge.test",
+            "GET /api/v3/user HTTP/1.1\r\nHost: forge.test.",
+            421,
+        ),
+        (
+            "https://[0:0:0:0:0:0:0:1]",
+            "GET /api/v3/user HTTP/1.1\r\nHost: [::1]",
+            200,
+        ),
+        (
+            "https://[::1]",
+            "GET /api/v3/user HTTP/1.1\r\nHost: [0:0:0:0:0:0:0:1]:443",
+            200,
+        ),
+        (
+            "https://[::1]",
+            "GET /api/v3/user HTTP/1.1\r\nHost: [::2]",
+            421,
+        ),
+    ] {
+        let (addr, seen) = gateway(public).await;
+        let status = send(addr, &format!("{head}\r\nAuthorization: token t")).await;
+        assert_eq!(status, expected, "{public} {head:?}");
+        let reached = seen.lock().unwrap().len();
+        assert_eq!(reached, usize::from(expected == 200), "{public} {head:?}");
+    }
 }
