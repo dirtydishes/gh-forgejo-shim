@@ -299,25 +299,59 @@ class OracleTests(unittest.TestCase):
         self.assertNotIn('sekret-token', str(raised.exception))
         # The original HTTPError, which holds the unredacted message, never reaches a traceback.
         self.assertTrue(raised.exception.__suppress_context__)
+        # A malformed status line quoting the token is redacted too.
+        bad = twin_seed.http.client.BadStatusLine('HTTP/1.1 sekret-token')
+        with patch.object(twin_seed.OPENER, 'open', side_effect=bad):
+            with self.assertRaises(twin_seed.TwinError) as raised:
+                twin.api('GET', 'repos/' + twin_seed.REPO)
+        self.assertNotIn('sekret-token', str(raised.exception))
+        self.assertTrue(raised.exception.__suppress_context__)
 
-    def test_twin_seed_opens_a_pr_only_on_its_own_branch(self):
+    def test_twin_seed_opens_a_pr_only_on_a_branch_holding_the_plan(self):
+        """An existing branch is the plan's only if its tree is the plan's commits on its merge-base:
+        the plan's messages on other contents are not enough."""
         item = next(i for i in twin_seed.PLAN if i['number'] == 6)
-        twin = twin_seed.Twin('https://git.dirtydishes.dev', 'disposable')
-        def head(message):
-            return patch.object(twin, 'api', return_value={'commit': {'message': message + '\n'}})
-        with head(twin_seed.message(item, len(item['commits']))):
-            self.assertTrue(twin_seed.owned(twin, item))
-        with head('someone else\'s work'):
-            self.assertFalse(twin_seed.owned(twin, item))
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            twin = twin_seed.Twin('http://127.0.0.1:9', 'disposable')
+            run = lambda *a, cwd: twin.git(*a, cwd=cwd)
+            run('init', '-q', '--bare', '-b', 'main', str(temp / 'origin.git'), cwd=temp)
+            run('clone', '-q', str(temp / 'origin.git'), str(temp / 'seed'), cwd=temp)
+            seed = temp / 'seed'
+            for key, value in (('user.name', 't'), ('user.email', 't@example.invalid')):
+                run('config', key, value, cwd=seed)
+            (seed / 'README.md').write_text('main\n')
+            run('add', 'README.md', cwd=seed); run('commit', '-q', '-m', 'main', cwd=seed)
+            run('push', '-q', 'origin', 'main', cwd=seed)
+            # The plan's branch, then main moving on: still the plan's.
+            twin_seed.push_branch(twin, seed, item)
+            run('switch', '-q', 'main', cwd=seed)
+            (seed / 'later.txt').write_text('later\n')
+            run('add', 'later.txt', cwd=seed); run('commit', '-q', '-m', 'later', cwd=seed)
+            run('push', '-q', 'origin', 'main', cwd=seed)
+            run('fetch', '-q', 'origin', cwd=seed)
+            self.assertTrue(twin_seed.owned(twin, seed, item))
+            # The plan's message on other contents.
+            run('switch', '-q', item['branch'], cwd=seed)
+            (seed / 'notes' / 'merged.txt').write_text('something else\n')
+            run('commit', '-q', '-a', '--amend', '--no-edit', cwd=seed)
+            run('push', '-q', '-f', 'origin', item['branch'], cwd=seed)
+            self.assertFalse(twin_seed.owned(twin, seed, item))
 
     def test_twin_seed_resumes_only_onto_its_own_plan(self):
-        planned = {item['number']: (item['title'], item.get('branch')) for item in twin_seed.PLAN}
+        repo = twin_seed.REPO
+        planned = {item['number']: (item['title'], item['branch'], repo, 'main') if item['kind'] == 'pr'
+                   else (item['title'], None, None, None) for item in twin_seed.PLAN}
         self.assertEqual(sorted(planned), list(range(1, 16)))
-        self.assertEqual(planned[4], ('WIP: scenario: draft', 's/draft'))
+        self.assertEqual(planned[4], ('WIP: scenario: draft', 's/draft', repo, 'main'))
         twin_seed.check_resumable({})
         twin_seed.check_resumable({n: planned[n] for n in (1, 2, 3)})
-        for found in ({1: ('someone else', 's/pass')}, {1: (planned[1][0], 'other-branch')},
-                      {16: ('beyond the plan', None)}, {1: planned[1], 3: planned[3]}):
+        title = planned[6][0]
+        for found in ({1: ('someone else', 's/pass', repo, 'main')}, {1: (planned[1][0], 'other-branch', repo, 'main')},
+                      # The plan's title and branch, but from a fork, or into another base.
+                      {n: planned[n] for n in range(1, 6)} | {6: (title, 's/merged', 'outsider/fork', 'main')},
+                      {n: planned[n] for n in range(1, 6)} | {6: (title, 's/merged', repo, 'other-base')},
+                      {16: ('beyond the plan', None, None, None)}, {1: planned[1], 3: planned[3]}):
             with self.assertRaises(SystemExit, msg=str(found)): twin_seed.check_resumable(found)
 
     def test_twin_seed_never_follows_a_redirect_with_its_token(self):

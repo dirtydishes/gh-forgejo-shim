@@ -22,6 +22,7 @@ The token never reaches argv or error output: git gets it through GIT_CONFIG_* v
 user's own git config is ignored, so no insteadOf rule can reroute the push over SSH.
 """
 import base64
+import http.client
 import json
 import os
 from pathlib import Path
@@ -147,8 +148,13 @@ class Twin:
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as error:
             # A reply, or a redirect target, can echo what it received; nothing of it may carry the token.
-            detail = error.read()[:300].decode(errors='replace')
+            # Closed here, so no unclosed-response warning prints its message either.
+            with error:
+                detail = error.read()[:300].decode(errors='replace')
             raise TwinError(error.code, self.redact(f'HTTP {error.code} {error.msg} for {method} {route}: {detail}')) from None
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
+            # A malformed status line or a broken connection can quote the reply too.
+            raise TwinError(None, self.redact(f'{type(error).__name__} for {method} {route}: {error}')) from None
 
     def exists(self, route):
         try:
@@ -184,14 +190,20 @@ def existing(twin):
         while True:
             query = f'state=all&limit=50&page={page}' + ('&type=issues' if kind == 'issues' else '')
             batch = twin.api('GET', f'repos/{REPO}/{kind}?{query}')
-            for item in batch: found[item['number']] = (item['title'], (item.get('head') or {}).get('ref'))
+            for item in batch:
+                head, base = item.get('head') or {}, item.get('base') or {}
+                found[item['number']] = (item['title'], head.get('ref'), (head.get('repo') or {}).get('full_name'),
+                                         base.get('ref'))
             if len(batch) < 50: break
             page += 1
     return found
 
 
 def check_resumable(found):
-    planned = {item['number']: (item['title'], item.get('branch')) for item in PLAN}
+    """An existing PR must match the plan by title, head branch, head repository and base: a PR of the
+    same title and branch from a fork, or into another base, is not the plan's."""
+    planned = {item['number']: (item['title'], item['branch'], REPO, 'main') if item['kind'] == 'pr'
+               else (item['title'], None, None, None) for item in PLAN}
     for number, seen in found.items():
         if planned.get(number) != seen:
             raise SystemExit(f'#{number} {seen!r} is not in the plan; refusing to seed on top of it')
@@ -216,12 +228,18 @@ def push(twin, checkout, item):
     twin.git('push', '-q', 'origin', f'refs/heads/{item["branch"]}:refs/heads/{item["branch"]}', cwd=checkout)
 
 
-def owned(twin, item):
-    """Whether an existing branch is this plan's: its head is one of the commits the plan pushes to
-    it. A branch of the same name with anything else stays untouched, and the run stops."""
-    head = twin.api('GET', f'repos/{REPO}/branches/{item["branch"]}')['commit']['message'].strip()
-    total = len(item['commits']) + len(item['then'][1] if item.get('then') else [])
-    return head in {message(item, n) for n in range(len(item['commits']), total + 1)}
+def owned(twin, checkout, item):
+    """Whether an existing branch, before its PR opens, holds exactly the plan's changes: the plan's
+    commits, rebuilt on the branch's own merge-base with main, give the branch's tree. Comparing
+    trees, not messages, catches a commit amended under the plan's message; using the merge-base
+    keeps a resume working after main has moved. Anything else stays untouched, and the run stops."""
+    twin.git('fetch', '-q', 'origin', f'refs/heads/{item["branch"]}', cwd=checkout)
+    remote = twin.git('rev-parse', 'FETCH_HEAD^{tree}', cwd=checkout)
+    base = twin.git('merge-base', 'origin/main', 'FETCH_HEAD', cwd=checkout)
+    twin.git('switch', '-q', '-C', item['branch'], base, cwd=checkout)
+    for i, changes in enumerate(item['commits']):
+        commit(twin, checkout, changes, message(item, i + 1))
+    return twin.git('rev-parse', 'HEAD^{tree}', cwd=checkout) == remote
 
 
 def push_branch(twin, checkout, item):
@@ -291,7 +309,7 @@ def seed(twin, checkout):
             else:
                 if not twin.exists(f'repos/{REPO}/branches/{item["branch"]}'):
                     push_branch(twin, checkout, item)
-                elif not owned(twin, item):
+                elif not owned(twin, checkout, item):
                     raise SystemExit(f'branch {item["branch"]} exists with commits outside the plan; refusing to open #{number} on it')
                 created = twin.api('POST', f'repos/{REPO}/pulls', dict(base='main', head=item['branch'],
                                    title=item['title'], body=item['body']))
@@ -335,13 +353,17 @@ def main(argv):
         raise SystemExit(__doc__)
     token = os.environ.get('TWIN_TOKEN') or sys.exit('set TWIN_TOKEN')
     twin = Twin(base, token)
-    with tempfile.TemporaryDirectory() as temp:
-        checkout = Path(temp)
-        twin.git('clone', '-q', f'{base}/{REPO}.git', str(checkout), cwd=temp)
-        twin.git('config', 'user.name', 'dirtydishes', cwd=checkout)
-        twin.git('config', 'user.email', 'dirtydishes@users.noreply.invalid', cwd=checkout)
-        seed(twin, checkout)
-    print(json.dumps({n: title for n, (title, _) in existing(twin).items()}, indent=2, sort_keys=True))
+    try:
+        with tempfile.TemporaryDirectory() as temp:
+            checkout = Path(temp)
+            twin.git('clone', '-q', f'{base}/{REPO}.git', str(checkout), cwd=temp)
+            twin.git('config', 'user.name', 'dirtydishes', cwd=checkout)
+            twin.git('config', 'user.email', 'dirtydishes@users.noreply.invalid', cwd=checkout)
+            seed(twin, checkout)
+        print(json.dumps({n: seen[0] for n, seen in existing(twin).items()}, indent=2, sort_keys=True))
+    except Exception as error:
+        # The last line of defence: whatever escaped, its message is redacted and its traceback dropped.
+        raise SystemExit(twin.redact(f'{type(error).__name__}: {error}')) from None
 
 
 if __name__ == '__main__':
