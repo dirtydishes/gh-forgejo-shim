@@ -257,7 +257,7 @@ impl Session {
 
     /// How many items Forgejo returns per page when asked for [`PAGE_SIZE`]: it clamps every page to
     /// its `MAX_RESPONSE_ITEMS` (`services/convert/utils.go:15-20`), which may be lower.
-    /// An upstream without the settings endpoint keeps Forgejo's default of 50.
+    /// An upstream that hides the settings endpoint keeps Forgejo's default of 50.
     pub(crate) async fn page_size(&self) -> Result<usize, Error> {
         #[derive(serde::Deserialize)]
         struct ApiSettings {
@@ -271,7 +271,9 @@ impl Session {
         }
         let size = match self.get::<ApiSettings>(&["settings", "api"], &[]).await {
             Ok(settings) => settings.max_response_items.clamp(1, PAGE_SIZE),
-            Err(Error::NotFound) => PAGE_SIZE,
+            // A forge or proxy that hides the settings keeps the default; a failure that may pass
+            // (a timeout, a 5xx) still fails the request and isn't cached.
+            Err(Error::NotFound | Error::Forbidden) => PAGE_SIZE,
             Err(e) => return Err(e),
         };
         *self.forgejo.page_size.lock().expect("page size lock") = Some((size, Instant::now()));
@@ -292,11 +294,7 @@ impl Session {
             let count = batch.len();
             items.extend(batch);
             // Forgejo's links are authoritative; endpoints that send none end on a short page.
-            let more = match next {
-                Some(next) => next,
-                None => count >= self.page_size().await?,
-            };
-            if !more {
+            if !next.unwrap_or(count >= PAGE_SIZE) {
                 return Ok(items);
             }
         }
