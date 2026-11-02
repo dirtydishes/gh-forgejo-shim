@@ -200,7 +200,6 @@ fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C4: fails until gh-forgejo-shim-jko.20 is fixed"]
 fn audit_cred_failed_import_preserves_previous_token() -> TestResult {
     let fixture = Fixture::new()?;
     auth::write_stored_token(
