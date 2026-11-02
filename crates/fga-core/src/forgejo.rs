@@ -593,6 +593,42 @@ mod tests {
         upstream.join().unwrap();
     }
 
+    /// A reply that declares more than the cap fails on its headers, without waiting for a body.
+    #[tokio::test]
+    async fn a_declared_oversize_reply_fails_before_its_body() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _ = socket.read(&mut [0; 4096]).unwrap();
+            let declared = MAX_RESPONSE_BYTES + 1;
+            let _ = socket.write_all(
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\n\r\n").as_bytes(),
+            );
+            // Hold the body back; the client should give up long before this.
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _ = socket.read(&mut [0; 1]);
+        });
+        let session = Session {
+            forgejo: Forgejo::new(base.parse().unwrap()).unwrap(),
+            authorization: "token disposable".into(),
+            viewer: serde_json::from_value(serde_json::json!({"id":1,"login":"t","avatar_url":""}))
+                .unwrap(),
+            memo: Memo::default(),
+            deadline: tokio::time::Instant::now() + Duration::from_secs(2),
+            budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
+        };
+        let result = session.text(&["big.diff"], &[]).await;
+        assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
+        drop(session);
+        // Join off the runtime, so the client's connection task can close the socket.
+        tokio::task::spawn_blocking(move || upstream.join().unwrap())
+            .await
+            .unwrap();
+    }
+
     /// A chunked reply declares no length, so the read itself stops at the per-reply cap.
     #[tokio::test]
     async fn a_chunked_reply_stops_at_the_response_cap() {
