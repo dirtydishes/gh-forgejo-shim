@@ -141,8 +141,10 @@ its API: `gh auth login` checks the token against the host before writing anythi
 (`gh/pkg/cmd/auth/login/login.go:239`, `gh/pkg/cmd/auth/shared/login_flow.go:237`). A Forgejo
 host without server mode has no `/api/v3`, so that check fails there. A login in the user's own
 `hosts.yml`, an entry for the forge with an `oauth_token` or a `user`, therefore means the forge
-serves gh itself. The entry is keyed as gh looks the host up: its hostname, or `host:port` for a
-ported allowlist entry. When routing picks such a forge, the wrapper steps aside and runs plain
+serves gh itself. The wrapper reads the entry gh's API client would use: the key equal to the
+forge's hostname without its port, spelled exactly, because gh drops the port before looking up a
+token (`gh/api/http_client.go:284-290`). A login stored only under `host:port` doesn't count,
+since plain gh's API requests would never find it. When routing picks such a forge, the wrapper steps aside and runs plain
 gh as on the delegate path: no run directory, no gateway, and the user's environment unchanged
 apart from `FJ_SHIM_DEPTH` (§8). That holds for every route to the host, the "user's gh hosts"
 route included (§3), and such a host is never in *S*. Until `cwe.42` adds the server-mode key,
@@ -283,14 +285,16 @@ the shim serves as its only host, plain gh defaults to that host, while a launch
 allowlist hosts added, may not. Before delegating, routing checks plain gh's own choice
 (`GhHosts::user`). When that choice is a served Forgejo host, routing marks the route "user's gh
 hosts" (L2). If the user's gh is logged in to that host, the wrapper steps aside (§2).
-Otherwise the entry holds only settings, such as the `git_protocol` that
-`gh config set -h <host> git_protocol ssh` writes. Plain gh would hit the forge's missing
+Otherwise the entry gives gh no login it can use: it holds only settings, such as the
+`git_protocol` that `gh config set -h <host> git_protocol ssh` writes, or a login stored under
+`host:port`, which gh's API client never reads. Plain gh would hit the forge's missing
 `/api/v3`, and every launch with a key set that keeps plain gh's default host has broken token
 lookup or the default host itself. So the launcher doesn't run gh. It exits 1 with:
-`gh-forgejo-shim: <config dir>/hosts.yml has settings for <host> but no login, which makes <host> gh's default host; delete the <host> entry from that file to use gh-forgejo-shim there`,
-where `<config dir>` is the user's effective gh config directory. `gh auth logout` can't help,
-because it removes only logins and fails on a host without one
-(`gh/pkg/cmd/auth/logout/logout.go:111-127`). The user's config is left alone (§3).
+`gh-forgejo-shim: <config dir>/hosts.yml makes <key> gh's default host, but gh has no login it can use there; delete the <key> entry from that file to use gh-forgejo-shim there`.
+`<config dir>` is the user's effective gh config directory, as §3 finds it, and `<key>` is the
+entry's key as that file spells it, such as `Forge.Test`. `gh auth logout` can't help, because
+it removes only logins and fails on a host without one
+(`gh/pkg/cmd/auth/logout/logout.go:111-129`). The user's config is left alone (§3).
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
 token, doesn't share its hostname with another entry, and isn't one the user's gh is logged in to
@@ -801,12 +805,15 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     `gh pr view`, `gh api repos/{owner}/{repo}` and the alias `co` = `pr view` in that
     forge's checkout all run plain gh: no run directory is created, no socket is bound, and gh's
     environment equals the wrapper's apart from `FJ_SHIM_DEPTH`. The same holds when that forge
-    is the user's only host. A host-less `gh auth status` in another forge's checkout leaves the
-    logged-in forge out of *S*.
-16. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, with
-    a `git_protocol` and no login, and two hosts on the allowlist, a call that routes "user's gh
-    hosts" exits 1 with the settings message naming the user's config directory, and leaves the
-    user's config unchanged.
+    is the user's only host, and when the allowlist entry is `forge.test:3443` while the login
+    sits under `forge.test`. A login stored only under `forge.test:3443` doesn't step aside: the
+    call launches. A host-less `gh auth status` in another forge's checkout leaves the logged-in
+    forge out of *S*.
+16. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, and
+    two hosts on the allowlist, a call that routes "user's gh hosts" exits 1 with the message
+    naming the user's config directory and the key, and leaves the user's config unchanged. It
+    runs with an entry holding only a `git_protocol`, one keyed `Forge.Test` (the message names
+    `Forge.Test`), and one holding a login under `forge.test:3443`.
 
 ## 12. Ownership
 
