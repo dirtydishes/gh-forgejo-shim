@@ -56,6 +56,9 @@ pub fn create_git_recorder(
 
     let trace = absolute_path(trace_path)?;
     let real_git = absolute_path(&git_path)?;
+    if real_git == wrapper {
+        return Err(not_real_git(&real_git));
+    }
     fs::write(
         &wrapper,
         git_recorder_script(recorder_program, &real_git, &trace),
@@ -319,23 +322,36 @@ fn finish_record(record: &mut Value, finished: FinishedGit<'_>) {
 }
 
 fn resolve_real_git(real_git: Option<&Path>, env: &HashMap<String, String>) -> Result<PathBuf> {
-    if let Some(path) = real_git {
-        return Ok(expand_home(path));
-    }
-    if let Some(value) = env
+    let path = if let Some(path) = real_git {
+        expand_home(path)
+    } else if let Some(value) = env
         .get(REAL_GIT_ENV)
         .filter(|value| !value.trim().is_empty())
     {
-        return Ok(expand_home(Path::new(value)));
+        expand_home(Path::new(value))
+    } else {
+        find_on_path("git", env.get("PATH").map_or("", String::as_str))
+            .ok_or_else(|| ShimError::new(format!("could not find git; set {REAL_GIT_ENV}")))?
+    };
+    // A wrapper that runs a recorder as its real git can end up running itself without bound.
+    if is_recorder_wrapper(&path) {
+        return Err(not_real_git(&path));
     }
-    find_on_path("git", env.get("PATH").map_or("", String::as_str))
-        .ok_or_else(|| ShimError::new(format!("could not find git; set {REAL_GIT_ENV}")))
+    Ok(path)
 }
 
+fn not_real_git(path: &Path) -> ShimError {
+    ShimError::new(format!(
+        "{} is a gh-forgejo-shim git recorder, not the real git; set {REAL_GIT_ENV}",
+        path.display()
+    ))
+}
+
+/// Finds `name` on PATH, skipping git recorders: a recorder directory is often on PATH already.
 fn find_on_path(name: &str, path_value: &str) -> Option<PathBuf> {
     env::split_paths(path_value).find_map(|directory| {
         let candidate = directory.join(name);
-        is_executable_file(&candidate).then_some(candidate)
+        (is_executable_file(&candidate) && !is_recorder_wrapper(&candidate)).then_some(candidate)
     })
 }
 
@@ -744,6 +760,30 @@ mod tests {
         remove_git_recorder(&directory)?;
 
         assert!(!directory.exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_a_recorder_as_real_git() -> Result<()> {
+        let root = recorder_root("refuses")?;
+        let first = create(&root, Some(&root), None)?;
+        let directory = root.join("second");
+        let refused = |real_git: &Path| {
+            create_git_recorder(
+                &root.join("trace.jsonl"),
+                Some(real_git),
+                None,
+                Some(&directory),
+                &HashMap::new(),
+                Path::new("/tmp/gfj"),
+            )
+            .is_err_and(|error| error.message().contains("not the real git"))
+        };
+
+        assert!(refused(&first.wrapper_path));
+        assert!(refused(&directory.join("git")));
+        assert!(!directory.join("git").exists());
         fs::remove_dir_all(root)?;
         Ok(())
     }
