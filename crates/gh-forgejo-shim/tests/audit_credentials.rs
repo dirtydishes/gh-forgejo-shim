@@ -106,7 +106,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-#[ignore = "audit C3: fails until gh-forgejo-shim-jko.8 is fixed"]
 fn audit_cred_malformed_hosts_does_not_reset_store() -> TestResult {
     let fixture = Fixture::new()?;
     let path = auth::auth_file_path(Some(&fixture.home));
