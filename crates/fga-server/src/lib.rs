@@ -1,5 +1,6 @@
-//! The gateway router. It writes nothing to stdout or stderr: launched in-process, gh owns both.
-#![deny(clippy::print_stdout, clippy::print_stderr)]
+//! The gateway router. It never prints to stdout or stderr: launched in-process, gh owns both.
+//! A panic still reaches stderr through the panic hook, which the embedding process owns.
+#![deny(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
 pub mod config;
 mod rest;
 mod runs;
@@ -23,6 +24,7 @@ use fga_core::{
     map::WipPrefixes,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use url::Url;
 
@@ -36,7 +38,7 @@ pub struct Host {
     name: Url,
     /// When set, the only credential accepted for this host. A launcher hands each host's token
     /// over; server mode leaves it unset and lets Forgejo judge every user's token.
-    expected_token: Option<String>,
+    expected_token: Option<[u8; 32]>,
 }
 
 impl Host {
@@ -62,12 +64,13 @@ impl Host {
 
     pub fn expecting(self, token: String) -> Self {
         Self {
-            expected_token: Some(token),
+            expected_token: Some(Sha256::digest(token).into()),
             ..self
         }
     }
 
-    /// Whether `authorization` may be used for this host at all, compared in constant time.
+    /// Whether `authorization` may be used for this host at all. Digests compare in constant time
+    /// and reveal nothing about the expected token's length.
     fn admits(&self, authorization: &str) -> bool {
         let Some(expected) = &self.expected_token else {
             return true;
@@ -78,12 +81,12 @@ impl Host {
                 scheme.eq_ignore_ascii_case("token") || scheme.eq_ignore_ascii_case("bearer")
             })
             .map_or("", |(_, token)| token);
-        presented.len() == expected.len()
-            && presented
-                .bytes()
-                .zip(expected.bytes())
-                .fold(0, |diff, (a, b)| diff | (a ^ b))
-                == 0
+        let presented: [u8; 32] = Sha256::digest(presented).into();
+        presented
+            .iter()
+            .zip(expected)
+            .fold(0, |diff, (a, b)| diff | (a ^ b))
+            == 0
     }
 }
 
@@ -95,12 +98,30 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(hosts: Vec<Host>, ghes_version: String) -> Self {
-        Self {
+    /// Refuses an empty set, and two hosts answering to the same host and port: the second could
+    /// never be reached.
+    pub fn new(hosts: Vec<Host>, ghes_version: String) -> Result<Self, &'static str> {
+        let key = |host: &Host| {
+            (
+                host.name.host().map(|h| h.to_owned()),
+                host.name.port_or_known_default(),
+            )
+        };
+        if hosts.is_empty() {
+            return Err("the gateway needs at least one host");
+        }
+        if hosts
+            .iter()
+            .enumerate()
+            .any(|(i, a)| hosts[..i].iter().any(|b| key(a) == key(b)))
+        {
+            return Err("two hosts answer to the same host and port");
+        }
+        Ok(Self {
             hosts: hosts.into_iter().map(Arc::new).collect(),
             ghes_version,
             schema: graphql::schema(),
-        }
+        })
     }
 }
 
@@ -176,6 +197,8 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
             req.extensions_mut().insert(host);
             next.run(req).await
         }
+        // GitHub answers bad credentials with 401 on GraphQL too (Opus o2#1).
+        Err(error @ Error::Unauthorized) => rest_error(error),
         Err(error) if req.uri().path() == "/api/graphql" => {
             let error = graphql::error(error);
             Json(json!({"errors": [{"message": error.message, "type": error.extensions.unwrap().get("type"), "path": []}]})).into_response()
@@ -187,7 +210,7 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
 /// Whether every authority the request names (its target's and each `Host`) is the public URL's
 /// host and port, and it names at least one.
 fn addressed_to(public: &Url, req: &HttpRequest) -> bool {
-    let (Some(host), Some(port)) = (public.host(), public.port_or_known_default()) else {
+    let (Some(name), Some(port)) = (public.host(), public.port_or_known_default()) else {
         return false;
     };
     // A missing port is the default for the scheme the client used, not the configured port.
@@ -196,13 +219,13 @@ fn addressed_to(public: &Url, req: &HttpRequest) -> bool {
         "https" => 443,
         _ => return false,
     };
-    let host = host.to_owned();
+    let name = name.to_owned();
     let target = req.uri().authority().map(|a| a.as_str().as_bytes());
     let headers = req.headers().get_all(HOST).iter().map(|v| v.as_bytes());
     let mut named = false;
     for authority in target.into_iter().chain(headers) {
         named = true;
-        if !names(authority, &host, port, default) {
+        if !names(authority, &name, port, default) {
             return false;
         }
     }
@@ -211,7 +234,7 @@ fn addressed_to(public: &Url, req: &HttpRequest) -> bool {
 
 /// Case doesn't matter, and `[::1]` names `[0:0:0:0:0:0:0:1]`.
 /// `Host` never carries userinfo (RFC 9110 §7.2), and an explicit port must be a real one.
-fn names(authority: &[u8], host: &url::Host, port: u16, default: u16) -> bool {
+fn names(authority: &[u8], name: &url::Host, port: u16, default: u16) -> bool {
     let Ok(authority) = Authority::try_from(authority) else {
         return false;
     };
@@ -233,7 +256,7 @@ fn names(authority: &[u8], host: &url::Host, port: u16, default: u16) -> bool {
     explicit == port
         && url::Host::parse(text).is_ok_and(|parsed| {
             (matches!(parsed, url::Host::Ipv6(_)) || parsed.to_string().eq_ignore_ascii_case(text))
-                && parsed == *host
+                && parsed == *name
         })
 }
 

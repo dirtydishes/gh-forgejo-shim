@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Forgejo::new(config.forgejo_url)?,
         config.wip_prefixes,
     );
-    let state = AppState::new(vec![host], config.ghes_version);
+    let state = AppState::new(vec![host], config.ghes_version)?;
     let router = app(state);
     if let Some((cert, key)) = config.tls {
         rustls::crypto::ring::default_provider()

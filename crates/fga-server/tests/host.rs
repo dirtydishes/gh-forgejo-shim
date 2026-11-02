@@ -21,7 +21,7 @@ async fn gateway(public: &str) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
 async fn serve(hosts: Vec<Host>) -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState::new(hosts, "3.19.0".into());
+    let state = AppState::new(hosts, "3.19.0".into()).unwrap();
     tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
     addr
 }
@@ -53,18 +53,29 @@ async fn forgejo() -> (Forgejo, Arc<Mutex<Vec<String>>>) {
     (Forgejo::new(upstream_url.parse().unwrap()).unwrap(), seen)
 }
 
-/// Send one raw HTTP/1.1 request, so the test controls the request target and Host lines exactly.
-async fn send(addr: SocketAddr, head: &str) -> u16 {
+/// Send one raw HTTP/1.1 request and return the whole response, so the test controls the request
+/// target and Host lines exactly.
+async fn fetch(addr: SocketAddr, head: &str) -> String {
     let request = format!("{head}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     tokio::task::spawn_blocking(move || {
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.write_all(request.as_bytes()).unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
-        response.split(' ').nth(1).unwrap().parse().unwrap()
+        response
     })
     .await
     .unwrap()
+}
+
+async fn send(addr: SocketAddr, head: &str) -> u16 {
+    fetch(addr, head)
+        .await
+        .split(' ')
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -243,8 +254,16 @@ async fn each_host_admits_only_its_own_token_and_reaches_only_its_forge() {
         ("b.test", "", 401),
         ("api.github.com", "token a-token", 421),
     ] {
-        let head = format!("GET /api/v3/user HTTP/1.1\r\nHost: {host}\r\nAuthorization: {auth}");
-        assert_eq!(send(addr, &head).await, expected, "{head:?}");
+        // GraphQL refuses like REST, with GitHub's 401 (Opus o2#1); REST proves admission.
+        let paths = if expected == 200 {
+            &["GET /api/v3/user"][..]
+        } else {
+            &["GET /api/v3/user", "POST /api/graphql"]
+        };
+        for path in paths {
+            let head = format!("{path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: {auth}");
+            assert_eq!(send(addr, &head).await, expected, "{head:?}");
+        }
     }
     assert_eq!(*a_seen.lock().unwrap(), ["token a-token"]);
     assert_eq!(*b_seen.lock().unwrap(), ["Bearer b-token"]);
@@ -268,16 +287,11 @@ async fn each_host_links_to_its_own_web_ui() {
         ),
     ])
     .await;
-    let request = "GET /api/v3/ HTTP/1.1\r\nHost: b.test\r\nAuthorization: token t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    let body = tokio::task::spawn_blocking(move || {
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        response
-    })
-    .await
-    .unwrap();
+    let body = fetch(
+        addr,
+        "GET /api/v3/ HTTP/1.1\r\nHost: b.test\r\nAuthorization: token t",
+    )
+    .await;
     assert!(
         body.contains("\"current_user_url\":\"https://b.test/api/v3/user\""),
         "{body}"
@@ -312,18 +326,42 @@ async fn a_host_can_answer_to_its_portless_name_and_link_with_its_port() {
     }
     // Both admitted requests carry one token; the second reuses its cached identity.
     assert_eq!(*seen.lock().unwrap(), ["token t"]);
-    let request = "GET /api/v3/ HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    let body = tokio::task::spawn_blocking(move || {
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        response
-    })
-    .await
-    .unwrap();
+    let body = fetch(
+        addr,
+        "GET /api/v3/ HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token t",
+    )
+    .await;
     assert!(
         body.contains("\"current_user_url\":\"https://forge.test:3443/api/v3/user\""),
         "{body}"
     );
+}
+
+async fn host(public: &str) -> Host {
+    Host::new(
+        public.parse().unwrap(),
+        forgejo().await.0,
+        WipPrefixes::default(),
+    )
+}
+
+/// A second host answering to the same host and port could never be reached (Opus o2#3).
+#[tokio::test]
+async fn the_host_set_is_never_empty_or_ambiguous() {
+    assert!(AppState::new(vec![], "3.19.0".into()).is_err());
+    let twins = vec![
+        host("https://a.test").await,
+        host("https://A.test:443/x").await,
+    ];
+    assert!(AppState::new(twins, "3.19.0".into()).is_err());
+    let renamed = host("https://a.test:3443")
+        .await
+        .answering_to("a.test")
+        .unwrap();
+    assert!(AppState::new(vec![host("https://a.test").await, renamed], "3.19.0".into()).is_err());
+    let distinct = vec![
+        host("https://a.test").await,
+        host("https://a.test:3443").await,
+    ];
+    assert!(AppState::new(distinct, "3.19.0".into()).is_ok());
 }
