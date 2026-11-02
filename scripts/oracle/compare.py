@@ -79,10 +79,19 @@ def expected_difference(case, oracle, gateway):
     return False
 
 
-PR_URL = re.compile(r'https://forge\.test/dirtydishes/gfj-oracle/(pulls?)/(\d+)')
+# Any host, so a link to the wrong host is caught too (the normalizer folds hosts together).
+PR_URL = re.compile(r'https?://([^/\s"]+)/dirtydishes/gfj-oracle/(pulls?)/(\d+)')
 INVARIANT_FAILURES = {
     'pr-urls': 'MAPPING §8 decides /pull/N, but bead 65s has not built it, so the gateway still emits /pulls/N.',
 }
+# The only problems an expected failure covers: a forge.test link in Forgejo's /pulls/N layout.
+INVARIANT_KNOWN = {'pr-urls': lambda problem: problem.startswith('layout ')}
+
+
+def classify(matches, known, expected_failure):
+    """pass, xfail or unexpected. A fixed expected failure is unexpected, so its entry gets removed."""
+    if matches: return 'unexpected' if expected_failure else 'pass'
+    return 'xfail' if known and expected_failure else 'unexpected'
 
 
 def invariants(outputs, backend):
@@ -95,7 +104,8 @@ def invariants(outputs, backend):
     for case, stdout in outputs.items():
         for match in PR_URL.finditer(stdout):
             urls += 1
-            if match[1] != 'pull': problems['pr-urls'].append(f'{case}: {match[0]}')
+            if match[1] != 'forge.test': problems['pr-urls'].append(f'host {case}: {match[0]}')
+            elif match[2] != 'pull': problems['pr-urls'].append(f'layout {case}: {match[0]}')
         try: data = json.loads(stdout)
         except ValueError: continue
         for pr in data if isinstance(data, list) else [data]:
@@ -126,7 +136,7 @@ def main(expected, actual, backend):
                 known &= ext == 'stdout' and expected_difference(case, a, b)
                 diffs.extend(difflib.unified_diff(a.splitlines(), b.splitlines(), fromfile='oracle.'+ext, tofile='gateway.'+ext, lineterm=''))
         expected_failure = case in EXPECTED_FAILURES
-        state = 'pass' if matches and not expected_failure else 'xfail' if not matches and known and expected_failure else 'unexpected'
+        state = classify(matches, known, expected_failure)
         counts[{'pass':'passed','xfail':'xfail','unexpected':'unexpected'}[state]] += 1
         reason = EXPECTED_FAILURES[case] if state == 'xfail' else ''
         print(f'{state.upper()} {case}' + (': ' + reason if reason else ''))
@@ -135,7 +145,8 @@ def main(expected, actual, backend):
     outputs = {case['id']: (actual / f"{case['id']}.stdout").read_text() for case in CASES}
     for name, problems in invariants(outputs, json.loads(backend.read_text())).items():
         expected_failure = name in INVARIANT_FAILURES
-        state = 'pass' if not problems and not expected_failure else 'xfail' if problems and expected_failure else 'unexpected'
+        known = all(INVARIANT_KNOWN.get(name, lambda _: False)(problem) for problem in problems)
+        state = classify(not problems, known, expected_failure)
         counts[{'pass':'passed','xfail':'xfail','unexpected':'unexpected'}[state]] += 1
         reason = INVARIANT_FAILURES[name] if state == 'xfail' else ''
         print(f'{state.upper()} invariant {name}' + (': ' + reason if reason else ''))
