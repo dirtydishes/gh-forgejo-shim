@@ -52,7 +52,7 @@ because Forgejo's boolean cannot prove whether a draft has conflicts.
 The upstream and public URLs must use HTTP or HTTPS and contain no credentials, query or fragment.
 Upstream requests do not follow redirects. Each authenticated request shares a ten-second deadline
 across its upstream reads, including the mergeability retry.
-It reads at most 16 MiB of each upstream reply and 64 MiB across one incoming request's reads. Past
+The gateway reads at most 16 MiB of each upstream reply and 64 MiB across one incoming request's reads. Past
 either, the request fails with `502` (REST) or an `INTERNAL` GraphQL error saying so, which is what
 a very large `gh pr diff` gets.
 
