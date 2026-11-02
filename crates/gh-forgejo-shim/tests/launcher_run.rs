@@ -913,3 +913,103 @@ fn the_browser_helper_rewrites_served_pr_pages_and_never_calls_itself() {
         "https://forge.test/o/r/pulls/4"
     );
 }
+
+#[test]
+fn auth_status_steps_aside_or_serves_tokened_hosts_without_a_routed_token() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let host = |entry: &str, token_env: &str| {
+        format!(
+            "[host.\"{entry}\"]\ntoken_env = \"{token_env}\"\napi_url = \"http://127.0.0.1:9\"\n"
+        )
+    };
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\"]\n{}{}",
+            host("forge.test", "NO_SUCH_TOKEN"),
+            host("other.test", "HOST_TOKEN"),
+        ),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(
+        r#"{ echo "GH_CONFIG_DIR=${GH_CONFIG_DIR-unset}"; [ -n "$GH_CONFIG_DIR" ] && cat "$GH_CONFIG_DIR/hosts.yml"; } > "$REPORT"; exit 0"#,
+    );
+
+    // Host-less, in a checkout of the forge without a token: the forge that has one is served.
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    let hosts: serde_yaml::Mapping =
+        serde_yaml::from_str(report.split_once('\n').expect("report").1).expect("hosts.yml");
+    let token = |key: &str| {
+        hosts
+            .get(key)
+            .and_then(|entry| entry.get("oauth_token"))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(
+        token("forge.test").as_deref(),
+        Some("gfj-not-served"),
+        "{report}"
+    );
+    assert_eq!(
+        token("other.test").map(|token| token.len()),
+        Some(64),
+        "{report}"
+    );
+
+    // The user's gh is logged in to the forge: plain gh, even with no shim token for it.
+    fixture.user_hosts("forge.test:\n    oauth_token: user-login\n");
+    let output = fixture
+        .command(&gh, &["auth", "status", "--hostname", "forge.test"])
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        fixture.report().starts_with("GH_CONFIG_DIR=unset"),
+        "{}",
+        fixture.report()
+    );
+}
+
+#[test]
+fn a_signal_during_the_login_lookup_ends_the_launch_at_once() {
+    let _serial = serial();
+    // An upstream that accepts and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let api = format!("http://{}", listener.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+        }
+    });
+    let fixture = Fixture::new(&api);
+    let gh = fixture.fake_gh("exit 0");
+    let mut child = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .process_group(0)
+        .spawn()
+        .expect("spawn wrapper");
+    std::thread::sleep(Duration::from_millis(700));
+    let sent = Instant::now();
+    Command::new("/bin/kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill");
+    let status = wait_bounded(&mut child, "the lookup held off SIGINT");
+    assert!(
+        sent.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        sent.elapsed()
+    );
+    assert_eq!(status.signal(), Some(2), "{status}");
+    assert!(fixture.parent_is_empty(), "run directory removed");
+}

@@ -41,6 +41,9 @@ pub fn launches(invocation: &Invocation) -> bool {
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && invocation.is_native()
+        // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
+        // built-in path prints the checks instead.
+        && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
         // gh reads a PR URL only as `/pull/N`, and Forgejo's own URLs say `/pulls/N`; a URL
         // selector keeps the built-in path, which reads both, until the launcher rewrites it.
         && !invocation
@@ -105,6 +108,7 @@ mod tests {
             launches(&invocation(&["pr", "view", "12", "--web"])),
             "the browser helper"
         );
+        assert!(!launches(&invocation(&["pr", "checks", "12", "--web"])));
         assert!(!launches(&invocation(&["pr", "view", "--help"])));
         assert!(!launches(&invocation(&[
             "pr",

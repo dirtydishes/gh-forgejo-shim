@@ -453,7 +453,7 @@ fn managed_gh_missing_real_gh_preserves_error_shape() -> TestResult {
 }
 
 #[test]
-fn managed_gh_forgejo_repo_selects_native_route_without_delegating() -> TestResult {
+fn managed_gh_forgejo_auth_status_launches_without_delegating() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
     // Real gh: a launched `auth status` runs it with the run directory as its config (L3);
