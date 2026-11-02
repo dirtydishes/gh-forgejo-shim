@@ -313,10 +313,11 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
 static DISPATCHER_MARKER: [u8; 47] = *b"gh-forgejo-shim dispatcher, not real gh: 7f3c1e";
 
 /// Whether `path` may run this dispatcher: the running binary under any name (a symlink or a
-/// hardlink), a byte-for-byte copy of it, or a binary of about its size that carries
-/// [`DISPATCHER_MARKER`], such as a copy of the other entry point (`gfj` and `gh-forgejo-shim`
-/// differ in bytes). A copy of a build from before the marker passes; the launcher's own recursion
-/// guards cover that case.
+/// hardlink), or a binary within a tenth of its size that carries [`DISPATCHER_MARKER`], such as
+/// a copy of either entry point (`gfj` and `gh-forgejo-shim` differ in bytes). Some copies still
+/// pass, and the launcher's own recursion guards cover them: a build from before the marker, a
+/// marked build of another size (a debug `gfj` beside a release dispatcher), or a release whose
+/// size moved more than a tenth.
 fn is_current_executable(path: &Path) -> bool {
     // On Linux the running binary stays readable here even after its file is deleted.
     let running = if cfg!(target_os = "linux") {
@@ -331,18 +332,13 @@ fn is_current_executable(path: &Path) -> bool {
         return false;
     };
     same_file(path, &candidate_meta, &running, &running_meta)
-        || is_copy(path, &candidate_meta, &running, &running_meta)
+        || is_copy(path, &candidate_meta, &running_meta)
 }
 
-/// A copy of the running binary, or of any dispatcher build of about its size. Real gh is a
-/// different size, so it costs only the `stat` already made. A candidate in range that can't be
-/// read counts as a copy: it may still be executable, and it can't be shown to differ.
-fn is_copy(
-    candidate: &Path,
-    candidate_meta: &fs::Metadata,
-    running: &Path,
-    running_meta: &fs::Metadata,
-) -> bool {
+/// A dispatcher build of about the running binary's size. Real gh is a different size, so it
+/// costs only the `stat` already made. A candidate in range that can't be read counts as a copy:
+/// it may still be executable, and it can't be shown to differ.
+fn is_copy(candidate: &Path, candidate_meta: &fs::Metadata, running_meta: &fs::Metadata) -> bool {
     let (len, running_len) = (candidate_meta.len(), running_meta.len());
     if len.abs_diff(running_len) > running_len / 10 {
         return false;
@@ -353,7 +349,6 @@ fn is_copy(
     bytes
         .windows(DISPATCHER_MARKER.len())
         .any(|window| window == DISPATCHER_MARKER)
-        || (len == running_len && fs::read(running).map_or(true, |running| running == bytes))
 }
 
 /// Whether both paths reach one file, through symlinks or as hardlinks.
