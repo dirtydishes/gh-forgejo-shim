@@ -189,6 +189,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         // Browsers follow these links without a token.
         .route("/{owner}/{repo}/pull/{number}", get(pull_link))
+        .route("/{owner}/{repo}/pull/{number}/", get(pull_link))
         .route("/{owner}/{repo}/pull/{number}/{*rest}", get(pull_link))
         .merge(api)
         .layer(middleware::from_fn_with_state(state.clone(), select_host))
@@ -218,6 +219,16 @@ async fn pull_link(uri: axum::http::Uri) -> Response {
         || number.is_empty()
         || !number.bytes().all(|b| b.is_ascii_digit())
     {
+        return rest_error(Error::NotFound);
+    }
+    // The rest names a page of the PR, such as `files`: plain segments only, so `Location` can't
+    // reach another path on the forge. A trailing slash leaves one empty last segment.
+    let (last, middle) = rest
+        .split_last()
+        .map_or((None, &[][..]), |(l, m)| (Some(l), m));
+    let plain =
+        |s: &str| !s.is_empty() && s != "." && s != ".." && !s.contains('%') && !s.contains('\\');
+    if !middle.iter().all(|s| plain(s)) || last.is_some_and(|s| !s.is_empty() && !plain(s)) {
         return rest_error(Error::NotFound);
     }
     let mut location = format!("/{owner}/{repo}/pulls/{number}");
