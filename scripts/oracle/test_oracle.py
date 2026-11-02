@@ -186,6 +186,15 @@ class OracleTests(unittest.TestCase):
         # A check with nothing to check fails rather than passing vacuously.
         self.assertTrue(compare.invariants({}, backend)['head-oid'])
         self.assertTrue(compare.invariants({}, backend)['pr-urls'])
+        # A link to the wrong host is its own problem, which the /pulls/N expected failure doesn't cover.
+        wrong_host = compare.invariants(outputs(url='https://github.com/dirtydishes/gfj-oracle/pull/1'), backend)['pr-urls']
+        self.assertEqual(wrong_host, ['host list-me-head: https://github.com/dirtydishes/gfj-oracle/pull/1'])
+        known = compare.INVARIANT_KNOWN['pr-urls']
+        self.assertTrue(all(map(known, compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls'])))
+        self.assertFalse(all(map(known, wrong_host)))
+        self.assertFalse(all(map(known, compare.invariants({}, backend)['pr-urls'])))
+        self.assertEqual([compare.classify(*args) for args in [(True, True, False), (True, True, True), (False, True, True), (False, False, True), (False, True, False)]],
+                         ['pass', 'unexpected', 'xfail', 'unexpected', 'unexpected'])
 
     def test_viewer_comparison_allows_only_an_empty_me(self):
         with tempfile.TemporaryDirectory() as temp:
