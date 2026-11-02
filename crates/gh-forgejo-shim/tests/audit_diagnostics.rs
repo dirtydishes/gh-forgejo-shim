@@ -138,6 +138,10 @@ fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
 fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
     let f = Fixture::new()?;
     let fresh_tmp = f.root.join("fresh/tmp");
+    // A directory that already exists is the user's, and keeps its mode.
+    let existing = f.home.join(".config");
+    fs::create_dir(&existing)?;
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o750))?;
     // Under umask 000 a plain create_dir_all makes 0777 directories, so this fails on any
     // runner unless each directory the shim creates gets its own mode.
     let run = |args: &[&str]| -> io::Result<std::process::Output> {
@@ -154,7 +158,7 @@ fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
             .output()
     };
     let real_git = f.bin.join("git");
-    let trace = f.root.join("git.jsonl");
+    let trace = f.root.join("fresh-git-trace/git.jsonl");
     let mut commands = vec![
         vec!["install-shim"],
         vec!["gh", "--version"],
@@ -181,15 +185,28 @@ fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
         assert!(output.status.success(), "{args:?} failed: {output:?}");
     }
     let recorder = fs::read_dir(&fresh_tmp)?
-        .next()
-        .ok_or("no recorder directory")??
-        .path();
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("gh-forgejo-shim-git-"))
+        })
+        .ok_or("no recorder directory")?;
+    // Running the recorder's git writes its trace, creating the trace's parent.
+    let mut git = Command::new("/bin/sh");
+    git.args(["-c", "umask 000 && exec \"$0\" status"])
+        .arg(recorder.join("git"))
+        .env_clear()
+        .envs(f.env())
+        .current_dir(&f.root)
+        .stdin(Stdio::null());
+    git.output()?;
     let mode = |path: &Path| fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
     let mut created = vec![
         (f.root.join("fresh-trace"), 0o700),
+        (f.root.join("fresh-git-trace"), 0o700),
         (f.home.join(".local"), 0o755),
         (f.home.join(".local/bin"), 0o755),
-        (f.home.join(".config"), 0o700),
         (f.home.join(".config/gh-forgejo-shim"), 0o700),
         (f.root.join("fresh"), 0o755),
         (fresh_tmp.clone(), 0o755),
@@ -198,6 +215,11 @@ fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
     if cfg!(target_os = "macos") {
         created.push((f.home.join("Library/LaunchAgents"), 0o755));
     }
+    assert_eq!(
+        mode(&existing)?,
+        0o750,
+        "an existing directory's mode changed"
+    );
     for (path, allowed) in created {
         let mode = mode(&path)?;
         assert_eq!(
