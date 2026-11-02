@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::{Result, ShimError};
+use crate::{shim, Result, ShimError};
 
 pub const MARKER: &str = "managed by gh-forgejo-shim git recorder";
 pub const TRACE_PATH_ENV: &str = "FJ_SHIM_TRACE";
@@ -47,28 +47,28 @@ pub fn create_git_recorder(
     let git_path = resolve_real_git(real_git, env)?;
     let (directory, created) = make_wrapper_dir(root_dir, wrapper_dir)?;
     let wrapper = directory.join("git");
-    if wrapper.exists() && !is_recorder_wrapper(&wrapper) {
-        return Err(ShimError::new(format!(
-            "{} exists and is not managed by gh-forgejo-shim",
-            wrapper.display()
-        )));
+    let marker = directory.join(MARKER_FILE);
+    // `symlink_metadata` so a dangling symlink counts as a file the recorder doesn't own.
+    for (path, header) in [(&wrapper, wrapper_header()), (&marker, marker_header())] {
+        if fs::symlink_metadata(path).is_ok() && !written_by_recorder(path, &header) {
+            return Err(ShimError::new(format!(
+                "{} exists and is not managed by gh-forgejo-shim",
+                path.display()
+            )));
+        }
     }
 
     let trace = absolute_path(trace_path)?;
     let real_git = absolute_path(&git_path)?;
-    fs::write(
-        &wrapper,
-        git_recorder_script(recorder_program, &real_git, &trace),
-    )?;
-    make_executable(&wrapper)?;
-    let marker = directory.join(MARKER_FILE);
+    let script = git_recorder_script(recorder_program, &real_git, &trace);
+    shim::replace_file(&wrapper, script.as_bytes(), true)?;
     let created = created || created_directory(&marker);
     let marker_text = if created {
-        format!("{MARKER}\n{CREATED_DIRECTORY}\n")
+        format!("{}{CREATED_DIRECTORY}\n", marker_header())
     } else {
-        format!("{MARKER}\n")
+        marker_header()
     };
-    fs::write(marker, marker_text)?;
+    shim::replace_file(&marker, marker_text.as_bytes(), false)?;
 
     let path = prepend_path(&directory, env.get("PATH").map_or("", String::as_str));
     let mut launch_env = env.clone();
@@ -656,20 +656,6 @@ fn round_float(value: f64, digits: i32) -> f64 {
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(permissions.mode() | 0o755);
-    fs::set_permissions(path, permissions)
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
@@ -744,7 +730,11 @@ mod tests {
     ) -> Result<GitRecorder> {
         let real_git = root.join("real-git");
         fs::write(&real_git, "#!/bin/sh\n")?;
-        make_executable(&real_git)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&real_git, fs::Permissions::from_mode(0o755))?;
+        }
         create_git_recorder(
             &root.join("trace.jsonl"),
             Some(&real_git),
@@ -813,6 +803,30 @@ mod tests {
         fs::write(directory.join(MARKER_FILE), marker_header())?;
         assert!(remove_git_recorder(&directory).is_err());
         assert!(recorder.wrapper_path.exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_never_writes_through_a_symlink() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let root = recorder_root("symlinks")?;
+        let precious = root.join("precious");
+        fs::write(&precious, "precious\n")?;
+        for name in ["git", MARKER_FILE] {
+            let directory = root.join(format!("bin-{}", name.trim_start_matches('.')));
+            fs::create_dir(&directory)?;
+            symlink(&precious, directory.join(name))?;
+            assert!(create(&root, None, Some(&directory)).is_err());
+            let dangling = root.join(format!("missing-{}", name.trim_start_matches('.')));
+            fs::remove_file(directory.join(name))?;
+            symlink(&dangling, directory.join(name))?;
+            assert!(create(&root, None, Some(&directory)).is_err());
+            assert!(!dangling.exists());
+        }
+        assert_eq!(fs::read_to_string(&precious)?, "precious\n");
         fs::remove_dir_all(root)?;
         Ok(())
     }
