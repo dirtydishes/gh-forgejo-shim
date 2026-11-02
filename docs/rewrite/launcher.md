@@ -243,9 +243,9 @@ launcher answers every git in the call itself:
   beyond the entry's own. git reads its config files, then `GIT_CONFIG_COUNT`, then
   `GIT_CONFIG_PARAMETERS` in order, and a `-c` on its own command line last. git gathers every
   helper that matches a URL, scoped `credential.<url>.helper` entries included, into one list in
-  that order, and an empty value clears the list. So the launcher's helper is the first one any
-  git in the call asks, and the only one apart from a `-c` on that git's own command line
-  (checked against git 2.56). gh's own `-c` pair names the same script.
+  that order, and an empty value clears the list. So the launcher's helper is the only one any
+  git in the call asks, unless that git has a `-c` of its own (checked against git 2.56). gh's
+  own `-c` pair names the same script.
 - **The answer.** Before anything else, ahead of guard 2 and the §7 revert, the wrapper checks
   for `FJ_SHIM_CREDENTIALS` and an argv of `auth git-credential <op>`. It then answers from that
   file and exits, never routing or launching:
@@ -265,9 +265,10 @@ launcher answers every git in the call itself:
 Any other `auth git-credential` call, from a git outside a launched call, delegates to plain gh
 (§2), which answers from the user's own config. It never launches.
 
-Two cases stay outside the launcher's reach. A nested git with a helper on its own command line,
-such as `git -c credential.helper=… push`, asks that helper after the launcher's declines, as it
-would without the shim. If that helper is gh's, it runs plain gh with the user's own config (§7),
+Two cases stay outside the launcher's reach. A nested git with a helper on its own command line
+asks that helper as it would without the shim: after the launcher's declines for
+`git -c credential.helper=X push`, and instead of it for `git -c credential.helper=
+-c credential.helper=X push`, the form gh itself uses. If that helper is gh's, it runs plain gh with the user's own config (§7),
 or real gh under the call's `GH_CONFIG_DIR`, where it finds per-call tokens and placeholders.
 A git still running after the call ends finds no script, and git goes on without a credential.
 
@@ -737,7 +738,9 @@ runtime serves them concurrently.
 ## 11. Acceptance tests
 
 L3 builds these, as process tests against real gh v2.103.3 and a Forgejo stub or the e2e Forgejo.
-Each names the section it proves. On macOS the tests send only SIGTERM, SIGKILL, SIGINT and SIGHUP,
+Each names the section it proves. In tests 1 to 14 the user's `hosts.yml` holds no login for the
+served forge, or every call would step aside (§2); the e2e client setup logs gh in to the forge,
+so those tests can't reuse its config. On macOS the tests send only SIGTERM, SIGKILL, SIGINT and SIGHUP,
 because crash-type signals (SIGSEGV, SIGQUIT, SIGABRT, SIGBUS, SIGILL) open a crash dialog on the
 user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 
@@ -882,7 +885,7 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    beyond what an askpass program or a terminal prompt supplies for that host.
    Git that gh itself starts is unchanged by this, and git outside a launched call is
    unaffected. A nested git that names a helper with `-c` on its own command line still asks
-   that helper after the launcher's declines (§3). The alternative was to keep the user's own
+   that helper (§3). The alternative was to keep the user's own
    helpers for nested git and narrow the guarantee's wording, leaving gh's `gist.` retry open.
 
    Kell, 2026-11-02: force the launcher's helper, with the cost above.
