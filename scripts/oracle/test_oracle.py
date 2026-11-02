@@ -253,19 +253,60 @@ class OracleTests(unittest.TestCase):
     def test_twin_seed_refuses_writes_outside_its_fence_before_the_network(self):
         twin = twin_seed.Twin('https://git.dirtydishes.dev', 'disposable')
         repo = 'repos/' + twin_seed.REPO
-        with patch.object(twin_seed.urllib.request, 'urlopen') as urlopen:
+        # Twin.api sends through OPENER, so that is what must never be called.
+        with patch.object(twin_seed.OPENER, 'open') as send:
             for method, route, body, sudo in [
                 ('POST', 'repos/dirtydishes/other/pulls', {}, None),
                 ('DELETE', repo + '/issues/1', None, None),
                 ('PATCH', repo + '/pulls/1', {'state': 'open'}, None),
                 ('PATCH', repo + '/pulls/1', {'title': 'x'}, None),
                 ('POST', repo + '/pulls/14/reviews', {}, 'dirtydishes'),
+                ('POST', repo + '/pulls/14/reviews', {}, None),
                 ('POST', 'admin/users', {'username': 'someone-else'}, None),
+                ('POST', 'admin/users', {'username': twin_seed.REVIEWER}, twin_seed.REVIEWER),
                 ('GET', 'users/someone-else', None, None),
+                ('GET', repo, None, twin_seed.REVIEWER),
+                ('POST', repo + '/pulls/6/merge', {'Do': 'merge', 'delete_branch_after_merge': True}, None),
+                ('POST', repo + '/pulls/6/merge', {'Do': 'squash', 'delete_branch_after_merge': False}, None),
+                ('POST', repo + '/pulls', {'base': 'main', 'head': 'not-planned', 'title': 't', 'body': ''}, None),
+                ('POST', repo + '/pulls', {'base': 'other', 'head': 's/pass', 'title': 't', 'body': ''}, None),
+                ('POST', repo + '/issues', {'title': 't', 'body': '', 'assignees': ['x']}, None),
             ]:
-                with self.assertRaises(SystemExit, msg=f'{method} {route}'):
+                with self.assertRaises(SystemExit, msg=f'{method} {route} {body} {sudo}'):
                     twin.api(method, route, body, sudo=sudo)
-            urlopen.assert_not_called()
+            send.assert_not_called()
+        # The plan's own writes pass the fence.
+        for method, route, body, sudo in [
+            ('POST', repo + '/pulls', {'base': 'main', 'head': 's/pass', 'title': 't', 'body': ''}, None),
+            ('POST', repo + '/issues', {'title': 't', 'body': ''}, None),
+            ('POST', repo + '/pulls/6/merge', {'Do': 'merge', 'delete_branch_after_merge': False}, None),
+            ('PATCH', repo + '/issues/12', {'state': 'closed'}, None),
+            ('POST', repo + '/pulls/14/reviews', {'event': 'APPROVED'}, twin_seed.REVIEWER),
+            ('POST', 'admin/users', {'username': twin_seed.REVIEWER}, None),
+        ]:
+            self.assertTrue(twin.allowed(method, route, body, sudo), f'{method} {route}')
+
+    def test_twin_seed_errors_never_carry_the_token(self):
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', 'sekret-token')
+        echo = io.BytesIO(b'{"message":"bad","received":"Authorization: token sekret-token"}')
+        failure = twin_seed.urllib.error.HTTPError('u', 500, 'Internal sekret-token', {}, echo)
+        with patch.object(twin_seed.OPENER, 'open', side_effect=failure):
+            with self.assertRaises(twin_seed.TwinError) as raised:
+                twin.api('GET', 'repos/' + twin_seed.REPO)
+        self.assertEqual(raised.exception.code, 500)
+        self.assertNotIn('sekret-token', str(raised.exception))
+        # The original HTTPError, which holds the unredacted message, never reaches a traceback.
+        self.assertTrue(raised.exception.__suppress_context__)
+
+    def test_twin_seed_opens_a_pr_only_on_its_own_branch(self):
+        item = next(i for i in twin_seed.PLAN if i['number'] == 6)
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', 'disposable')
+        def head(message):
+            return patch.object(twin, 'api', return_value={'commit': {'message': message + '\n'}})
+        with head(twin_seed.message(item, len(item['commits']))):
+            self.assertTrue(twin_seed.owned(twin, item))
+        with head('someone else\'s work'):
+            self.assertFalse(twin_seed.owned(twin, item))
 
     def test_twin_seed_resumes_only_onto_its_own_plan(self):
         planned = {item['number']: (item['title'], item.get('branch')) for item in twin_seed.PLAN}
