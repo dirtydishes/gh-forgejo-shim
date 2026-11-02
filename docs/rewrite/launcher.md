@@ -30,8 +30,9 @@ These facts decide most of the design. Each one was checked in the source.
    Extensions live in the data directory and update state in the state directory, so moving
    `GH_CONFIG_DIR` touches neither.
 3. **Env tokens beat the config, and the enterprise one covers every non-GitHub host.**
-   `GH_TOKEN` and `GITHUB_TOKEN` apply to github.com, `*.ghe.com` and localhost.
-   `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` apply to every other host. Both win over
+   `GH_TOKEN` and `GITHUB_TOKEN` apply to github.com, `*.ghe.com` and `github.localhost`
+   (`go-gh/pkg/auth/auth.go:26,68`). `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` apply to
+   every other host, plain `localhost` included. Both win over
    `hosts.<host>.oauth_token` in `hosts.yml` (`go-gh/pkg/auth/auth.go:63-100`). A host-level
    `oauth_token` resolves without a `user` key (`gh/internal/config/config.go:295-304`).
 4. **gh hands its token to git.** For fetches and clones gh injects
