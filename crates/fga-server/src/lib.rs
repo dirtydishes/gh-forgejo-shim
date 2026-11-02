@@ -130,7 +130,7 @@ impl AppState {
 }
 
 pub fn app(state: AppState) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/api/v3/", get(rest::root))
         .route("/api/v3/meta", get(rest::meta))
         .route("/api/v3/user", get(rest::user))
@@ -160,14 +160,43 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/graphql", post(graphql_request))
         .fallback(|| async { rest_error(Error::NotFound) })
-        .layer(middleware::from_fn_with_state(state.clone(), authenticate))
+        .layer(middleware::from_fn(authenticate));
+    Router::new()
+        // Browsers follow these links without a token.
+        .route("/{owner}/{repo}/pull/{number}", get(pull_link))
+        .route("/{owner}/{repo}/pull/{number}/{*rest}", get(pull_link))
+        .merge(api)
+        .layer(middleware::from_fn_with_state(state.clone(), select_host))
         .with_state(state)
 }
 
-async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next: Next) -> Response {
-    // gh's socket setting sends every host's requests here, each with that host's token, so a
-    // request for a host not served, or with a token not meant for it, is refused before the
-    // token is used.
+/// gh and ChatGPT link PRs as GitHub does, `/{o}/{r}/pull/{n}`, which Forgejo doesn't serve, so
+/// send the browser to Forgejo's `/pulls/{n}` (MAPPING §8). The raw path is kept as sent, and a
+/// fragment stays with the browser across the redirect.
+async fn pull_link(uri: axum::http::Uri) -> Response {
+    let mut segments: Vec<&str> = uri.path().split('/').collect();
+    if segments.len() < 5
+        || segments[3] != "pull"
+        || !segments[4].bytes().all(|b| b.is_ascii_digit())
+        || segments[4].is_empty()
+    {
+        return rest_error(Error::NotFound);
+    }
+    segments[3] = "pulls";
+    let mut location = segments.join("/");
+    if let Some(query) = uri.query() {
+        location = format!("{location}?{query}");
+    }
+    (
+        StatusCode::MOVED_PERMANENTLY,
+        [(axum::http::header::LOCATION, location)],
+    )
+        .into_response()
+}
+
+/// gh's socket setting sends every host's requests here, each with that host's token, so a request
+/// for a host not served is refused before anything else happens.
+async fn select_host(State(state): State<AppState>, mut req: HttpRequest, next: Next) -> Response {
     let Some(host) = state
         .hosts
         .iter()
@@ -185,6 +214,16 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
         )
             .into_response();
     };
+    req.extensions_mut().insert(host);
+    next.run(req).await
+}
+
+/// A token not meant for the request's host is refused before it is used.
+async fn authenticate(
+    Extension(host): Extension<Arc<Host>>,
+    mut req: HttpRequest,
+    next: Next,
+) -> Response {
     let auth = req
         .headers()
         .get(AUTHORIZATION)
@@ -198,7 +237,6 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
     match result {
         Ok(session) => {
             req.extensions_mut().insert(session);
-            req.extensions_mut().insert(host);
             next.run(req).await
         }
         // GitHub answers bad credentials with 401 on GraphQL too (Opus o2#1).
