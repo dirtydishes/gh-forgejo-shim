@@ -1,12 +1,12 @@
 //! External command discovery and delegation helpers.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicI32, Ordering};
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
@@ -119,8 +119,10 @@ fn exit_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or(1)
 }
 
-/// The signal that killed the last child this process waited on in the foreground, or 0.
-static CHILD_SIGNAL: AtomicI32 = AtomicI32::new(0);
+thread_local! {
+    /// The signal that killed the last child this thread waited on in the foreground, or 0.
+    static CHILD_SIGNAL: Cell<i32> = const { Cell::new(0) };
+}
 
 /// [`exit_code`] for a child that shares this process's terminal. A signal that killed it is
 /// remembered, so [`exit_like_child`] can end this process with the same signal.
@@ -129,24 +131,28 @@ pub fn inherited_exit_code(status: ExitStatus) -> i32 {
     {
         use std::os::unix::process::ExitStatusExt;
 
-        CHILD_SIGNAL.store(status.signal().unwrap_or(0), Ordering::Relaxed);
+        CHILD_SIGNAL.set(status.signal().unwrap_or(0));
     }
     exit_code(status)
 }
 
 /// Returns `code`, unless it is the one [`inherited_exit_code`] gave for a child killed by a
-/// signal. Then this process sends itself that signal, so its parent sees the death that the
-/// child's parent saw. Call it last, once traces are written. When the signal is ignored or
-/// blocked here, the process survives it and `code` is returned: Rust ignores SIGPIPE, so a
-/// child's SIGPIPE ends this process with exit 141.
+/// signal on this thread. Then this process dies of that signal too, so its parent sees the death
+/// that the child's parent saw. Call it last, once traces are written.
+///
+/// The signal's default action is put back and the signal unblocked first: Rust ignores SIGPIPE
+/// and handles SIGSEGV and SIGBUS itself, and a parent may have left the signal ignored or
+/// blocked. signal-hook's table has no real-time signals, so those are raised as they are. If
+/// the process somehow survives, `code` is returned.
 pub fn exit_like_child(code: i32) -> i32 {
     #[cfg(unix)]
     {
-        let signal = CHILD_SIGNAL.load(Ordering::Relaxed);
-        if signal != 0 && code == 128 + signal {
-            if let Some(signal) = rustix::process::Signal::from_named_raw(signal) {
-                let _ = rustix::process::kill_process(rustix::process::getpid(), signal);
-            }
+        let signal = CHILD_SIGNAL.get();
+        if signal != 0
+            && code == 128 + signal
+            && signal_hook::low_level::emulate_default_handler(signal).is_err()
+        {
+            let _ = signal_hook::low_level::raise(signal);
         }
     }
     code
