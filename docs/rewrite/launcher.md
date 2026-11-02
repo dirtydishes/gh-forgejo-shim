@@ -1,6 +1,6 @@
 # Launcher spec (L0)
 
-Status: draft for Kell's approval. Bead `cwe.25`. Findings F1 and F23 in the
+Status: approved by Kell on 2026-11-02, including the section 13 decisions; in review. Bead `cwe.25`. Findings F1 and F23 in the
 [plan review](plan-review-2026-11-01.md), decisions D1 and D2, and audit bugs R1 (`jko.15`),
 R6 (`jko.16`) and R7 (`jko.7`).
 
