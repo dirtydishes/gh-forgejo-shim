@@ -198,8 +198,8 @@ Keychain token two ways:
   only the local gateway, which refuses it with 421 and forwards nothing (§5).
 - **Not through git.** gh's own credential helper would find it, and would also retry a
   `gist.<host>` request as `<host>` (`gh/pkg/cmd/auth/gitcredential/helper.go:123-126`). The
-  launcher replaces that helper with its own, which knows only the served hosts ("Git's
-  credentials", below).
+  launcher replaces that helper, and the user's own, with its own for every git in the call. It
+  knows only the served hosts ("Git's credentials", below).
 
 So a token goes only to the local gateway, which refuses it. That is the guarantee: the
 launcher never sends a login to a site it doesn't belong to. Kell accepted it (§13,
@@ -210,16 +210,23 @@ decision 2).
 gh installs its credential helper for every host on its fetches and pushes, as
 `!%q auth git-credential` built from `GH_PATH` (`gh/git/client.go:148-155,905-913`). That helper
 reads `hosts.yml` and the Keychain, and retries `gist.<host>` as `<host>`. In a launched call,
-`hosts.yml` holds only per-call tokens and placeholders (above), so whatever that helper finds
-is useless outside the gateway. That covers any git that reaches gh's own helper, including one
-an alias shell or an editor starts through the user's own git config. Git that gh starts still
-needs the real token for the forge, so gh gets the launcher's helper instead:
+`hosts.yml` holds only per-call tokens and placeholders (above). The Keychain fallback and the
+`gist.` retry still let that helper give a login to a site it doesn't belong to, and a git that an
+alias shell or an editor starts reaches it through the user's own git config, under the launched
+call's `GH_CONFIG_DIR`. Git that gh starts also needs the real token for the forge. So the
+launcher answers every git in the call itself:
 - **The script.** The run directory holds `gh`, mode 0700:
   `#!/bin/sh` and `FJ_SHIM_CREDENTIALS='<run dir>/credentials' exec '<shim>' gh "$@"`, with the
   shim path single-quoted. `GH_PATH` names it, so gh's own helper invocations run it.
-- **Nested git keeps the user's helpers.** A git that an alias shell or an editor starts reads
-  the user's own git config, as it would without the launcher. A push to GitHub authenticates
-  as usual. A fetch from the forge gets whatever the user's own helpers give it.
+- **Every git in the call uses it.** The launcher appends two entries to `GIT_CONFIG_PARAMETERS`,
+  after any value it inherited (§7): `credential.helper=` and
+  `credential.helper=!<run dir>/gh auth git-credential`. The run directory's path is shell-safe
+  (§4), so the helper needs no quoting. git reads its config files, then `GIT_CONFIG_COUNT`, then
+  `GIT_CONFIG_PARAMETERS` in order, and a `-c` on its own command line last. git gathers every
+  helper that matches a URL, scoped `credential.<url>.helper` entries included, into one list in
+  that order, and an empty value clears the list. So the launcher's helper is the first one any
+  git in the call asks, and the only one apart from a `-c` on that git's own command line
+  (checked against git 2.56). gh's own `-c` pair names the same script.
 - **The answer.** Before anything else, ahead of guard 2 and the §7 revert, the wrapper checks
   for `FJ_SHIM_CREDENTIALS` and an argv of `auth git-credential <op>`. It then answers from that
   file and exits, never routing or launching:
@@ -235,6 +242,12 @@ needs the real token for the forge, so gh gets the launcher's helper instead:
 
 Any other `auth git-credential` call, from a git outside a launched call, delegates to plain gh
 (§2), which answers from the user's own config. It never launches.
+
+Two cases stay outside the launcher's reach. A nested git with a helper on its own command line,
+such as `git -c credential.helper=… push`, asks that helper after the launcher's declines, as it
+would without the shim. If that helper is gh's, it runs plain gh with the user's own config (§7),
+or real gh under the call's `GH_CONFIG_DIR`, where it finds per-call tokens and placeholders.
+A git still running after the call ends finds no script, and git goes on without a credential.
 
 Only a few gh paths write `GH_PATH` somewhere that outlasts the call: `auth setup-git`,
 `auth login` and `auth refresh` write it into `~/.gitconfig`
@@ -273,8 +286,9 @@ What this guarantees:
 - **The launcher never sends a login to a site it doesn't belong to.** Every host in the user's
   own `hosts.yml` other than *S* has the placeholder, which no server accepts, and the gateway
   refuses any request for another host with 421, without contacting any upstream (L1). A
-  Keychain login the placeholders don't cover reaches only the gateway, which refuses it, and
-  no git in the call can use it (§3, "Git's credentials").
+  Keychain login the placeholders don't cover reaches only the gateway, which refuses it. No git
+  in the call can use it, short of a helper named on that git's own command line (§3, "Git's
+  credentials").
 
 The cost:
 
@@ -290,6 +304,11 @@ The cost:
   for every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
   `gh/pkg/cmd/pr/checkout/checkout.go:369-370`). A private GitHub submodule fetched by
   `gh pr checkout` in a Forgejo repo therefore fails to authenticate.
+- A git that a child of a launched gh starts, such as an alias shell or an editor, also gets a
+  credential only for a served host. A shell alias that pushes to GitHub over HTTPS gets none
+  and fails. SSH remotes are unaffected. With the usual gh setup, the push would fail without
+  the launcher's helper too: `gh auth setup-git` names real gh, which reads the call's
+  `hosts.yml` and finds GitHub's placeholder ahead of the Keychain login.
 
 Rejected:
 
@@ -543,6 +562,7 @@ the launcher never converts the environment to `String`.
 |---|---|
 | `GH_CONFIG_DIR` | the run directory |
 | `GH_PATH` | the run directory's `gh` script, so gh's git credential helper is the launcher's (section 3, "Git's credentials") |
+| `GIT_CONFIG_PARAMETERS` | the inherited value, if any, then `'credential.helper'=''` and `'credential.helper'='!<run dir>/gh auth git-credential'` (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
 | `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
@@ -561,7 +581,11 @@ again, it reaches the wrapper. Before routing, the wrapper reverts the launcher'
 name in `FJ_SHIM_SAVED`, it restores the variable from `FJ_SHIM_ORIG_<NAME>`, or unsets it if
 there's no saved value. It skips any variable whose current state no longer matches what the
 launcher left: a different value from `FJ_SHIM_SET_<NAME>`, or, for a removed variable, any value
-at all. Something in between changed it on purpose. It then removes the
+at all. Something in between changed it on purpose. `GIT_CONFIG_PARAMETERS` is the one
+exception: a git that runs a child with `-c` appends its own entries to it, so when its value
+starts with `FJ_SHIM_SET_GIT_CONFIG_PARAMETERS`, the wrapper replaces that prefix with the
+original value, or with nothing if it was unset, and keeps the rest. A value left empty is
+unset. It then removes the
 bookkeeping variables, except `FJ_SHIM_DEPTH`. A shell alias that runs
 `gh api https://api.github.com/user` therefore runs plain gh with the user's own config and token.
 
@@ -735,10 +759,14 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 14. **Git's credentials (§3).** With `GIT_TERMINAL_PROMPT=0`: in a launched `gh pr checkout`, git
     fetching from the served forge, with or without a custom port, gets the real token. A push
     to `https://gist.forge.test/…` gets no credential, and neither does a fetch from a GitHub
-    remote, even with a GitHub token in the Keychain. A shell alias that runs `git push` to
-    `gist.forge.test`, with real gh in the user's git config (as a generic helper, or through
-    `GIT_CONFIG_PARAMETERS`), gets at most the per-call token, and the server refuses it. A shell
-    alias pushing to GitHub authenticates with the user's own helper. `gh sg`, with alias
+    remote, even with a GitHub token in the Keychain. Then a shell alias runs `git push`, with
+    gh's helper set in four places: a generic `credential.helper`, a
+    `credential.https://github.com.helper`, a `GIT_CONFIG_COUNT` entry and an inherited
+    `GIT_CONFIG_PARAMETERS` entry. The test runs once with those naming the wrapper and once
+    naming real gh by absolute path. `GIT_TRACE` shows only the launcher's helper ran. The push
+    gets the real token for the served forge, and none for `gist.forge.test` or GitHub. A `gh` run by a
+    `git -c x.y=z` alias inside the call sees the user's own `GIT_CONFIG_PARAMETERS` followed by
+    `'x.y'='z'`. `gh sg`, with alias
     `sg: auth setup-git`, delegates and writes real gh's path, not the run directory's, into
     `~/.gitconfig`. `gh auth token --hostname <forge>` still prints the real token.
 15. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, and
@@ -792,6 +820,14 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    login. The guarantee only got stronger, so it didn't go back to Kell. Its one cost, a private
    GitHub submodule failing to authenticate in a launched `gh pr checkout`, was already listed
    and approved.
+
+   Sol's round 5 found that git started by a child of a launched gh, such as an alias shell or
+   an editor, could still reach gh's own helper through the user's git config, and gh's `gist.`
+   retry could then give a forge login to a `gist.` host. The launcher now forces its own helper
+   on every git in the call through `GIT_CONFIG_PARAMETERS` (§3, §7). That adds a cost the user
+   sees, so it went back to Kell: inside a launched call, a git push to GitHub over HTTPS from an
+   alias shell or an editor gets no credential. With the usual `gh auth setup-git`, that push
+   already failed, because real gh found GitHub's placeholder in the call's `hosts.yml`.
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
 4. **`gh api` and `gh auth token` without `--hostname`, inside a Forgejo checkout** (§2). gh
