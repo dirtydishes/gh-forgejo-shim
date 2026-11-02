@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use gh_forgejo_shim::git_recorder;
+use gh_forgejo_shim::{git_recorder, shim};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -130,6 +130,33 @@ fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
         "install without --force followed an unmanaged dangling symlink and created its target: exit={:?}, victim_exists={}",
         output.status.code(),
         victim.exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_diag_install_drops_other_write_permissions() -> TestResult {
+    let f = Fixture::new()?;
+    let target_dir = f.home.join(".local/bin");
+    fs::create_dir_all(&target_dir)?;
+    let target = target_dir.join("gh");
+    fs::write(&target, shim::shim_script(Path::new("/old/gfj")))?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o666))?;
+    // Under umask 002 the new wrapper starts group-writable, so this fails on any runner
+    // unless install sets the mode outright.
+    let install = Command::new("/bin/sh")
+        .args(["-c", "umask 002 && exec \"$0\" install-shim"])
+        .arg(env!("CARGO_BIN_EXE_gfj"))
+        .env_clear()
+        .envs(f.env())
+        .current_dir(&f.root)
+        .stdin(Stdio::null())
+        .output()?;
+    assert!(install.status.success(), "install failed: {install:?}");
+    let writable_by_others = fs::metadata(target)?.permissions().mode() & 0o022;
+    assert_eq!(
+        writable_by_others, 0,
+        "install made the wrapper executable while preserving group/other write permission"
     );
     Ok(())
 }

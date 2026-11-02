@@ -195,9 +195,8 @@ fn shell_quote(value: &str) -> String {
 fn make_executable(file: &File) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = file.metadata()?.permissions();
-    permissions.set_mode(permissions.mode() | 0o755);
-    file.set_permissions(permissions)?;
+    // Set, not added: the new file starts at 0666 & ~umask, which can include group write.
+    file.set_permissions(fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
