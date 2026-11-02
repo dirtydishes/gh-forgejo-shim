@@ -29,9 +29,15 @@ async fn execute(router: Router, query: String) -> async_graphql::Response {
     task.abort();
     response
 }
+fn repo() -> Value {
+    json!({"id":1,"name":"r","full_name":"o/r","owner":{"id":1,"login":"o","avatar_url":""},
+    "private":false,"html_url":"","default_branch":"main","fork":false,"archived":false,
+    "default_merge_style":"squash","allow_merge_commits":true,"allow_squash_merge":true,"allow_rebase":true})
+}
 fn router() -> Router {
     Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route("/api/v1/repos/o/r", get(|| async { Json(repo()) }))
         .route("/api/v1/repos/o/r/pulls/1", get(|| async { Json(pull()) }))
 }
 
@@ -234,19 +240,26 @@ async fn merge_errors_keep_the_github_type_message_and_mutation_path() {
                     let method = method.clone();
                     async move {
                         assert_eq!(input["Do"], method);
-                        assert_eq!(input["head_commit_id"], "abc");
+                        if mutation == "mergePullRequest" {
+                            assert_eq!(input["head_commit_id"], "abc");
+                            assert_eq!(input["merge_when_checks_succeed"], false);
+                        } else {
+                            assert!(input.get("head_commit_id").is_none());
+                        }
                         assert_eq!(input["MergeTitleField"], "headline");
                         assert_eq!(input["MergeMessageField"], "body");
                         assert_eq!(input["delete_branch_after_merge"], false);
-                        assert_eq!(
-                            input["merge_when_checks_succeed"],
-                            mutation == "enablePullRequestAutoMerge"
-                        );
                         (status, Json(body))
                     }
                 }),
             );
-            let response = execute(app, format!(r#"mutation {{ {mutation}(input: {{pullRequestId: "{}", mergeMethod:{graphql_method}, expectedHeadOid:"abc", commitHeadline:"headline", commitBody:"body"}}) {{clientMutationId}} }}"#, node_id("PullRequest", "o/r", 1))).await;
+            // Auto-merge refuses an expected head before writing.
+            let head = if mutation == "mergePullRequest" {
+                r#"expectedHeadOid:"abc","#
+            } else {
+                ""
+            };
+            let response = execute(app, format!(r#"mutation {{ {mutation}(input: {{pullRequestId: "{}", mergeMethod:{graphql_method}, {head} commitHeadline:"headline", commitBody:"body"}}) {{clientMutationId}} }}"#, node_id("PullRequest", "o/r", 1))).await;
             assert_eq!(response.errors.len(), 1, "{description}");
             let error = &response.errors[0];
             let actual_kind = error.extensions.as_ref().unwrap().get("type");
@@ -341,12 +354,15 @@ async fn timeline_is_read_whole_and_uses_latest_event_even_in_the_same_second() 
         ),
         (Value::Null, false),
     ] {
-        let app = router()
-            .route("/api/v1/repos/o/r", get(|| async { Json(json!({"id":1,"name":"r","full_name":"o/r","owner":{"id":1,"login":"o","avatar_url":""},"private":false,"html_url":"","default_branch":"main","fork":false,"archived":false,"default_merge_style":"squash"})) }))
-            .route("/api/v1/repos/o/r/issues/1/timeline", get(move |Query(query): Query<HashMap<String,String>>| async move {
-                assert!(!query.contains_key("page"), "timeline must not be paged");
-                Json(events)
-            }));
+        let app = router().route(
+            "/api/v1/repos/o/r/issues/1/timeline",
+            get(
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    assert!(!query.contains_key("page"), "timeline must not be paged");
+                    Json(events)
+                },
+            ),
+        );
         let response = execute(app, "{repository(owner:\"o\",name:\"r\"){pullRequest(number:1){autoMergeRequest{enabledAt enabledBy{login} mergeMethod commitHeadline commitBody authorEmail}}}}".into()).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         let data = response.data.into_json().unwrap();
@@ -359,5 +375,262 @@ async fn timeline_is_read_whole_and_uses_latest_event_even_in_the_same_second() 
         } else {
             assert!(auto.is_null());
         }
+    }
+}
+
+/// Forgejo schedules any style and its worker later drops a disallowed one, so refuse it first.
+#[tokio::test]
+async fn disallowed_merge_styles_are_refused_before_writing() {
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r",
+            get(|| async {
+                let mut repo = repo();
+                repo["allow_merge_commits"] = json!(false);
+                Json(repo)
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/1/merge",
+            axum::routing::post(|| async { panic!("must not write") as StatusCode }),
+        );
+    let query = format!(
+        r#"mutation {{enablePullRequestAutoMerge(input:{{pullRequestId:"{}", mergeMethod:MERGE}}){{pullRequest{{number}}}}}}"#,
+        node_id("PullRequest", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert_eq!(
+        response.errors[0].message,
+        "Merge commits are not allowed on this repository."
+    );
+}
+
+/// A schedule stores no expected head, so auto-merge refuses one before writing.
+#[tokio::test]
+async fn auto_merge_refuses_an_expected_head() {
+    let app = router().route(
+        "/api/v1/repos/o/r/pulls/1/merge",
+        axum::routing::post(|| async { panic!("must not write") as StatusCode }),
+    );
+    let query = format!(
+        r#"mutation {{enablePullRequestAutoMerge(input:{{pullRequestId:"{}", mergeMethod:SQUASH, expectedHeadOid:"abc"}}){{pullRequest{{number}}}}}}"#,
+        node_id("PullRequest", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert_eq!(
+        response.errors[0].message,
+        "Forgejo can't tie an auto-merge to a head commit; merge without auto-merge to check the head"
+    );
+}
+
+#[tokio::test]
+async fn forgejo_state_refusals_keep_their_reason() {
+    let app = router().route(
+        "/api/v1/repos/o/r/pulls/1",
+        axum::routing::patch(|| async {
+            (
+                StatusCode::PRECONDITION_FAILED,
+                Json(api_error(
+                    "cannot close this pull request because it still has open dependencies",
+                )),
+            )
+        }),
+    );
+    let query = format!(
+        r#"mutation {{closePullRequest(input:{{pullRequestId:"{}"}}){{pullRequest{{number}}}}}}"#,
+        node_id("PullRequest", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert_eq!(
+        response.errors[0].message,
+        "Pull Request still has open dependencies"
+    );
+}
+
+/// Ready removes only the draft marker; a title still opening with a prefix would stay a draft.
+#[tokio::test]
+async fn ready_removes_one_prefix_and_refuses_an_unrepresentable_title() {
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            get(|| async {
+                let mut pull = pull();
+                pull["title"] = json!("WIP: [WIP] keep this");
+                pull["draft"] = json!(true);
+                Json(pull)
+            })
+            .patch(|| async { panic!("must not write") as StatusCode }),
+        );
+    let query = format!(
+        r#"mutation {{markPullRequestReadyForReview(input:{{pullRequestId:"{}"}}){{pullRequest{{number}}}}}}"#,
+        node_id("PullRequest", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert_eq!(
+        response.errors[0].message,
+        "The title still starts with a WIP prefix, so Forgejo would keep this a draft"
+    );
+}
+
+/// Forgejo's create ignores maintainer edits, so a fork PR gets them in a follow-up edit.
+#[tokio::test]
+async fn fork_prs_get_maintainer_edits_after_create() {
+    let fork = || {
+        let mut pull = pull();
+        pull["head"]["repo"] = json!({"name":"r","owner":{"id":2,"login":"fork","avatar_url":""}});
+        pull
+    };
+    let app = router()
+        .route(
+            "/api/v1/repos/o/r/pulls",
+            axum::routing::post(move |Json(body): Json<Value>| async move {
+                assert!(body.get("allow_maintainer_edit").is_none());
+                (StatusCode::CREATED, Json(fork()))
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            axum::routing::patch(move |Json(body): Json<Value>| async move {
+                assert_eq!(body, json!({"allow_maintainer_edit": true}));
+                let mut pull = fork();
+                pull["allow_maintainer_edit"] = json!(true);
+                (StatusCode::CREATED, Json(pull))
+            }),
+        );
+    let query = format!(
+        r#"mutation {{createPullRequest(input:{{repositoryId:"{}", baseRefName:"main", headRefName:"fork:head", title:"T"}}){{pullRequest{{maintainerCanModify}}}}}}"#,
+        node_id("Repository", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"createPullRequest":{"pullRequest":{"maintainerCanModify":true}}})
+    );
+}
+
+/// A refused maintainer-edit setting still returns the created PR, with an error naming it.
+#[tokio::test]
+async fn refused_maintainer_edits_report_the_created_pr() {
+    let fork = || {
+        let mut pull = pull();
+        pull["head"]["repo"] = json!({"name":"r","owner":{"id":2,"login":"fork","avatar_url":""}});
+        pull
+    };
+    let app = router()
+        .route(
+            "/api/v1/repos/o/r/pulls",
+            axum::routing::post(move || async move { (StatusCode::CREATED, Json(fork())) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            axum::routing::patch(|| async { StatusCode::FORBIDDEN }),
+        );
+    let query = format!(
+        r#"mutation {{createPullRequest(input:{{repositoryId:"{}", baseRefName:"main", headRefName:"fork:head", title:"T"}}){{pullRequest{{number maintainerCanModify}}}}}}"#,
+        node_id("Repository", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert_eq!(
+        response.errors[0].message,
+        "Created https://forge.test/o/r/pulls/1, but Forgejo refused to let maintainers edit its branch"
+    );
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"createPullRequest":{"pullRequest":{"number":1,"maintainerCanModify":false}}})
+    );
+}
+
+/// Forgejo always schedules and only a later event wakes its worker, so auto-merge merges a ready
+/// PR at once and schedules only after a refusal such an event can lift. A direct merge leaves
+/// the style to Forgejo and needs no repository read.
+#[tokio::test]
+async fn auto_merge_merges_ready_prs_and_schedules_after_a_policy_refusal() {
+    let refusal = (
+        StatusCode::METHOD_NOT_ALLOWED,
+        "not allowed to merge [reason: Does not have enough approvals]",
+    );
+    let denied = (
+        StatusCode::METHOD_NOT_ALLOWED,
+        "User not allowed to merge PR",
+    );
+    let checking = (StatusCode::METHOD_NOT_ALLOWED, "Please try again later");
+    let raced = (StatusCode::CONFLICT, "merge push out of date");
+    let (ok, scheduled) = ((StatusCode::OK, ""), (StatusCode::CREATED, ""));
+    // (mutation, Forgejo's replies, merge_when_checks_succeed per request, error)
+    let cases = [
+        ("enablePullRequestAutoMerge", vec![ok], vec![false], None),
+        (
+            "enablePullRequestAutoMerge",
+            vec![refusal, scheduled],
+            vec![false, true],
+            None,
+        ),
+        // Still checking: the direct attempt retries, then the schedule is accepted.
+        (
+            "enablePullRequestAutoMerge",
+            vec![checking, checking, checking, checking, scheduled],
+            vec![false, false, false, false, true],
+            None,
+        ),
+        // A push that lost a race to the base gets one fresh direct attempt.
+        (
+            "enablePullRequestAutoMerge",
+            vec![raced, ok],
+            vec![false, false],
+            None,
+        ),
+        (
+            "enablePullRequestAutoMerge",
+            vec![raced, raced],
+            vec![false, false],
+            Some("Base branch was modified. Review and try the merge again."),
+        ),
+        (
+            "enablePullRequestAutoMerge",
+            vec![denied],
+            vec![false],
+            Some("User does not have permission to merge this pull request"),
+        ),
+        ("mergePullRequest", vec![ok], vec![false], None),
+    ];
+    for (mutation, replies, sent, error) in cases {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut app = Router::new()
+            .route("/api/v1/user", get(|| async { Json(user()) }))
+            .route("/api/v1/repos/o/r/pulls/1", get(|| async { Json(pull()) }))
+            .route(
+                "/api/v1/repos/o/r/pulls/1/merge",
+                axum::routing::post({
+                    let seen = seen.clone();
+                    move |Json(input): Json<Value>| async move {
+                        let mut seen = seen.lock().unwrap();
+                        seen.push(input["merge_when_checks_succeed"] == true);
+                        let (status, message) = replies[seen.len() - 1];
+                        (status, Json(api_error(message)))
+                    }
+                }),
+            );
+        app = if mutation == "mergePullRequest" {
+            app.route(
+                "/api/v1/repos/o/r",
+                get(|| async { panic!("direct merges need no repository read") as StatusCode }),
+            )
+        } else {
+            app.route("/api/v1/repos/o/r", get(|| async { Json(repo()) }))
+        };
+        let query = format!(
+            r#"mutation {{ {mutation}(input:{{pullRequestId:"{}", mergeMethod:SQUASH}}){{pullRequest{{number}}}}}}"#,
+            node_id("PullRequest", "o/r", 1)
+        );
+        let response = execute(app, query).await;
+        assert_eq!(
+            response.errors.first().map(|e| e.message.as_str()),
+            error,
+            "{mutation} {sent:?}"
+        );
+        assert_eq!(*seen.lock().unwrap(), sent, "{mutation}");
     }
 }

@@ -1,4 +1,4 @@
-use super::{Check, StatusState, rollup};
+use super::{Check, StatusState, required_checks_pass, rollup};
 use crate::forgejo::{Protection, PullRequest, RequestedTeam, Review, User};
 use async_graphql::Enum;
 use std::collections::BTreeMap;
@@ -122,7 +122,10 @@ pub fn review_state(review: &Review) -> PullRequestReviewState {
 fn latest<'a>(reviews: impl Iterator<Item = &'a Review>) -> Vec<&'a Review> {
     let mut users = BTreeMap::<i64, &Review>::new();
     for review in reviews {
-        let entry = users.entry(review.user.id).or_insert(review);
+        let Some(user) = &review.user else {
+            continue;
+        };
+        let entry = users.entry(user.id).or_insert(review);
         if (&review.submitted_at, review.id) > (&entry.submitted_at, entry.id) {
             *entry = review;
         }
@@ -140,37 +143,37 @@ pub fn latest_reviews(reviews: &[Review]) -> Vec<&Review> {
     )
 }
 
+/// Forgejo's review gate (`models/issues/pull.go:901-952`). Only `official` reviews count: each
+/// reviewer's latest approval or rejection, if they could write or were whitelisted when they
+/// submitted it (`models/issues/review.go:259-288,410-467`).
 pub fn review_decision(
     reviews: &[Review],
     protection: Option<&Protection>,
 ) -> Option<PullRequestReviewDecision> {
-    let p = protection.filter(|p| p.required_approvals > 0 || p.block_on_rejected_reviews)?;
-    let reviews = latest(reviews.iter().filter(|r| {
-        !r.dismissed
-            && !(r.stale && p.dismiss_stale_approvals)
-            && matches!(
-                review_state(r),
-                PullRequestReviewState::Approved | PullRequestReviewState::ChangesRequested
-            )
-    }));
-    if reviews.iter().any(|r| {
-        review_state(r) == PullRequestReviewState::ChangesRequested
-            && (p.block_on_rejected_reviews || r.official)
-    }) {
+    let p = protection.filter(|p| p.gates_reviews())?;
+    let official = |state: &'static str| {
+        reviews
+            .iter()
+            .filter(move |r| r.official && !r.dismissed && r.state == state)
+    };
+    if p.block_on_rejected_reviews && official("REQUEST_CHANGES").next().is_some() {
         return Some(PullRequestReviewDecision::ChangesRequested);
     }
-    let count = reviews
-        .iter()
-        .filter(|r| {
-            review_state(r) == PullRequestReviewState::Approved
-                && (!p.enable_approvals_whitelist || r.official)
-        })
+    let approvals = official("APPROVED")
+        .filter(|r| !(p.ignore_stale_approvals && r.stale))
         .count();
-    Some(if count >= p.required_approvals.max(0) as usize {
-        PullRequestReviewDecision::Approved
+    let requested = p.block_on_official_review_requests
+        && reviews
+            .iter()
+            .any(|r| r.official && r.state == "REQUEST_REVIEW");
+    if approvals < p.required_approvals.max(0) as usize || requested {
+        Some(PullRequestReviewDecision::ReviewRequired)
+    } else if p.partial {
+        // Hidden flags (stale approvals, rejections, requests) may still fail the gate.
+        None
     } else {
-        PullRequestReviewDecision::ReviewRequired
-    })
+        Some(PullRequestReviewDecision::Approved)
+    }
 }
 
 pub fn merge_state(
@@ -192,23 +195,20 @@ pub fn merge_state(
     if protection.is_some_and(|p| p.block_on_outdated_branch) && behind {
         return MergeStateStatus::Behind;
     }
-    let missing_checks = protection.is_some_and(|p| {
-        p.required_contexts().iter().any(|glob| {
-            let mut matching = checks
-                .iter()
-                .filter(|c| glob.is_match(&c.source().context))
-                .peekable();
-            matching.peek().is_none() || matching.any(|c| c.state() != StatusState::Success)
-        })
-    });
-    if matches!(
-        decision,
-        Some(
-            PullRequestReviewDecision::ReviewRequired | PullRequestReviewDecision::ChangesRequested
+    if !required_checks_pass(checks, protection)
+        || matches!(
+            decision,
+            Some(
+                PullRequestReviewDecision::ReviewRequired
+                    | PullRequestReviewDecision::ChangesRequested
+            )
         )
-    ) || missing_checks
     {
         return MergeStateStatus::Blocked;
+    }
+    // Rules this caller can't read may still block.
+    if protection.is_some_and(|p| p.partial) {
+        return MergeStateStatus::Unknown;
     }
     if rollup(checks).is_some_and(|state| state != StatusState::Success) {
         MergeStateStatus::Unstable

@@ -1,6 +1,8 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
     routing::get,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -92,4 +94,53 @@ async fn workflow_listing_keeps_bad_files_with_filename_names() {
         assert_eq!(workflow.state, "active");
     }
     task.abort();
+}
+
+/// Forgejo reads the first workflow directory that exists, even an empty one, and knows
+/// `.gitea/workflows` (`modules/actions/workflows.go:62-102`).
+#[tokio::test]
+async fn workflow_discovery_stops_at_the_first_existing_directory() {
+    for (directories, expected) in [
+        (
+            vec![".gitea/workflows", ".github/workflows"],
+            Some(".gitea/workflows/ci.yml"),
+        ),
+        (vec![".forgejo/workflows", ".github/workflows"], None),
+    ] {
+        let upstream = Router::new()
+            .route(
+                "/api/v1/user",
+                get(|| async { Json(json!({"id":1,"login":"e2e","avatar_url":""})) }),
+            )
+            .route(
+                "/api/v1/repos/o/r/contents/{*path}",
+                get(move |Path(path): Path<String>| {
+                    let directories = directories.clone();
+                    async move {
+                        if path == ".forgejo/workflows" && directories.contains(&path.as_str()) {
+                            Json(json!([{"name":"README.md","type":"file"}])).into_response()
+                        } else if directories.contains(&path.as_str()) {
+                            Json(json!([{"name":"ci.yml","type":"file"}])).into_response()
+                        } else if path.ends_with("/ci.yml") {
+                            Json(json!({"content":STANDARD.encode("name: ci\n")})).into_response()
+                        } else {
+                            StatusCode::NOT_FOUND.into_response()
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let session = Forgejo::new(url)
+            .unwrap()
+            .authenticate("token disposable")
+            .await
+            .unwrap();
+        let workflows = session.workflows("o", "r").await.unwrap();
+        assert_eq!(workflows.values().map(|w| w.path.as_str()).next(), expected);
+        task.abort();
+    }
 }

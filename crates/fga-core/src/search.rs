@@ -104,15 +104,29 @@ impl Filters {
             query.push(("labels", self.labels.join(",")));
         }
         if !self.words.is_empty() {
-            query.push(("q", self.words.join(" ")));
+            query.push(("q", self.keywords()));
         }
         query
     }
+
+    /// Forgejo's keyword syntax (`modules/indexer/issues/internal/qstring.go:47-110`): `+` makes
+    /// a term required, as every GitHub term is. Quotes make it exact, so neither a fuzzy match
+    /// nor one of Forgejo's own filters like `is:open`. Inside quotes, `\` escapes `"` and `\`.
+    fn keywords(&self) -> String {
+        self.words
+            .iter()
+            .map(|word| format!("+\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
-fn tokens(query: &str) -> Result<Vec<String>, String> {
+/// Terms, each marked if it opens with a quote: that makes it a keyword, while gh's
+/// `label:"needs work"` stays a qualifier.
+fn tokens(query: &str) -> Result<Vec<(String, bool)>, String> {
     let mut result = Vec::new();
     let mut word = String::new();
     let mut quoted = false;
+    let mut was_quoted = false;
     let mut escaped = false;
     for c in query.chars() {
         if escaped {
@@ -121,11 +135,13 @@ fn tokens(query: &str) -> Result<Vec<String>, String> {
         } else if c == '\\' && quoted {
             escaped = true;
         } else if c == '"' {
+            was_quoted |= word.is_empty() && !quoted;
             quoted = !quoted;
         } else if c.is_whitespace() && !quoted {
             if !word.is_empty() {
-                result.push(std::mem::take(&mut word));
+                result.push((std::mem::take(&mut word), was_quoted));
             }
+            was_quoted = false;
         } else {
             word.push(c);
         }
@@ -134,7 +150,7 @@ fn tokens(query: &str) -> Result<Vec<String>, String> {
         return Err("unterminated search quote".into());
     }
     if !word.is_empty() {
-        result.push(word);
+        result.push((word, was_quoted));
     }
     Ok(result)
 }
@@ -163,7 +179,11 @@ impl Search {
         };
         let mut depth = 0;
         let mut sort_explicit = false;
-        for term in tokens(query)? {
+        for (term, quoted) in tokens(query)? {
+            if quoted {
+                result.filters.words.push(term);
+                continue;
+            }
             match term.as_str() {
                 "(" => {
                     depth += 1;
@@ -287,8 +307,18 @@ mod tests {
                 ("created_by", "viewer".into()),
                 ("assigned_by", "someone".into()),
                 ("labels", "needs work".into()),
-                ("q", "scenario".into())
+                ("q", "+\"scenario\"".into())
             ]
+        );
+        let s = Search::parse(
+            r#"repo:o/r type:issue "broken feature" "is:open" "say \"hi\"" plain"#,
+            "viewer",
+        )
+        .unwrap();
+        assert_eq!(s.state, State::All, "a quoted qualifier is a keyword");
+        assert_eq!(
+            s.filters.keywords(),
+            r#"+"broken feature" +"is:open" +"say \"hi\"" +"plain""#
         );
         for term in [
             "unknown:x",

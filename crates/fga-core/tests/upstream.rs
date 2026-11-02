@@ -1,4 +1,10 @@
-use axum::{Json, Router, extract::Query, http::HeaderMap, response::IntoResponse, routing::get};
+use axum::{
+    Json, Router,
+    extract::Query,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::get,
+};
 use fga_core::forgejo::{Error, Forgejo};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -92,7 +98,8 @@ async fn memo_repo(axum::extract::State(hits): axum::extract::State<Counters>) -
     hits.repos.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Json(
         json!({"id":1,"name":"oracle","full_name":"e2e/oracle","owner":user(),"private":true,
-        "html_url":"https://forge.test/e2e/oracle","default_branch":"main","fork":false,"archived":false}),
+        "html_url":"https://forge.test/e2e/oracle","default_branch":"main","fork":false,"archived":false,
+        "permissions":{"admin":true,"push":true,"pull":true}}),
     )
 }
 async fn memo_pr(axum::extract::State(hits): axum::extract::State<Counters>) -> Json<Value> {
@@ -487,4 +494,104 @@ async fn unpaged_endpoints_are_read_once_and_paging_is_bounded() {
     assert_eq!(runs.workflow_runs.len(), 30);
     assert_eq!(*run_pages.lock().unwrap(), ["20001"]);
     server.abort();
+}
+
+/// `/branch_protections` is admin-only, so others read the branch's summary of its rule, whose
+/// name Forgejo hides from non-admins (`services/convert/convert.go:88-99`). A token limited to
+/// some repositories gets 403 even when the repository reports admin rights. Team review
+/// requests arrive with a null user.
+#[tokio::test]
+async fn non_admins_read_protection_from_the_branch_and_team_requests_parse() {
+    for admin in [false, true] {
+        let mut base = pr(1, "e2e", "s/pass");
+        base["base"]["ref"] = json!("release/1");
+        base["base"]["label"] = json!("release/1");
+        base["mergeable"] = json!(true);
+        let upstream = Router::new()
+            .route("/api/v1/user", get(|| async { Json(user()) }))
+            .route(
+                "/api/v1/repos/e2e/oracle",
+                get(move || async move {
+                    Json(json!({"id":1,"name":"oracle","full_name":"e2e/oracle","owner":user(),"private":false,
+                        "html_url":"https://forge.test/e2e/oracle","default_branch":"main","fork":false,"archived":false,
+                        "permissions":{"admin":admin,"push":true,"pull":true}}))
+                }),
+            )
+            .route(
+                "/api/v1/repos/e2e/oracle/branch_protections",
+                get(|| async { StatusCode::FORBIDDEN }),
+            )
+            .route(
+                "/api/v1/repos/e2e/oracle/branches/release/1",
+                get(|| async {
+                    Json(json!({"name":"release/1","protected":true,"effective_branch_protection_name":"",
+                        "required_approvals":1,"enable_status_check":false,"status_check_contexts":null}))
+                }),
+            )
+            .route(
+                "/api/v1/repos/e2e/oracle/branches/main",
+                get(|| async {
+                    Json(json!({"name":"main","protected":false,"effective_branch_protection_name":"","status_check_contexts":[]}))
+                }),
+            )
+            .route(
+                "/api/v1/repos/e2e/oracle/pulls/1",
+                get(move || {
+                    let base = base.clone();
+                    async move { Json(base) }
+                }),
+            )
+            .route(
+                "/api/v1/repos/e2e/oracle/commits/abc/statuses",
+                get(|| async { Json(json!([])) }),
+            )
+            .route(
+                "/api/v1/repos/e2e/oracle/pulls/1/reviews",
+                get(|| async {
+                    Json(json!([
+                        {"id":1,"user":user(),"body":"","state":"APPROVED","submitted_at":"2026-10-30T00:00:01Z","commit_id":"abc","official":true},
+                        {"id":2,"user":null,"body":"","state":"REQUEST_REVIEW","submitted_at":"2026-10-30T00:00:02Z","commit_id":"abc","official":true}
+                    ]))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let session = Forgejo::new(url)
+            .unwrap()
+            .authenticate("token t")
+            .await
+            .unwrap();
+        assert!(
+            session
+                .protection("e2e", "oracle", "main")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let response = fga_core::graphql::schema()
+            .execute(
+                async_graphql::Request::new(
+                    r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
+                        reviewDecision mergeStateStatus baseRef{branchProtectionRule{requiredApprovingReviewCount}}
+                        reviews(first:10){totalCount} latestReviews(first:10){totalCount}}}}"#,
+                )
+                .data(session)
+                .data("https://forge.test".parse::<url::Url>().unwrap()),
+            )
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        // The visible gates pass, but hidden flags may still block, so neither the review decision
+        // nor the merge state is known.
+        assert_eq!(
+            response.data.into_json().unwrap()["repository"]["pullRequest"],
+            json!({"reviewDecision":null,"mergeStateStatus":"UNKNOWN",
+                "baseRef":{"branchProtectionRule":{"requiredApprovingReviewCount":1}},
+                "reviews":{"totalCount":1},"latestReviews":{"totalCount":1}}),
+            "admin: {admin}"
+        );
+        server.abort();
+    }
 }

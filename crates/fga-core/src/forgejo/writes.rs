@@ -29,6 +29,8 @@ pub enum WriteError {
     AlreadyScheduled,
     #[error("{0} are not allowed on this repository.")]
     DisallowedMergeStyle(&'static str),
+    #[error("Pull Request still has open dependencies")]
+    DependenciesLeft,
     #[error("Validation failed")]
     Validation,
 }
@@ -111,7 +113,6 @@ pub struct CreatePull<'a> {
     pub head: &'a str,
     pub title: &'a str,
     pub body: &'a str,
-    pub allow_maintainer_edit: bool,
 }
 
 #[derive(Default, Serialize)]
@@ -142,9 +143,22 @@ pub struct MergePull {
     pub delete_branch_after_merge: bool,
 }
 
-/// Forgejo's 400, 409 and 422 on a write mean it refused the input.
+/// Forgejo's 400, 409, 412 and 422 on a write mean it refused the input. Its 412s are the PR
+/// state refusals of `routers/api/v1/repo/pull.go:738-749`.
 fn written(reply: Reply) -> Result<Reply, WriteError> {
     match reply.status {
+        StatusCode::PRECONDITION_FAILED => {
+            let value: serde_json::Value = reply.json().unwrap_or_default();
+            Err(match value["message"].as_str() {
+                Some("cannot change state of this pull request, it was already merged") => {
+                    WriteError::AlreadyMerged
+                }
+                Some("cannot close this pull request because it still has open dependencies") => {
+                    WriteError::DependenciesLeft
+                }
+                _ => WriteError::Validation,
+            })
+        }
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY | StatusCode::CONFLICT => {
             Err(WriteError::Validation)
         }
