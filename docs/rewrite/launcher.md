@@ -143,12 +143,24 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   itself. Other commands never show the account, so they get no `user` and no lookup.
   - A served host (the set *S*, below) gets its real token.
   - Every other host gets the placeholder `gfj-not-served`.
-  - gh keys tokens by the host text it targets, and keeps a port the user writes (§5). When the
-    routed target names a served host with its port, through a full URL, `--hostname`, a
-    three-part `-R` or `GH_HOST`, `hosts.yml` gets a second entry under `host:port` with the same
-    token. Only then: an extra key changes gh's default host whenever `hosts.yml` would otherwise
-    hold one host. A call with an explicit target doesn't depend on the default host. `GH_HOST`
-    is the default host itself.
+  - An allowlist entry with a port, such as `forge.test:3443`, always gets two entries, because
+    gh looks its token up two ways. gh's API client drops the port before the lookup
+    (`gh/api/http_client.go:284-290`), so it finds the portless key. gh's git credential helper
+    looks up the host git passes, port included (`gh/pkg/cmd/auth/gitcredential/helper.go:119`),
+    so a fetch from `https://forge.test:3443/…` finds `forge.test:3443`.
+    - The `host:port` entry gets the real token, which git then sends only to that port.
+    - The portless entry gets a random token instead, 32 bytes from the OS RNG as hex, made for
+      this call. The gateway accepts it for the host and authenticates upstream with the real
+      token (§5).
+
+    A git fetch from the same hostname on another port, such as a portless remote on 443 that
+    may be a different service, then gets only the random token, which nothing else accepts.
+    Routing counts both keys (L2, `GhHosts::load`), so gh's default host still matches the
+    wrapper's model.
+  - Two allowlist entries that share a hostname, such as `forge.test:3443` and
+    `forge.test:8443`, can't share the portless key. That key gets the placeholder, and each entry
+    is reachable only with its port spelled out. Routing already leaves a portless host on a shared
+    hostname unrouted (L2).
 
 The placeholders matter because of how gh finds a token. With no token in `hosts.yml` for a
 host, gh falls back to the Keychain's unkeyed slot for it (`gh:<host>`, user `""`;
@@ -321,10 +333,15 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   and HTTP client, with the CA and `api_url` settings from L4. `public_url` is `https://<entry>`,
   the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
   at the forge's web UI. Per D2, PR links end in `/pull/N`.
-- `.expecting(token)` with the token the launcher wrote into `hosts.yml`. Any other credential for
-  that host gets 401 before any upstream contact: a GitHub token, another forge's token, the
-  placeholder, a `basic` scheme, or none. GraphQL returns 401 too, not 200 with an error body.
-- For an allowlist entry with a port, `.answering_to(<portless hostname>)`. gh drops the port from
+- `.expecting(token)` with the token gh will present, the one under the key gh's API client
+  looks up, which is the portless key. Any other credential for that host gets 401 before any
+  upstream contact: a GitHub token, another forge's token, the placeholder, a `basic` scheme, or
+  none. GraphQL returns 401 too, not 200 with an error body. For a default-port entry, that is the
+  real token, which the gateway forwards upstream. For an entry with a port, it is §3's random
+  token, and the gateway must send the real token upstream instead. That needs one more L1
+  builder method, say `.upstream_token(real)`, requested from the gateway thread for L3.
+- For an allowlist entry with a port, `.answering_to(<portless hostname>)`, unless another entry
+  in *S* shares that hostname (§3). gh drops the port from
   a remote URL, so a launched gh usually sends `Host: forge.test`. It keeps the port when the user
   writes it: a full-URL `gh api https://forge.test:3443/…`, `--hostname forge.test:3443`, a
   three-part `-R`, or `GH_HOST`. The `Host` admits both spellings, `forge.test` (port 443) and
