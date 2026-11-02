@@ -744,3 +744,54 @@ fn deleted_head_branches_keep_their_name() {
         "topic"
     );
 }
+
+/// PR web URLs take GitHub's `/pull/{n}` layout, and nothing else in the URL changes (MAPPING §8).
+#[test]
+fn pull_web_urls_take_githubs_layout() {
+    for (forgejo, github) in [
+        (
+            "https://forge.test/o/r/pulls/1",
+            "https://forge.test/o/r/pull/1",
+        ),
+        (
+            "https://forge.test/o/r/pulls/12/files#issuecomment-7",
+            "https://forge.test/o/r/pull/12/files#issuecomment-7",
+        ),
+        (
+            "https://forge.test/o/r/pulls/3?tab=x#y",
+            "https://forge.test/o/r/pull/3?tab=x#y",
+        ),
+        // A forge under a subpath, with a port, keeps both.
+        (
+            "http://h:3000/git/o/r/pulls/4",
+            "http://h:3000/git/o/r/pull/4",
+        ),
+        // A repository or owner named `pulls` is a name, not the route.
+        (
+            "https://forge.test/o/pulls/pulls/5",
+            "https://forge.test/o/pulls/pull/5",
+        ),
+        (
+            "https://forge.test/pulls/9/pulls/6",
+            "https://forge.test/pulls/9/pull/6",
+        ),
+    ] {
+        assert_eq!(pull_web_url(forgejo), github, "{forgejo}");
+    }
+    for unchanged in [
+        "https://forge.test/o/r/issues/1",
+        "https://forge.test/o/r/pulls",
+        "https://forge.test/o/r/pulls/new",
+        "https://forge.test/o/r",
+        "https://forge.test/pulls/1",
+        "https://forge.test/o/r/commit/abc#pulls/1",
+        "not a url",
+        "",
+    ] {
+        assert_eq!(pull_web_url(unchanged), unchanged);
+    }
+    assert_eq!(
+        pull_request(&pr(), &WipPrefixes::default())["html_url"],
+        "https://forge.test/o/r/pull/1"
+    );
+}
