@@ -184,7 +184,6 @@ fn audit_diag_gh_trace_json_escaped_secret() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D9: fails until gh-forgejo-shim-jko.26 is fixed"]
 fn audit_diag_gh_trace_url_password_at_sign() -> TestResult {
     let f = Fixture::new()?;
     let url = "https://alice:prefix@audit-password-tail@forge.example.test/api/v1/user";

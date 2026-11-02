@@ -181,7 +181,8 @@ fn redact_url_credentials(value: &str, replacement: &str) -> String {
             })
             .map_or(value.len(), |offset| credential_start + offset);
 
-        if let Some(relative_at) = value[credential_start..authority_end].find('@') {
+        // The host follows the last `@`; an `@` before it is part of the password.
+        if let Some(relative_at) = value[credential_start..authority_end].rfind('@') {
             let at = credential_start + relative_at;
             if at > credential_start {
                 ranges.push((credential_start, at));
