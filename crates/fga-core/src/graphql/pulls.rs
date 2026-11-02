@@ -36,11 +36,13 @@ impl PullRequest {
             .map_err(error)?;
         Ok(repository.archived)
     }
-    /// Whether the viewer may schedule or cancel a merge: Forgejo refuses both in an archived
-    /// repository, and otherwise asks whether the viewer may merge into the base branch, which the
-    /// branch's summary answers for them.
+    /// Whether the viewer may schedule or cancel a merge (`IsUserAllowedToMerge`). Forgejo refuses
+    /// both in an archived repository. It checks code write access as the request's token allows
+    /// it, which the repository's permissions report, and a merge allowlist, which only the base
+    /// branch's summary reflects; only code writers can join an allowlist. A deleted base branch
+    /// has no summary, and then write access decides.
     async fn viewer_can_merge(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        if self.archived(ctx).await? {
+        if self.archived(ctx).await? || !viewer_can_write(ctx, &self.owner, &self.repo).await? {
             return Ok(false);
         }
         Ok(ctx
@@ -48,7 +50,7 @@ impl PullRequest {
             .branch_summary(&self.owner, &self.repo, &self.source.base.ref_name)
             .await
             .map_err(error)?
-            .is_some_and(|summary| summary.user_can_merge))
+            .is_none_or(|summary| summary.user_can_merge))
     }
     async fn checks(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<map::Check>> {
         let statuses = ctx

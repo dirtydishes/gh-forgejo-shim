@@ -262,9 +262,7 @@ pub struct ReviewComment {
     pub pull_request_review_id: i64,
     pub created_at: String,
     pub path: String,
-    /// The commit the comment's position was read on.
-    #[serde(default)]
-    pub commit_id: String,
+    /// The diff around the comment as the reviewer saw it, ending on the commented line.
     pub diff_hunk: String,
     /// The new-side line, or 0 when the comment is on the old side.
     pub position: u64,
