@@ -572,7 +572,6 @@ fn audit_diag_recorder_recreate_prevents_self_recursion() -> TestResult {
 
 #[test]
 #[cfg(target_os = "linux")]
-#[ignore = "audit D15: fails until gh-forgejo-shim-jko.14 is fixed"]
 fn audit_diag_release_documented_extract() -> TestResult {
     let f = Fixture::new()?;
     for name in ["awk", "mktemp", "install", "tar", "gzip", "rm"] {

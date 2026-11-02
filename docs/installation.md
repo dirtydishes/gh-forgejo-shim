@@ -56,7 +56,7 @@ curl -LO "https://github.com/dirtydishes/gh-forgejo-shim/releases/download/v${ve
 shasum -a 256 -c "gh-forgejo-shim-${version}-${target}.tar.gz.sha256"
 
 mkdir -p ~/.local/bin
-tar -xzf "gh-forgejo-shim-${version}-${target}.tar.gz" -C ~/.local/bin gh-forgejo-shim gfj
+tar -xzf "gh-forgejo-shim-${version}-${target}.tar.gz" -C ~/.local/bin ./gh-forgejo-shim ./gfj
 gfj --version
 gfj bootstrap
 ```
