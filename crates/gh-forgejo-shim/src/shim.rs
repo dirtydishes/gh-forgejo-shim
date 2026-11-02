@@ -212,6 +212,13 @@ pub fn uninstall_default_shims(home: Option<&Path>, path_dirs: &[PathBuf]) -> Re
                     default.display()
                 )));
             }
+            // Never opened: reading a FIFO would block, and the shim only writes regular files.
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(ShimError::new(format!(
+                    "{} is not a regular file, so not a wrapper this shim installed; remove it yourself",
+                    default.display()
+                )));
+            }
             Ok(_) => removed.push(uninstall_shim(None, home)?),
             Err(_) => {}
         }
@@ -419,6 +426,33 @@ mod tests {
         assert!(outside.join("gh").exists());
         fs::remove_dir_all(home).ok();
         fs::remove_dir_all(outside).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_uninstall_refuses_a_fifo_without_opening_it() -> Result<()> {
+        let home = unique_path("gh-forgejo-shim-uninstall-fifo");
+        let local_bin = home.join(".local/bin");
+        fs::create_dir_all(&local_bin)?;
+        let made = std::process::Command::new("/usr/bin/mkfifo")
+            .arg(local_bin.join("gh"))
+            .status()?;
+        assert!(made.success(), "mkfifo failed");
+
+        // Opening the FIFO would block this test forever; refusing it returns at once.
+        let error = uninstall_default_shims(Some(&home), &[]).expect_err("a FIFO is the user's");
+
+        assert!(
+            error.message().contains("not a regular file"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            fs::symlink_metadata(local_bin.join("gh")).is_ok(),
+            "the FIFO stays"
+        );
+        fs::remove_dir_all(home).ok();
         Ok(())
     }
 
