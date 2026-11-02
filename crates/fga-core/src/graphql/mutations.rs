@@ -160,10 +160,15 @@ impl Mutation {
         {
             let mut segments = vec!["repos", &id.owner, &id.repository, "branches"];
             segments.extend(base.split('/'));
-            session
+            // URL building drops `.` and `..` segments, so only a branch that names itself as
+            // `base` proves it exists.
+            let branch = session
                 .get::<serde_json::Value>(&segments, &[])
                 .await
                 .map_err(error)?;
+            if branch["name"] != base {
+                return Err(error(forgejo::Error::NotFound));
+            }
         }
         let title = input
             .title
