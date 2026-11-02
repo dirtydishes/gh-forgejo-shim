@@ -108,12 +108,14 @@ async fn memo_pr(axum::extract::State(hits): axum::extract::State<Counters>) -> 
     p["mergeable"] = json!(true);
     Json(p)
 }
-async fn memo_commits() -> Json<Value> {
+fn pull_commit(sha: &str) -> Value {
     let author =
         json!({"name":"Test User","email":"test@example.invalid","date":"2026-10-30T00:00:00Z"});
-    Json(
-        json!([{"sha":"abc","author":user(),"commit":{"message":"test","author":author,"committer":author}}]),
-    )
+    json!({"sha":sha,"author":user(),"commit":{"message":sha,"author":author,"committer":author}})
+}
+
+async fn memo_commits() -> Json<Value> {
+    Json(json!([pull_commit("abc")]))
 }
 async fn memo_statuses(axum::extract::State(hits): axum::extract::State<Counters>) -> Json<Value> {
     hits.statuses
@@ -314,12 +316,6 @@ async fn graphql_draft_title_uses_configured_prefixes_and_mergeability_is_unknow
         assert_eq!(data["repository"]["pullRequest"]["mergeable"], "UNKNOWN");
     }
     server.abort();
-}
-
-fn pull_commit(sha: &str) -> Value {
-    let author =
-        json!({"name":"Test User","email":"test@example.invalid","date":"2026-10-30T00:00:00Z"});
-    json!({"sha":sha,"author":user(),"commit":{"message":sha,"author":author,"committer":author}})
 }
 
 #[tokio::test]
