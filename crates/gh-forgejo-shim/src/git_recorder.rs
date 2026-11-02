@@ -56,9 +56,6 @@ pub fn create_git_recorder(
 
     let trace = absolute_path(trace_path)?;
     let real_git = absolute_path(&git_path)?;
-    if real_git == wrapper {
-        return Err(not_real_git(&real_git));
-    }
     fs::write(
         &wrapper,
         git_recorder_script(recorder_program, &real_git, &trace),
@@ -334,6 +331,14 @@ fn resolve_real_git(real_git: Option<&Path>, env: &HashMap<String, String>) -> R
             .ok_or_else(|| ShimError::new(format!("could not find git; set {REAL_GIT_ENV}")))?
     };
     // A wrapper that runs a recorder as its real git can end up running itself without bound.
+    // Requiring an existing file also rules out the new wrapper's own path, however it's
+    // spelled: that file either doesn't exist yet or is a recorder.
+    if !is_executable_file(&path) {
+        return Err(ShimError::new(format!(
+            "{} is not an executable file; set {REAL_GIT_ENV} to the real git",
+            path.display()
+        )));
+    }
     if is_recorder_wrapper(&path) {
         return Err(not_real_git(&path));
     }
@@ -722,9 +727,12 @@ mod tests {
         root_dir: Option<&Path>,
         wrapper_dir: Option<&Path>,
     ) -> Result<GitRecorder> {
+        let real_git = root.join("real-git");
+        fs::write(&real_git, "#!/bin/sh\n")?;
+        make_executable(&real_git)?;
         create_git_recorder(
             &root.join("trace.jsonl"),
-            Some(Path::new("/usr/bin/git")),
+            Some(&real_git),
             root_dir,
             wrapper_dir,
             &HashMap::new(),
@@ -787,12 +795,16 @@ mod tests {
                 &HashMap::new(),
                 Path::new("/tmp/gfj"),
             )
-            .is_err_and(|error| error.message().contains("not the real git"))
+            .is_err_and(|error| error.message().contains("the real git"))
         };
 
         assert!(refused(&first.wrapper_path));
         assert!(refused(&directory.join("git")));
-        assert!(!directory.join("git").exists());
+        assert!(refused(&directory.join("..").join("second").join("git")));
+        assert!(
+            !directory.exists(),
+            "a refused create left its directory behind"
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }
