@@ -670,6 +670,44 @@ fn bootstrap_gives_no_auth_advice_for_an_allowlisted_github_enterprise_host() ->
 }
 
 #[test]
+fn bootstrap_suggests_removing_the_exact_entry_that_routes_github_enterprise() -> TestResult {
+    // gh drops the port, but the entry keeps it; `remove-host` with gh's spelling would succeed
+    // and leave the route in place.
+    let fixture = checkout_with_origin("https://ghe.corp.example:8443/me/proj.git", "unused")?;
+    write_gh_hosts(&fixture, &["ghe.corp.example"])?;
+    write_shim_config(&fixture, "hosts = [\"ghe.corp.example:8443\"]\n")?;
+
+    let stdout = bootstrap(&fixture, &[])?;
+
+    assert!(
+        stdout.contains("run gh-forgejo-shim config remove-host ghe.corp.example:8443"),
+        "{stdout}"
+    );
+    let removed = fixture
+        .command("gh-forgejo-shim")?
+        .env_remove("FJ_SHIM_HOSTS")
+        .args(["config", "remove-host", "ghe.corp.example:8443"])
+        .output()?;
+    assert!(removed.status.success(), "{removed:?}");
+    assert_eq!(
+        shim_config(&fixture)?,
+        "hosts = []\n",
+        "the entry is still there"
+    );
+
+    // From FJ_SHIM_HOSTS, no config command can remove it.
+    let fixture = checkout_with_origin("https://ghe.corp.example/me/proj.git", "unused")?;
+    write_gh_hosts(&fixture, &["ghe.corp.example"])?;
+    let stdout = bootstrap(&fixture, &[("FJ_SHIM_HOSTS", "ghe.corp.example")])?;
+    assert!(
+        stdout.contains("remove ghe.corp.example from FJ_SHIM_HOSTS"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("config remove-host"), "{stdout}");
+    Ok(())
+}
+
+#[test]
 fn bootstrap_reads_the_remote_spelling_even_with_gh_repo_set() -> TestResult {
     // GH_REPO wins over the remotes; the spelling check must look past it.
     let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;

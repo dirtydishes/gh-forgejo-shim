@@ -272,17 +272,31 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
             ));
             Some(repo)
         }
-        Some(RepoPlan::GitHubAllowlisted { repo }) => {
+        Some(RepoPlan::GitHubAllowlisted { repo, entry }) => {
+            // The repair has to remove the entry that routes it, as written: `remove-host` with
+            // gh's spelling would leave `host:port` in place. FJ_SHIM_HOSTS replaces the file's
+            // hosts, so with it set the entry comes from there.
+            let (repair, command) = if options.env.contains_key("FJ_SHIM_HOSTS") {
+                (
+                    format!(
+                        "remove {entry} from FJ_SHIM_HOSTS, which replaces the config file's hosts"
+                    ),
+                    None,
+                )
+            } else {
+                let command = format!("gh-forgejo-shim config remove-host {entry}");
+                (format!("run {command}"), Some(command))
+            };
             checks.push(BootstrapCheck::new(
                 "repository",
                 false,
                 format!(
-                    "{} is in your gh hosts.yml and in the Forgejo allowlist, so the wrapper sends \
-                     {}/{} to Forgejo; bootstrap adds nothing and gives no auth advice for it; if \
-                     it's GitHub Enterprise, run gh-forgejo-shim config remove-host {}",
-                    repo.host, repo.owner, repo.name, repo.host
+                    "{} is in your gh hosts.yml and in the Forgejo allowlist as {entry}, so the \
+                     wrapper sends {}/{} to Forgejo; bootstrap adds nothing and gives no auth \
+                     advice for it; if it's GitHub Enterprise, {repair}",
+                    repo.host, repo.owner, repo.name
                 ),
-                [format!("gh-forgejo-shim config remove-host {}", repo.host)],
+                command.into_iter().collect::<Vec<_>>(),
             ));
             Some(repo)
         }
@@ -425,7 +439,8 @@ enum RepoPlan {
     },
     /// `repo`'s host is GitHub's (in the user's gh hosts.yml, say) yet the allowlist routes it:
     /// bootstrap adds nothing and gives no auth advice, which would send it the Forgejo token.
-    GitHubAllowlisted { repo: RepoRef },
+    /// `entry` is the allowlist entry that routes it, as written there (`host:port`, say).
+    GitHubAllowlisted { repo: RepoRef, entry: String },
     /// `repo`'s host isn't a host name the shim can use.
     Unusable { repo: RepoRef },
 }
@@ -458,7 +473,10 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
         if let Some(entry) = doctor::allowlist_entry(config, &repo.host) {
             // A GitHub host stays out of bootstrap's hands even when the user allowlisted it.
             if doctor::is_github_host(env, &repo.host) {
-                return Some(RepoPlan::GitHubAllowlisted { repo: repo.clone() });
+                return Some(RepoPlan::GitHubAllowlisted {
+                    repo: repo.clone(),
+                    entry,
+                });
             }
             return Some(RepoPlan::Allowlist {
                 repo: repo.clone(),
