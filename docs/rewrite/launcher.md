@@ -421,6 +421,7 @@ the launcher never converts the environment to `String`.
 | `FJ_SHIM_LAUNCH_DEPTH` | the inherited depth plus 1 |
 | `FJ_SHIM_SAVED` | the names of the variables above that the launcher changed |
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
+| `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
 
 The launcher spawns gh by absolute path, so `argv[0]` is that path too.
 
@@ -428,8 +429,9 @@ The launcher spawns gh by absolute path, so `argv[0]` is that path too.
 alias shells, extensions, git, pager, editor and credential helpers. When one of them runs `gh`
 again, it reaches the wrapper. Before routing, the wrapper reverts the launcher's changes. For each
 name in `FJ_SHIM_SAVED`, it restores the variable from `FJ_SHIM_ORIG_<NAME>`, or unsets it if
-there's no saved value. It skips any variable whose current value no longer matches what the
-launcher set, because something in between changed it on purpose. It then removes the
+there's no saved value. It skips any variable whose current state no longer matches what the
+launcher left: a different value from `FJ_SHIM_SET_<NAME>`, or, for a removed variable, any value
+at all. Something in between changed it on purpose. It then removes the
 bookkeeping variables, except `FJ_SHIM_LAUNCH_DEPTH`. A shell alias that runs
 `gh api https://api.github.com/user` therefore runs plain gh with the user's own config and token.
 
