@@ -324,9 +324,10 @@ The cost:
   The delegate list in section 2 keeps the commands that write config out of the launcher. An
   alias that expands to `config set` inside a Forgejo checkout loses its write. This is rare, and
   L3's docs name it.
-- A host-less `gh auth status` inside a Forgejo checkout reports the Forgejo hosts as logged in.
-  The user's other hosts, github.com included, show as failing, because a launched gh can't reach
-  them. Outside a Forgejo checkout, it delegates and shows the user's normal hosts.
+- A host-less `gh auth status` inside a Forgejo checkout reports the served Forgejo hosts as
+  logged in. The user's other hosts, github.com included, show as failing, because a launched gh
+  can't reach them. So does a forge the user's gh is logged in to (§2), though plain gh would show
+  it as logged in. Outside a Forgejo checkout, it delegates and shows the user's normal hosts.
 - Inside a launched gh, git fetches and pushes that gh starts, such as `gh pr checkout`, get a
   credential only for a served host. gh's fetch also clears the user's own git credential helpers
   for every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
@@ -844,6 +845,10 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    - Installed gh extensions always run through plain gh (§2).
 
    Kell, 2026-11-02: (a), the behavior above, with extensions through plain gh accepted.
+
+   The later step-aside rule (§2) adds one case to the first point: a forge the user's gh is
+   logged in to is not served, so it too shows as failing there, though plain gh would show it as
+   logged in.
 
    Sol's reviews then found one more gap, and it goes back to Kell. The placeholders cover only
    the hosts in the user's own `hosts.yml`, while the Keychain is shared by every gh config
