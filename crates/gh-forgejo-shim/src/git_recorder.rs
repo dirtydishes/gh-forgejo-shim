@@ -70,7 +70,8 @@ pub fn create_git_recorder(
     } else {
         marker_header()
     };
-    shim::replace_file(&marker, marker_text.as_bytes(), false)?;
+    // `remove` trusts this file to say whether it made the directory, so only its owner may edit it.
+    shim::replace_private_file(&marker, marker_text.as_bytes())?;
 
     let path = prepend_path(&directory, env.get("PATH").map_or("", String::as_str));
     let mut launch_env = env.clone();
