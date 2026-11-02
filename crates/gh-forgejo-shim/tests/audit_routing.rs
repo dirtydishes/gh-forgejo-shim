@@ -302,6 +302,30 @@ fn audit_route_signal_passthrough() -> TestResult {
 }
 
 #[test]
+fn audit_route_signal_passthrough_restores_default_actions() -> TestResult {
+    // Rust ignores SIGPIPE and handles SIGSEGV itself; real-time signals are outside
+    // signal-hook's table. SIGSEGV and SIGRTMIN run on Linux only: macOS shows a crash
+    // dialog for every process that dies of SIGSEGV.
+    let signals: &[i32] = if cfg!(target_os = "linux") {
+        &[13, 11, 34]
+    } else {
+        &[13]
+    };
+    for &signal in signals {
+        let fixture = Fixture::new()?;
+        executable(&fixture.real_gh, &format!("#!/bin/sh\nkill -{signal} $$\n"))?;
+        let output = fixture.run(&mut fixture.gh(&["--version"]))?;
+        assert_eq!(
+            output.status.signal(),
+            Some(signal),
+            "the wrapper must die of real gh's signal {signal}; observed status={}",
+            output.status
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_route_force_install_symlink() -> TestResult {
     let fixture = Fixture::new()?;
     let original = fs::read(&fixture.real_gh)?;
