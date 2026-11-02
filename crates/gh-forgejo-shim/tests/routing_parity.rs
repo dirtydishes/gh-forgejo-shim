@@ -1,12 +1,18 @@
 //! The wrapper must pick the same repository real gh would (finding F3).
 //!
-//! Each case is checked twice. `wrapper_matches_table` runs the dispatcher and reads its route
-//! trace. `real_gh_matches_table` runs real gh v2.103.3 on the same checkout and reads the request
-//! URL from `GH_DEBUG=api`; it is ignored unless `FJ_SHIM_PARITY_GH` names that binary. gh gets a
-//! `hosts.yml` listing the user's gh hosts plus the Forgejo host, which is the configuration the
-//! wrapper models: to gh, a Forgejo host the shim serves is a known host. Its `http_unix_socket`
-//! points at a path nothing listens on, so every request fails at once and nothing leaves the
-//! machine.
+//! `wrapper_matches_table` runs the dispatcher and reads its route trace: the repository, and the
+//! allowlist entry it routes to. `real_gh_matches_table` runs real gh v2.103.3 on the same checkout
+//! and reads the request URL from `GH_DEBUG=api`. It is ignored unless `FJ_SHIM_PARITY_GH` names
+//! that binary. It checks two things:
+//! - a routed case's repository, with gh given the `hosts.yml` key set a launched gh would get:
+//!   the user's hosts plus the allowlist hosts, or the user's hosts alone when the wrapper chose
+//!   plain gh's own key set;
+//! - for a delegated case, that plain gh, given only the user's hosts, doesn't target a host the
+//!   allowlist serves.
+//!
+//! gh's `http_unix_socket` points at a path nothing listens on, so every request fails at once and
+//! nothing leaves the machine. A stub `ssh` on PATH answers `ssh -G`, so the user's own ssh config
+//! never decides a row.
 #![cfg(unix)]
 
 use std::ffi::OsStr;
@@ -24,21 +30,58 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 const FORGE: &str = "forge.test";
 const GITHUB: &str = "github.com";
 
+/// How gh picks its base repository for the command the case runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Base {
+    /// `SmartBaseRepoFunc`, which honors `gh repo set-default`: `pr`, `browse` and most others.
+    Smart,
+    /// `BaseRepoFunc`, the first ranked remote: `secret`, `variable` and a few others.
+    First,
+}
+
+/// The `hosts.yml` key set a launched gh gets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Keys {
+    /// The user's hosts plus every allowlist host.
+    Shim,
+    /// The user's hosts alone, because plain gh's own choice was a Forgejo host.
+    User,
+}
+
+#[derive(Clone, Copy)]
 struct Case {
     name: &'static str,
     /// `(remote name, fetch URL, push URL)`, added in this order.
     remotes: &'static [(&'static str, &'static str, Option<&'static str>)],
-    /// `(remote name, value)` for `remote.<name>.gh-resolved`, as `gh repo set-default` writes.
-    resolved: Option<(&'static str, &'static str)>,
+    /// `(remote name, value)` lines for `remote.<name>.gh-resolved`, added in this order.
+    resolved: &'static [(&'static str, &'static str)],
     /// Hosts in the user's own gh `hosts.yml`.
     gh_hosts: &'static [&'static str],
-    /// The shim's Forgejo allowlist entry.
+    /// `FJ_SHIM_HOSTS`, the shim's Forgejo allowlist.
     allowlist: &'static str,
     env: &'static [(&'static str, &'static str)],
     args: &'static [&'static str],
-    /// `(host, owner, name)` gh resolves, or `None` when gh finds no repository.
+    base: Base,
+    /// `(host, owner, name)` the wrapper detects, or `None` when there's no repository.
     expected: Option<(&'static str, &'static str, &'static str)>,
+    /// The allowlist entry the wrapper routes to, or `None` when it delegates.
+    route: Option<&'static str>,
+    keys: Keys,
 }
+
+const BASE: Case = Case {
+    name: "",
+    remotes: &[],
+    resolved: &[],
+    gh_hosts: &[],
+    allowlist: FORGE,
+    env: &[],
+    args: &[],
+    base: Base::Smart,
+    expected: None,
+    route: None,
+    keys: Keys::Shim,
+};
 
 const ORIGIN_FORGE: (&str, &str, Option<&str>) =
     ("origin", "https://forge.test/local/project.git", None);
@@ -49,32 +92,23 @@ const CASES: &[Case] = &[
     Case {
         name: "single Forgejo origin",
         remotes: &[ORIGIN_FORGE],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "upstream outranks origin when gh knows two hosts",
         remotes: &[ORIGIN_FORGE, UPSTREAM_GITHUB],
-        resolved: None,
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((GITHUB, "up", "stream")),
+        ..BASE
     },
     Case {
         name: "a single known host filters the remotes to that host",
         remotes: &[ORIGIN_FORGE, UPSTREAM_GITHUB],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "Forgejo upstream outranks GitHub origin",
@@ -82,12 +116,10 @@ const CASES: &[Case] = &[
             ("origin", "https://github.com/me/fork.git", None),
             ("upstream", "git@forge.test:up/stream.git", None),
         ],
-        resolved: None,
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "up", "stream")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "GH_HOST keeps only its own remotes",
@@ -95,133 +127,177 @@ const CASES: &[Case] = &[
             ORIGIN_FORGE,
             ("github", "https://github.com/gh/repo.git", None),
         ],
-        resolved: None,
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
         env: &[("GH_HOST", GITHUB)],
-        args: &[],
         expected: Some((GITHUB, "gh", "repo")),
+        ..BASE
     },
     Case {
         name: "GH_HOST with no matching remote finds nothing",
         remotes: &[ORIGIN_FORGE],
-        resolved: None,
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
         env: &[("GH_HOST", GITHUB)],
-        args: &[],
-        expected: None,
+        ..BASE
     },
     Case {
         name: "a saved default remote wins over ranking",
         remotes: &[ORIGIN_FORGE, UPSTREAM_GITHUB],
-        resolved: Some(("origin", "base")),
+        resolved: &[("origin", "base")],
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "a saved default repository keeps its remote's host",
         remotes: &[ORIGIN_FORGE],
-        resolved: Some(("origin", "fork/thing")),
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
+        resolved: &[("origin", "fork/thing")],
         expected: Some((FORGE, "fork", "thing")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "the last saved default line wins",
+        remotes: &[ORIGIN_FORGE],
+        resolved: &[("origin", "a/first"), ("origin", "b/second")],
+        expected: Some((FORGE, "b", "second")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a dotted remote name never matches its saved default",
+        remotes: &[
+            ("my.fork", "https://forge.test/me/fork.git", None),
+            UPSTREAM_GITHUB,
+        ],
+        resolved: &[("my.fork", "base")],
+        gh_hosts: &[GITHUB],
+        expected: Some((GITHUB, "up", "stream")),
+        ..BASE
+    },
+    Case {
+        name: "variable commands ignore the saved default",
+        remotes: &[ORIGIN_FORGE, UPSTREAM_GITHUB],
+        resolved: &[("origin", "base")],
+        gh_hosts: &[GITHUB],
+        base: Base::First,
+        expected: Some((GITHUB, "up", "stream")),
+        ..BASE
     },
     Case {
         name: "-R owner/repo takes the only known host",
         remotes: &[ORIGIN_FORGE],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
         args: &["-R", "other/target"],
         expected: Some((FORGE, "other", "target")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "-R owner/repo falls back to github.com with two known hosts",
         remotes: &[ORIGIN_FORGE],
-        resolved: None,
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
-        env: &[],
         args: &["-R", "other/target"],
         expected: Some((GITHUB, "other", "target")),
+        ..BASE
     },
     Case {
         name: "GH_REPO owner/repo takes the only known host",
         remotes: &[ORIGIN_FORGE],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
         env: &[("GH_REPO", "other/target")],
-        args: &[],
         expected: Some((FORGE, "other", "target")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "-R with a host",
         remotes: &[UPSTREAM_GITHUB],
-        resolved: None,
         gh_hosts: &[GITHUB],
-        allowlist: FORGE,
-        env: &[],
         args: &["-R", "forge.test/a/b"],
         expected: Some((FORGE, "a", "b")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a -R URL loses an upper-case WWW.",
+        args: &["-R", "https://WWW.forge.test/o/r"],
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "plain gh's single Forgejo host routes when the allowlist names two",
+        remotes: &[ORIGIN_FORGE, UPSTREAM_GITHUB],
+        gh_hosts: &[FORGE],
+        allowlist: "forge.test,other.test",
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        keys: Keys::User,
+        ..BASE
+    },
+    Case {
+        name: "-R owner/repo takes plain gh's single Forgejo host",
+        remotes: &[ORIGIN_FORGE],
+        gh_hosts: &[FORGE],
+        allowlist: "forge.test,other.test",
+        args: &["-R", "other/target"],
+        expected: Some((FORGE, "other", "target")),
+        route: Some(FORGE),
+        keys: Keys::User,
+        ..BASE
     },
     Case {
         name: "an HTTPS port is not part of gh's host",
         remotes: &[("origin", "https://forge.test:3443/owner/repo.git", None)],
-        resolved: None,
-        gh_hosts: &[],
         allowlist: "forge.test:3443",
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "owner", "repo")),
+        route: Some("forge.test:3443"),
+        ..BASE
+    },
+    Case {
+        name: "two entries on one hostname leave a portless remote unrouted",
+        remotes: &[("origin", "https://forge.test:4443/owner/repo.git", None)],
+        allowlist: "forge.test:3443,forge.test:4443",
+        expected: Some((FORGE, "owner", "repo")),
+        ..BASE
+    },
+    Case {
+        name: "a port no entry has is not routed",
+        args: &["-R", "forge.test:9999/o/r"],
+        allowlist: "forge.test:3443",
+        expected: Some(("forge.test:9999", "o", "r")),
+        ..BASE
     },
     Case {
         name: "a remote below a subpath is not a repository to gh",
         remotes: &[("origin", "https://forge.test/sub/owner/repo.git", None)],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
-        expected: None,
+        ..BASE
     },
     Case {
         name: "the remote host is lowercased",
         remotes: &[("origin", "https://Forge.Test/owner/repo", None)],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "owner", "repo")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "a leading www. is dropped",
         remotes: &[("origin", "https://www.forge.test/owner/repo", None)],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "owner", "repo")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
-        // gh trims a literal `www.` before it lowercases (ghrepo/repo.go:74-76).
-        name: "an upper-case WWW. is kept",
+        // gh trims a literal `www.` from a remote before it lowercases (ghrepo/repo.go:74-76).
+        name: "an upper-case WWW. remote is kept",
         remotes: &[("origin", "https://WWW.Forge.Test/owner/repo", None)],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
-        expected: None,
+        ..BASE
+    },
+    Case {
+        name: "an ssh alias resolves through ssh -G",
+        remotes: &[("origin", "git@forge-alias:owner/repo.git", None)],
+        expected: Some((FORGE, "owner", "repo")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "other remote names keep git's order",
@@ -229,12 +305,9 @@ const CASES: &[Case] = &[
             ("b", "https://forge.test/second/repo.git", None),
             ("a", "https://forge.test/first/repo.git", None),
         ],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "first", "repo")),
+        route: Some(FORGE),
+        ..BASE
     },
     Case {
         name: "a push URL stands in for a local fetch URL",
@@ -243,12 +316,9 @@ const CASES: &[Case] = &[
             "/srv/mirror.git",
             Some("https://forge.test/owner/repo.git"),
         )],
-        resolved: None,
-        gh_hosts: &[],
-        allowlist: FORGE,
-        env: &[],
-        args: &[],
         expected: Some((FORGE, "owner", "repo")),
+        route: Some(FORGE),
+        ..BASE
     },
 ];
 
@@ -268,14 +338,12 @@ fn wrapper_matches_table() -> TestResult {
                     repo["name"].as_str().unwrap_or_default().to_string(),
                 )
             });
-        let expected_kind = match case.expected {
-            Some((host, _, _)) if host == FORGE => "forgejo",
-            _ => "delegate",
-        };
-        if actual != owned(case.expected) || trace["route"]["kind"] != expected_kind {
+        let route = (trace["route"]["kind"] == "forgejo")
+            .then(|| trace["host"].as_str().unwrap_or_default().to_string());
+        if actual != owned(case.expected) || route.as_deref() != case.route {
             failures.push(format!(
-                "{}: expected {:?} ({expected_kind}), wrapper chose {actual:?} ({})",
-                case.name, case.expected, trace["route"]["kind"]
+                "{}: expected {:?} routed to {:?}, wrapper chose {actual:?} routed to {route:?}",
+                case.name, case.expected, case.route
             ));
         }
     }
@@ -299,12 +367,33 @@ fn real_gh_matches_table() -> TestResult {
     let mut failures = Vec::new();
     for case in CASES {
         let fixture = Fixture::new(case)?;
-        let actual = fixture.real_gh_target(&gh, case)?;
-        if actual != owned(case.expected) {
-            failures.push(format!(
-                "{}: table says {:?}, gh chose {actual:?}",
-                case.name, case.expected
-            ));
+        if case.route.is_some() {
+            let actual = fixture.real_gh_target(&gh, case, case.keys)?;
+            if actual != owned(case.expected) {
+                failures.push(format!(
+                    "{}: table says {:?}, gh chose {actual:?}",
+                    case.name, case.expected
+                ));
+            }
+        } else {
+            // The model the wrapper delegated on must still be gh's own choice...
+            let modelled = fixture.real_gh_target(&gh, case, Keys::Shim)?;
+            if modelled != owned(case.expected) {
+                failures.push(format!(
+                    "{}: table says {:?}, gh with the shim's hosts chose {modelled:?}",
+                    case.name, case.expected
+                ));
+            }
+            // ...and plain gh, which the call goes to, must not land on a served Forgejo host.
+            let plain = fixture.real_gh_target(&gh, case, Keys::User)?;
+            if let Some((host, _, _)) = &plain {
+                if served(host, case.allowlist) {
+                    failures.push(format!(
+                        "{}: delegated, but plain gh chose served host {host}",
+                        case.name
+                    ));
+                }
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -313,6 +402,19 @@ fn real_gh_matches_table() -> TestResult {
 
 fn owned(value: Option<(&str, &str, &str)>) -> Option<(String, String, String)> {
     value.map(|(host, owner, name)| (host.to_string(), owner.to_string(), name.to_string()))
+}
+
+/// Whether the allowlist serves `host`: the same entry, or the one entry with its hostname when
+/// `host` has no port.
+fn served(host: &str, allowlist: &str) -> bool {
+    let entries = allowlist.split(',').collect::<Vec<_>>();
+    entries.contains(&host)
+        || (!host.contains(':')
+            && entries
+                .iter()
+                .filter(|entry| entry.split(':').next() == Some(host))
+                .count()
+                == 1)
 }
 
 struct Fixture {
@@ -332,18 +434,17 @@ impl Fixture {
         let home = root.join("home");
         let repo = root.join("repo");
         let bin = root.join("bin");
-        for dir in [
-            &home,
-            &repo,
-            &bin,
-            &root.join("gh-user"),
-            &root.join("gh-oracle"),
-        ] {
+        for dir in [&home, &repo, &bin] {
             fs::create_dir_all(dir)?;
         }
-        let real_gh = bin.join("real-gh");
-        fs::write(&real_gh, "#!/bin/sh\nexit 0\n")?;
-        fs::set_permissions(&real_gh, fs::Permissions::from_mode(0o755))?;
+        executable(&bin.join("real-gh"), "#!/bin/sh\nexit 0\n")?;
+        // `ssh -G [--] HOST`: `forge-alias` resolves to forge.test, anything else to itself.
+        executable(
+            &bin.join("ssh"),
+            "#!/bin/sh\n[ \"$1\" = -G ] || exit 1\nshift\n[ \"$1\" = -- ] && shift\n\
+             case \"$1\" in forge-alias) host=forge.test ;; *) host=\"$1\" ;; esac\n\
+             printf 'user git\\nhostname %s\\nport 22\\n' \"$host\"\n",
+        )?;
         // Reuse the installed git binary, but never a wrapper script found on PATH.
         let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
             .filter_map(|dir| dir.join("git").canonicalize().ok())
@@ -357,18 +458,6 @@ impl Fixture {
             bin,
         };
 
-        write_hosts(&fixture.root.join("gh-user"), case.gh_hosts)?;
-        let mut oracle_hosts = case.gh_hosts.to_vec();
-        oracle_hosts.push(FORGE);
-        write_hosts(&fixture.root.join("gh-oracle"), &oracle_hosts)?;
-        fs::write(
-            fixture.root.join("gh-oracle/config.yml"),
-            format!(
-                "version: \"1\"\nhttp_unix_socket: {}\n",
-                fixture.root.join("no-socket").display()
-            ),
-        )?;
-
         fixture.git(["init", "-q"])?;
         for (name, fetch, push) in case.remotes {
             fixture.git(["remote", "add", name, fetch])?;
@@ -376,8 +465,13 @@ impl Fixture {
                 fixture.git(["remote", "set-url", "--push", name, push])?;
             }
         }
-        if let Some((name, value)) = case.resolved {
-            fixture.git(["config", &format!("remote.{name}.gh-resolved"), value])?;
+        for (name, value) in case.resolved {
+            fixture.git([
+                "config",
+                "--add",
+                &format!("remote.{name}.gh-resolved"),
+                value,
+            ])?;
         }
         Ok(fixture)
     }
@@ -411,26 +505,47 @@ impl Fixture {
         Ok(())
     }
 
+    /// A gh config directory holding `hosts`, with a socket nobody listens on.
+    fn gh_config(&self, label: &str, hosts: &[&str]) -> io::Result<PathBuf> {
+        let dir = self.root.join(label);
+        fs::create_dir_all(&dir)?;
+        if !hosts.is_empty() {
+            let body = hosts
+                .iter()
+                .map(|host| format!("{host}:\n    oauth_token: fixture-token\n"))
+                .collect::<String>();
+            fs::write(dir.join("hosts.yml"), body)?;
+        }
+        fs::write(
+            dir.join("config.yml"),
+            format!(
+                "version: \"1\"\nhttp_unix_socket: {}\n",
+                self.root.join("no-socket").display()
+            ),
+        )?;
+        Ok(dir)
+    }
+
     fn wrapper_trace(&self, case: &Case) -> Result<Value, Box<dyn std::error::Error>> {
         let trace = self.root.join("trace.jsonl");
         let mut command = Command::new(env!("CARGO_BIN_EXE_gh-forgejo-shim"));
         self.isolate(&mut command);
+        let words: &[&str] = match case.base {
+            Base::Smart => &["pr", "view", "--help"],
+            Base::First => &["variable", "list", "--help"],
+        };
         command
             .arg("gh")
-            .args(["pr", "view", "--help"])
+            .args(words)
             .args(case.args)
-            .env("GH_CONFIG_DIR", self.root.join("gh-user"))
+            .env("GH_CONFIG_DIR", self.gh_config("gh-user", case.gh_hosts)?)
             .env("FJ_SHIM_HOSTS", case.allowlist)
             .env("FJ_SHIM_REAL_GH", self.bin.join("real-gh"))
             .env("FJ_SHIM_AUTH_STORE", "file")
             .env("FJ_SHIM_TRACE", &trace)
             .envs(case.env.iter().copied());
-        let output = run(&mut command)?;
-        assert!(
-            output.status.success(),
-            "{}: wrapper failed: {output:?}",
-            case.name
-        );
+        // The exit status doesn't matter here: an unsupported command still writes its route.
+        run(&mut command)?;
         let text = fs::read_to_string(trace)?;
         Ok(serde_json::from_str(
             text.lines().last().ok_or("missing route trace")?,
@@ -441,13 +556,31 @@ impl Fixture {
         &self,
         gh: &Path,
         case: &Case,
+        keys: Keys,
     ) -> io::Result<Option<(String, String, String)>> {
+        let mut hosts = case.gh_hosts.to_vec();
+        if keys == Keys::Shim {
+            for entry in case.allowlist.split(',') {
+                let hostname = entry.split(':').next().unwrap_or(entry);
+                if !hosts.contains(&hostname) {
+                    hosts.push(hostname);
+                }
+            }
+        }
+        let label = match keys {
+            Keys::Shim => "gh-shim-keys",
+            Keys::User => "gh-user-keys",
+        };
+        let words: &[&str] = match case.base {
+            Base::Smart => &["browse", "-n"],
+            Base::First => &["variable", "list"],
+        };
         let mut command = Command::new(gh);
         self.isolate(&mut command);
         command
-            .args(["browse", "-n"])
+            .args(words)
             .args(case.args)
-            .env("GH_CONFIG_DIR", self.root.join("gh-oracle"))
+            .env("GH_CONFIG_DIR", self.gh_config(label, &hosts)?)
             .env("GH_DEBUG", "api")
             .env("GH_TELEMETRY", "0")
             .env("GH_NO_UPDATE_NOTIFIER", "1")
@@ -482,15 +615,9 @@ fn parse_request_target(rest: &str) -> Option<(String, String, String)> {
     ))
 }
 
-fn write_hosts(dir: &Path, hosts: &[&str]) -> io::Result<()> {
-    if hosts.is_empty() {
-        return Ok(());
-    }
-    let body = hosts
-        .iter()
-        .map(|host| format!("{host}:\n    oauth_token: fixture-token\n"))
-        .collect::<String>();
-    fs::write(dir.join("hosts.yml"), body)
+fn executable(path: &Path, contents: &str) -> io::Result<()> {
+    fs::write(path, contents)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
 fn run(command: &mut Command) -> io::Result<Output> {
