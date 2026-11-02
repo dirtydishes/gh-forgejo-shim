@@ -3,9 +3,90 @@
 //! mode, `GH_BROWSER` names this helper, which rewrites a served host's PR page and opens the
 //! result with the browser the user would have got.
 
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+
 use url::Url;
 
-use crate::repo::gh_hostname;
+use crate::launcher::ghconfig::single_quote;
+use crate::repo::{gh_hostname, shell_split};
+
+/// The hidden subcommand `GH_BROWSER` names.
+pub const SUBCOMMAND: &str = "__gfj-browser";
+
+/// `GH_BROWSER` for a launched gh: the shim, single-quoted for gh's shlex split, the hidden
+/// subcommand, and the served entries. gh appends the URL.
+pub fn gh_browser(shim: &Path, served: &[String]) -> OsString {
+    let mut value = OsString::from(single_quote(&shim.to_string_lossy()));
+    value.push(format!(" {SUBCOMMAND}"));
+    for entry in served {
+        value.push(format!(" {entry}"));
+    }
+    value
+}
+
+/// The helper itself: `args` are the served entries, then the URL gh appended. Opens the URL,
+/// rewritten if it is a served PR page, with the browser the user would have got, and exits
+/// with that program's status.
+pub fn run(args: &[OsString]) -> i32 {
+    let Some((url, entries)) = args.split_last() else {
+        eprintln!("gh-forgejo-shim: {SUBCOMMAND} needs a URL");
+        return 1;
+    };
+    let served: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.to_string_lossy().into_owned())
+        .collect();
+    let target = rewrite(&url.to_string_lossy(), &served);
+    let shim = std::env::current_exe().ok();
+    let not_self =
+        |command: Option<String>| command.filter(|command| !is_self(command, shim.as_deref()));
+    let command = browser_command(
+        not_self(std::env::var("FJ_SHIM_ORIG_GH_BROWSER").ok()).as_deref(),
+        not_self(config_browser()).as_deref(),
+        not_self(std::env::var("BROWSER").ok()).as_deref(),
+    );
+    let Some(words) = shell_split(&command).filter(|words| !words.is_empty()) else {
+        eprintln!("gh-forgejo-shim: can't read the browser command {command:?}");
+        return 1;
+    };
+    match std::process::Command::new(&words[0])
+        .args(&words[1..])
+        .arg(&target)
+        .status()
+    {
+        Ok(status) => crate::external::inherited_exit_code(status),
+        Err(error) => {
+            eprintln!("gh-forgejo-shim: could not run {}: {error}", words[0]);
+            1
+        }
+    }
+}
+
+/// The `browser` key in gh's `config.yml`: the run directory's copy of the user's.
+fn config_browser() -> Option<String> {
+    let dir = std::env::var_os("GH_CONFIG_DIR")?;
+    let text = std::fs::read_to_string(Path::new(&dir).join("config.yml")).ok()?;
+    let config: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
+    config.get("browser")?.as_str().map(str::to_string)
+}
+
+/// A browser command that would run this helper again: the shim's own binary, or anything
+/// naming the hidden subcommand. The helper skips it, never calling itself.
+pub fn is_self(command: &str, shim: Option<&Path>) -> bool {
+    let Some(words) = shell_split(command) else {
+        return false;
+    };
+    if words.iter().any(|word| word == SUBCOMMAND) {
+        return true;
+    }
+    let (Some(first), Some(shim)) = (words.first(), shim) else {
+        return false;
+    };
+    let canonical = |path: &Path| std::fs::canonicalize(path).ok();
+    canonical(Path::new(first)).is_some_and(|first| Some(first) == canonical(shim))
+        || OsStr::new(first) == shim.as_os_str()
+}
 
 /// The URL to open: `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a
 /// fragment, becomes `/pulls/<N>` when the host is a served one; anything else is unchanged.
@@ -129,6 +210,39 @@ mod tests {
         ] {
             assert_eq!(rewrite(url, &served()), url, "{url}");
         }
+    }
+
+    #[test]
+    fn the_helper_recognises_itself() {
+        let shim = std::env::current_exe().expect("exe");
+        let quoted = format!("'{}' {SUBCOMMAND} forge.test", shim.display());
+        assert!(is_self(&quoted, Some(&shim)));
+        assert!(is_self(&shim.to_string_lossy(), Some(&shim)));
+        assert!(is_self(
+            &format!("/elsewhere/gfj {SUBCOMMAND}"),
+            Some(&shim)
+        ));
+        assert!(!is_self("firefox --new-tab", Some(&shim)));
+        assert!(!is_self("open", None));
+    }
+
+    #[test]
+    fn gh_browser_names_the_shim_the_helper_and_the_served_hosts() {
+        let value = gh_browser(
+            Path::new("/opt/it's/gfj"),
+            &["forge.test".to_string(), "port.test:3443".to_string()],
+        );
+        assert_eq!(
+            value,
+            OsString::from(format!(
+                "'/opt/it'\\''s/gfj' {SUBCOMMAND} forge.test port.test:3443"
+            ))
+        );
+        let words = shell_split(&value.to_string_lossy()).expect("split");
+        assert_eq!(
+            words,
+            ["/opt/it's/gfj", SUBCOMMAND, "forge.test", "port.test:3443"]
+        );
     }
 
     #[test]

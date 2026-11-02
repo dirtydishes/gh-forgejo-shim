@@ -289,7 +289,7 @@ const GH_COMMANDS: &[&str] = &[
 /// reject the alias. Quotes are removed. A backslash escapes the next character outside single
 /// quotes. A `#` at the start of a token begins a comment that runs to the end of the line. Only
 /// space, tab, CR and LF separate words.
-fn shell_split(text: &str) -> Option<Vec<String>> {
+pub(crate) fn shell_split(text: &str) -> Option<Vec<String>> {
     const SPACE: &[char] = &[' ', '\t', '\r', '\n'];
     let mut words = Vec::<String>::new();
     let mut chars = text.chars().peekable();
