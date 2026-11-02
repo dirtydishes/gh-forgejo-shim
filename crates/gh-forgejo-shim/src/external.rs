@@ -194,7 +194,7 @@ pub fn git_run(args: &[&str], cwd: Option<&Path>) -> GitRunResult {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     GitRunResult {
-        code: exit_code(output.status),
+        code: output.status.code().unwrap_or(1),
         message: if stderr.is_empty() { stdout } else { stderr },
     }
 }
