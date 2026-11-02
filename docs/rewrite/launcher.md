@@ -144,11 +144,16 @@ host without server mode has no `/api/v3`, so that check fails there. A login in
 serves gh itself. The wrapper reads the entry gh's API client would use: the key equal to the
 forge's hostname without its port, spelled exactly, because gh drops the port before looking up a
 token (`gh/api/http_client.go:284-290`). A login stored only under `host:port` doesn't count,
-since plain gh's API requests would never find it. When routing picks such a forge, the wrapper steps aside and runs plain
-gh as on the delegate path: no run directory, no gateway, and the user's environment unchanged
-apart from `FJ_SHIM_DEPTH` (§8). That holds for every route to the host, the "user's gh hosts"
-route included (§3), and such a host is never in *S*. Until `cwe.42` adds the server-mode key,
-this is how the shim recognizes server mode.
+since plain gh's API requests would never find it. When routing picks such a forge, the
+wrapper steps aside and runs plain gh as on the delegate path: no run directory, no gateway, and
+the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and one case. A host-less
+`gh api` or `gh auth token` gets `GH_HOST` set to the routed host, exactly as on the launch path
+(above), so decision 4 holds in every Forgejo checkout, server mode or not. Without it, plain gh
+would send these to its default host, github.com whenever the user is also logged in there, and
+`gh auth token` would print the GitHub token. The wrapper records that change with the §7
+bookkeeping, so a nested call gets the user's value back. That holds for every route to the host,
+the "user's gh hosts" route included (§3), and such a host is never in *S*. Until `cwe.42` adds
+the server-mode key, this is how the shim recognizes server mode.
 
 ## 3. Where gh's config lives
 
@@ -609,7 +614,7 @@ the launcher never converts the environment to `String`.
 | `GH_PATH` | the run directory's `gh` script, so gh's git credential helper is the launcher's (section 3, "Git's credentials") |
 | `GIT_CONFIG_PARAMETERS` | the inherited value and a space, if that value is non-empty, then `'credential.helper=' 'credential.helper=!<run dir>/gh auth git-credential'` (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
-| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
+| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2), on the launch path and when stepping aside; otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
@@ -824,9 +829,13 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     `~/.gitconfig`. `gh auth token --hostname <forge>` still prints the real token.
 15. **Stepping aside (§2).** With the user's own `hosts.yml` holding a login for a served forge,
     once as an `oauth_token` and once as a `user` alone, as gh's secure-storage login writes it,
-    `gh pr view`, `gh api repos/{owner}/{repo}` and the alias `co` = `pr view` in that
-    forge's checkout all run plain gh: no run directory is created, no socket is bound, and gh's
-    environment equals the wrapper's apart from `FJ_SHIM_DEPTH`. The same holds when that forge
+    `gh pr view`, `gh api --hostname <forge> repos/{owner}/{repo}` and the alias `co` = `pr view`
+    in that forge's checkout all run plain gh: no run directory is created, no socket is bound,
+    and gh's environment equals the wrapper's apart from `FJ_SHIM_DEPTH`. With github.com also
+    logged in, a host-less `gh api repos/{owner}/{repo}` and `gh auth token` there run plain gh
+    with `GH_HOST` set to the forge and the §7 bookkeeping for it: the request goes to the forge,
+    and `gh auth token` prints the forge's token from the user's own config. A `gh` run by a shell
+    alias inside that call sees the user's own `GH_HOST`. The same holds when that forge
     is the user's only host, and when the allowlist entry is `forge.test:3443` while the login
     sits under `forge.test`. A login stored only under `forge.test:3443` doesn't step aside: the
     call launches. A host-less `gh auth status` in another forge's checkout leaves the logged-in
@@ -924,3 +933,7 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    affects them.
 
    Kell, 2026-11-02: (a).
+
+   The later step-aside rule (§2) runs plain gh for a forge the user's gh is logged in to, which
+   would have dropped this for those forges. Kell, 2026-11-02: (a) there too. Stepping aside
+   sets `GH_HOST` for these two commands as the launch path does.
