@@ -146,6 +146,21 @@ fn decide_invocation_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
+    // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
+    // (`gh/pkg/cmd/api/http.go:19-21`).
+    if invocation.command == "api" {
+        if let Some((_, rest)) = invocation
+            .positionals
+            .first()
+            .and_then(|path| path.split_once("://"))
+        {
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            return host_route(host, config);
+        }
+    }
     if invocation.command.starts_with("auth ") || invocation.command == "api" {
         if let Some(host) = invocation
             .flag("hostname")
