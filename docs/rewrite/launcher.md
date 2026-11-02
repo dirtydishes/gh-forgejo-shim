@@ -129,8 +129,14 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   with an error naming it (section 6); plain gh would fail on it too.
 - **`hosts.yml`:** one entry for every host in the user's own `hosts.yml`, and one for every
   Forgejo host on the shim's allowlist, by gh's portless hostname. Each entry has an
-  `oauth_token`, plus the `git_protocol` from the user's entry for that host, if any. No entry has
-  a `user` key, so `gh auth status` asks the gateway for the login.
+  `oauth_token`, plus the `git_protocol` from the user's entry for that host, if any. A host-level
+  `oauth_token` needs no `user` key for gh to find it. `gh auth status` reads the account name from
+  `user`, though, and fetches it only for tokens from the environment
+  (`gh/pkg/cmd/auth/status/status.go:314-320,484-490`). For an `auth status` call, the launcher
+  therefore looks up each served host's login before it starts gh. It uses the gateway's own
+  `authenticate`, which warms the session cache, so gh's own requests repeat nothing. It writes
+  that login as `user`. If the lookup fails, the entry has no `user`, and gh reports the failure
+  itself. Other commands never show the account, so they get no `user` and no lookup.
   - A served host (the set *S*, below) gets its real token.
   - Every other host gets the placeholder `gfj-not-served`.
   - gh keys tokens by the host text it targets, and keeps a port the user writes (§5). When the
