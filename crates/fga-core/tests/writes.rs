@@ -474,6 +474,57 @@ async fn ready_removes_one_prefix_and_refuses_an_unrepresentable_title() {
     );
 }
 
+/// A forge whose WIP prefix the gateway doesn't know (Forgejo derives draft from server-configured
+/// title prefixes, `models/issues/pull.go:798`, which no API exposes). Records every PATCHed title.
+fn draft_prefix_forge(title: &str) -> (Router, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let current = std::sync::Arc::new(std::sync::Mutex::new(title.to_owned()));
+    let patched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let state = |title: &str| {
+        let mut pull = pull();
+        pull["title"] = json!(title);
+        pull["draft"] = json!(title.starts_with("DRAFT:"));
+        Json(pull)
+    };
+    let (read, write, log) = (current.clone(), current, patched.clone());
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            get(move || async move { state(&read.lock().unwrap()) }).patch(
+                move |Json(body): Json<Value>| async move {
+                    let title = body["title"].as_str().unwrap().to_owned();
+                    log.lock().unwrap().push(title.clone());
+                    *write.lock().unwrap() = title.clone();
+                    (StatusCode::CREATED, state(&title))
+                },
+            ),
+        );
+    (app, patched)
+}
+
+/// gh prints success for any payload, so a draft change Forgejo didn't make must fail, and leave
+/// the title as it was.
+#[tokio::test]
+async fn draft_changes_fail_unchanged_when_the_forge_uses_another_prefix() {
+    let mutation = |name: &str| {
+        format!(
+            r#"mutation {{{name}(input:{{pullRequestId:"{}"}}){{pullRequest{{isDraft}}}}}}"#,
+            node_id("PullRequest", "o/r", 1)
+        )
+    };
+    let message = "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's";
+
+    let (app, patched) = draft_prefix_forge("T");
+    let response = execute(app, mutation("convertPullRequestToDraft")).await;
+    assert_eq!(response.errors[0].message, message);
+    assert_eq!(*patched.lock().unwrap(), ["WIP: T", "T"]);
+
+    let (app, patched) = draft_prefix_forge("DRAFT: T");
+    let response = execute(app, mutation("markPullRequestReadyForReview")).await;
+    assert_eq!(response.errors[0].message, message);
+    assert_eq!(*patched.lock().unwrap(), Vec::<String>::new());
+}
+
 /// Forgejo's create ignores maintainer edits, so a fork PR gets them in a follow-up edit.
 #[tokio::test]
 async fn fork_prs_get_maintainer_edits_after_create() {
