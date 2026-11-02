@@ -10,7 +10,7 @@ use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::invocation::Invocation;
 use crate::read_only;
-use crate::repo::{detect_repo, RepoRef};
+use crate::repo::{detect_repo, gh_hostname, GhHosts, RepoRef};
 use crate::trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,20 @@ pub struct DispatcherConfig {
 impl DispatcherConfig {
     pub fn is_forgejo_host(&self, host: Option<&str>) -> bool {
         config::is_forgejo_host(&self.hosts, host)
+    }
+
+    /// The allowlist entry that serves `host`. gh drops the port from a remote URL, so an entry
+    /// with a port also serves its bare hostname; an exact match wins over that.
+    pub fn forgejo_host(&self, host: &str) -> Option<String> {
+        let host = normalize_host(host);
+        if self.is_forgejo_host(Some(&host)) {
+            return Some(host);
+        }
+        let hostname = gh_hostname(&host);
+        self.hosts
+            .iter()
+            .map(|entry| normalize_host(entry))
+            .find(|entry| gh_hostname(entry) == hostname && self.is_forgejo_host(Some(entry)))
     }
 }
 
@@ -136,7 +150,7 @@ fn decide_invocation_route(
             return host_route(host, config);
         }
     }
-    let detection = detect_repo(invocation, env, cwd);
+    let detection = detect_repo(invocation, env, cwd, &GhHosts::load(env, &config.hosts));
     let Some(repo) = detection.repo else {
         if let Some(host) = env.get("GH_HOST").filter(|host| !host.trim().is_empty()) {
             return host_route(host, config);
@@ -150,22 +164,22 @@ fn decide_invocation_route(
             None,
         );
     };
-    if !config.is_forgejo_host(Some(repo.host.as_str())) {
+    let Some(host) = config.forgejo_host(&repo.host) else {
         return RouteDecision::delegate(
             format!("host {} is not allowlisted", repo.host),
             Some(repo),
         );
-    }
-    let host = repo.host.clone();
+    };
     RouteDecision::forgejo(detection.source, Some(repo), Some(host))
 }
 
 fn host_route(host: &str, config: &DispatcherConfig) -> RouteDecision {
-    let host = normalize_host(host);
-    if config.is_forgejo_host(Some(&host)) {
-        RouteDecision::forgejo("host", None, Some(host))
-    } else {
-        RouteDecision::delegate(format!("host {host} is not allowlisted"), None)
+    match config.forgejo_host(host) {
+        Some(host) => RouteDecision::forgejo("host", None, Some(host)),
+        None => RouteDecision::delegate(
+            format!("host {} is not allowlisted", normalize_host(host)),
+            None,
+        ),
     }
 }
 
