@@ -499,9 +499,12 @@ ChatGPT's own "Open pull request in browser" link doesn't go through gh. In clie
 **Timeouts.** Per F23, the deadline belongs to each gateway request, not to the command:
 
 - Each gateway request has one 10 s deadline, shared by every upstream call it makes, body reads
-  included (`crates/fga-core/src/forgejo.rs:143,194-200`). The `/user` lookup that authenticates
-  it is bounded by the client's own 10 s timeout. A slow upstream gets gh a 504 within about 10 s
-  per request.
+  included (`crates/fga-core/src/forgejo.rs:143,194-200`). The deadline starts after
+  authentication, though, and the `/user` lookup that authenticates has its own 10 s client
+  timeout. A request that has to authenticate can therefore take up to about 20 s before gh gets
+  a 504: a 9 s `/user`, then a stalled call. Later requests in the same call reuse the cached
+  session, so they're bounded by about 10 s. Putting both steps under one deadline would be a
+  gateway change, not a launcher one.
 - The launcher has no process-wide deadline and never kills gh on its own. `gh run watch` and
   `gh pr checks --watch` poll for as long as gh likes. An interactive `gh pr create` sits in the
   editor for as long as the user likes. Plain gh against GitHub behaves the same way.
@@ -509,8 +512,9 @@ ChatGPT's own "Open pull request in browser" link doesn't go through gh. In clie
 - A client that wants a bound on the whole command kills the wrapper. SIGTERM reaches gh
   (section 6). SIGKILL leaves gh to fail on its next request.
 
-R4's old gate, "a slow server finishes within the deadline plus 0.5 s", becomes a gateway test: a
-stalled upstream gets a 504 within 10.5 s, and the launcher keeps running until gh exits.
+R4's old gate, "a slow server finishes within the deadline plus 0.5 s", becomes a gateway test.
+A stalled upstream gets a 504 within 10.5 s once the session is cached, and within 20.5 s when
+`/user` is slow too. The launcher keeps running until gh exits.
 
 **Concurrency.** Each invocation has its own run directory, socket, config copy, gateway and
 session cache. ChatGPT polls about every 60 s per thread, so several launchers run at once and share
@@ -573,8 +577,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     token, a launched `gh pr view` exits 4 with the login hint.
 12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
     `gh config set` in a Forgejo checkout changes the user's real `config.yml`.
-13. **Timeout (§10).** A stalled upstream gets gh a 504 within 10.5 s, and the launcher doesn't kill
-    gh.
+13. **Timeout (§10).** A stalled upstream gets gh a 504 within 10.5 s once the session is cached.
+    A slow `/user` (9 s) followed by a stalled call gets the 504 within 20.5 s. The launcher
+    doesn't kill gh in either case.
 
 ## 12. Ownership
 
