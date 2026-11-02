@@ -611,6 +611,93 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        name: "an alias after a short flag and its value is still an alias",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "-R",
+            "github.com/local/project",
+            "co",
+            "https://forge.test/o/r/pull/1",
+        ]),
+        aliases: &[("co", "pr checkout")],
+        host_only: true,
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias after a long flag and its value is still an alias",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "--repo",
+            "github.com/local/project",
+            "co",
+            "https://forge.test/o/r/pull/1",
+        ]),
+        aliases: &[("co", "pr checkout")],
+        host_only: true,
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias after a long flag with = is still an alias",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "--repo=github.com/local/project",
+            "co",
+            "https://forge.test/o/r/pull/1",
+        ]),
+        aliases: &[("co", "pr checkout")],
+        host_only: true,
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "flags after an alias pass through to its command",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "co",
+            "--repo",
+            "github.com/local/project",
+            "https://forge.test/o/r/pull/1",
+        ]),
+        aliases: &[("co", "pr checkout")],
+        host_only: true,
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a flag before an alias picks the Forgejo repository",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["-R", "forge.test/a/b", "pv", "1"]),
+        aliases: &[("pv", "pr view")],
+        host_only: true,
+        expected: Some((FORGE, "a", "b")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a flag before an alias picks the GitHub repository",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["-R", "github.com/a/b", "pv", "1"]),
+        aliases: &[("pv", "pr view")],
+        host_only: true,
+        expected: Some((GITHUB, "a", "b")),
+        ..BASE
+    },
+    Case {
+        name: "an alias whose expansion starts with -h is rejected",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["hx"]),
+        aliases: &[("hx", "-h pr view -R forge.test/o/r")],
+        host_only: true,
+        expected: None,
+        ..BASE
+    },
+    Case {
         name: "a control byte in a remote URL's fragment doesn't drop it",
         remotes: &[
             ("origin", "https://forge.test/local/project.git", None),
@@ -719,7 +806,13 @@ fn real_gh_matches_table() -> TestResult {
         } else {
             // The model the wrapper delegated on must still be gh's own choice...
             let modelled = fixture.real_gh_target(&gh, case, Keys::Shim)?;
-            if modelled != owned(case.expected) {
+            let matches = if case.host_only {
+                modelled.as_ref().map(|(host, _, _)| host.as_str())
+                    == case.expected.map(|(host, _, _)| host)
+            } else {
+                modelled == owned(case.expected)
+            };
+            if !matches {
                 failures.push(format!(
                     "{}: table says {:?}, gh with the shim's hosts chose {modelled:?}",
                     case.name, case.expected
