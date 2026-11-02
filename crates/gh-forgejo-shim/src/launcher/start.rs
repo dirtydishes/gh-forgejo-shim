@@ -61,30 +61,6 @@ pub fn launch(
             Ok(config) => config,
             Err(error) => return Some(fail(1, &error.to_string())),
         };
-    let forgejo_url = upstream_url(host, &config, env)?;
-    let token = auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()));
-    // `auth status` keeps its current answer for a host with no token (§2): the built-in path's
-    // "Not logged in", exit 1, as gh says it, with no real gh needed.
-    if token.is_none() && routed.command == "auth status" {
-        return None;
-    }
-
-    let Some(gh) = find_program("gh", real_gh, env) else {
-        // Discovery skips what it can't run; a configured path that exists anyway, a directory
-        // or a file without execute bits, is 126, not 127 (§6). `~` expands as discovery does.
-        if let Some(path) = real_gh.map(|path| expand_home(path, env)) {
-            if path.exists() && !is_executable_file(&path) {
-                return Some(fail(
-                    126,
-                    &format!("the real gh at {} is not executable", path.display()),
-                ));
-            }
-        }
-        return Some(fail(
-            127,
-            "could not find the real gh executable; set FJ_SHIM_REAL_GH",
-        ));
-    };
     // The user's gh files, read once and never written (§3).
     let user_dir = repo::user_gh_config_dir(env);
     let read = |name: &str| -> Result<Option<String>, String> {
@@ -126,6 +102,10 @@ pub fn launch(
 
     // A forge the user's own gh is logged in to serves gh itself (server mode): plain gh (§2).
     if logged_in(&user_hosts, host) {
+        let gh = match find_real_gh(real_gh, env) {
+            Ok(gh) => gh,
+            Err(code) => return Some(code),
+        };
         return Some(step_aside(
             &gh,
             args,
@@ -133,6 +113,19 @@ pub fn launch(
             crate::trace::tracing_enabled(env),
         ));
     }
+    let forgejo_url = upstream_url(host, &config, env)?;
+    let token = auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()));
+    // `auth status` keeps its current answer for a host with no token (§2), the built-in path's
+    // "Not logged in", unless it's host-less and other hosts have tokens: S is every allowlist
+    // host that has one (§3).
+    if token.is_none() && routed.command == "auth status" && !all_hosts {
+        return None;
+    }
+
+    let gh = match find_real_gh(real_gh, env) {
+        Ok(gh) => gh,
+        Err(code) => return Some(code),
+    };
     // Plain gh's default host is this forge, but its entry holds no login gh can use (§3).
     if reason.ends_with("user's gh hosts") {
         let key = user_hosts
@@ -153,12 +146,12 @@ pub fn launch(
         ));
     }
 
-    let Some(token) = token else {
+    if token.is_none() && routed.command != "auth status" {
         return Some(fail(
             4,
             &format!("no token for {host}; run: gfj auth login {host}"),
         ));
-    };
+    }
 
     let (parent, source) = rundir::parent(env);
     if let Err(message) = rundir::check_parent(&parent, source) {
@@ -173,7 +166,10 @@ pub fn launch(
     // allowlist entry with a token, except entries sharing a hostname, forges the user's gh is
     // logged in to, and settings the gateway can't honour yet.
     let routed_entry = config::normalize_host(host);
-    let mut served_hosts = vec![(routed_entry.clone(), token.token.clone(), forgejo_url)];
+    let mut served_hosts = Vec::new();
+    if let Some(token) = &token {
+        served_hosts.push((routed_entry.clone(), token.token.clone(), forgejo_url));
+    }
     if all_hosts {
         for entry in config
             .hosts
@@ -197,6 +193,10 @@ pub fn launch(
             };
             served_hosts.push((entry, found.token, url));
         }
+    }
+    // A host-less `auth status` whose hosts all lack tokens keeps the built-in answer.
+    if served_hosts.is_empty() {
+        return None;
     }
     let served: Vec<ServedHost> = served_hosts
         .iter()
@@ -277,6 +277,26 @@ pub fn launch(
             edits
         }),
     }))
+}
+
+/// Real gh, or §6's exit code: 126 for a configured path that exists but can't run (`~` expanded
+/// as discovery does), 127 when there is none.
+fn find_real_gh(real_gh: Option<&Path>, env: &HashMap<String, String>) -> Result<PathBuf, i32> {
+    if let Some(gh) = find_program("gh", real_gh, env) {
+        return Ok(gh);
+    }
+    if let Some(path) = real_gh.map(|path| expand_home(path, env)) {
+        if path.exists() && !is_executable_file(&path) {
+            return Err(fail(
+                126,
+                &format!("the real gh at {} is not executable", path.display()),
+            ));
+        }
+    }
+    Err(fail(
+        127,
+        "could not find the real gh executable; set FJ_SHIM_REAL_GH",
+    ))
 }
 
 fn is_executable_file(path: &Path) -> bool {
