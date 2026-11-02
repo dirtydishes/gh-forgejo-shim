@@ -83,6 +83,16 @@ fn edits_are_recorded_and_reverted() {
         Some("'a.b'='c' 'x.y'='z'".into())
     );
 
+    // A name edited twice keeps the user's value from before the first edit.
+    env::set_var("TWICE", "user");
+    apply(&[
+        ("TWICE", Edit::Set("a".into())),
+        ("TWICE", Edit::Set("b".into())),
+    ]);
+    assert_eq!(get("TWICE"), Some("b".into()));
+    revert();
+    assert_eq!(get("TWICE"), Some("user".into()));
+
     // Nothing recorded: revert only drops a stray launcher pid.
     env::set_var(LAUNCHER, "7");
     env::set_var("GH_CONFIG_DIR", "/kept");

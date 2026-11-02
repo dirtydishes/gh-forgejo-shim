@@ -419,3 +419,70 @@ fn delegated_gh_gets_the_wrappers_environment_byte_for_byte() {
         "every wrapper invocation raises the depth: {report:?}"
     );
 }
+
+#[test]
+fn a_nested_call_gets_the_users_environment_back() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let gh = fixture.fake_gh(
+        r#"printf '%s\n' "GH_TOKEN=${GH_TOKEN-unset}" "GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS-unset}" \
+  "FJ_SHIM_DEPTH=${FJ_SHIM_DEPTH-unset}" "FJ_SHIM_CREDENTIALS=${FJ_SHIM_CREDENTIALS-unset}" \
+  "FJ_SHIM_SAVED=${FJ_SHIM_SAVED-unset}" "FJ_SHIM_LAUNCHER=${FJ_SHIM_LAUNCHER-unset}" > "$REPORT""#,
+    );
+    // What a launched call leaves for a nested one: its edits and bookkeeping, and the
+    // variable the run directory's script sets. The route here delegates.
+    let output = fixture
+        .command(&gh, &["pr", "view", "1", "-R", "github.com/o/r"])
+        .env("FJ_SHIM_SAVED", "GH_TOKEN,GIT_CONFIG_PARAMETERS")
+        .env("FJ_SHIM_ORIG_GH_TOKEN", "usertok")
+        .env("FJ_SHIM_ORIG_GIT_CONFIG_PARAMETERS", "'a.b=c'")
+        .env("FJ_SHIM_SET_GIT_CONFIG_PARAMETERS", "'credential.helper='")
+        .env("GIT_CONFIG_PARAMETERS", "'credential.helper='")
+        .env("FJ_SHIM_DEPTH", "3")
+        .env("FJ_SHIM_LAUNCHER", u32::MAX.to_string())
+        .env("FJ_SHIM_CREDENTIALS", "/nonexistent/credentials")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        fixture.report(),
+        "GH_TOKEN=usertok\nGIT_CONFIG_PARAMETERS='a.b=c'\nFJ_SHIM_DEPTH=4\n\
+         FJ_SHIM_CREDENTIALS=unset\nFJ_SHIM_SAVED=unset\nFJ_SHIM_LAUNCHER=unset\n"
+    );
+}
+
+#[test]
+fn a_credential_request_is_answered_before_the_guards() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let credentials = fixture.dir.join("credentials");
+    fs::write(&credentials, "forge.test real-token\n").expect("credentials");
+    // Depth at the cap, and this test as the wrapper's parent and "launcher": both guards would
+    // stop any other call.
+    let mut child = fixture
+        .command(
+            &fixture.dir.join("absent"),
+            &["auth", "git-credential", "get"],
+        )
+        .env("FJ_SHIM_CREDENTIALS", &credentials)
+        .env("FJ_SHIM_DEPTH", "8")
+        .env("FJ_SHIM_LAUNCHER", std::process::id().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn wrapper");
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"protocol=https\nhost=forge.test\n\n")
+        .expect("write");
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("password=real-token\n"),
+        "{output:?}"
+    );
+}
