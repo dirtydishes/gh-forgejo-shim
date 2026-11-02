@@ -124,6 +124,32 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
     )))
 }
 
+/// Removes the managed wrapper from `~/.local/bin` and from every `PATH` directory under
+/// `home`, since `bootstrap` installs into the first writable one of those. Returns the paths it
+/// removed. With none to remove, it behaves as [`uninstall_shim`] on the default directory.
+pub fn uninstall_default_shims(home: Option<&Path>, path: Option<&str>) -> Result<Vec<PathBuf>> {
+    let mut candidates = vec![shim_path(None, home)?];
+    if let (Some(home), Some(path)) = (home, path) {
+        candidates.extend(
+            std::env::split_paths(path)
+                .filter(|dir| dir.is_absolute() && dir.starts_with(home))
+                .map(|dir| dir.join("gh")),
+        );
+    }
+    let mut removed = Vec::new();
+    for candidate in candidates {
+        // A directory listed twice finds the wrapper already gone the second time.
+        if is_managed_shim(&candidate) {
+            fs::remove_file(&candidate)?;
+            removed.push(candidate);
+        }
+    }
+    if removed.is_empty() {
+        removed.push(uninstall_shim(None, home)?);
+    }
+    Ok(removed)
+}
+
 pub fn uninstall_shim(bin_dir: Option<&Path>, home: Option<&Path>) -> Result<PathBuf> {
     let target = shim_path(bin_dir, home)?;
     if !target.exists() {
@@ -232,6 +258,33 @@ mod tests {
         fs::write(&path, script)?;
         assert!(is_managed_shim(&path));
         fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn default_uninstall_removes_managed_wrappers_on_path_under_home() -> Result<()> {
+        let home = unique_path("gh-forgejo-shim-uninstall-default");
+        let (cargo, other) = (home.join(".cargo/bin"), home.join("bin"));
+        let outside = unique_path("gh-forgejo-shim-uninstall-outside");
+        for dir in [&cargo, &other, &outside] {
+            fs::create_dir_all(dir)?;
+        }
+        install_shim(Some(&cargo), Some(&home), Path::new("/opt/gfj"), false)?;
+        install_shim(Some(&outside), Some(&home), Path::new("/opt/gfj"), false)?;
+        fs::write(other.join("gh"), "#!/bin/sh\n")?;
+        let path = std::env::join_paths([&other, &cargo, &outside])
+            .map_err(|error| ShimError::new(error.to_string()))?;
+
+        let removed = uninstall_default_shims(Some(&home), path.to_str())?;
+
+        assert_eq!(removed, [cargo.join("gh")]);
+        assert!(other.join("gh").exists(), "an unmanaged gh stays");
+        assert!(
+            outside.join("gh").exists(),
+            "a wrapper outside HOME needs --bin-dir"
+        );
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(outside).ok();
         Ok(())
     }
 

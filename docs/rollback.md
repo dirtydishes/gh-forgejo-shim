@@ -14,11 +14,10 @@ package.
 gh-forgejo-shim uninstall-shim
 ```
 
-By default this removes:
-
-```text
-~/.local/bin/gh
-```
+By default this removes the wrapper from `~/.local/bin/gh`, and from any directory
+on your `PATH` inside your home directory, such as `~/.cargo/bin`, where
+`bootstrap` may have installed it instead. For a wrapper installed with
+`--bin-dir DIR`, pass the same `--bin-dir DIR`.
 
 The uninstall command only removes files that look like a shim created by this project.
 

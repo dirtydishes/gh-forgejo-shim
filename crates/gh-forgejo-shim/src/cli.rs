@@ -386,9 +386,16 @@ fn run_uninstall_shim(
         }
     }
 
-    let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
-    let path = shim::uninstall_shim(bin_dir.as_deref(), runtime.home())?;
-    writeln!(stdout, "removed gh shim at {}", path.display())?;
+    let paths = match resolve_optional_path(bin_dir_arg, runtime.home())? {
+        Some(bin_dir) => vec![shim::uninstall_shim(Some(&bin_dir), runtime.home())?],
+        None => shim::uninstall_default_shims(
+            runtime.home(),
+            runtime.env().get("PATH").map(String::as_str),
+        )?,
+    };
+    for path in paths {
+        writeln!(stdout, "removed gh shim at {}", path.display())?;
+    }
     Ok(0)
 }
 

@@ -488,7 +488,6 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
 // Linux only: on macOS the CLI reads the real launchd PATH through /bin/launchctl, even with
 // --no-gui-path, and the library call inherits the runner's own environment.
 #[cfg(target_os = "linux")]
-#[ignore = "audit D14: fails until gh-forgejo-shim-jko.13 is fixed"]
 fn audit_diag_uninstall_reverses_default_bootstrap() -> TestResult {
     let f = Fixture::new()?;
     let selected = f.home.join(".cargo/bin");
