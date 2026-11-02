@@ -71,7 +71,7 @@ pre-move audit merged as its PR #6 (`22c0b69`).
   README section. Decision D1 below supersedes this: server mode is a first-class install path.
 - If real gh becomes newly required, the release notes say so. It does become newly required (F14).
 
-**Decisions on this review, 2026-11-01 (Kell).** Section 3 has the full text.
+**Decisions on this review, 2026-11-01 (Kell).** Sections 3 and 4 have the full text.
 
 - D1: client-only mode supports Claude's agent running gh, and server mode becomes first-class.
 - D2: PR URLs use `/pull/N`.
@@ -79,6 +79,8 @@ pre-move audit merged as its PR #6 (`22c0b69`).
 - D4: no interim release from `rewrite`. The shim's `pr checks --required` path is deleted in the
   restructure, and the rule is that nothing ships from `rewrite` until the launcher slice (L3) passes.
 - D5: seeding the Forgejo twin and adding a non-admin e2e user are approved.
+- D6: audit bugs R3, D1 and D18 get a small fix PR to `main` first, then a cherry-pick into `rewrite`
+  (section 4).
 
 **State on 2026-11-01:**
 
@@ -610,7 +612,9 @@ section 4, but it reaches users only after L3. The freeze is a blocking note on 
 release bead (`cwe.39`), and both already depend on `cwe.28`. Lifting it early takes a new decision from
 Kell.
 
-The freeze doesn't cover `main` itself. A patch release cut from `main` is open question D6 in section 4.
+The freeze doesn't cover `main` itself. Decision D6 (section 4) sends three high audit fixes to `main`
+in a small PR, then cherry-picks them into `rewrite`. That doesn't break the freeze, which only covers
+moving `rewrite` into `main`.
 
 ### Decisions (Kell, 2026-11-01)
 
@@ -627,6 +631,8 @@ The freeze doesn't cover `main` itself. A patch release cut from `main` is open 
   (F11)
 - **D5: approved.** Seeding PR states on `dirtydishes/gfj-oracle` and adding a non-admin e2e user are
   both OK. Both are build work for their beads (`cwe.32`, `cwe.31`), not part of this review. (F15)
+- **D6: patch `main` first.** Audit bugs R3, D1 and D18 get a small fix PR to `main`, then a cherry-pick
+  into `rewrite`. This doesn't break the release freeze. (Section 4)
 
 ## 4. Where the shell audit's bugs land
 
@@ -704,9 +710,13 @@ in `repo.rs`.
   `codex_smoke.rs`, because contract tests supersede it. If `trace smoke` survives, fix both. If it's
   dropped, the tests go with it. Decide this at cutover (`cwe.19`).
 
-### Open question for Kell (D6)
+### Decision D6 (Kell, 2026-11-01): patch `main` first
 
-Audit bugs R3, D1 and D18 are high, and they ship in released code today. Should they go out as a patch
-release cut from `main` ahead of the restructure? D4 freezes releases from `rewrite`, so without a patch
-from `main`, released users keep these three until after L3. The fixes are small and don't touch code the
-restructure replaces. They would be cherry-picked to `rewrite` afterwards.
+Audit bugs R3, D1 and D18 are high, and they ship in released code today. They get fixed in a small PR
+to `main`, then cherry-picked into `rewrite`. The release freeze (D4) only covers moving `rewrite` into
+`main`, so this PR doesn't break it. The fixes are small and don't touch code the restructure replaces.
+The audit tests live on the audit branch, which is cut from `rewrite`, so the PR to `main` brings its three
+tests with it and passes them: `audit_route_force_install_symlink` (`jko.1`),
+`audit_diag_recorder_remove_preserves_unrelated_files` (`jko.3`) and
+`audit_diag_recorder_recreate_prevents_self_recursion` (`jko.4`). After the cherry-pick, the same tests
+lose their `#[ignore]` on `rewrite`.
