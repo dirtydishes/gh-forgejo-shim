@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use crate::invocation::Invocation;
 
 #[cfg(unix)]
+pub mod credentials;
+#[cfg(unix)]
 pub mod gateway;
 pub mod ghconfig;
 #[cfg(unix)]
