@@ -826,6 +826,8 @@ mod tests {
         fs::create_dir(&directory)?;
         let script = directory.join("git");
         fs::write(&script, format!("#!/bin/sh\n# mentions {MARKER}\n"))?;
+        // A valid marker, so only the wrapper check stands between the script and removal.
+        fs::write(directory.join(MARKER_FILE), marker_header())?;
         assert!(remove_git_recorder(&directory).is_err());
         assert!(script.exists());
 
@@ -833,7 +835,6 @@ mod tests {
         fs::remove_file(&script)?;
         #[cfg(unix)]
         std::os::unix::fs::symlink(&recorder.wrapper_path, &script)?;
-        fs::write(directory.join(MARKER_FILE), marker_header())?;
         assert!(remove_git_recorder(&directory).is_err());
         assert!(recorder.wrapper_path.exists());
         fs::remove_dir_all(root)?;
@@ -851,12 +852,16 @@ mod tests {
         for name in ["git", MARKER_FILE] {
             let directory = root.join(format!("bin-{}", name.trim_start_matches('.')));
             fs::create_dir(&directory)?;
+            let refused = |root: &Path| {
+                create(root, None, Some(&directory))
+                    .is_err_and(|error| error.message().contains("not managed by gh-forgejo-shim"))
+            };
             symlink(&precious, directory.join(name))?;
-            assert!(create(&root, None, Some(&directory)).is_err());
+            assert!(refused(&root));
             let dangling = root.join(format!("missing-{}", name.trim_start_matches('.')));
             fs::remove_file(directory.join(name))?;
             symlink(&dangling, directory.join(name))?;
-            assert!(create(&root, None, Some(&directory)).is_err());
+            assert!(refused(&root));
             assert!(!dangling.exists());
         }
         assert_eq!(fs::read_to_string(&precious)?, "precious\n");
