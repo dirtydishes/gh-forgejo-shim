@@ -423,13 +423,7 @@ fn make_wrapper_dir(
             "gh-forgejo-shim-git-{}-{attempt}",
             std::process::id()
         ));
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o755);
-        }
-        match builder.create(&directory) {
+        match shim::create_dir(&directory, 0o755) {
             Ok(()) => return Ok((absolute_path(&directory)?, true)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
