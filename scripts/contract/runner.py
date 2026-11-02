@@ -34,6 +34,17 @@ def classify(case, actual):
     return "pass", ""
 
 
+def gh_script(real_gh=None):
+    """The `gh` on a case's PATH. The decoy marks a delegation and fails. For a launch-list case,
+    real gh runs only when the launcher started it, with a run directory as its config, so a
+    delegation still hits the decoy."""
+    decoy = ': > "$GFJS_DECOY_MARKER"\nprintf "%s\\n" "ERROR: contract delegated to real gh" >&2\nexit 97\n'
+    if real_gh is None:
+        return "#!/bin/sh\n" + decoy
+    run_dir = "*/gfj-" + "[0-9a-f]" * 16
+    return f'#!/bin/sh\ncase "$GH_CONFIG_DIR" in {run_dir}) exec {shlex.quote(str(real_gh))} "$@" ;; esac\n' + decoy
+
+
 def execute(case, binary, seed_home, work_dir, real_gh=None):
     with tempfile.TemporaryDirectory(prefix=case["id"] + "-", dir=work_dir) as temporary:
         directory = Path(temporary)
@@ -47,12 +58,8 @@ def execute(case, binary, seed_home, work_dir, real_gh=None):
         (tools / "git").symlink_to(git)
         decoy = tools / "gh"
         marker = directory / "delegated"
-        if real_gh is not None:
-            # A launch-list case: the shim launches real gh through its gateway.
-            decoy.symlink_to(real_gh)
-        else:
-            decoy.write_text('#!/bin/sh\n: > "$GFJS_DECOY_MARKER"\nprintf "%s\\n" "ERROR: contract delegated to real gh" >&2\nexit 97\n')
-            decoy.chmod(0o755)
+        decoy.write_text(gh_script(real_gh))
+        decoy.chmod(0o755)
         entrypoint = directory / "gh"
         entrypoint.write_text(f'#!/bin/sh\nexec {shlex.quote(str(binary))} gh "$@"\n')
         entrypoint.chmod(0o755)
