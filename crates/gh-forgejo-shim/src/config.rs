@@ -295,16 +295,17 @@ fn set_hosts(document: &mut DocumentMut, hosts: &[String]) {
         return;
     };
     let mut kept = Vec::<String>::new();
-    array.retain(|value| {
-        let host = value.as_str().and_then(normalized_forgejo_host);
-        match host {
-            Some(host) if hosts.contains(&host) && !kept.contains(&host) => {
-                kept.push(host);
-                true
-            }
-            _ => false,
+    let mut dropped = Vec::new();
+    for (index, value) in array.iter().enumerate() {
+        match value.as_str().and_then(normalized_forgejo_host) {
+            Some(host) if hosts.contains(&host) && !kept.contains(&host) => kept.push(host),
+            _ => dropped.push(index),
         }
-    });
+    }
+    // Last first, so a run of removals hands each line's comment along in turn.
+    for index in dropped.into_iter().rev() {
+        remove_keeping_line_comments(array, index);
+    }
     for host in hosts.iter().filter(|host| !kept.contains(host)) {
         let trailing = array.trailing().as_str().unwrap_or_default().to_string();
         if !trailing.contains('\n') {
@@ -327,6 +328,39 @@ fn set_hosts(document: &mut DocumentMut, hosts: &[String]) {
         ));
         array.push_formatted(value);
         array.set_trailing("\n");
+    }
+}
+
+/// Removes element `index`, keeping the line-end comment of the element before it. In a
+/// multi-line array, the text up to the first line break of an element's prefix ends the line
+/// above: it holds that element's `# comment`. Removing the element would lose it, and leave the
+/// removed element's own comment, held by whatever follows, on the line above instead.
+fn remove_keeping_line_comments(array: &mut Array, index: usize) {
+    let removed = array.remove(index);
+    let prefix = removed
+        .decor()
+        .prefix()
+        .and_then(|prefix| prefix.as_str())
+        .unwrap_or_default();
+    let Some(line_end) = prefix.find('\n') else {
+        return;
+    };
+    let carried = &prefix[..=line_end];
+    let replace_head = |text: &str| match text.find('\n') {
+        Some(end) => format!("{carried}{}", &text[end + 1..]),
+        None => text.to_string(),
+    };
+    if let Some(next) = array.get_mut(index) {
+        let text = next
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or_default()
+            .to_string();
+        next.decor_mut().set_prefix(replace_head(&text));
+    } else {
+        let text = array.trailing().as_str().unwrap_or_default().to_string();
+        array.set_trailing(replace_head(&text));
     }
 }
 
@@ -588,6 +622,26 @@ future_setting = "keep" # why
         assert_eq!(
             load_config_with_env(Some(&path), &EnvMap::new())?.hosts,
             ["git.example.com", "new.example.com"]
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn removing_a_host_keeps_the_comments_of_the_hosts_that_stay() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [ # forges\n  \"a.example.com\", # a reason\n  # about b\n  \"b.example.com\", # b reason\n  \"c.example.com\", # c reason\n  \"d.example.com\", # d reason\n]\n",
+        )?;
+
+        remove_host("b.example.com", Some(&path))?;
+        remove_host("d.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "hosts = [ # forges\n  \"a.example.com\", # a reason\n  \"c.example.com\", # c reason\n]\n"
         );
         fs::remove_dir_all(root).ok();
         Ok(())
