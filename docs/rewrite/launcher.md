@@ -171,9 +171,11 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     Routing counts both keys (L2, `GhHosts::load`), so gh's default host still matches the
     wrapper's model.
   - Two allowlist entries that share a hostname, such as `forge.test:3443` and
-    `forge.test:8443`, can't share the portless key. That key gets the placeholder, and each entry
-    is reachable only with its port spelled out. Routing already leaves a portless host on a shared
-    hostname unrouted (L2).
+    `forge.test:8443`, can't be served at all. gh's API client looks up the portless key for any
+    spelling, even `https://forge.test:3443/…`, so a launched gh could present neither entry's
+    token. Routing leaves every target on such a hostname unrouted, port or not (L2, `34023a8`),
+    and those entries are never in *S*. Their keys get the placeholder. A user who needs both
+    forges serves one of them in server mode (§2), where plain gh logs in to each normally.
 
 The placeholders matter because of how gh finds a token. With no token in `hosts.yml` for a
 host, gh falls back to the Keychain's unkeyed slot for it (`gh:<host>`, user `""`;
@@ -185,11 +187,19 @@ down the socket. A non-empty token in `hosts.yml` wins over the Keychain
 
 The placeholders cover every host the user's `hosts.yml` lists, and nothing else. The Keychain is
 shared by every gh config directory, though. Say the user once logged in to github.com under
-another `GH_CONFIG_DIR`, and this one doesn't list github.com. A launched gh asked for github.com
-by an explicit URL, such as an alias expanding to `api https://api.github.com/user`, finds that
-Keychain token and sends it down the socket. It reaches only the local gateway, which refuses it
-with 421 and forwards nothing (§5). No credential leaves the machine for the wrong host, but the
-gateway does see it. §13 decision 2 records this.
+another `GH_CONFIG_DIR`, and this one doesn't list github.com. A launched gh can then find that
+Keychain token two ways:
+- **Through the API**, when it's asked for github.com by an explicit URL, such as an alias
+  expanding to `api https://api.github.com/user`. The token goes down the socket and reaches
+  only the local gateway, which refuses it with 421 and forwards nothing (§5).
+- **Through git.** `gh pr checkout` can fetch from a GitHub remote even when the PR is on the
+  forge: gh matches remotes by owner and name without checking the host (`gh/context/remote.go`
+  `FindByRepo`). It also installs its credential helper for every host for that fetch
+  (`gh/pkg/cmd/pr/checkout/checkout.go:369-370`). The helper finds the Keychain token, and git
+  sends it to GitHub directly, as plain gh would.
+
+Either way, a token only ever goes to its own site, or to the local gateway, which refuses it.
+§13 decision 2 records this.
 
 The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
 `repo::GhHosts::load`) assumes gh knows. A launched gh therefore resolves the same default host
@@ -203,8 +213,16 @@ with the user's key set instead, marked "user's gh hosts" in the route reason. T
 `hosts.yml` then lists only the user's hosts, the served one with its real token and the others
 with the placeholder. The launched gh then resolves exactly as plain gh would.
 
+The token split for an entry with a port still applies in this case: the served hostname's key
+holds the random token, and a `host:port` key holds the real one. Otherwise a portless remote
+on that hostname would hand the real token to whatever answers on 443. That adds a key, which
+would change gh's default host, so the launcher also sets `GH_HOST` to the served hostname for
+the call. That pins the default to the host plain gh chose. `GH_HOST` filters remotes without
+the fallback a single configured key allows. But plain gh's choice came from a remote on that
+host or from an explicit override, so the result is the same.
+
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
-token, so the status reports all of them.
+token and doesn't share its hostname with another entry, so the status reports all of them.
 
 What this guarantees:
 
@@ -360,9 +378,14 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   looks up, which is the portless key. Any other credential for that host gets 401 before any
   upstream contact: a GitHub token, another forge's token, the placeholder, a `basic` scheme, or
   none. GraphQL returns 401 too, not 200 with an error body. For a default-port entry, that is the
-  real token, which the gateway forwards upstream. For an entry with a port, it is §3's random
-  token, and the gateway must send the real token upstream instead. That needs one more L1
-  builder method, say `.upstream_token(real)`, requested from the gateway thread for L3.
+  real token, which the gateway forwards upstream. For an entry with a port, gh presents §3's
+  random token on ordinary calls. But `gh auth status --hostname forge.test:3443` reads the real
+  token from the `host:port` key and sends it itself (`gh/pkg/cmd/auth/status/status.go:500`,
+  `gh/pkg/cmd/auth/shared/oauth_scopes.go:39`), and gh's transport keeps an Authorization header
+  the caller set (`gh/api/http_client.go:233`). So the gateway accepts either token for that
+  host, and always sends the real one upstream. That needs one more L1 builder method, say
+  `.upstream_token(real)`, which makes `real` acceptable too. It's requested from the gateway
+  thread for L3.
 - For an allowlist entry with a port, `.answering_to(<portless hostname>)`, unless another entry
   in *S* shares that hostname (§3). gh drops the port from
   a remote URL, so a launched gh usually sends `Host: forge.test`. It keeps the port when the user
@@ -481,7 +504,7 @@ the launcher never converts the environment to `String`.
 | `GH_CONFIG_DIR` | the run directory |
 | `GH_PATH` | real gh's absolute path, so gh's git credential helper and extensions run real gh, not the wrapper (fact 4) |
 | `GH_BROWSER` | the URL helper (section 9) |
-| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` only (section 2); otherwise unchanged |
+| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2), and for a launch decided by the user's own hosts that serves an entry with a port (section 3); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
@@ -691,13 +714,14 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 
    Kell, 2026-11-02: (a), the behavior above, with extensions through plain gh accepted.
 
-   Sol's round 1 then found one more gap, and it goes back to Kell. The placeholders cover only
+   Sol's reviews then found one more gap, and it goes back to Kell. The placeholders cover only
    the hosts in the user's own `hosts.yml`, while the Keychain is shared by every gh config
    directory. A token saved by a login under another config directory, for a host this one
-   doesn't list, can still be sent by a launched gh that is asked for that host explicitly. It
-   reaches only the local gateway, which refuses it with 421 and forwards nothing (§3).
-   - **(a) Recommended:** accept this, and state the guarantee as "no other host's credential
-     leaves the machine through the launcher".
+   doesn't list, can still be used by a launched gh (§3). It goes either down the socket to the
+   local gateway, which refuses it and forwards nothing, or out through git to its own site, as
+   plain gh would send it.
+   - **(a) Recommended:** accept this, and state the guarantee as "the launcher never sends a
+     login to a site it doesn't belong to".
    - **(b)** Always add a github.com placeholder too. That covers the usual case, a GitHub login
      made elsewhere. But routing would then treat github.com as known for every user, so a
      two-part `-R` would default to github.com even for someone with only a forge. Other hosts
