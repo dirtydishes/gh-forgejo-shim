@@ -3,11 +3,13 @@
 //! gh's exit status.
 
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::future::IntoFuture;
-use std::io;
+use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::{Mutex, Once};
 use std::time::Duration;
 
 use rustix::process::{Pid, Signal};
@@ -50,6 +52,7 @@ pub struct Launch<'a> {
 /// of signal s, which `external::exit_like_child` then turns back into that death. Failures
 /// before gh starts print one line and return §6's codes.
 pub fn run(launch: Launch<'_>) -> i32 {
+    install_panic_hook();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
@@ -58,7 +61,11 @@ pub fn run(launch: Launch<'_>) -> i32 {
         Ok(runtime) => runtime,
         Err(error) => return fail(1, &format!("could not start the gateway runtime: {error}")),
     };
-    runtime.block_on(run_async(launch))
+    let code = runtime.block_on(run_async(launch));
+    // Dropping the runtime would wait for blocking tasks, such as a gateway request's DNS lookup
+    // that gh no longer needs; the launcher's exit mustn't wait on them.
+    runtime.shutdown_background();
+    code
 }
 
 struct Signals {
@@ -118,12 +125,22 @@ async fn run_async(launch: Launch<'_>) -> i32 {
             )
         }
     };
+    // Dropped before `run_dir`, on every path out of here.
+    let _panics = PanicFile::set(run_dir.path().join("panic"));
     let files = (launch.files)(run_dir.path());
     // §4's order: hosts.yml, credentials and the gh script, then config.yml, then the socket.
+    // An empty `credentials` or `gh` isn't written: nothing would read it.
+    let optional = |name, text: &str, mode| {
+        if text.is_empty() {
+            Ok(())
+        } else {
+            run_dir.write(name, text.as_bytes(), mode).map(drop)
+        }
+    };
     let written = run_dir
         .write("hosts.yml", files.hosts_yml.as_bytes(), 0o600)
-        .and_then(|_| run_dir.write("credentials", files.credentials.as_bytes(), 0o600))
-        .and_then(|_| run_dir.write("gh", files.gh_script.as_bytes(), 0o700))
+        .and_then(|_| optional("credentials", &files.credentials, 0o600))
+        .and_then(|_| optional("gh", &files.gh_script, 0o700))
         .and_then(|_| run_dir.write("config.yml", files.config_yml.as_bytes(), 0o600));
     if let Err(error) = written {
         return fail(1, &format!("could not write the run directory: {error}"));
@@ -190,6 +207,53 @@ async fn run_async(launch: Launch<'_>) -> i32 {
         Ok(status) => inherited_exit_code(status),
         Err(_) => 1,
     }
+}
+
+/// Where a panic goes while a run directory exists (§5).
+static PANIC_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Sends panics to a run directory's `panic` file until dropped.
+struct PanicFile;
+
+impl PanicFile {
+    fn set(path: PathBuf) -> Self {
+        if let Ok(mut file) = PANIC_FILE.lock() {
+            *file = Some(path);
+        }
+        Self
+    }
+}
+
+impl Drop for PanicFile {
+    fn drop(&mut self) {
+        if let Ok(mut file) = PANIC_FILE.lock() {
+            *file = None;
+        }
+    }
+}
+
+/// A panic in a gateway task would otherwise print to stderr, which gh owns and clients parse.
+/// While a run directory exists, the message goes to its `panic` file, removed with it; any
+/// other time, the previous hook runs as before. Tracing it is a follow-up (trace.rs).
+fn install_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let path = PANIC_FILE.lock().ok().and_then(|file| file.clone());
+            match path {
+                Some(path) => {
+                    let _ = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .mode(0o600)
+                        .open(path)
+                        .and_then(|mut file| writeln!(file, "{info}"));
+                }
+                None => previous(info),
+            }
+        }));
+    });
 }
 
 fn forward(pid: Option<Pid>, signal: Signal) {
