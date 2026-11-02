@@ -129,11 +129,16 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
             ".{name}.gh-forgejo-shim-{}-{attempt}",
             std::process::id()
         ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Owner-only from creation: a handle another account opened while the file was still
+        // 0666 & ~umask would keep write access through any later chmod and the rename.
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temp) {
             Ok(file) => return Ok((file, temp)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -353,6 +358,22 @@ mod tests {
             .message()
             .contains("is not managed by gh-forgejo-shim; refusing to remove"));
         assert!(root.join("gh").exists());
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_file_is_owner_only_from_creation() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_path("gh-forgejo-shim-temp-mode");
+        fs::create_dir(&root)?;
+
+        let (file, temp) = create_temp_file(&root.join("gh"))?;
+
+        assert_eq!(file.metadata()?.permissions().mode() & 0o077, 0);
+        fs::remove_file(temp)?;
         fs::remove_dir_all(root).ok();
         Ok(())
     }
