@@ -1,11 +1,14 @@
 //! Diagnostic checks for shim setup.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::gui_path;
-use crate::repo;
+use crate::invocation::Invocation;
+use crate::repo::{self, Checkout, GhHosts, RepoRef};
+use crate::routing::DispatcherConfig;
 use crate::setup::{self, SetupInspectOptions, TargetMode};
 use crate::Result;
 
@@ -142,8 +145,8 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     ));
 
     if should_check_current_repo {
-        if let Some(repo) = repo::detect_from_git(options.cwd.as_deref()) {
-            if config.is_forgejo_host(Some(&repo.host)) {
+        if let Some(repo) = current_repo(options.cwd.as_deref(), &options.env, &config) {
+            if routes_to_forgejo(&config, &repo.host) {
                 checks.push(Check::new(
                     "current repo host",
                     true,
@@ -178,6 +181,50 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     }
 
     Ok(checks)
+}
+
+/// The repository a `gh` command run in `cwd` acts on, found the way the wrapper routes it, so
+/// `doctor` and `bootstrap` name the same one. In a fork whose origin is GitHub and whose
+/// allowlisted upstream is Forgejo, that's the upstream.
+pub(crate) fn current_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoRef> {
+    let env = env
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HashMap<_, _>>();
+    // A command gh resolves a base repository for, with no -R and no URL to select another.
+    let invocation = Invocation::parse(&["pr".to_string(), "status".to_string()]);
+    let checkout = Checkout::new(cwd);
+    let launched = repo::detect_repo(
+        &invocation,
+        &env,
+        &checkout,
+        &GhHosts::load(&env, &config.hosts),
+    )
+    .repo;
+    // As routing does: plain gh knows only the user's hosts, and may still pick a Forgejo one.
+    let found = match launched {
+        Some(repo) if routes_to_forgejo(config, &repo.host) => Some(repo),
+        launched => repo::detect_repo(&invocation, &env, &checkout, &GhHosts::user(&env))
+            .repo
+            .filter(|repo| routes_to_forgejo(config, &repo.host))
+            .or(launched),
+    };
+    // Fallback for unknown hosts. gh skips a remote whose host it doesn't know, so on a first run
+    // in a Forgejo checkout, before its host is allowlisted, it finds nothing. That remote is the
+    // one bootstrap should allowlist and doctor should name, so take the first remote, origin
+    // first, as before routing followed gh.
+    found.or_else(|| repo::detect_from_git(cwd))
+}
+
+/// Whether the wrapper routes a repository on `host` to Forgejo. gh drops a remote's port, so
+/// `git.example.com` matches an allowlist entry `git.example.com:3000`.
+fn routes_to_forgejo(config: &Config, host: &str) -> bool {
+    DispatcherConfig {
+        hosts: config.hosts.clone(),
+        real_gh: None,
+    }
+    .forgejo_host(host)
+    .is_some()
 }
 
 pub fn format_checks(checks: &[Check]) -> String {
