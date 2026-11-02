@@ -174,7 +174,7 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
             }
             Some(repo)
         }
-        Some(RepoPlan::LeaveToGh { repo, hint }) => {
+        Some(RepoPlan::LeaveToGh { repo, hint, listed }) => {
             let mut message = if doctor::is_github_host(&options.env, &repo.host) {
                 format!(
                     "detected GitHub repository {}/{}/{}",
@@ -203,6 +203,15 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                 message.push_str(&format!(
                     "; to allowlist it for other checkouts, run gh-forgejo-shim config add-host \
                      {hint}"
+                ));
+            }
+            // No ready command for it: if it's GitHub Enterprise, allowlisting it would send the
+            // Forgejo token there.
+            if let Some(listed) = listed {
+                message.push_str(&format!(
+                    "; {listed} is in your gh hosts.yml, so bootstrap takes it for GitHub \
+                     Enterprise and leaves it out; if it's a Forgejo server, allowlist it with \
+                     gh-forgejo-shim config add-host HOST"
                 ));
             }
             checks.push(BootstrapCheck::new(
@@ -331,8 +340,13 @@ enum RepoPlan {
     /// Allowlist `entry`: the wrapper routes `repo` to it, or will once it's allowlisted.
     Allowlist { repo: RepoRef, entry: String },
     /// Real gh keeps `repo`. `hint` is a host that allowlisting wouldn't route this checkout to,
-    /// but that the user's other checkouts could use.
-    LeaveToGh { repo: RepoRef, hint: Option<String> },
+    /// but that the user's other checkouts could use. `listed` is a host passed over only
+    /// because the user's gh hosts.yml lists it.
+    LeaveToGh {
+        repo: RepoRef,
+        hint: Option<String>,
+        listed: Option<String>,
+    },
     /// `repo`'s host isn't a host name the shim can use.
     Unusable { repo: RepoRef },
 }
@@ -344,6 +358,7 @@ enum RepoPlan {
 /// knows, such as a hosts.yml that names github.com.
 fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPlan> {
     let current = doctor::current_repo(cwd, env, config)?.repo;
+    let first_remote = repo::detect_from_git(cwd);
     // Already routed: write the entry that routes it. gh drops a remote's port, and its spelling
     // beside an entry with one would leave two entries for one hostname, which routes neither.
     if let Some(entry) = doctor::allowlist_entry(config, &current.host) {
@@ -352,14 +367,27 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
             entry,
         });
     }
-    let Some(candidate) = [Some(current.clone()), repo::detect_from_git(cwd)]
+    let candidates = [Some(current.clone()), first_remote]
         .into_iter()
         .flatten()
+        .collect::<Vec<_>>();
+    // Nothing tells a GitHub Enterprise server in hosts.yml from a Forgejo one listed there, so
+    // such a host is passed over, and bootstrap says so.
+    let listed = candidates
+        .iter()
+        .find(|repo| {
+            !config::is_known_github_host(Some(&repo.host))
+                && doctor::in_gh_hosts_yml(env, &repo.host)
+        })
+        .map(|repo| repo.host.clone());
+    let Some(candidate) = candidates
+        .into_iter()
         .find(|repo| !doctor::is_github_host(env, &repo.host))
     else {
         return Some(RepoPlan::LeaveToGh {
             repo: current,
             hint: None,
+            listed,
         });
     };
     let Some(entry) = config::normalized_forgejo_host(&candidate.host) else {
@@ -369,6 +397,7 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
             RepoPlan::LeaveToGh {
                 repo: current,
                 hint: None,
+                listed,
             }
         });
     };
@@ -392,6 +421,7 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
         None => RepoPlan::LeaveToGh {
             repo: current,
             hint: allowlisted.is_none().then_some(entry),
+            listed,
         },
     })
 }

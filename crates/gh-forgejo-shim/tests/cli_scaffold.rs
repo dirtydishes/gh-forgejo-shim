@@ -320,12 +320,44 @@ fn bootstrap_never_suggests_allowlisting_a_github_enterprise_origin() -> TestRes
 
     let stdout = bootstrap(&fixture, &[])?;
 
+    assert!(!stdout.contains("add-host ghe.corp.example"), "{stdout}");
     assert!(
-        !stdout.contains("ghe.corp.example was left out"),
+        stdout.contains("ghe.corp.example is in your gh hosts.yml"),
         "{stdout}"
     );
-    assert!(!stdout.contains("add-host"), "{stdout}");
     assert_eq!(shim_config(&fixture)?, "", "something was allowlisted");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_leaves_out_a_host_the_users_gh_hosts_list_and_says_so() -> TestResult {
+    // A Forgejo server can be in hosts.yml too, say after `gh config set -h <host> git_protocol
+    // ssh`, and nothing tells it from GitHub Enterprise; bootstrap leaves it out and says so. A
+    // key with a port lists the same host, as gh compares hosts.
+    for (listed, remote) in [
+        ("forge.example.com", "https://forge.example.com/me/proj.git"),
+        (
+            "ghe.corp.example:8443",
+            "https://ghe.corp.example:8443/team/proj.git",
+        ),
+    ] {
+        let fixture = CliFixture::new()?;
+        fixture.init_git_repo()?;
+        write_gh_hosts(&fixture, &[listed])?;
+        fixture.git(["remote", "set-url", "origin", remote])?;
+
+        let stdout = bootstrap(&fixture, &[])?;
+
+        assert!(
+            stdout.contains("is in your gh hosts.yml"),
+            "{listed}: {stdout}"
+        );
+        assert!(
+            stdout.contains("allowlist it with gh-forgejo-shim config add-host HOST"),
+            "{listed}: {stdout}"
+        );
+        assert_eq!(shim_config(&fixture)?, "", "{listed} was allowlisted");
+    }
     Ok(())
 }
 
