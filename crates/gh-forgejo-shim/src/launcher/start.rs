@@ -42,6 +42,9 @@ pub fn launch(
 ) -> Option<i32> {
     let Plan {
         real_token,
+        expect_real,
+        all_hosts,
+        look_up_logins,
         extra_edits,
     } = Plan::for_invocation(routed, host, env);
     let env_map: EnvMap = env
@@ -59,6 +62,12 @@ pub fn launch(
             Err(error) => return Some(fail(1, &error.to_string())),
         };
     let forgejo_url = upstream_url(host, &config, env)?;
+    let token = auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()));
+    // `auth status` keeps its current answer for a host with no token (§2): the built-in path's
+    // "Not logged in", exit 1, as gh says it, with no real gh needed.
+    if token.is_none() && routed.command == "auth status" {
+        return None;
+    }
 
     let Some(gh) = find_program("gh", real_gh, env) else {
         // Discovery skips what it can't run; a configured path that exists anyway, a directory
@@ -144,9 +153,7 @@ pub fn launch(
         ));
     }
 
-    let Some(token) =
-        auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()))
-    else {
+    let Some(token) = token else {
         return Some(fail(
             4,
             &format!("no token for {host}; run: gfj auth login {host}"),
@@ -162,22 +169,62 @@ pub fn launch(
         Ok(token) => token,
         Err(error) => return Some(fail(1, &format!("could not make a call token: {error}"))),
     };
-    let served = vec![ServedHost {
-        entry: config::normalize_host(host),
-        real_token: token.token.clone(),
-        login: None,
-    }];
+    // S, the served hosts (§3): the routed host, or for a host-less `auth status` every
+    // allowlist entry with a token, except entries sharing a hostname, forges the user's gh is
+    // logged in to, and settings the gateway can't honour yet.
+    let routed_entry = config::normalize_host(host);
+    let mut served_hosts = vec![(routed_entry.clone(), token.token.clone(), forgejo_url)];
+    if all_hosts {
+        for entry in config
+            .hosts
+            .iter()
+            .map(|entry| config::normalize_host(entry))
+        {
+            let shared = config
+                .hosts
+                .iter()
+                .filter(|other| gh_hostname(other) == gh_hostname(&entry))
+                .count()
+                > 1;
+            if entry == routed_entry || shared || logged_in(&user_hosts, &entry) {
+                continue;
+            }
+            let (Some(url), Some(found)) = (
+                upstream_url(&entry, &config, env),
+                auth::resolve_token(&entry, &config, &env_map, home.as_deref(), Some(platform())),
+            ) else {
+                continue;
+            };
+            served_hosts.push((entry, found.token, url));
+        }
+    }
+    let served: Vec<ServedHost> = served_hosts
+        .iter()
+        .map(|(entry, real, _)| ServedHost {
+            entry: entry.clone(),
+            real_token: real.clone(),
+            login: None,
+        })
+        .collect();
+    let gateway: Vec<GatewayHost> = served_hosts
+        .into_iter()
+        .map(|(entry, real, forgejo_url)| GatewayHost {
+            entry,
+            forgejo_url,
+            // `auth status --show-token` presents the real token, which it prints (§3, §5).
+            expected: if expect_real {
+                real.clone()
+            } else {
+                per_call.clone()
+            },
+            upstream: real,
+            answer_portless: true,
+            wip_prefixes: WipPrefixes::default(),
+        })
+        .collect();
     let allowlist = config.hosts.clone();
     let shim = std::env::current_exe().unwrap_or_default();
-
-    let gateway = vec![GatewayHost {
-        entry: config::normalize_host(host),
-        forgejo_url,
-        expected: per_call.clone(),
-        upstream: token.token,
-        answer_portless: true,
-        wip_prefixes: WipPrefixes::default(),
-    }];
+    let credentials = ghconfig::credentials(&served);
 
     Some(run::run(Launch {
         gh,
@@ -188,18 +235,8 @@ pub fn launch(
         files: Box::new(move |run_dir| {
             let socket = run_dir.join("s");
             Files {
-                hosts_yml: ghconfig::hosts_yml(
-                    &user_hosts,
-                    &allowlist,
-                    &served,
-                    if real_token {
-                        ServedToken::Real
-                    } else {
-                        ServedToken::PerCall(&per_call)
-                    },
-                ),
                 // Git's credentials: the launcher's own helper answers every git in the call (§3).
-                credentials: ghconfig::credentials(&served),
+                credentials,
                 gh_script: ghconfig::gh_script(run_dir, &shim),
                 // Checked above, so this only fails on a non-UTF-8 socket path, which §4's
                 // path check rules out.
@@ -207,6 +244,27 @@ pub fn launch(
                     .unwrap_or_default(),
             }
         }),
+        hosts_yml: Box::new(move |logins| {
+            let served: Vec<ServedHost> = served
+                .into_iter()
+                .zip(logins)
+                .map(|(host, login)| ServedHost {
+                    login: login.clone(),
+                    ..host
+                })
+                .collect();
+            ghconfig::hosts_yml(
+                &user_hosts,
+                &allowlist,
+                &served,
+                if real_token {
+                    ServedToken::Real
+                } else {
+                    ServedToken::PerCall(&per_call)
+                },
+            )
+        }),
+        look_up_logins,
         edits: Box::new(move |run_dir| {
             let mut edits = launched_edits(run_dir);
             edits.extend(extra_edits);
@@ -301,8 +359,15 @@ fn step_aside(gh: &Path, args: &[OsString], mut edits: Edits, trace_enabled: boo
 
 /// What one invocation needs beyond every launch's settings.
 struct Plan {
-    /// `gh auth token` prints the real token, so its `hosts.yml` holds it (§3).
+    /// `gh auth token` and `gh auth status --show-token` print the token from `hosts.yml`, so
+    /// it holds the real one (§3).
     real_token: bool,
+    /// `--show-token`, which also calls the API: the gateway expects the real token (§5).
+    expect_real: bool,
+    /// A host-less `auth status`: every eligible allowlist host is served (§3).
+    all_hosts: bool,
+    /// `auth status` shows each account, from `user` in `hosts.yml` (§3).
+    look_up_logins: bool,
     extra_edits: Edits,
 }
 
@@ -319,8 +384,14 @@ impl Plan {
                 extra_edits.push(("GH_HOST", Edit::Set(hostname.into())));
             }
         }
+        let status = command == "auth status";
+        // pflag's ParseBool, last occurrence, after alias expansion (§3).
+        let show_token = status && routed.flag("show-token") == Some("true");
         Self {
-            real_token: command == "auth token",
+            real_token: command == "auth token" || show_token,
+            expect_real: show_token,
+            all_hosts: status && routed.flag("hostname").is_none(),
+            look_up_logins: status,
             extra_edits,
         }
     }
@@ -443,10 +514,44 @@ mod tests {
     }
 
     #[test]
-    fn only_auth_token_puts_the_real_token_in_hosts_yml() {
+    fn only_auth_token_and_show_token_put_the_real_token_in_hosts_yml() {
         assert!(plan(&["auth", "token"], &[]).real_token);
         assert!(!plan(&["api", "user"], &[]).real_token);
         assert!(!plan(&["pr", "view", "1"], &[]).real_token);
+        assert!(!plan(&["auth", "status"], &[]).real_token);
+    }
+
+    #[test]
+    fn show_token_is_read_as_pflag_reads_it() {
+        for shown in [
+            &["auth", "status", "-t"][..],
+            &["auth", "status", "-at"][..],
+            &["auth", "status", "-ta"][..],
+            &["auth", "status", "--show-token"][..],
+            &["auth", "status", "--show-token=1"][..],
+            &["auth", "status", "--show-token=t"][..],
+        ] {
+            let plan = plan(shown, &[]);
+            assert!(plan.real_token && plan.expect_real, "{shown:?}");
+        }
+        for hidden in [
+            &["auth", "status"][..],
+            &["auth", "status", "--show-token=false"][..],
+            &["auth", "status", "--show-token=0"][..],
+            &["auth", "status", "-t", "--show-token=false"][..],
+        ] {
+            let plan = plan(hidden, &[]);
+            assert!(!plan.real_token && !plan.expect_real, "{hidden:?}");
+        }
+    }
+
+    #[test]
+    fn host_less_auth_status_serves_every_host_and_looks_up_logins() {
+        let host_less = plan(&["auth", "status"], &[]);
+        assert!(host_less.all_hosts && host_less.look_up_logins);
+        let one = plan(&["auth", "status", "--hostname", "forge.test"], &[]);
+        assert!(!one.all_hosts && one.look_up_logins);
+        assert!(!plan(&["pr", "view", "1"], &[]).look_up_logins);
     }
 
     #[test]
