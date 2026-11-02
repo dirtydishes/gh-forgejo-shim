@@ -163,6 +163,22 @@ impl Drop for Fixture {
     }
 }
 
+/// Linux refuses to exec a file any process holds open for writing. A test that writes a script
+/// and runs it can lose that race: another test's fork inherits the write descriptor and keeps it
+/// until its own exec. The window is short, so a few retries ride it out (ago, as jko.42).
+fn output_retrying_busy(command: &mut Command) -> io::Result<Output> {
+    let mut attempts = 0;
+    loop {
+        match command.output() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+}
+
 #[test]
 #[ignore = "audit D10: fails until gh-forgejo-shim-jko.27 is fixed"]
 fn audit_diag_gh_trace_json_escaped_secret() -> TestResult {
@@ -412,12 +428,13 @@ fn audit_diag_recorder_remove_preserves_unrelated_files() -> TestResult {
 fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
     let f = Fixture::new()?;
     let git = f.tool("git", "#!/bin/sh\nkill -TERM $$\n")?;
-    let bare = Command::new(&git)
-        .env_clear()
-        .envs(f.env())
-        .current_dir(&f.root)
-        .stdin(Stdio::null())
-        .output()?;
+    let bare = output_retrying_busy(
+        Command::new(&git)
+            .env_clear()
+            .envs(f.env())
+            .current_dir(&f.root)
+            .stdin(Stdio::null()),
+    )?;
     assert_eq!(bare.status.signal(), Some(15));
     let recorded = f.git_trace(&f.root.join("git.jsonl"), &["fetch"], false)?;
     let shell_status = recorded
@@ -485,12 +502,13 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
         options.check_gui_path = Some(false);
         options.platform = "linux".into();
         let checks = doctor::run_checks(options)?;
-        let broken = Command::new(managed_dir.join("gh"))
-            .env_clear()
-            .envs(f.env())
-            .current_dir(&f.root)
-            .arg("--version")
-            .output()?;
+        let broken = output_retrying_busy(
+            Command::new(managed_dir.join("gh"))
+                .env_clear()
+                .envs(f.env())
+                .current_dir(&f.root)
+                .arg("--version"),
+        )?;
         assert!(!broken.status.success());
         let managed = checks
             .iter()
