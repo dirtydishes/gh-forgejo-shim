@@ -486,3 +486,34 @@ fn a_credential_request_is_answered_before_the_guards() {
         "{output:?}"
     );
 }
+
+#[test]
+fn a_repeated_depth_entry_still_counts_toward_the_cap() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let gh = raw_env_gh(&fixture, false);
+    // Two entries: routing reads the last, `set_var` alone would change only the first, and the
+    // depth would never climb (Sol r1#1 on #87).
+    let output = run_with_raw_env(
+        &fixture,
+        &gh,
+        &["pr", "view", "1", "-R", "github.com/o/r"],
+        &["FJ_SHIM_DEPTH=7", "FJ_SHIM_DEPTH=7"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    let depths: Vec<&str> = report
+        .lines()
+        .filter(|line| line.starts_with("FJ_SHIM_DEPTH="))
+        .collect();
+    assert_eq!(depths, ["FJ_SHIM_DEPTH=8"], "{report}");
+
+    // One more level trips guard 3.
+    let output = run_with_raw_env(
+        &fixture,
+        &gh,
+        &["pr", "view", "1", "-R", "github.com/o/r"],
+        &["FJ_SHIM_DEPTH=0", "FJ_SHIM_DEPTH=8"],
+    );
+    assert_eq!(output.status.code(), Some(127), "{output:?}");
+}
