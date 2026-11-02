@@ -247,6 +247,10 @@ fn bootstrap_says_why_a_forge_origin_behind_a_github_upstream_is_left_out() -> T
         stdout.contains("forge.example.com was left out too"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("run gh-forgejo-shim config add-host forge.example.com"),
+        "{stdout}"
+    );
     assert_eq!(shim_config(&fixture)?, "", "something was allowlisted");
     Ok(())
 }

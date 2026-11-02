@@ -174,9 +174,12 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
             if let Some(first) = repo::detect_from_git(options.cwd.as_deref()).filter(|first| {
                 first.host != repo.host && !config::is_known_github_host(Some(&first.host))
             }) {
+                // The user's other checkouts on that forge can still take it in one step.
                 message.push_str(&format!(
-                    "; {} was left out too, because gh, and so the wrapper, acts on {}/{}/{} here",
-                    first.host, repo.host, repo.owner, repo.name
+                    "; {} was left out too, because gh, and so the wrapper, acts on {}/{}/{} \
+                     here; to allowlist it for other checkouts, run gh-forgejo-shim config \
+                     add-host {}",
+                    first.host, repo.host, repo.owner, repo.name, first.host
                 ));
             }
             checks.push(BootstrapCheck::new(
