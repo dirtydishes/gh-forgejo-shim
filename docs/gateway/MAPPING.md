@@ -167,8 +167,8 @@ would trade a rare stale "enabled" for a wrong "disabled" on schedules that are 
 404 and writes no cancel event (`RemoveScheduledAutoMerge`, `automerge.go:71-78`). The gateway reports
 that 404 as success, so gh says auto-merge is disabled while `autoMergeRequest` still shows it.
 
-To clear it, run `gh pr merge --auto` again. The gateway tries the merge at once (§6 code in
-`graphql/mutations.rs`), so one of three things happens:
+To clear it, run `gh pr merge --auto` again. The gateway tries the merge at once (`merge` in
+`crates/fga-core/src/graphql/mutations.rs`), so one of three things happens:
 
 - the PR merges;
 - gh shows the error the worker hit, such as a disallowed merge style, which the user can then fix;
