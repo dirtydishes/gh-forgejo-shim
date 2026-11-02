@@ -412,6 +412,31 @@ fn audit_route_force_install_symlink() -> TestResult {
 }
 
 #[test]
+fn audit_route_non_utf8_environment_reaches_real_gh_unchanged() -> TestResult {
+    // Real gh prints the variable's bytes in hex, so a dropped or rewritten value shows.
+    let fixture = Fixture::new()?;
+    executable(
+        &fixture.real_gh,
+        "#!/bin/sh\nprintf '%s' \"$AUDIT_OPAQUE_VALUE\" | /usr/bin/od -An -tx1\n",
+    )?;
+    let mut command = fixture.gh(&["--version"]);
+    command.env(
+        "AUDIT_OPAQUE_VALUE",
+        OsString::from_vec(vec![b'a', 0xff, b'b']),
+    );
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["61", "ff", "62"],
+        "real gh must get the non-UTF-8 value byte for byte; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_route_non_utf8_environment_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     let mut command = fixture.gh(&["--version"]);
