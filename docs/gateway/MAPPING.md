@@ -79,6 +79,10 @@ Forgejo has commit statuses only. Reads return the state in the field **`status`
 - **Non-Actions statuses** become `StatusContext {context, state, targetUrl, description, createdAt}`,
   with `state` mapped pending→PENDING, success→SUCCESS, error→ERROR, and failure and
   warning→FAILURE. StatusState has no "warning", and FAILURE is how Forgejo's own gate treats it.
+- **Checks belong to the head commit.** gh reads them through `commits(last: 1)`. Forgejo lists PR
+  commits newest first (`git log base..head`, `modules/git/repo_compare.go`), so reverse them into
+  GitHub's oldest-first order; otherwise `last: 1` is the oldest commit and a fix pushed on a failing
+  commit still reports the failure.
 - **Latest per context only.** Forgejo returns status history, so keep the newest `updated_at` per
   `context`. gh dedupes too, but the rollup state must not count stale entries.
 - **`isRequired(pullRequestId:)`** is true when the base branch's protection has `enable_status_check`
