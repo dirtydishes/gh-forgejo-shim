@@ -242,7 +242,7 @@ fn audit_route_copied_sibling_entry_point_on_path() -> TestResult {
 }
 
 #[test]
-fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
+fn audit_route_symlinked_dispatcher_rejects_a_copied_gfj() -> TestResult {
     // Run through a symlink in a directory with no gfj beside it, as a symlinked install does.
     let fixture = Fixture::new()?;
     let linked = fixture.root.join("linked");
@@ -271,8 +271,7 @@ fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
 #[test]
 fn audit_route_hardlinked_dispatcher_rejects_a_copied_gfj() -> TestResult {
     // Run through a hardlink in another directory: there is no sibling gfj to compare with, so
-    // only the marker can show that the copy on PATH is the shim. Kell accepted this case as a
-    // known limit on PR #44; this closes it.
+    // only the marker can show that the copy on PATH is the shim.
     let fixture = Fixture::new()?;
     let alias = fixture.root.join("alias");
     fs::create_dir(&alias)?;
@@ -292,6 +291,32 @@ fn audit_route_hardlinked_dispatcher_rejects_a_copied_gfj() -> TestResult {
         String::from_utf8_lossy(&output.stdout),
         REAL_GH,
         "a copied gfj must not pass as real gh when the dispatcher runs through a hardlink"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_real_gh_of_the_shims_size_is_still_used() -> TestResult {
+    // A real gh without the marker is accepted even at exactly the dispatcher's size, so the size
+    // window alone never hides it.
+    let fixture = Fixture::new()?;
+    let size = fs::metadata(env!("CARGO_BIN_EXE_gh-forgejo-shim"))?.len();
+    let script = "#!/bin/sh\nprintf 'real-gh\\n'\nexit 0\n#";
+    let padding = usize::try_from(size)? - script.len() - 1;
+    executable(
+        &fixture.bin.join("gh"),
+        &format!("{script}{}\n", "x".repeat(padding)),
+    )?;
+    assert_eq!(fs::metadata(fixture.bin.join("gh"))?.len(), size);
+    let mut command = fixture.gh(&["--version"]);
+    command
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", &fixture.bin);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a real gh the dispatcher's size, without the marker, must still be used"
     );
     Ok(())
 }
