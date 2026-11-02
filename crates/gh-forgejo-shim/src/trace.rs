@@ -403,12 +403,14 @@ pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
     line.push(b'\n');
     let mut file = options.open(path)?;
     // The mode above applies only to a new file. Records can hold repo paths and command lines,
-    // so an existing file others can read is narrowed before anything is added to it.
+    // so an existing file others can read is narrowed before anything is added to it. Only a
+    // regular file: a trace sent to /dev/null or a terminal leaves that device's mode alone.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
-        if file.metadata()?.permissions().mode() & 0o077 != 0 {
+        let metadata = file.metadata()?;
+        if metadata.is_file() && metadata.permissions().mode() & 0o077 != 0 {
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
     }
@@ -474,6 +476,20 @@ mod tests {
         assert!(!redacted.contains("hunter2"), "{redacted}");
         assert!(!redacted.contains("plain-secret"), "{redacted}");
         assert!(redacted.contains(REDACTED), "{redacted}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_trace_sent_to_a_device_leaves_its_mode_alone() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let null = Path::new("/dev/null");
+        let before = fs::metadata(null)?.permissions().mode();
+
+        append_jsonl(null, &json!({"kind": "gh"}))?;
+
+        assert_eq!(fs::metadata(null)?.permissions().mode(), before);
+        Ok(())
     }
 
     #[test]
