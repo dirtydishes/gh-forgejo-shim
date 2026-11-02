@@ -256,8 +256,13 @@ grace period (their client is gone), removes `s`, `config.yml`, `hosts.yml` and 
 removes the directory. It removes only names it created. It never removes a directory recursively,
 the mistake behind audit D1.
 
-**Stale directories.** At each launch, before creating its own directory, the launcher sweeps the
-parent for `gfj-*` entries:
+**Stale directories.** At each launch, before creating its own directory, the launcher sweeps
+every parent a launch could have used, not just its own. That means each of `$XDG_RUNTIME_DIR`,
+`$TMPDIR` and `/tmp` that exists, once each. A call from cron or an SSH session, or a client harness
+with its own `TMPDIR`, can use a different parent from a desktop call. Without this, a token left
+by a killed launch under one parent would never be swept by launches under another. One case
+remains: a parent set only for one run (a `TMPDIR` that later calls don't share) is swept again
+only when a call with that environment runs. In each parent it looks at `gfj-*` entries:
 
 - skip anything that isn't a real directory owned by the current uid (`symlink_metadata`, no
   following links);
