@@ -7,12 +7,25 @@ fn user(login: &str) -> Value {
     json!({"id":1,"login":login,"full_name":"","avatar_url":format!("https://forge.test/avatars/{login}")})
 }
 
-/// A fake Forgejo where the viewer `e2e` has `push` access, for a PR by `author` in `state`.
-fn forge(push: bool, author: &'static str, state: &'static str) -> Router {
-    let pull = json!({"number":1,"title":"T","state":state,"merged":false,"draft":false,
+fn pull(author: &str, state: &str) -> Value {
+    json!({"number":1,"title":"T","state":state,"merged":false,"draft":false,
         "html_url":"https://forge.test/e2e/oracle/pulls/1","mergeable":true,
         "head":{"ref":"h","label":"h","sha":"abc"},"base":{"ref":"main","label":"main","sha":"def"},
-        "user":user(author),"merged_at":null});
+        "user":user(author),"merged_at":null})
+}
+
+/// A fake Forgejo where the viewer `e2e` has `push` access, for a PR by `author` in `state`.
+fn forge(push: bool, author: &'static str, state: &'static str) -> Router {
+    forge_with(push, pull(author, state), false)
+}
+
+/// The same forge for any PR, optionally with an auto-merge scheduled by the viewer.
+fn forge_with(push: bool, pull: Value, scheduled: bool) -> Router {
+    let timeline = if scheduled {
+        json!([{"id":1,"type":"pull_scheduled_merge","created_at":"2026-11-01T00:00:00Z","user":user("e2e")}])
+    } else {
+        json!([])
+    };
     Router::new()
         .route("/api/v1/user", get(|| async { Json(user("e2e")) }))
         .route(
@@ -30,10 +43,17 @@ fn forge(push: bool, author: &'static str, state: &'static str) -> Router {
                 Json(json!([
                     {"id":7,"user":user("other"),"body":"ok","state":"APPROVED","commit_id":"abc",
                      "submitted_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:01Z",
-                     "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70"},
+                     "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70","comments_count":2},
                     {"id":8,"user":user("e2e"),"body":"draft","state":"PENDING","commit_id":"abc",
                      "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z",
-                     "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-80"}
+                     "html_url":"","comments_count":1},
+                    // Someone else's pending review: Forgejo shows it to site admins, GitHub to no one.
+                    {"id":9,"user":user("other"),"body":"secret","state":"PENDING","commit_id":"abc",
+                     "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z","html_url":"","comments_count":1},
+                    // A plain approval: no code comments, so no comments read.
+                    {"id":10,"user":user("third"),"body":"","state":"APPROVED","commit_id":"abc",
+                     "submitted_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z",
+                     "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-100","comments_count":0}
                 ]))
             }),
         )
@@ -45,17 +65,26 @@ fn forge(push: bool, author: &'static str, state: &'static str) -> Router {
                 Json(json!([comment(1, "e2e"), comment(2, "other")]))
             }),
         )
-        .route("/api/v1/repos/e2e/oracle/issues/1/timeline", get(|| async { Json(json!([])) }))
+        .route("/api/v1/repos/e2e/oracle/issues/1/timeline", get(move || async move { Json(timeline) }))
         // Forgejo's conversations: review 7 has a reply on a.rs:3 (new side); the viewer's pending
         // review 8 has a resolved comment on old-side line 5 of b.rs.
         .route(
             "/api/v1/repos/e2e/oracle/pulls/1/reviews/7/comments",
+            // Forgejo's order varies between requests; this one is newest first.
             get(|| async {
                 Json(json!([
-                    review_comment(70, 7, "other", "a.rs", 3, 0, None),
-                    review_comment(71, 7, "e2e", "a.rs", 3, 0, None)
+                    review_comment(71, 7, "e2e", "a.rs", 3, 0, None),
+                    review_comment(70, 7, "other", "a.rs", 3, 0, None)
                 ]))
             }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/1/reviews/9/comments",
+            get(|| async { Json(json!([review_comment(90, 9, "other", "c.rs", 1, 0, None)])) }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/1/reviews/10/comments",
+            get(|| async { panic!("a review without code comments needs no read") as Json<Value> }),
         )
         .route(
             "/api/v1/repos/e2e/oracle/pulls/1/reviews/8/comments",
@@ -169,8 +198,11 @@ async fn timeline_fields_for_reviews_comments_and_commits() {
         json!([
             {"author":{"login":"other"},"createdAt":"2026-11-01T00:00:00Z",
              "url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70","isMinimized":false,"viewerCanUpdate":false},
+            // A pending review has no URL of its own; another user's pending review isn't listed.
             {"author":{"login":"e2e"},"createdAt":"2026-11-02T00:00:00Z",
-             "url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-80","isMinimized":false,"viewerCanUpdate":true}
+             "url":"https://forge.test/e2e/oracle/pulls/1","isMinimized":false,"viewerCanUpdate":true},
+            {"author":{"login":"third"},"createdAt":"2026-11-03T00:00:00Z",
+             "url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-100","isMinimized":false,"viewerCanUpdate":false}
         ])
     );
     // Without push access, only the viewer's own comment can be changed.
@@ -221,7 +253,7 @@ async fn review_threads_follow_forgejo_conversations() {
     .await;
     assert_eq!(
         pull["reviews"]["nodes"],
-        json!([{"comments":{"totalCount":2}},{"comments":{"totalCount":1}}])
+        json!([{"comments":{"totalCount":2}},{"comments":{"totalCount":1}},{"comments":{"totalCount":0}}])
     );
     let review = |id| fga_core::ids::node_id("PullRequestReview", "e2e/oracle", id);
     let comment = |id: i64, login: &str, review_id: i64, state: &str| {
@@ -239,8 +271,68 @@ async fn review_threads_follow_forgejo_conversations() {
              "comments":{"nodes":[comment(70, "other", 7, "SUBMITTED"), comment(71, "e2e", 7, "SUBMITTED")]}},
             {"id":fga_core::ids::node_id("PullRequestReviewThread", "e2e/oracle", 80),"path":"b.rs",
              "diffSide":"LEFT","line":5,"originalLine":5,"startLine":null,
-             "isResolved":true,"viewerCanResolve":false,"viewerCanUnresolve":true,
+             "isResolved":true,"viewerCanResolve":false,"viewerCanUnresolve":false,
              "comments":{"nodes":[comment(80, "e2e", 8, "PENDING")]}}
         ]})
+    );
+    // The PR's author, or a writer, may resolve any conversation; a thread's own starter without
+    // push access may not (Forgejo's CanMarkConversation; Opus interim o1#1).
+    let marks = |pull: &Value| -> Vec<Value> {
+        pull["reviewThreads"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| json!([t["viewerCanResolve"], t["viewerCanUnresolve"]]))
+            .collect()
+    };
+    let threads = r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
+        reviewThreads(first:10){nodes{viewerCanResolve viewerCanUnresolve}}}}}"#;
+    let author = query(forge(false, "e2e", "open"), threads).await;
+    assert_eq!(marks(&author), [json!([true, false]), json!([false, true])]);
+    let writer = query(forge(true, "other", "open"), threads).await;
+    assert_eq!(marks(&writer), [json!([true, false]), json!([false, true])]);
+}
+
+/// The viewer flags in the states the first test doesn't reach (Opus interim o1#5, o1#6).
+#[tokio::test]
+async fn viewer_can_covers_schedules_merged_and_draft_prs_and_writers_reviews() {
+    let flags = |pull: Value| {
+        json!([
+            pull["viewerCanClose"],
+            pull["viewerCanReopen"],
+            pull["viewerCanEnableAutoMerge"],
+            pull["viewerCanDisableAutoMerge"]
+        ])
+    };
+    // A schedule: no enabling it again; its scheduler may disable it even without push access.
+    for push in [true, false] {
+        let scheduled = query(forge_with(push, pull("other", "open"), true), VIEWER_CAN).await;
+        assert_eq!(
+            flags(scheduled),
+            json!([push, false, false, true]),
+            "push {push}"
+        );
+    }
+    let mut merged = pull("other", "closed");
+    merged["merged"] = json!(true);
+    assert_eq!(
+        flags(query(forge_with(true, merged, false), VIEWER_CAN).await),
+        json!([true, false, false, false])
+    );
+    let mut draft = pull("other", "open");
+    draft["draft"] = json!(true);
+    assert_eq!(
+        flags(query(forge_with(true, draft, false), VIEWER_CAN).await),
+        json!([true, false, false, false])
+    );
+    // A writer may edit anyone's review body, as with comments.
+    let reviews = query(
+        forge(true, "other", "open"),
+        r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){reviews(first:10){nodes{viewerCanUpdate}}}}}"#,
+    )
+    .await;
+    assert_eq!(
+        reviews["reviews"]["nodes"],
+        json!([{"viewerCanUpdate":true},{"viewerCanUpdate":true},{"viewerCanUpdate":true}])
     );
 }
