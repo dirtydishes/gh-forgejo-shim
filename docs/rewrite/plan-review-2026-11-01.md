@@ -66,8 +66,16 @@ pre-move audit merged as its PR #6 (`22c0b69`).
 - The install command, binary names (`gh-forgejo-shim`, `gfj`, and the managed `gh` wrapper), config
   file and token storage stay the same for existing users.
 - Standalone server mode, with the gateway behind a reverse proxy on the forge host, becomes a secondary
-  README section.
+  README section. Decision D1 below supersedes this: server mode is a first-class install path.
 - If real gh becomes newly required, the release notes say so. It does become newly required (F14).
+
+**Decisions on this review, 2026-11-01 (Kell).** Section 3 has the full text.
+
+- D1: client-only mode supports Claude's agent running gh, and server mode becomes first-class.
+- D2: PR URLs use `/pull/N`.
+- D3: the minimum gh is v2.103.3, and install and upgrade refuse anything older.
+- D4: still open.
+- D5: seeding the Forgejo twin and adding a non-admin e2e user are approved.
 
 **State on 2026-11-01:**
 
@@ -200,7 +208,7 @@ result. The e2e seed creates one commit per PR, so no test catches it.
 **Fix.** Reverse PR commits into GitHub's oldest-first order in fga-core. Add a seeded PR with two commits
 and different check results to the e2e oracle.
 
-### F5. Client-only mode can't serve Claude, which is the gateway's first goal (high, confirmed; decision)
+### F5. Client-only mode can't serve Claude, which is the gateway's first goal (high, confirmed; decided D1)
 
 Claude desktop and Claude Code get a token from gh and then call `https://<forge>/api/v3` themselves.
 Those requests never go through gh, so a socket that lives only as long as one gh process can't receive
@@ -208,11 +216,19 @@ them. `docs/gateway/DESIGN.md` lists "Claude Code and Claude desktop show PR sta
 and assumes the gateway runs on the forge hostname. Under option B the default install is client-only.
 A Claude user would get a successful token probe and still no PR status.
 
-**Fix.** State support per mode. In client-only mode, Claude's agent can run `gh` commands, but Claude's
-built-in PR status needs server mode. Test the two modes separately. Kell decides whether that's
-acceptable or whether server mode gets more weight (decision D1).
+**Decision D1.** Client-only mode supports Claude's agent running `gh`. Claude's built-in PR status needs
+server mode. Server mode gets real weight rather than a secondary README section:
 
-### F6. Client-only mode can't make ChatGPT's PR links work (high, confirmed; decision)
+- its own install path;
+- its own tests;
+- a README note telling anyone who uses Claude to use server mode.
+
+**Fix.** Build server mode as its own work package, `cwe.42`. It covers the container image, proxy
+snippets that include the `/pull/N` redirect, and tests for real gh and Claude's REST lookups against
+fga-server. Acceptance is the Claude footer and Claude desktop showing the PR on clover. Release notes
+and the README state support per mode.
+
+### F6. Client-only mode can't make ChatGPT's PR links work (high, confirmed; decided D2)
 
 ChatGPT 22943 ignores a PR whose URL ends `/pulls/N` and accepts `/pull/N`. Its bundle parses PR URLs with
 `\/pull\/(\d+)`. Forgejo has no `/pull/N` route: `/pull/N` returns 404 on both Codeberg and
@@ -223,10 +239,17 @@ uses gh's socket. Client-only users therefore get one of two outcomes:
 - `/pull/N`: ChatGPT shows the PR, but "Open pull request in browser" 404s.
 - `/pulls/N`: the link works, but ChatGPT shows no PR.
 
-**Fix.** Decide the client-only policy (D2). The likely answer is `/pull/N` plus a documented broken
-browser link, with the redirect recipe for anyone who controls the forge. gh's own `--web` opens can be
-fixed locally, because the wrapper can set `GH_BROWSER` to a helper that rewrites `/pull/` to `/pulls/`.
-Rewrite bead `65s` with acceptance for each mode.
+**Decision D2.** PR URLs use `/pull/N` in every mode. In client-only mode, the wrapper sets
+`GH_BROWSER` to a helper that rewrites `/pull/` to `/pulls/`, so gh's own `--web` opens work. The
+README carries the redirect recipe for anyone who runs their own forge. "Open pull request in browser" in
+ChatGPT still 404s for client-only users without that redirect, and the README says so.
+
+**Fix.** Bead `65s` is rewritten with acceptance for each mode:
+
+- **Both modes.** A raw `/pull/N` in `pr list`/`pr view --json url` (with no normalizer), and ChatGPT
+  shows the PR.
+- **Client-only.** `gh pr view --web` opens a working `/pulls/N` page.
+- **Server mode.** `/pull/N` redirects to `/pulls/N` with the query and fragment intact.
 
 ### F7. ChatGPT's six documents fail against the schema, and nothing tests them (high, confirmed)
 
@@ -311,6 +334,8 @@ This was found by the gateway thread and two reviewers independently. It only af
 
 fga-core already handles all three (`Session::protection`, `Protection::for_branch`).
 
+D4 is still open with Kell, so this stays fix-or-delete (`cwe.40`).
+
 **Fix.** If anything ships from `rewrite` before the launcher, switch this path to
 `fga_core::forgejo::Session::protection`, which the move makes available by path. Otherwise delete it in
 the restructure. Either way, add a non-admin `--required` case.
@@ -355,11 +380,21 @@ visible gates pass), and the auto-merge refusals.
   version range or a check at install or upgrade time.
 - **Release notes.** They are still the fixed string "Rust-first gh-forgejo-shim release artifacts."
   (`.github/workflows/release.yml:139`).
-- **No owned task** covers the README restructure with server mode as a secondary section, upgrade and
-  rollback proof, or archiving forgejo-github-api with a pointer. That repo has no open issues or PRs,
-  and PR #6 is already merged, so archiving it is simple.
+- **No owned task** covers the README restructure, upgrade and rollback proof, or archiving
+  forgejo-github-api with a pointer. That repo has no open issues or PRs, and PR #6 is already merged,
+  so archiving it is simple.
 
-**Fix.** Add a release and retirement bead (R1 in section 3) that blocks C5.
+**Decision D3.** The minimum supported gh is **v2.103.3**, the version this review checked. Install and
+upgrade refuse with a clear message when real gh is missing or older.
+
+**Fix.** The release and retirement bead (`cwe.39`) blocks C5 and carries:
+
+- the D3 check at install and upgrade time, with tests for a missing gh, an older gh and v2.103.3;
+- release notes that say real gh v2.103.3 or newer is now required;
+- a README that puts the client-only flow and server mode (`cwe.42`) side by side, with the Claude note
+  from D1;
+- upgrade and rollback proof using the existing config and token store;
+- the forgejo-github-api pointer.
 
 ### F15. The live Forgejo twin has no PRs, and the e2e user is an admin (medium, confirmed)
 
@@ -375,8 +410,11 @@ But `GET https://git.dirtydishes.dev/api/v1/repos/dirtydishes/gfj-oracle/pulls?s
 Separately, `scripts/e2e.sh:43-44` creates the e2e user with `--admin`. Every e2e read goes through the
 admin protection path, and the non-admin fallback that PR #6 added is covered only by fixtures.
 
-**Fix.** Seed the twin from the same scenario script the e2e uses. That writes to Kell's server, so it
-needs Kell's go-ahead (D5). Add a non-admin e2e user and run the read oracle as that user too.
+**Decision D5.** Kell approved both seeding the twin and adding a non-admin e2e user. The seeding is
+build work for the bead that owns it, not something to do during this review.
+
+**Fix.** `cwe.32` seeds the twin from the same scenario script the e2e uses. `cwe.31` adds a non-admin
+e2e user and runs the read oracle as that user too.
 
 ### F16. Auto-merge can show as enabled after Forgejo dropped it (medium, confirmed)
 
@@ -522,7 +560,7 @@ path. Scrub them in a separate small change.
 | C5 `cwe.19` cutover | keep with new prerequisites | F9 |
 | D `cwe.20` | still deferred | Drop "REST passthrough", which the gateway already serves |
 | `cwe.22` serde_yaml | keep | |
-| `65s` PR URLs | rewrite | Per-mode policy (F6, D2) |
+| `65s` PR URLs | rewritten | `/pull/N` with per-mode acceptance (F6, D2) |
 
 None of these beads is closed or deleted by this review. The retire and rewrite actions are proposals for
 Kell, recorded as bead comments.
@@ -544,31 +582,33 @@ Kell, recorded as bead comments.
    - the R1 runner rewrite (F8);
    - the URL assertion (F21);
    - a two-commit seed (F4);
-   - a non-admin e2e user (F15);
-   - the twin seed, once D5 is approved.
+   - a non-admin e2e user (F15, approved under D5);
+   - the twin seed (`cwe.32`, approved under D5).
 6. **G. Gateway correctness:**
    - F4 commit order, which is the most urgent: it's a real bug in code that is already merged;
    - F16 to F20;
    - C2g / G4 (F7).
 
    These can run alongside L, because none of them depends on the launcher.
-7. **C-tier acceptance** (rewritten C1 to C4), then **R. Release and retirement** (F14), then
+7. **S. Server mode** (`cwe.42`, D1). Its own install path and tests. It starts after M1 and L1, and
+   runs alongside L2 to L4.
+8. **C-tier acceptance** (rewritten C1 to C4), then **R. Release and retirement** (F14, D3), then
    **C5 cutover**.
 
 F11 only matters if a release ships from `rewrite` before L3. If that happens, it becomes a small fix
 right after M1.
 
-### Decisions for Kell
+### Decisions (Kell, 2026-11-01)
 
-- **D1.** Is client-only Claude support limited to Claude's agent running `gh` acceptable, with
-  Claude's built-in PR status requiring server mode? Or does server mode need more weight than "secondary
-  README section"? (F5)
-- **D2.** In client-only mode, should PR URLs be `/pull/N`, which ChatGPT needs but which 404s in the
-  browser unless the forge adds a redirect? Or `/pulls/N`? (F6) The recommendation is `/pull/N`, plus
-  the `GH_BROWSER` rewrite and the redirect recipe in the README.
-- **D3.** Which gh versions does the shim support, and does install or upgrade refuse to proceed without
-  a compatible gh? (F14)
-- **D4.** Will anything ship from `rewrite` before the launcher slice? That decides whether F11 gets
-  fixed or deleted.
-- **D5.** May the Forgejo twin `dirtydishes/gfj-oracle` be seeded with PR states? This writes to
-  git.dirtydishes.dev. (F15)
+- **D1: client-only mode supports Claude's agent running `gh`; Claude's built-in PR status needs server
+  mode.** Server mode gets real weight: its own install path (`cwe.42`), its own tests, and a README
+  note telling Claude users to use it. It is not a secondary section. (F5)
+- **D2: `/pull/N`.** The wrapper also sets a `GH_BROWSER` rewrite for gh's `--web`, and the README has a
+  redirect recipe for people who run their own forge. Bead `65s` is rewritten with acceptance per
+  mode. (F6)
+- **D3: the minimum supported gh is v2.103.3.** Install and upgrade refuse with a clear message when gh
+  is missing or older. This is in the release bead `cwe.39`. (F14)
+- **D4: open.** Kell is still deciding whether anything ships from `rewrite` before the launcher slice.
+  F11 (`cwe.40`) stays fix-or-delete until then.
+- **D5: approved.** Seeding PR states on `dirtydishes/gfj-oracle` and adding a non-admin e2e user are
+  both OK. Both are build work for their beads (`cwe.32`, `cwe.31`), not part of this review. (F15)
