@@ -92,7 +92,10 @@ pub fn install_shim(
 /// replaces a symlink at `target` itself, where writing to the path would follow it and overwrite
 /// whatever it points to, such as the real gh.
 pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> Result<()> {
-    let (mut file, temp) = create_temp_file(target)?;
+    // An executable starts owner-only: a handle another account opened while it was still
+    // 0666 & ~umask would keep write access through make_executable and the rename. Other
+    // files keep the default mode they've always had.
+    let (mut file, temp) = create_temp_file(target, if executable { 0o600 } else { 0o666 })?;
     let result = (|| -> Result<()> {
         file.write_all(contents)?;
         if executable {
@@ -116,7 +119,8 @@ pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> 
     result
 }
 
-fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
+/// Creates a new file beside `target` with `mode`, which umask can only narrow.
+fn create_temp_file(target: &Path, mode: u32) -> Result<(File, PathBuf)> {
     let parent = target.parent().unwrap_or(Path::new("."));
     let name = target
         .file_name()
@@ -128,13 +132,13 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
         ));
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
-        // Owner-only from creation: a handle another account opened while the file was still
-        // 0666 & ~umask would keep write access through any later chmod and the rename.
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            options.mode(mode);
         }
+        #[cfg(not(unix))]
+        let _ = mode;
         match options.open(&temp) {
             Ok(file) => return Ok((file, temp)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -468,16 +472,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn temporary_file_is_owner_only_from_creation() -> Result<()> {
+    fn an_executable_is_owner_only_from_creation_and_other_files_keep_the_default() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
         let root = unique_path("gh-forgejo-shim-temp-mode");
         fs::create_dir(&root)?;
 
-        let (file, temp) = create_temp_file(&root.join("gh"))?;
-
+        let (file, temp) = create_temp_file(&root.join("gh"), 0o600)?;
         assert_eq!(file.metadata()?.permissions().mode() & 0o077, 0);
         fs::remove_file(temp)?;
+
+        // A plain file gets what fs::write gives under the same umask, as before.
+        replace_file(&root.join("marker"), b"marker\n", false)?;
+        fs::write(root.join("reference"), b"reference\n")?;
+        let mode =
+            |name: &str| fs::metadata(root.join(name)).map(|m| m.permissions().mode() & 0o777);
+        assert_eq!(mode("marker")?, mode("reference")?);
         fs::remove_dir_all(root).ok();
         Ok(())
     }
