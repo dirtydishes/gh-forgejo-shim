@@ -81,8 +81,10 @@ impl Fixture {
     fn fill(&self, host: &str) -> Output {
         let logger = self.root.join("log-helper");
         let inherited = OsString::from(format!("'credential.helper={}'", logger.display()));
+        // Outside any checkout: `git credential fill` needs no repository.
         let mut child = Command::new("git")
             .args(["credential", "fill"])
+            .current_dir(&self.root)
             .env_clear()
             .env("HOME", &self.home)
             .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin")
