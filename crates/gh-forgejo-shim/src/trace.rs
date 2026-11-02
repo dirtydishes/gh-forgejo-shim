@@ -485,7 +485,7 @@ fn create_parent_dirs(path: &Path) -> io::Result<()> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent)?;
+        crate::shim::create_dirs(parent, 0o700)?;
     }
     Ok(())
 }

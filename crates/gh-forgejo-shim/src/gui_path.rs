@@ -96,8 +96,10 @@ pub fn install_gui_path(
             target.display()
         )));
     };
-    fs::create_dir_all(parent)?;
-    fs::write(&target, launch_agent_plist(&value))?;
+    // A LaunchAgents directory others can write would let them plant an agent that runs as you.
+    crate::shim::create_dirs(parent, 0o755)?;
+    // A launch agent others could edit would run their commands at your login.
+    crate::shim::write_file(&target, launch_agent_plist(&value).as_bytes(), 0o644)?;
 
     if !apply_now {
         return Ok(GuiPathResult {

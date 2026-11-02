@@ -87,6 +87,17 @@ in client mode and the command isn't on the delegate list below. Everything else
 Unknown commands launch, because gh aliases arrive as unknown commands and expand only inside gh.
 An alias such as `gh co 12` in a Forgejo checkout has to reach a gh that can talk to the forge.
 
+**Transition: the launch list.** Until the gateway serves every command, the rule above applies
+only to the commands on one list in code, `launcher::LAUNCH_LIST`, matched on the command after
+alias expansion (L2). Every other Forgejo route keeps the shim's built-in path, as before the
+launcher. So do usage errors, help, and a listed command's forms the built-in path refuses as
+unsupported, such as `pr checks --watch`: their answers need no token, and they stay as they are
+until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, adds `pr checkout` with git's
+credentials, then `pr list`, `api`, `auth status` and `auth token` with the rest of section 11's
+tests. Each later gateway command adds its name to the list, with a test, in the change that
+makes the gateway serve it. Once the list covers everything, C5 (`cwe.19`) deletes the built-in
+path and the list with it, and this rule becomes the one above.
+
 **Installed extensions delegate.** A first argument *name* with an installed extension, a
 directory `<data dir>/extensions/gh-<name>`, runs through plain gh. The data directory is
 `$XDG_DATA_HOME/gh`, else `~/.local/share/gh` (`go-gh/pkg/config/config.go` `DataDir`; gh's
@@ -125,12 +136,14 @@ then github.com. Routing these by the checkout's remote, as today, would make th
 print the placeholder for `gh auth token`, and send `gh api` to github.com, where the gateway
 refuses it with 421. So when routing sends a host-less `gh api` or `gh auth token` to a Forgejo
 host, the launcher sets `GH_HOST` to that host's hostname without its port (`gh_hostname`), which
-makes it gh's default host. gh looks up the token under the portless key, and drops the port from
-remotes before comparing them with `GH_HOST`, so `forge.test:3443` would find neither: `gh auth
-token` fails with "no oauth token found for forge.test:3443". The launched `hosts.yml` has the
-portless key, and the gateway answers to the portless spelling (§5). When the user's own
-`GH_HOST` already has that value, it stays as it is. They then talk to the forge, as the shim's versions of them always have. Kell chose this
-(§13, decision 4). The alternative, following gh to github.com, was declined. `GH_HOST` is restored for nested calls like the other launcher variables (§7).
+makes it gh's default host. Both commands then talk to the forge, as the shim's versions of them
+always have. Kell chose this (§13, decision 4). The alternative, following gh to github.com, was
+declined. The value has no port because gh drops the port from remotes before comparing them
+with `GH_HOST`: with `forge.test:3443`, gh refuses with "none of the git remotes … correspond to
+the GH_HOST environment variable". The portless value also keeps `gh auth token`'s lookup on the
+same key as gh's API requests. The launched `hosts.yml` has that key, and the gateway answers to
+the portless spelling (§5). When the user's own `GH_HOST` already has that value, it stays as it
+is. `GH_HOST` is restored for nested calls like the other launcher variables (§7).
 `auth status` keeps its current routing. `auth git-credential` under a launcher is answered by
 the wrapper itself (§3, "Git's credentials"); otherwise it keeps its current routing. L3 owns the
 exact table and
@@ -154,10 +167,17 @@ the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and one case. 
 `gh api` or `gh auth token` gets `GH_HOST` set to the forge's portless hostname, exactly as on the
 launch path (above), so decision 4 holds in every Forgejo checkout, server mode or not. Without
 it, plain gh would send these to its default host, github.com whenever the user is also logged in
-there, and `gh auth token` would print the GitHub token. Setting `GH_HOST` also makes gh use
+there, and `gh auth token` would print the GitHub token. Here the portless value also matters
+for the token: a user's own `hosts.yml` has the login under the portless key only, and
+`GH_HOST=forge.test:3443` gives "no oauth token found for forge.test:3443". For a forge on a
+custom port, stepping aside therefore sends gh to the forge's default port 443, where the user's
+login was checked, while the launch path reaches the entry's own port through the gateway.
+Setting `GH_HOST` also makes gh use
 `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`, if set, for the forge ahead of the user's
 login there (fact 3), which would send a GitHub Enterprise login to the forge. So when the wrapper
-sets `GH_HOST` here, it also removes those two variables. It records both changes with §7's
+sets `GH_HOST` here, it also removes those two variables. When the user's own `GH_HOST` already
+names the forge, the wrapper sets nothing and keeps those variables, as plain gh would: the user
+chose that host. It records both changes with §7's
 `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`, so a nested call, such as one
 from `gh api`'s pager, gets the user's values back. It never sets `FJ_SHIM_LAUNCHER`: the wrapper
 execs gh here, so gh has the wrapper's pid, and guard 2 would stop a wrapper that gh runs directly
@@ -203,10 +223,13 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     that dies with the call. That command does call the API, so for that call the gateway
     expects the real token in place of a per-call one (§5). It runs no git and starts nothing
     (`status.go` imports nothing that spawns a process). The wrapper decides "with
-    `--show-token`" on the argv after alias expansion (L2's `expand_alias`), parsed as gh's
-    pflag declaration does (`BoolVarP(…, "show-token", "t", …)`, `status.go:258`): `-t`, `-at`,
-    `-ta`, `--show-token` and `--show-token=true` count, and `--show-token=false` doesn't.
-    A plain scan for `-t` would miss `-at` and print a token that dies with the call. No other
+    `--show-token`" on the argv after alias expansion (L2's `expand_alias`), with the invocation
+    parser's flag grammar, which declares the flag as gh's pflag does
+    (`BoolVarP(…, "show-token", "t", …)`, `status.go:258`): `Invocation::flag("show-token")`,
+    the last occurrence, read with Go's `strconv.ParseBool` rules. So `-t`, `-at`, `-ta`,
+    `--show-token`, `--show-token=1` and `--show-token=t` count, and `--show-token=false`,
+    `-t=false`, `=0` and `-t --show-token=false` don't. A plain scan for `-t` would miss `-at`
+    and print a token that dies with the call. No other
     call puts the real token in `hosts.yml`.
   - Every other host gets the placeholder `gfj-not-served`.
   - An allowlist entry with a port, such as `forge.test:3443`, always gets two entries, its
@@ -630,7 +653,7 @@ the launcher never converts the environment to `String`.
 | `GH_PATH` | the run directory's `gh` script, so gh's git credential helper is the launcher's (section 3, "Git's credentials") |
 | `GIT_CONFIG_PARAMETERS` | the inherited value and a space, if that value is non-empty, then `'credential.helper=' 'credential.helper=!<run dir>/gh auth git-credential'` (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
-| `GH_HOST` | the routed host's hostname without its port, for a host-less `gh api` or `gh auth token` (section 2), on the launch path and when stepping aside; otherwise unchanged |
+| `GH_HOST` | the routed host's hostname without its port, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
@@ -638,6 +661,11 @@ the launcher never converts the environment to `String`.
 | `FJ_SHIM_SAVED` | the names of the variables above that the launcher changed |
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
+
+The table is the launch path. Stepping aside (§2) changes only `GH_HOST` and the two GitHub
+Enterprise token variables, and only for a host-less `gh api` or `gh auth token`, with
+`FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`. It never sets
+`FJ_SHIM_LAUNCHER`, and it doesn't remove `GH_TOKEN` or `GITHUB_TOKEN`.
 
 The launcher spawns gh by absolute path, so `argv[0]` is that path too.
 
@@ -819,9 +847,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     through unchanged.
 11. **Tokens (§3).** `gh auth token --hostname <forge>` prints the stored token, and so does
     `gh auth status --show-token --hostname <forge>`, which also reports the forge as logged
-    in. So do `-at` and an alias expanding to `auth status -t`. A plain `gh auth status`, and
-    `gh auth status --show-token=false`, print no token, and gh's request carries the per-call
-    one.
+    in. So do `-at`, `--show-token=1` and an alias expanding to `auth status -t`. A plain
+    `gh auth status`, `--show-token=false`, `--show-token=0` and `-t --show-token=false` print no
+    token, and gh's request carries the per-call one.
     With no stored token, a launched `gh pr view` exits 4 with the login hint.
 12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
     `gh config set` in a Forgejo checkout changes the user's real `config.yml`.
@@ -859,7 +887,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     `FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN` holds `ghe_corp`; a request captured at the forge stub
     never carries `ghe_corp`. With the allowlist entry `forge.test:3443` and the checkout's
     origin `https://forge.test:3443/o/r.git`, gh gets `GH_HOST=forge.test`, and both commands
-    succeed. A user `GH_HOST=forge.test` is left as it is. The same holds when that forge
+    succeed: the request arrives at `forge.test` on port 443, so the forge stub listens there
+    too, and nothing reaches port 3443. A user `GH_HOST=forge.test` is left as it is, and with
+    it `GH_ENTERPRISE_TOKEN` stays in gh's environment, as plain gh would have it. The same holds when that forge
     is the user's only host, and when the allowlist entry is `forge.test:3443` while the login
     sits under `forge.test`. A login stored only under `forge.test:3443` doesn't step aside: the
     call launches. A host-less `gh auth status` in another forge's checkout leaves the logged-in

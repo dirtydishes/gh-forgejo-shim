@@ -316,7 +316,7 @@ fn write_auth_file(data: &Value, home: Option<&Path>) -> Result<()> {
             path.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| {
+    crate::shim::create_dirs(parent, 0o700).map_err(|error| {
         ShimError::new(format!("could not create {}: {error}", parent.display()))
     })?;
     set_permissions(parent, 0o700).ok();

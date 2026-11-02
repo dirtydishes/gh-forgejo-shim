@@ -833,7 +833,7 @@ impl SshHosts {
 }
 
 /// The user's gh config directory, found the way go-gh's `ConfigDir` does.
-fn user_gh_config_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
+pub(crate) fn user_gh_config_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
     let non_empty = |name: &str| env.get(name).filter(|value| !value.is_empty());
     if let Some(dir) = non_empty("GH_CONFIG_DIR") {
         Some(PathBuf::from(dir))

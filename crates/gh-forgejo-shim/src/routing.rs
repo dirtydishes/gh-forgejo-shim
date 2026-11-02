@@ -112,6 +112,10 @@ where
     let env = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .collect::<HashMap<_, _>>();
+    // Guards 2 and 3 (launcher spec §8) come before routing, so a loop stops at once.
+    if let Some(code) = crate::launcher::recursion_guard(&env) {
+        return code;
+    }
     let cwd = std::env::current_dir().ok();
     run_gh(argv, env, cwd.as_deref(), DelegateMode::Inherit)
 }
@@ -269,12 +273,16 @@ fn run_gh(
             return 1;
         }
     };
-    let decision = decide_invocation_route(&routing_invocation(&argv, &env), &config, &env, cwd);
+    let routed = routing_invocation(&argv, &env);
+    let decision = decide_invocation_route(&routed, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
     let exit_code = match decision.kind {
         RouteKind::Delegate => run_delegate(&original_argv, &env, cwd, &config, &mut mode),
-        RouteKind::Forgejo => run_forgejo(&invocation, &env, cwd, &decision, &mut mode),
+        RouteKind::Forgejo => {
+            launch_listed(&routed, &decision, &original_argv, &env, &config, &mode)
+                .unwrap_or_else(|| run_forgejo(&invocation, &env, cwd, &decision, &mut mode))
+        }
     };
 
     if trace_enabled {
@@ -328,6 +336,25 @@ fn run_delegate(
             }
         }
     }
+}
+
+/// Runs a launch-list command through the launcher (spec §2), or returns `None` for the built-in
+/// path. Only on the terminal path: a captured run has no gh to hand the terminal to.
+fn launch_listed(
+    routed: &Invocation,
+    decision: &RouteDecision,
+    argv: &[OsString],
+    env: &HashMap<String, String>,
+    config: &DispatcherConfig,
+    mode: &DelegateMode<'_>,
+) -> Option<i32> {
+    #[cfg(unix)]
+    if matches!(mode, DelegateMode::Inherit) && crate::launcher::launches(routed) {
+        let host = decision.trace_host()?;
+        return crate::launcher::start::launch(host, argv, env, config.real_gh.as_deref());
+    }
+    let _ = (routed, decision, argv, env, config, mode);
+    None
 }
 
 fn run_forgejo(

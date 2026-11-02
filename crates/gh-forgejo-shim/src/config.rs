@@ -244,7 +244,9 @@ fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
             path.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| {
+    // The auth store shares this directory, and a config others could swap could point api_url
+    // at their own host and collect the token.
+    crate::shim::create_dirs(parent, 0o700).map_err(|error| {
         ShimError::new(format!("could not create {}: {error}", parent.display()))
     })?;
 
@@ -369,7 +371,10 @@ fn replace_config_file(path: &Path, contents: &[u8]) -> Result<()> {
     let permissions = fs::metadata(&target)
         .ok()
         .map(|metadata| metadata.permissions());
-    shim::replace_file(&target, contents, false).map_err(|error| could_not_write(&error))?;
+    // A config others could edit could point api_url at their own host and collect the token, or
+    // point `paths.gh` at their own program, so a new one is owner-only. An existing one keeps the
+    // mode its owner gave it.
+    shim::replace_private_file(&target, contents).map_err(|error| could_not_write(&error))?;
     if let Some(permissions) = permissions {
         fs::set_permissions(&target, permissions).map_err(|error| could_not_write(&error))?;
     }

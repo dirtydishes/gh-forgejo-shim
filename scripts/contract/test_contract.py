@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,8 @@ from unittest.mock import patch
 
 import capture
 import runner
-from common import LOCAL_PROBES, REPO, ROOT, load_cases, normalize, oracle_argv, validate_case
+from common import (DECOY_PROBES, LOCAL_PROBES, REPO, ROOT, launch_list, launched, load_cases, normalize,
+                    oracle_argv, validate_case)
 
 
 class ContractTests(unittest.TestCase):
@@ -99,6 +101,51 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(runner.classify(case, case["expected"]), ("pass", ""))
         for key, value in (("exit", 97), ("stdout", "wrong"), ("stderr", "wrong")):
             self.assertEqual(runner.classify(case, case["expected"] | {key: value})[0], "unexpected")
+
+    def test_decoy_cases_are_exact_and_never_captured(self):
+        case = {"id": "probe", "kind": "decoy", "repo": REPO, "argv": DECOY_PROBES[0], "normalize": []}
+        validate_case(case)
+        with self.assertRaisesRegex(ValueError, "decoy allowlist"):
+            validate_case(case | {"argv": ["pr", "view", "1"]})
+        with self.assertRaisesRegex(ValueError, "expect only the decoy"):
+            validate_case(case | {"oracle": {"exit": 0, "stdout": "", "stderr": ""}})
+        with self.assertRaisesRegex(ValueError, "never reach real gh"):
+            oracle_argv(case)
+        self.assertEqual(runner.classify(case, {"exit": 97, "stdout": "", "stderr": ""}), ("pass", ""))
+
+    def test_only_oracle_cases_on_the_launch_list_get_real_gh(self):
+        commands = launch_list()
+        self.assertEqual(commands, ["pr view", "pr checks"])
+        self.assertTrue(launched(self.case(["pr", "view", "1"]), commands))
+        self.assertTrue(launched(self.case(["pr", "checks", "1"]), commands))
+        self.assertFalse(launched(self.case(["pr", "list"]), commands))
+        self.assertFalse(launched(self.case(["api", "user"]), commands))
+        local = self.case(["pr", "view", "1"]) | {"kind": "shim-local"}
+        self.assertFalse(launched(local, commands))
+        decoy = {"id": "probe", "kind": "decoy", "repo": REPO, "argv": DECOY_PROBES[0], "normalize": []}
+        self.assertFalse(launched(decoy, commands))
+        self.assertTrue(any(case.get("kind") == "decoy" for _, case in load_cases(ROOT / "contract/cases")),
+                        "a committed case must prove an off-list command still reaches the decoy")
+
+    def test_launch_list_gh_runs_real_gh_only_for_a_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            real = directory / "real gh"
+            real.write_text("#!/bin/sh\nprintf real\n")
+            real.chmod(0o755)
+            wrapper = directory / "gh"
+            wrapper.write_text(runner.gh_script(real))
+            wrapper.chmod(0o755)
+            for config, launched_call in ((directory / "gfj-0123456789abcdef", True),
+                                          (directory / "gh-config", False),
+                                          (directory / "gfj-backup", False)):
+                marker = directory / "marker"
+                result = subprocess.run([str(wrapper), "pr", "view"], capture_output=True, text=True,
+                                        env={"GH_CONFIG_DIR": str(config), "GFJS_DECOY_MARKER": str(marker)})
+                self.assertEqual((result.returncode, result.stdout), (0, "real") if launched_call else (97, ""),
+                                 config.name)
+                self.assertEqual(marker.exists(), not launched_call, config.name)
+                marker.unlink(missing_ok=True)
 
     def test_checksum_mismatch_refuses_executable(self):
         class Download:

@@ -19,6 +19,7 @@ pub mod forgejo;
 pub mod git_recorder;
 pub mod gui_path;
 pub mod invocation;
+pub mod launcher;
 pub mod normalize;
 pub mod read_only;
 pub mod repo;
