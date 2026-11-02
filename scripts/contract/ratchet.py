@@ -17,7 +17,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ratchet-", dir=os.environ["GFJS_WORK_DIR"]) as temporary:
         cases = Path(temporary) / "cases"
         shutil.copytree(ROOT / "contract/cases", cases)
-        missing = cases / "pr-checks-none-5.json"
+        # Any committed expected failure will do; a fixed name goes stale when its case is fixed.
+        expected_failure = next(case["id"] for _, case in source_cases if "xfail" in case)
+        missing = cases / f"{expected_failure}.json"
         original = json.loads(missing.read_text())
         edited = dict(original)
         del edited["xfail"]
@@ -35,7 +37,7 @@ def main():
                 raise RuntimeError(f"{label}: did not observe the required contract failure")
             print(f"PASS {label}: cargo exited {result.returncode}, expected contract failure observed", flush=True)
 
-        verify("removed xfail in scratch copy", "unexpected pr-checks-none-5")
+        verify("removed xfail in scratch copy", f"unexpected {expected_failure}")
         missing.write_text(json.dumps(original))
         # Mark a known passing case as expected failure to simulate a fixed implementation.
         passing = cases / "pr-view-closed-7.json"
