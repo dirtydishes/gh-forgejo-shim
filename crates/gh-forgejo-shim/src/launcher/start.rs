@@ -11,13 +11,14 @@ use url::Url;
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::external::find_program;
+use crate::invocation::Invocation;
 use crate::launcher::credentials::git_config_parameters;
 use crate::launcher::env::Edit;
 use crate::launcher::gateway::GatewayHost;
 use crate::launcher::ghconfig::{self, ServedHost, ServedToken};
 use crate::launcher::run::{self, Edits, Files, Launch};
 use crate::launcher::rundir;
-use crate::repo;
+use crate::repo::{self, gh_hostname};
 
 /// The token variables gh would prefer over `hosts.yml` (spec fact 3). A launched gh never sees
 /// them: `GH_ENTERPRISE_TOKEN` would otherwise reach the forge.
@@ -33,10 +34,15 @@ const TOKEN_VARIABLES: [&str; 4] = [
 /// config bridge (L4) gives the gateway those settings.
 pub fn launch(
     host: &str,
+    routed: &Invocation,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
 ) -> Option<i32> {
+    let Plan {
+        real_token,
+        extra_edits,
+    } = Plan::for_invocation(routed, host, env);
     let env_map: EnvMap = env
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -156,7 +162,11 @@ pub fn launch(
                     &user_hosts,
                     &allowlist,
                     &served,
-                    ServedToken::PerCall(&per_call),
+                    if real_token {
+                        ServedToken::Real
+                    } else {
+                        ServedToken::PerCall(&per_call)
+                    },
                 ),
                 // Git's credentials: the launcher's own helper answers every git in the call (§3).
                 credentials: ghconfig::credentials(&served),
@@ -167,7 +177,11 @@ pub fn launch(
                     .unwrap_or_default(),
             }
         }),
-        edits: Box::new(launched_edits),
+        edits: Box::new(move |run_dir| {
+            let mut edits = launched_edits(run_dir);
+            edits.extend(extra_edits);
+            edits
+        }),
     }))
 }
 
@@ -207,6 +221,33 @@ fn upstream_url(host: &str, config: &Config, env: &HashMap<String, String>) -> O
     let url = Url::parse(&format!("{}/", base.trim_end_matches('/'))).ok()?;
     // fga-core joins absolute `/api/v1/...` paths, which would drop a path prefix.
     (url.path() == "/").then_some(url)
+}
+
+/// What one invocation needs beyond every launch's settings.
+struct Plan {
+    /// `gh auth token` prints the real token, so its `hosts.yml` holds it (§3).
+    real_token: bool,
+    extra_edits: Edits,
+}
+
+impl Plan {
+    fn for_invocation(routed: &Invocation, host: &str, env: &HashMap<String, String>) -> Self {
+        let command = routed.command.as_str();
+        let mut extra_edits = Edits::new();
+        // Decision 4 (§2): host-less `gh api` and `gh auth token` use gh's default host, so the
+        // forge becomes it. Portless, because gh drops the port from remotes before comparing
+        // them with GH_HOST. A user GH_HOST with that value already stays as it is.
+        if matches!(command, "api" | "auth token") && routed.flag("hostname").is_none() {
+            let hostname = gh_hostname(host);
+            if env.get("GH_HOST") != Some(&hostname) {
+                extra_edits.push(("GH_HOST", Edit::Set(hostname.into())));
+            }
+        }
+        Self {
+            real_token: command == "auth token",
+            extra_edits,
+        }
+    }
 }
 
 /// What a launch changes in gh's environment (§7). Everything else passes through untouched.
@@ -285,6 +326,51 @@ mod tests {
         let plain = config("hosts = [\"forge.test\"]\n");
         let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), "/etc/ca.pem".to_string())]);
         assert_eq!(upstream_url("forge.test", &plain, &env), None);
+    }
+
+    fn plan(args: &[&str], env: &[(&str, &str)]) -> Plan {
+        let argv: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        let env: HashMap<String, String> = env
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        Plan::for_invocation(&Invocation::parse(&argv), "forge.test:3443", &env)
+    }
+
+    #[test]
+    fn host_less_api_and_auth_token_get_the_forges_portless_gh_host() {
+        let gh_host = Edit::Set("forge.test".into());
+        for args in [&["api", "user"][..], &["auth", "token"][..]] {
+            assert_eq!(
+                plan(args, &[]).extra_edits,
+                vec![("GH_HOST", gh_host.clone())],
+                "{args:?}"
+            );
+            assert!(
+                plan(args, &[("GH_HOST", "forge.test")])
+                    .extra_edits
+                    .is_empty(),
+                "kept"
+            );
+            assert_eq!(
+                plan(args, &[("GH_HOST", "other.test")]).extra_edits,
+                vec![("GH_HOST", gh_host.clone())]
+            );
+        }
+        assert!(plan(&["api", "user", "--hostname", "forge.test"], &[])
+            .extra_edits
+            .is_empty());
+        assert!(plan(&["auth", "token", "-h", "forge.test"], &[])
+            .extra_edits
+            .is_empty());
+        assert!(plan(&["pr", "view", "1"], &[]).extra_edits.is_empty());
+    }
+
+    #[test]
+    fn only_auth_token_puts_the_real_token_in_hosts_yml() {
+        assert!(plan(&["auth", "token"], &[]).real_token);
+        assert!(!plan(&["api", "user"], &[]).real_token);
+        assert!(!plan(&["pr", "view", "1"], &[]).real_token);
     }
 
     #[test]

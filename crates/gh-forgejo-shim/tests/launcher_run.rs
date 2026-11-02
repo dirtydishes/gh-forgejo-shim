@@ -486,3 +486,28 @@ fn a_credential_request_is_answered_before_the_guards() {
         "{output:?}"
     );
 }
+
+#[test]
+fn a_host_less_auth_token_gets_the_real_token_and_the_forge_as_gh_host() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    // A forge on a custom port: GH_HOST is its portless hostname (decision 4, §2).
+    let config = fixture.home.join(".config/gh-forgejo-shim/config.toml");
+    fs::write(
+        &config,
+        "hosts = [\"forge.test:3443\"]\n[host.\"forge.test:3443\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"http://127.0.0.1:9\"\n",
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(
+        r#"{ echo "GH_HOST=${GH_HOST-unset}"; cat "$GH_CONFIG_DIR/hosts.yml"; } > "$REPORT""#,
+    );
+    let output = fixture
+        .command(&gh, &["auth", "token"])
+        .env("GH_REPO", "forge.test:3443/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert!(report.starts_with("GH_HOST=forge.test\n"), "{report}");
+    assert!(report.contains("oauth_token: host-secret"), "{report}");
+}

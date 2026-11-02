@@ -23,7 +23,7 @@ pub mod start;
 /// matched on the command after alias expansion. Every other Forgejo route keeps the built-in
 /// path. A command joins in the change that makes the gateway serve it, with its test; C5
 /// deletes the built-in path, and this list, once it covers everything.
-pub const LAUNCH_LIST: &[&str] = &["pr view", "pr checks", "pr list"];
+pub const LAUNCH_LIST: &[&str] = &["pr view", "pr checks", "pr list", "api", "auth token"];
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
