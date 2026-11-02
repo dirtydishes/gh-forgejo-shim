@@ -659,6 +659,56 @@ fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
 }
 
 #[test]
+fn audit_diag_written_config_and_launch_agent_are_owner_writable_only() -> TestResult {
+    let f = Fixture::new()?;
+    // Under umask 000 a plain fs::write makes 0666 files, so this fails on any runner unless the
+    // shim gives each file it creates its own mode.
+    let run = |args: &[&str]| -> io::Result<std::process::Output> {
+        Command::new("/bin/sh")
+            .args(["-c", "umask 000 && exec \"$0\" \"$@\""])
+            .arg(env!("CARGO_BIN_EXE_gfj"))
+            .args(args)
+            .env_clear()
+            .envs(f.env())
+            .current_dir(&f.root)
+            .stdin(Stdio::null())
+            .output()
+    };
+    let mut commands = vec![vec!["config", "add-host", "git.example.test"]];
+    let mut written = vec![(f.home.join(".config/gh-forgejo-shim/config.toml"), 0o600)];
+    if cfg!(target_os = "macos") {
+        commands.push(vec![
+            "install-gui-path",
+            "--path",
+            "/usr/bin:/bin",
+            "--no-apply",
+        ]);
+        written.push((
+            f.home
+                .join("Library/LaunchAgents")
+                .join(gh_forgejo_shim::gui_path::PLIST_NAME),
+            0o644,
+        ));
+    }
+    for args in &commands {
+        let output = run(args)?;
+        assert!(output.status.success(), "{args:?} failed: {output:?}");
+    }
+    for (path, expected) in &written {
+        let mode = fs::metadata(path)?.permissions().mode() & 0o777;
+        assert_eq!(mode, *expected, "{} was written {mode:o}", path.display());
+    }
+
+    // An existing file is the user's, and keeps its mode.
+    let config = &written[0].0;
+    fs::set_permissions(config, fs::Permissions::from_mode(0o640))?;
+    let output = run(&["config", "add-host", "other.example.test"])?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::metadata(config)?.permissions().mode() & 0o777, 0o640);
+    Ok(())
+}
+
+#[test]
 fn audit_diag_recorder_recreate_prevents_self_recursion() -> TestResult {
     let f = Fixture::new()?;
     let directory = f.root.join("recorder");
