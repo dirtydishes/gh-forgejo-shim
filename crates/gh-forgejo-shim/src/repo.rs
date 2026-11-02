@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod go_sort;
+
 use crate::config::normalize_host;
 use crate::external::git_output;
 use crate::invocation::Invocation;
@@ -169,17 +171,22 @@ pub fn detect_repo(
     checkout: &Checkout<'_>,
     hosts: &GhHosts,
 ) -> Detection {
-    // A PR or issue URL argument names its own repository, and gh uses it even with -R.
-    if let Some(url_arg) = invocation
+    let aliases = user_gh_aliases(env);
+    let group = command_group(&invocation.command, &aliases);
+    // A `pr` or `issue` command takes a PR or issue URL as its selector, and gh uses that URL's
+    // repository even with -R. `repo view` takes the repository itself. Any other command's URL
+    // argument is data, such as a release tag, and selects nothing.
+    if let Some(selector) = invocation
         .positionals
         .iter()
         .map(String::as_str)
         .find(|arg| {
-            matches!(url_scheme(arg), Some("http" | "https" | "ssh" | "git"))
+            (matches!(group.as_str(), "pr" | "issue")
+                && matches!(url_scheme(arg), Some("http" | "https")))
                 || invocation.command == "repo view"
         })
     {
-        if let Some(repo) = parse_repo_spec(url_arg, Some(&hosts.default)) {
+        if let Some(repo) = parse_repo_spec(selector, Some(&hosts.default)) {
             return Detection::found(repo, "command URL");
         }
     }
@@ -200,42 +207,133 @@ pub fn detect_repo(
             .map_or_else(Detection::unknown, |repo| Detection::found(repo, "GH_REPO"));
     }
 
-    let saved_default = honors_saved_default(&invocation.command, &user_gh_aliases(env));
+    let saved_default = honors_saved_default(&group);
     base_repo_from_remotes(checkout.remotes(), hosts, saved_default)
         .map_or_else(Detection::unknown, |(repo, source)| {
             Detection::found(repo, source)
         })
 }
 
+/// gh's top-level commands in v2.103.3, with cobra's short names and the help topics: the names
+/// an alias can't take (`gh/pkg/cmd/root/root.go:134-185`).
+const GH_COMMANDS: &[&str] = &[
+    "version",
+    "accessibility",
+    "a11y",
+    "actions",
+    "alias",
+    "auth",
+    "attestation",
+    "at",
+    "config",
+    "gist",
+    "gpg-key",
+    "completion",
+    "extension",
+    "extensions",
+    "ext",
+    "search",
+    "secret",
+    "variable",
+    "ssh-key",
+    "codespace",
+    "cs",
+    "project",
+    "preview",
+    "skills",
+    "copilot",
+    "status",
+    "credits",
+    "licenses",
+    "send-telemetry",
+    "agent-task",
+    "agent-tasks",
+    "agent",
+    "agents",
+    "browse",
+    "discussion",
+    "pr",
+    "org",
+    "issue",
+    "release",
+    "repo",
+    "ruleset",
+    "rs",
+    "run",
+    "workflow",
+    "label",
+    "cache",
+    "api",
+    "help",
+    "mintty",
+    "environment",
+    "telemetry",
+    "reference",
+    "formatting",
+    "exit-codes",
+];
+
+/// The gh command `command` runs, after a plain alias. gh registers an alias only when its name
+/// isn't a command and its expansion's first word, split as a shell would, is one
+/// (`gh/pkg/cmd/alias/shared/validations.go`). Anything else is returned as it is.
+fn command_group(command: &str, aliases: &HashMap<String, String>) -> String {
+    let word = command.split_whitespace().next().unwrap_or_default();
+    if GH_COMMANDS.contains(&word) {
+        return word.to_string();
+    }
+    aliases
+        .get(word)
+        .and_then(|expansion| shell_first_word(expansion))
+        .filter(|first| GH_COMMANDS.contains(&first.as_str()))
+        .unwrap_or_else(|| word.to_string())
+}
+
+/// The first word of `text` as shlex splits it: quotes removed, a backslash escaping the next
+/// character.
+fn shell_first_word(text: &str) -> Option<String> {
+    let mut word = String::new();
+    let mut chars = text.trim_start().chars();
+    let mut quote = None;
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (None, c) if c.is_whitespace() => break,
+            (None, '\\') | (Some('"'), '\\') => word.push(chars.next()?),
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(open), c) if c == open => quote = None,
+            (_, c) => word.push(c),
+        }
+    }
+    (quote.is_none() && !word.is_empty()).then_some(word)
+}
+
 /// gh reads `gh repo set-default` only in the commands it builds with `SmartBaseRepoFunc`
 /// (`gh/pkg/cmd/root/root.go:161-178`). The groups added before that line take the first ranked
-/// remote (`gh/pkg/cmd/factory/default.go:83-90`). A plain alias counts as the command it expands
-/// to (`gh/pkg/cmd/root/alias.go` `NewCmdAlias`). A command the wrapper still doesn't know, such
-/// as a shell alias, is taken to be a smart one.
-fn honors_saved_default(command: &str, aliases: &HashMap<String, String>) -> bool {
-    let word = command.split_whitespace().next().unwrap_or_default();
-    let word = aliases
-        .get(word)
-        .and_then(|expansion| expansion.split_whitespace().next())
-        .unwrap_or(word);
+/// remote (`gh/pkg/cmd/factory/default.go:83-90`). A command the wrapper still doesn't know, such
+/// as a shell alias or an extension, is taken to be a smart one.
+fn honors_saved_default(group: &str) -> bool {
     !matches!(
-        word,
+        group,
         "version"
             | "accessibility"
+            | "a11y"
             | "actions"
             | "alias"
             | "auth"
             | "attestation"
+            | "at"
             | "config"
             | "gist"
             | "gpg-key"
             | "completion"
             | "extension"
+            | "extensions"
+            | "ext"
             | "search"
             | "secret"
             | "variable"
             | "ssh-key"
             | "codespace"
+            | "cs"
             | "project"
             | "preview"
             | "skills"
@@ -297,15 +395,16 @@ fn base_repo_from_remotes(
     hosts: &GhHosts,
     saved_default: bool,
 ) -> Option<(RepoRef, &'static str)> {
+    // gh sorts every remote with Go's unstable `sort.Sort`, then filters by host
+    // (`remote_resolver.go`). Equally ranked remotes beyond 12 come out in that sort's own order.
+    let mut remotes = remotes.to_vec();
+    go_sort::sort(&mut remotes, |a, b| {
+        remote_rank(&a.name) > remote_rank(&b.name)
+    });
     let mut remotes = remotes
-        .iter()
+        .into_iter()
         .filter(|remote| hosts.knows(&remote.repo.host))
-        .cloned()
         .collect::<Vec<_>>();
-    // gh sorts with Go's `sort.Sort`, before filtering (`remote_resolver.go`). That sort isn't
-    // stable, but for 12 elements or fewer it is an insertion sort, which is, so this stable sort
-    // gives gh's order. Beyond 12 remotes, equally ranked remotes can come out in another order.
-    remotes.sort_by_key(|remote| std::cmp::Reverse(remote_rank(&remote.name)));
     if hosts.default_source != DefaultSource::Fallback {
         let on_default = remotes
             .iter()
@@ -440,6 +539,13 @@ impl GitUrl {
         } else {
             raw.to_string()
         };
+        // Go's url.Parse refuses control characters, a `%` not followed by two hex digits, and
+        // userinfo outside its allowed characters (`net/url` `validUserinfo`); gh then drops the
+        // remote.
+        let before_query = raw.split('?').next().unwrap_or(&raw);
+        if raw.bytes().any(|b| b < 0x20 || b == 0x7f) || !valid_escapes(before_query) {
+            return None;
+        }
         let (scheme, rest) = raw.split_once("://")?;
         let scheme = match scheme.to_ascii_lowercase().as_str() {
             "git+https" => "https".to_string(),
@@ -450,6 +556,11 @@ impl GitUrl {
         let rest = rest.split('#').next().unwrap_or(rest);
         let rest = rest.split('?').next().unwrap_or(rest);
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        if let Some((userinfo, _)) = authority.rsplit_once('@') {
+            if !userinfo.chars().all(valid_userinfo_char) {
+                return None;
+            }
+        }
         let host = url_hostname(
             authority
                 .rsplit_once('@')
@@ -504,6 +615,39 @@ fn url_hostname(authority: &str) -> &str {
         return authority;
     }
     authority.split(':').next().unwrap_or(authority)
+}
+
+fn valid_escapes(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.iter().enumerate().all(|(i, byte)| {
+        *byte != b'%'
+            || (bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+                && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit))
+    })
+}
+
+fn valid_userinfo_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '-' | '.'
+                | '_'
+                | ':'
+                | '~'
+                | '!'
+                | '$'
+                | '&'
+                | '\''
+                | '('
+                | ')'
+                | '*'
+                | '+'
+                | ','
+                | ';'
+                | '='
+                | '%'
+                | '@'
+        )
 }
 
 fn is_supported_protocol(value: &str) -> bool {
