@@ -81,6 +81,18 @@ impl Bot {
     }
 }
 
+/// Whether a review belongs in GitHub's lists: review requests are reviews in Forgejo, and Forgejo
+/// shows site admins other users' pending reviews, which GitHub shows no one
+/// (`services/convert/pull_review.go:74-77`).
+pub(super) fn listed(review: &forgejo::Review, viewer: &str) -> bool {
+    review.state != "REQUEST_REVIEW"
+        && (review.state != "PENDING"
+            || review
+                .user
+                .as_ref()
+                .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer)))
+}
+
 /// Whether the viewer may write to the repository, which is what lets them edit or close others'
 /// pull requests and comments.
 pub(super) async fn viewer_can_write(
@@ -255,7 +267,7 @@ impl PullRequestReview {
     async fn submitted_at(&self) -> Option<DateTime> {
         self.source.submitted_at.clone().map(DateTime)
     }
-    /// Forgejo reviews carry no creation time; a pending one has no submission time either.
+    /// Forgejo's `submitted_at` is the review's creation time (`services/convert/pull_review.go:35`).
     async fn created_at(&self) -> DateTime {
         DateTime(
             self.source
@@ -265,18 +277,31 @@ impl PullRequestReview {
                 .unwrap_or_default(),
         )
     }
-    async fn url(&self) -> Uri {
-        Uri(self.source.html_url.clone())
+    /// A pending review has no comment yet, so Forgejo sends an empty URL
+    /// (`models/issues/review.go:1009-1021`); it falls back to the PR's page.
+    async fn url(&self, ctx: &Context<'_>) -> Uri {
+        if !self.source.html_url.is_empty() {
+            return Uri(self.source.html_url.clone());
+        }
+        let mut url = ctx.data_unchecked::<url::Url>().clone();
+        url.path_segments_mut()
+            .expect("validated HTTP URL")
+            .pop_if_empty()
+            .extend([&self.owner, &self.repo, "pulls", &self.number.to_string()]);
+        Uri(url.to_string())
     }
     async fn is_minimized(&self) -> bool {
         false
     }
-    async fn viewer_can_update(&self, ctx: &Context<'_>) -> bool {
+    /// The body is a comment the poster or a repository writer may edit (`issue_comment.go:611`).
+    async fn viewer_can_update(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
-        self.source
+        Ok(self
+            .source
             .user
             .as_ref()
             .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer))
+            || viewer_can_write(ctx, &self.owner, &self.repo).await?)
     }
     async fn body(&self) -> &str {
         &self.source.body

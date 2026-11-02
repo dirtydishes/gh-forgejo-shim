@@ -400,7 +400,7 @@ impl PullRequest {
         // Forgejo lists review requests as reviews; GitHub keeps them in reviewRequests.
         let nodes = reviews
             .into_iter()
-            .filter(|review| review.state != "REQUEST_REVIEW")
+            .filter(|review| listed(review, &ctx.data_unchecked::<Session>().viewer.login))
             .filter(|review| {
                 author.as_ref().is_none_or(|author| {
                     review
@@ -455,7 +455,14 @@ impl PullRequest {
         after: Option<String>,
         before: Option<String>,
     ) -> async_graphql::Result<PullRequestReviewThreadConnection> {
-        let nodes = review_threads(ctx, &self.owner, &self.repo, self.source.number).await?;
+        let nodes = review_threads(
+            ctx,
+            &self.owner,
+            &self.repo,
+            self.source.number,
+            &self.source.user.login,
+        )
+        .await?;
         Ok(page(nodes, first, last, after, before)?.into())
     }
     async fn comments(

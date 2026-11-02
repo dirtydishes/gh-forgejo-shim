@@ -288,6 +288,9 @@ pub struct Review {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub html_url: String,
+    /// Code comments in the review (`CodeCommentsCount`); absent from older fixtures.
+    #[serde(default)]
+    pub comments_count: Option<i64>,
     pub commit_id: String,
     #[serde(default)]
     pub dismissed: bool,
