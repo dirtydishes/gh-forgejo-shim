@@ -759,6 +759,12 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 
    Kell, 2026-11-02: (a). The guarantee is "the launcher never sends a login to a site it
    doesn't belong to", with no github.com placeholder.
+
+   Sol's round 3 then led to the launcher supplying git's credential helper (§3, "Git's
+   credentials"). That removes the git exception: a Keychain login can no longer leave through
+   git either. The guarantee only got stronger, so it didn't go back to Kell. Its one cost, a
+   private GitHub submodule failing to authenticate in a launched `gh pr checkout`, was already
+   listed and approved.
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
 4. **`gh api` and `gh auth token` without `--hostname`, inside a Forgejo checkout** (§2). gh
