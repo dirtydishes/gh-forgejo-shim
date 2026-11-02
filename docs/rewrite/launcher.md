@@ -158,8 +158,8 @@ What this guarantees:
   launcher only ever opens it to read. There is nothing to restore after a crash.
   `docs/rollback.md` stays true: removing the wrapper restores plain gh.
 - **Concurrent invocations can't collide**, because each one has its own directory and socket.
-- **Aliases and settings work inside a Forgejo checkout.** Extensions work too, since the data
-  directory is untouched.
+- **Aliases and settings work inside a Forgejo checkout.** Installed extensions run through plain
+  gh (§2), so the ones that talk to GitHub keep working there.
 - **The launched gh holds credentials only for the hosts in *S*.** github.com and every other host
   have the placeholder, which no server accepts, and the gateway rejects their requests with 421
   without contacting any upstream (L1).
@@ -396,7 +396,7 @@ The exec path in section 2 needs none of this: after exec, gh's death is the wra
 
 | Failure | Exit |
 |---|---|
-| no real gh found, or every candidate is the shim (section 8) | 127 |
+| no real gh found, every candidate is the shim, or guard 2 or 3 tripped (section 8) | 127 |
 | real gh found but not executable | 126 |
 | routed host has no token | 4 |
 | run directory, socket path length, bind, unreadable or unparseable user config | 1 |
