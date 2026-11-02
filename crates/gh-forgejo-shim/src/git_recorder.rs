@@ -701,11 +701,20 @@ mod tests {
         assert!(script.contains("trace git-recorder run"));
     }
 
+    /// A new directory for one test. It never reuses or clears an existing one.
     fn recorder_root(name: &str) -> Result<PathBuf> {
-        let root = env::temp_dir().join(format!("gfj-recorder-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root)?;
-        Ok(root)
+        for attempt in 0..1000 {
+            let root = env::temp_dir().join(format!(
+                "gfj-recorder-{name}-{}-{attempt}",
+                std::process::id()
+            ));
+            match fs::create_dir(&root) {
+                Ok(()) => return Ok(root),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ShimError::new("unable to allocate a test directory"))
     }
 
     fn create(
