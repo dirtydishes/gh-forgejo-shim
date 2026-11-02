@@ -166,13 +166,14 @@ pub fn review_decision(
         && reviews
             .iter()
             .any(|r| r.official && r.state == "REQUEST_REVIEW");
-    Some(
-        if approvals >= p.required_approvals.max(0) as usize && !requested {
-            PullRequestReviewDecision::Approved
-        } else {
-            PullRequestReviewDecision::ReviewRequired
-        },
-    )
+    if approvals < p.required_approvals.max(0) as usize || requested {
+        Some(PullRequestReviewDecision::ReviewRequired)
+    } else if p.partial {
+        // Hidden flags (stale approvals, rejections, requests) may still fail the gate.
+        None
+    } else {
+        Some(PullRequestReviewDecision::Approved)
+    }
 }
 
 pub fn merge_state(

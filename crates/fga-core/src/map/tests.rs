@@ -492,7 +492,25 @@ fn review_decision_counts_only_official_reviews_like_forgejo() {
                 block_on_official_review_requests: true,
                 ..Default::default()
             }),
-            vec![approve, team_request],
+            vec![approve.clone(), team_request],
+            Some(PullRequestReviewDecision::ReviewRequired),
+        ),
+        // A rule read from the branch summary hides the review flags: a passing count is
+        // indeterminate, a failing one is not.
+        (
+            Some(Protection {
+                partial: true,
+                ..p.clone()
+            }),
+            vec![approve.clone()],
+            None,
+        ),
+        (
+            Some(Protection {
+                partial: true,
+                ..p.clone()
+            }),
+            vec![],
             Some(PullRequestReviewDecision::ReviewRequired),
         ),
     ] {

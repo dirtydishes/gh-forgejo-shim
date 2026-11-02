@@ -240,15 +240,15 @@ async fn merge_errors_keep_the_github_type_message_and_mutation_path() {
                     let method = method.clone();
                     async move {
                         assert_eq!(input["Do"], method);
-                        let auto = mutation == "enablePullRequestAutoMerge";
-                        assert_eq!(input.get("head_commit_id").is_some(), !auto);
+                        if mutation == "mergePullRequest" {
+                            assert_eq!(input["head_commit_id"], "abc");
+                            assert_eq!(input["merge_when_checks_succeed"], false);
+                        } else {
+                            assert!(input.get("head_commit_id").is_none());
+                        }
                         assert_eq!(input["MergeTitleField"], "headline");
                         assert_eq!(input["MergeMessageField"], "body");
                         assert_eq!(input["delete_branch_after_merge"], false);
-                        assert_eq!(
-                            input["merge_when_checks_succeed"],
-                            mutation == "enablePullRequestAutoMerge"
-                        );
                         (status, Json(body))
                     }
                 }),
@@ -541,4 +541,74 @@ async fn refused_maintainer_edits_report_the_created_pr() {
         response.data.into_json().unwrap(),
         json!({"createPullRequest":{"pullRequest":{"number":1,"maintainerCanModify":false}}})
     );
+}
+
+/// Forgejo always schedules and only a later event wakes its worker, so auto-merge merges a ready
+/// PR at once and schedules only after a refusal such an event can lift. A direct merge leaves
+/// the style to Forgejo and needs no repository read.
+#[tokio::test]
+async fn auto_merge_merges_ready_prs_and_schedules_after_a_policy_refusal() {
+    let refusal = (
+        StatusCode::METHOD_NOT_ALLOWED,
+        "not allowed to merge [reason: Does not have enough approvals]",
+    );
+    let denied = (
+        StatusCode::METHOD_NOT_ALLOWED,
+        "User not allowed to merge PR",
+    );
+    let (ok, scheduled) = ((StatusCode::OK, ""), (StatusCode::CREATED, ""));
+    // (mutation, Forgejo's replies, merge_when_checks_succeed per request, error)
+    let cases = [
+        ("enablePullRequestAutoMerge", vec![ok], vec![false], None),
+        (
+            "enablePullRequestAutoMerge",
+            vec![refusal, scheduled],
+            vec![false, true],
+            None,
+        ),
+        (
+            "enablePullRequestAutoMerge",
+            vec![denied],
+            vec![false],
+            Some("User does not have permission to merge this pull request"),
+        ),
+        ("mergePullRequest", vec![ok], vec![false], None),
+    ];
+    for (mutation, replies, sent, error) in cases {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut app = Router::new()
+            .route("/api/v1/user", get(|| async { Json(user()) }))
+            .route("/api/v1/repos/o/r/pulls/1", get(|| async { Json(pull()) }))
+            .route(
+                "/api/v1/repos/o/r/pulls/1/merge",
+                axum::routing::post({
+                    let seen = seen.clone();
+                    move |Json(input): Json<Value>| async move {
+                        let mut seen = seen.lock().unwrap();
+                        seen.push(input["merge_when_checks_succeed"] == true);
+                        let (status, message) = replies[seen.len() - 1];
+                        (status, Json(api_error(message)))
+                    }
+                }),
+            );
+        app = if mutation == "mergePullRequest" {
+            app.route(
+                "/api/v1/repos/o/r",
+                get(|| async { panic!("direct merges need no repository read") as StatusCode }),
+            )
+        } else {
+            app.route("/api/v1/repos/o/r", get(|| async { Json(repo()) }))
+        };
+        let query = format!(
+            r#"mutation {{ {mutation}(input:{{pullRequestId:"{}", mergeMethod:SQUASH}}){{pullRequest{{number}}}}}}"#,
+            node_id("PullRequest", "o/r", 1)
+        );
+        let response = execute(app, query).await;
+        assert_eq!(
+            response.errors.first().map(|e| e.message.as_str()),
+            error,
+            "{mutation} {sent:?}"
+        );
+        assert_eq!(*seen.lock().unwrap(), sent, "{mutation}");
+    }
 }

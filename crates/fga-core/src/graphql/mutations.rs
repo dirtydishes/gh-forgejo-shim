@@ -381,20 +381,30 @@ async fn merge(
             )));
         }
     }
+    let input = |merge_when_checks_succeed| forgejo::MergePull {
+        method,
+        headline: headline.clone(),
+        body: body.clone(),
+        head_commit_id: expected.as_ref().map(|e| e.0.clone()),
+        merge_when_checks_succeed,
+        delete_branch_after_merge: false,
+    };
+    if auto {
+        // Forgejo always schedules, and only a later status, review or push wakes its worker
+        // (`services/automerge/automerge.go:56-67`, `services/shared/automerge/automerge.go:26`),
+        // so a PR that is ready now would wait. Merge it now if Forgejo allows; schedule only
+        // after a refusal that such an event can lift.
+        match session
+            .merge_pull(&id.owner, &id.repository, id.number, input(false))
+            .await
+        {
+            Ok(source) => return Ok(PullRequest::new(source, &id.owner, &id.repository)),
+            Err(forgejo::WriteError::ProtectedBranch | forgejo::WriteError::MergeConflicts) => {}
+            Err(e) => return Err(write_error(e)),
+        }
+    }
     let source = session
-        .merge_pull(
-            &id.owner,
-            &id.repository,
-            id.number,
-            forgejo::MergePull {
-                method,
-                headline,
-                body,
-                head_commit_id: expected.map(|e| e.0),
-                merge_when_checks_succeed: auto,
-                delete_branch_after_merge: false,
-            },
-        )
+        .merge_pull(&id.owner, &id.repository, id.number, input(auto))
         .await
         .map_err(write_error)?;
     Ok(PullRequest::new(source, &id.owner, &id.repository))

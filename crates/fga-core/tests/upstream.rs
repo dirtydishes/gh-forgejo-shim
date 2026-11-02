@@ -583,10 +583,11 @@ async fn non_admins_read_protection_from_the_branch_and_team_requests_parse() {
             )
             .await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
-        // The known gates pass, but hidden flags may still block, so the merge state is unknown.
+        // The visible gates pass, but hidden flags may still block, so neither the review decision
+        // nor the merge state is known.
         assert_eq!(
             response.data.into_json().unwrap()["repository"]["pullRequest"],
-            json!({"reviewDecision":"APPROVED","mergeStateStatus":"UNKNOWN",
+            json!({"reviewDecision":null,"mergeStateStatus":"UNKNOWN",
                 "baseRef":{"branchProtectionRule":{"requiredApprovingReviewCount":1}},
                 "reviews":{"totalCount":1},"latestReviews":{"totalCount":1}}),
             "admin: {admin}"
