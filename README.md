@@ -322,9 +322,9 @@ Every pull request URL the wrapper and the gateway print uses GitHub's layout,
 only by that `/pull/<number>` shape. Forgejo itself has no `/pull/` page:
 
 - **Server mode** redirects `/pull/7` to Forgejo's `/pulls/7`, so every link opens.
-- **Client-only installs:** the wrapper's own `--web` commands, such as `gh pr comment --web`, open
-  Forgejo's `/pulls/7` page. A link opened anywhere else, such as ChatGPT's "Open pull request in
-  browser", gets a 404 unless the forge redirects it.
+- **Client-only installs:** the wrapper's own `--web` commands (`gh pr view --web`, `gh pr diff --web`,
+  `gh pr comment --web`) give Forgejo's `/pulls/7` page. A `/pull/7` link opened anywhere else, such as
+  ChatGPT's "Open pull request in browser", gets a 404 unless the forge redirects it.
 
 If you run the forge, add the redirect to its reverse proxy. For nginx, in the forge's `server` block:
 
@@ -342,6 +342,8 @@ redir @pull_link /{re.pull.1}/{re.pull.2}/pulls/{re.pull.3}{re.pull.4}{?query} 3
 ```
 
 Both match only plain owner and repository names, so a crafted path can't redirect to another site.
+They assume the forge is served at the root of its hostname; under a subpath, add the prefix to both
+the pattern and the target.
 Server mode's gateway does the same, and also redirects deeper paths under a PR.
 
 `gh pr list` supports JSON output, repo selection, state, limit, head, and base filters. It currently accepts but does not apply several GitHub search-style filters, including author, app, assignee, label, and search. Real filtering for those flags is tracked as follow-up work in Beads issue `gh-forgejo-shim-9r8`.
