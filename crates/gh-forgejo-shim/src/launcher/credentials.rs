@@ -24,7 +24,7 @@ pub fn answer(
     output: &mut dyn Write,
     errors: &mut dyn Write,
 ) -> Option<i32> {
-    let path = credentials?;
+    let path = credentials.filter(|path| !path.is_empty())?;
     let [auth, command, operation] = args else {
         return None;
     };
