@@ -557,6 +557,11 @@ async fn an_edit_to_a_missing_base_changes_nothing() {
                 (StatusCode::CREATED, Json(pull()))
             }),
         )
+        // URL building drops `.` and `..` segments, so `.` reaches the branch list (parallax r1#1).
+        .route(
+            "/api/v1/repos/o/r/branches",
+            get(|| async { Json(json!([{"name": "release/next"}])) }),
+        )
         .route(
             "/api/v1/repos/o/r/branches/{*branch}",
             get(
@@ -575,9 +580,11 @@ async fn an_edit_to_a_missing_base_changes_nothing() {
             node_id("PullRequest", "o/r", 1)
         )
     };
-    let response = execute(app.clone(), edit("missing")).await;
-    assert_eq!(response.errors[0].message, "Not Found");
-    assert_eq!(*patched.lock().unwrap(), Vec::<Value>::new());
+    for missing in ["missing", ".", "release/../next", "release/./next"] {
+        let response = execute(app.clone(), edit(missing)).await;
+        assert_eq!(response.errors[0].message, "Not Found", "{missing}");
+        assert_eq!(*patched.lock().unwrap(), Vec::<Value>::new(), "{missing}");
+    }
 
     let response = execute(app, edit("release/next")).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
