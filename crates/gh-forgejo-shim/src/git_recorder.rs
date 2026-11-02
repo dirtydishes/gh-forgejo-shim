@@ -20,6 +20,9 @@ pub const TRACE_BODY_ENV: &str = "FJ_SHIM_TRACE_BODY";
 pub const REAL_GIT_ENV: &str = "FJ_SHIM_REAL_GIT";
 
 const SCHEMA: &str = "gh-forgejo-shim.git-recorder.v1";
+const MARKER_FILE: &str = ".gh-forgejo-shim-git-recorder";
+// Recorded in the marker file when the recorder made its directory, so removal may delete it.
+const CREATED_DIRECTORY: &str = "created directory";
 const SECRET_REPLACEMENT: &str = "[REDACTED]";
 const EXCERPT_LIMIT: usize = 4096;
 
@@ -42,7 +45,7 @@ pub fn create_git_recorder(
     recorder_program: &Path,
 ) -> Result<GitRecorder> {
     let git_path = resolve_real_git(real_git, env)?;
-    let directory = make_wrapper_dir(root_dir, wrapper_dir)?;
+    let (directory, created) = make_wrapper_dir(root_dir, wrapper_dir)?;
     let wrapper = directory.join("git");
     if wrapper.exists() && !is_recorder_wrapper(&wrapper) {
         return Err(ShimError::new(format!(
@@ -58,10 +61,14 @@ pub fn create_git_recorder(
         git_recorder_script(recorder_program, &real_git, &trace),
     )?;
     make_executable(&wrapper)?;
-    fs::write(
-        directory.join(".gh-forgejo-shim-git-recorder"),
-        format!("{MARKER}\n"),
-    )?;
+    let marker = directory.join(MARKER_FILE);
+    let created = created || created_directory(&marker);
+    let marker_text = if created {
+        format!("{MARKER}\n{CREATED_DIRECTORY}\n")
+    } else {
+        format!("{MARKER}\n")
+    };
+    fs::write(marker, marker_text)?;
 
     let path = prepend_path(&directory, env.get("PATH").map_or("", String::as_str));
     let mut launch_env = env.clone();
@@ -98,8 +105,29 @@ pub fn remove_git_recorder(path: &Path) -> Result<PathBuf> {
             directory.display()
         )));
     }
-    fs::remove_dir_all(&directory)?;
+    // Remove only what the recorder wrote. The directory may be one the user already had, such
+    // as ~/bin, so it goes only if the recorder made it and nothing else is left in it.
+    let marker = directory.join(MARKER_FILE);
+    let created = created_directory(&marker);
+    fs::remove_file(&wrapper)?;
+    if is_recorder_wrapper(&marker) {
+        fs::remove_file(&marker)?;
+    }
+    if created {
+        match fs::remove_dir(&directory) {
+            Err(error) if error.kind() != io::ErrorKind::DirectoryNotEmpty => {
+                return Err(error.into())
+            }
+            _ => {}
+        }
+    }
     Ok(directory)
+}
+
+fn created_directory(marker: &Path) -> bool {
+    fs::read_to_string(marker).is_ok_and(|text| {
+        text.contains(MARKER) && text.lines().any(|line| line == CREATED_DIRECTORY)
+    })
 }
 
 pub fn git_recorder_script(recorder_program: &Path, real_git: &Path, trace_path: &Path) -> String {
@@ -311,11 +339,16 @@ fn find_on_path(name: &str, path_value: &str) -> Option<PathBuf> {
     })
 }
 
-fn make_wrapper_dir(root_dir: Option<&Path>, wrapper_dir: Option<&Path>) -> Result<PathBuf> {
+/// Returns the wrapper directory, and whether this call created it.
+fn make_wrapper_dir(
+    root_dir: Option<&Path>,
+    wrapper_dir: Option<&Path>,
+) -> Result<(PathBuf, bool)> {
     if let Some(path) = wrapper_dir {
         let directory = absolute_path(path)?;
+        let existed = directory.exists();
         fs::create_dir_all(&directory)?;
-        return Ok(directory);
+        return Ok((directory, !existed));
     }
 
     let root = root_dir.map_or_else(env::temp_dir, expand_home);
@@ -326,7 +359,7 @@ fn make_wrapper_dir(root_dir: Option<&Path>, wrapper_dir: Option<&Path>) -> Resu
             std::process::id()
         ));
         match fs::create_dir(&directory) {
-            Ok(()) => return absolute_path(&directory),
+            Ok(()) => return Ok((absolute_path(&directory)?, true)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
         }
@@ -650,6 +683,69 @@ mod tests {
 
         assert!(script.contains(MARKER));
         assert!(script.contains("trace git-recorder run"));
+    }
+
+    fn recorder_root(name: &str) -> Result<PathBuf> {
+        let root = env::temp_dir().join(format!("gfj-recorder-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root)?;
+        Ok(root)
+    }
+
+    fn create(
+        root: &Path,
+        root_dir: Option<&Path>,
+        wrapper_dir: Option<&Path>,
+    ) -> Result<GitRecorder> {
+        create_git_recorder(
+            &root.join("trace.jsonl"),
+            Some(Path::new("/usr/bin/git")),
+            root_dir,
+            wrapper_dir,
+            &HashMap::new(),
+            Path::new("/tmp/gfj"),
+        )
+    }
+
+    #[test]
+    fn remove_deletes_the_directory_it_created() -> Result<()> {
+        let root = recorder_root("created")?;
+        let recorder = create(&root, Some(&root), None)?;
+
+        remove_git_recorder(&recorder.wrapper_dir)?;
+
+        assert!(!recorder.wrapper_dir.exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn remove_keeps_a_directory_that_already_existed() -> Result<()> {
+        let root = recorder_root("existing")?;
+        let directory = root.join("bin");
+        fs::create_dir(&directory)?;
+        create(&root, None, Some(&directory))?;
+
+        remove_git_recorder(&directory)?;
+
+        assert!(directory.exists());
+        assert_eq!(fs::read_dir(&directory)?.count(), 0);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn recreating_keeps_the_created_directory_removable() -> Result<()> {
+        let root = recorder_root("recreated")?;
+        let directory = root.join("recorder");
+        create(&root, None, Some(&directory))?;
+        create(&root, None, Some(&directory))?;
+
+        remove_git_recorder(&directory)?;
+
+        assert!(!directory.exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
