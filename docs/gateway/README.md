@@ -31,7 +31,8 @@ Embedded in a launcher, the router serves several forges at once (`fga_server::H
 own upstream, public URL and, optionally, the one token it accepts: any other credential for that
 host gets 401 without reaching Forgejo. The gateway libraries never write to stdout or stderr.
 
-`FGA_GHES_VERSION` defaults to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and `FGA_TLS_KEY` to PEM file paths.
+`FGA_GHES_VERSION` defaults to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and
+`FGA_TLS_KEY` to PEM file paths.
 `FGA_WIP_PREFIXES` sets the comma-separated draft title prefixes, default `WIP:,[WIP]`.
 REST and GraphQL strip the first matching prefix, ignoring case, and any following whitespace
 when the PR is a draft. An empty list disables stripping. Draft mergeability stays `UNKNOWN`
