@@ -1,0 +1,12 @@
+{
+  "id": "decoy-off-list-delegates",
+  "kind": "decoy",
+  "argv": [
+    "pr",
+    "list",
+    "-R",
+    "github.com/dirtydishes/gfj-oracle"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": []
+}

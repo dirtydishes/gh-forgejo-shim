@@ -655,7 +655,7 @@ async fn refused_maintainer_edits_report_the_created_pr() {
     let response = execute(app, query).await;
     assert_eq!(
         response.errors[0].message,
-        "Created https://forge.test/o/r/pulls/1, but Forgejo refused to let maintainers edit its branch"
+        "Created https://forge.test/o/r/pull/1, but Forgejo refused to let maintainers edit its branch"
     );
     assert_eq!(
         response.data.into_json().unwrap(),

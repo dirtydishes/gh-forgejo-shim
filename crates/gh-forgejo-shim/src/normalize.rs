@@ -128,7 +128,7 @@ pub fn normalize_pull(pull: &Value) -> Value {
         "title": cloned_or_null(pull.get("title")),
         "state": normalize_state(pull),
         "isDraft": truthy(pull.get("draft").unwrap_or(&Value::Bool(false))),
-        "url": value_or(pull.get("html_url"), pull.get("url")),
+        "url": pull_web_url(value_or(pull.get("html_url"), pull.get("url"))),
         "headRefName": object_value(head, "ref"),
         "baseRefName": object_value(base, "ref"),
         "author": {
@@ -346,7 +346,7 @@ pub fn normalize_issue(issue: &Value) -> Value {
         "stateReason": null,
         "title": cloned_or_null(issue.get("title")),
         "updatedAt": cloned_or_null(issue.get("updated_at")),
-        "url": value_or(issue.get("html_url"), issue.get("url")),
+        "url": pull_web_url(value_or(issue.get("html_url"), issue.get("url"))),
     })
 }
 
@@ -778,6 +778,14 @@ fn connection(total_count: i64, nodes: Option<Vec<Value>>) -> Value {
     })
 }
 
+/// A pull request's URL in GitHub's `/pull/{n}` layout, which ChatGPT and Codex look for (MAPPING §8).
+fn pull_web_url(url: Value) -> Value {
+    match url {
+        Value::String(url) => Value::String(fga_core::map::pull_web_url(&url)),
+        other => other,
+    }
+}
+
 fn value_or(primary: Option<&Value>, fallback: Option<&Value>) -> Value {
     primary
         .filter(|value| truthy(value))
@@ -994,7 +1002,7 @@ mod tests {
                 "currentBranch": {
                     "number": 12,
                     "title": "Add shim",
-                    "url": "https://git.example.com/o/r/pulls/12"
+                    "url": "https://git.example.com/o/r/pull/12"
                 },
                 "createdBy": [],
                 "needsReview": []

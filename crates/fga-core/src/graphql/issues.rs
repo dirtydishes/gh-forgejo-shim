@@ -65,8 +65,9 @@ impl Issue {
     async fn body(&self) -> &str {
         self.source.body.as_deref().unwrap_or("")
     }
+    /// Forgejo's issue lists include pull requests, whose URLs take GitHub's layout.
     async fn url(&self) -> Uri {
-        Uri(self.source.html_url.clone())
+        Uri(crate::map::pull_web_url(&self.source.html_url))
     }
     async fn state(&self) -> IssueState {
         if self.source.state == "closed" {

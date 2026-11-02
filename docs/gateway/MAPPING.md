@@ -194,6 +194,8 @@ Node IDs are opaque base64 strings of `fga:<Type>:<owner>/<repo>:<number|id>`, p
 `{web base}/{o}/{r}/pull/{n}`, not Forgejo's `/pulls/{n}`. That covers GraphQL `PullRequest.url`, REST
 `html_url`, `pr list --json url`, and URLs derived from a PR (`#issuecomment-…`, `#discussion_r…`, and
 `/files`). Other web URLs (issues, commits, runs, repos) keep Forgejo's paths; they already match GitHub's.
+One exception: the wrapper's own `--web` commands give Forgejo's `/pulls/{n}`, a page that opens without a
+redirect in a client-only install.
 
 The gateway answers `GET /{o}/{r}/pull/{n}{rest}` with `301 Location: /{o}/{r}/pulls/{n}{rest}`, keeping
 the query and fragment. The deployment's proxy routes that path pattern to the gateway (G5), so every

@@ -27,6 +27,15 @@ Cases with `kind = "shim-local"` use `expected` instead of `oracle`. Capture ski
 `oracle_argv` rejects them. The exact local allowlist covers unsupported merge, edit, and repository API calls.
 The runner still checks exit code, both streams, and the real-gh decoy for these cases.
 
+## The launcher's commands
+
+Commands on the launcher's launch list (`contract/launch-list.txt`, which a unit test keeps equal
+to `launcher::LAUNCH_LIST`) run real gh through the shim's gateway. For those cases the runner puts
+the checksum-pinned official gh 2.103.3 on `PATH`, downloaded as captures do; a checksum mismatch
+stops the run. Every other case gets the decoy, which fails the case if the shim calls it. Cases
+with `kind = "decoy"` invert that: an exact allowlist of off-list commands that must delegate, so
+the run proves the decoy is still in place.
+
 Capture requires curl and the host's existing gh login for `github.com`. It validates every case
 before reading the login through `gh auth token --hostname github.com`. It downloads the official
 gh 2.103.3 archive and checks it against the committed upstream release checksums in

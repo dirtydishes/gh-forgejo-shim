@@ -81,11 +81,9 @@ def expected_difference(case, oracle, gateway):
 
 # Any host, so a link to the wrong host is caught too (the normalizer folds hosts together).
 PR_URL = re.compile(r'https?://([^/\s"]+)/dirtydishes/gfj-oracle/(pulls?)/(\d+)')
-INVARIANT_FAILURES = {
-    'pr-urls': 'MAPPING §8 decides /pull/N, but bead 65s has not built it, so the gateway still emits /pulls/N.',
-}
-# The only problems an expected failure covers: a forge.test link in Forgejo's /pulls/N layout.
-INVARIANT_KNOWN = {'pr-urls': lambda problem: problem.startswith('layout ')}
+# An invariant that is known to fail: its reason, and which of its problems the expected failure covers.
+INVARIANT_FAILURES = {}
+INVARIANT_KNOWN = {}
 
 
 def classify(matches, known, expected_failure):

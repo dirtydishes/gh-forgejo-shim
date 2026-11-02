@@ -40,13 +40,65 @@ pub fn repository(repo: &forgejo::Repository, owner_type: &str) -> Value {
     value
 }
 
+/// A pull request's web URL, or one under it (`/files`, `#issuecomment-…`), in GitHub's layout:
+/// Forgejo's `/{o}/{r}/pulls/{n}` becomes `/{o}/{r}/pull/{n}` (MAPPING §8). ChatGPT ignores a PR whose
+/// URL doesn't match `/pull/(\d+)`. Only that path segment changes: the host, the rest of the path,
+/// the query and the fragment stay as Forgejo sent them, and any other URL passes through.
+pub fn pull_web_url(url: &str) -> String {
+    rename_pull_segment(url, "pulls", "pull")
+}
+
+/// The inverse of [`pull_web_url`]: the page Forgejo serves, for opening in a browser where no
+/// redirect from `/pull/{n}` exists.
+pub fn forgejo_pull_web_url(url: &str) -> String {
+    rename_pull_segment(url, "pull", "pulls")
+}
+
+/// Renames `{from}/{n}` to `{to}/{n}` where it is a pull request's page: after an owner and a
+/// repository, and followed by nothing or one of the PR's own tabs. That leaves an owner or
+/// repository named `pulls` alone, even on a forge served under a subpath.
+fn rename_pull_segment(url: &str, from: &str, to: &str) -> String {
+    // The authority ends at the first `/`, `?` or `#`; only a `/` starts a path.
+    let path_start = url.find("://").and_then(|scheme| {
+        let authority = scheme + 3;
+        url[authority..]
+            .find(['/', '?', '#'])
+            .map(|end| authority + end)
+            .filter(|&end| url[end..].starts_with('/'))
+    });
+    let Some(start) = path_start else {
+        return url.to_owned();
+    };
+    let end = url[start..]
+        .find(['?', '#'])
+        .map_or(url.len(), |end| start + end);
+    let mut segments: Vec<&str> = url[start..end].split('/').collect();
+    // Segment 0 is empty (the path's leading slash); owner and repository come before `pulls`.
+    let number = |segment: &str| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit());
+    let pr_tab = |segment: Option<&&str>| {
+        matches!(
+            segment,
+            None | Some(&"" | &"files" | &"commits" | &"checks")
+        )
+    };
+    match (3..segments.len().saturating_sub(1))
+        .find(|&i| segments[i] == from && number(segments[i + 1]) && pr_tab(segments.get(i + 2)))
+    {
+        Some(i) => {
+            segments[i] = to;
+            format!("{}{}{}", &url[..start], segments.join("/"), &url[end..])
+        }
+        None => url.to_owned(),
+    }
+}
+
 pub fn pull_request(pr: &forgejo::PullRequest, prefixes: &WipPrefixes) -> Value {
     json!({
         "number": pr.number,
         "title": title(pr, prefixes),
         "state": if pr.merged { "closed" } else { &pr.state },
         "draft": pr.draft,
-        "html_url": pr.html_url,
+        "html_url": pull_web_url(&pr.html_url),
         "head": {"ref": pr.head.name(), "sha": pr.head.sha, "label": pr.head.label()},
         "base": {"ref": pr.base.ref_name, "sha": pr.base.sha, "label": pr.base.label()},
         "user": {"login": pr.user.login},

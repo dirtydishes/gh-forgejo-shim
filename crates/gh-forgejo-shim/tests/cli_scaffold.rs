@@ -1406,7 +1406,7 @@ fn fixture_exposes_isolated_paths_and_private_bin_only() -> TestResult {
 fn harness_loads_phase_01_compatibility_contract() -> TestResult {
     let contract = load_contract()?;
 
-    assert_eq!(contract.schema, "gh-forgejo-shim.compatibility-contract.v1");
+    assert_eq!(contract.schema, "gh-forgejo-shim.compatibility-contract.v2");
     assert_eq!(contract.bead, "gh-forgejo-shim-3sl");
 
     let command_ids = contract

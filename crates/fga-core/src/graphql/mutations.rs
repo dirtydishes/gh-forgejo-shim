@@ -100,7 +100,7 @@ impl Mutation {
                 Err(_) => ctx.add_error(
                     async_graphql::Error::new(format!(
                         "Created {}, but Forgejo refused to let maintainers edit its branch",
-                        source.html_url
+                        map::pull_web_url(&source.html_url)
                     ))
                     .extend_with(|_, e| e.set("type", "UNPROCESSABLE"))
                     .into_server_error(ctx.item.pos),

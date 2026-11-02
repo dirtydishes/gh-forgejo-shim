@@ -141,7 +141,7 @@ impl Fixture {
             .stdout(File::create(&stdout)?)
             .stderr(File::create(&stderr)?)
             .process_group(0);
-        let mut child = command.spawn()?;
+        let mut child = spawn_retrying_busy(command)?;
         let started = Instant::now();
         let status = loop {
             if let Some(status) = child.try_wait()? {
@@ -182,6 +182,22 @@ fn is_script(path: &Path) -> bool {
     File::open(path)
         .and_then(|mut file| io::Read::read_exact(&mut file, &mut start))
         .map_or(true, |()| &start == b"#!")
+}
+
+/// Linux refuses to exec a file that any process holds open for writing. A test that writes an
+/// executable and runs it can lose that race: another test's fork inherits the write descriptor
+/// and keeps it until its own exec. The window is short, so a few retries ride it out (jko.42).
+fn spawn_retrying_busy(command: &mut Command) -> io::Result<std::process::Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
 }
 
 fn executable(path: &Path, contents: &str) -> io::Result<()> {
@@ -377,7 +393,11 @@ fn audit_route_signal_passthrough_restores_default_actions() -> TestResult {
         executable(&fixture.real_gh, &format!("#!/bin/sh\nkill -{signal} $$\n"))?;
         // A signal ignored on entry can't be reset by sh (Docker leaves SIGRTMIN ignored), so
         // the fake gh can't die of it there and the case doesn't run.
-        if Command::new(&fixture.real_gh).status()?.signal() != Some(signal) {
+        if spawn_retrying_busy(&mut Command::new(&fixture.real_gh))?
+            .wait()?
+            .signal()
+            != Some(signal)
+        {
             eprintln!("skipped signal {signal}: this environment starts processes with it ignored");
             continue;
         }
@@ -407,6 +427,58 @@ fn audit_route_force_install_symlink() -> TestResult {
         fs::read_to_string(&fixture.real_gh)?,
         String::from_utf8(original)?,
         "install --force must replace the gh symlink without overwriting the real gh it points to"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_non_utf8_environment_reaches_real_gh_unchanged() -> TestResult {
+    // Real gh prints the variable's bytes in hex, so a dropped or rewritten value shows.
+    let fixture = Fixture::new()?;
+    executable(
+        &fixture.real_gh,
+        "#!/bin/sh\nprintf '%s' \"$AUDIT_OPAQUE_VALUE\" | /usr/bin/od -An -tx1\n",
+    )?;
+    let mut command = fixture.gh(&["--version"]);
+    command.env(
+        "AUDIT_OPAQUE_VALUE",
+        OsString::from_vec(vec![b'a', 0xff, b'b']),
+    );
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["61", "ff", "62"],
+        "real gh must get the non-UTF-8 value byte for byte; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_non_utf8_variable_name_reaches_real_gh_unchanged() -> TestResult {
+    // A shell can't name this variable and may drop it, so real gh is `env` itself, run with no
+    // arguments: it prints every variable it got, raw. The link keeps the name `env`: a multi-call
+    // coreutils, such as uutils on Ubuntu, refuses to run as `gh`.
+    let fixture = Fixture::new()?;
+    let env = fixture.real_gh.with_file_name("env");
+    symlink("/usr/bin/env", &env)?;
+    let mut command = fixture.gh(&[]);
+    command.env("FJ_SHIM_REAL_GH", &env);
+    command.env(
+        OsString::from_vec(b"AUDIT_OPAQUE_\xff".to_vec()),
+        "audit-opaque-name",
+    );
+    let output = fixture.run(&mut command)?;
+    assert!(
+        output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .any(|line| line == b"AUDIT_OPAQUE_\xff=audit-opaque-name"),
+        "real gh must get the non-UTF-8 variable name byte for byte; stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
 }

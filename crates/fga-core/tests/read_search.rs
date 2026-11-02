@@ -108,3 +108,51 @@ async fn search_closed_includes_merged_while_repository_closed_excludes_them() {
     );
     task.abort();
 }
+
+/// PR web URLs, and URLs under a PR, take GitHub's `/pull/{n}` layout; other web URLs keep
+/// Forgejo's (MAPPING §8).
+#[tokio::test]
+async fn pull_request_urls_use_githubs_layout() {
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route("/api/v1/repos/o/r", get(|| async { Json(json!({"id":1,"name":"r","full_name":"o/r","owner":{"id":1,"login":"o","avatar_url":"https://forge.test/avatar"},"private":false,"html_url":"https://forge.test/o/r","default_branch":"main","fork":false,"archived":false})) }))
+        .route("/api/v1/repos/o/r/pulls/2", get(|| async { Json(pull(2, false)) }))
+        .route(
+            "/api/v1/repos/o/r/issues/2/comments",
+            get(|| async {
+                Json(json!([{"id":7,"user":user(),"body":"hi","created_at":"2026-01-01T00:00:00Z",
+                    "html_url":"https://forge.test/o/r/pulls/2#issuecomment-7"}]))
+            }),
+        )
+        // Forgejo's issue routes answer for pull requests too, with the PR's URL.
+        .route(
+            "/api/v1/repos/o/r/issues/2",
+            get(|| async {
+                let mut pr = issue(2, "needle");
+                pr["html_url"] = json!("https://forge.test/o/r/pulls/2");
+                Json(pr)
+            }),
+        )
+        .route("/api/v1/repos/o/r/issues/4", get(|| async { Json(issue(4, "plain")) }));
+    let (session, task) = session(upstream).await;
+    let response = graphql::schema()
+        .execute(
+            Request::new(
+                r#"{repository(owner:"o",name:"r"){url
+                    pullRequest(number:2){url comments(first:1){nodes{url}}}
+                    asIssue:issue(number:2){url} issue(number:4){url}}}"#,
+            )
+            .data(session),
+        )
+        .await;
+    task.abort();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"repository":{"url":"https://forge.test/o/r",
+            "pullRequest":{"url":"https://forge.test/o/r/pull/2",
+                "comments":{"nodes":[{"url":"https://forge.test/o/r/pull/2#issuecomment-7"}]}},
+            "asIssue":{"url":"https://forge.test/o/r/pull/2"},
+            "issue":{"url":"https://forge.test/o/r/issues/2"}}})
+    );
+}

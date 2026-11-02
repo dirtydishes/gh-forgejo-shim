@@ -52,6 +52,9 @@ because Forgejo's boolean cannot prove whether a draft has conflicts.
 The upstream and public URLs must use HTTP or HTTPS and contain no credentials, query or fragment.
 Upstream requests do not follow redirects. Each authenticated request shares a ten-second deadline
 across its upstream reads, including the mergeability retry.
+The gateway reads at most 16 MiB of each upstream reply and 64 MiB across one incoming request's reads. Past
+either, the request fails with `502` (REST) or an `INTERNAL` GraphQL error saying so, which is what
+a very large `gh pr diff` gets.
 
 Use a Forgejo token with `read:user`, `write:repository`, `write:issue`, and `read:organization`.
 The gateway accepts `token` and `bearer` authorization schemes. It advertises the GitHub scopes
@@ -75,9 +78,10 @@ The full schema download remains ignored under `.local/`.
 The pull-list route filters `head=owner:branch` after reading Forgejo's pages, then applies GitHub
 `page` and `per_page` pagination and emits `Link` headers. It compares owner names without case and
 branch names with case. This first version reads all upstream pages per lookup, which costs more
-requests on repositories with many PRs. It emits Forgejo's real web URLs, including `/pulls/N`.
-[MAPPING §8](MAPPING.md#8-web-urls-v11) records the decision to switch PR URLs to GitHub's
-`/pull/N`, which isn't built yet.
+requests on repositories with many PRs. PR web URLs, and URLs under a PR, use GitHub's
+`/pull/N` layout ([MAPPING §8](MAPPING.md#8-web-urls-v11)), which ChatGPT expects.
+Forgejo has no `/pull/N` route, so links open only where the forge redirects them: server mode does
+([server-mode.md](server-mode.md)).
 Merged PRs have GraphQL state `MERGED`, REST state `closed`, and their upstream `merged_at`.
 
 Run the gates from the repository root:
