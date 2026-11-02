@@ -976,7 +976,7 @@ fn run_comment(
     if parsed.web {
         let normalized = normalize_pull(&pull);
         let url = normalized.get("url").and_then(Value::as_str).map_or_else(
-            || format!("{}/pulls/{number}", target_repo.web_base_url()),
+            || format!("{}/pull/{number}", target_repo.web_base_url()),
             str::to_string,
         );
         open_web_url(&format!("{url}#new-comment"));
@@ -1022,7 +1022,7 @@ fn run_diff(
     if parsed.web {
         let normalized = normalize_pull(&pull);
         let url = normalized.get("url").and_then(Value::as_str).map_or_else(
-            || format!("{}/pulls/{number}", target_repo.web_base_url()),
+            || format!("{}/pull/{number}", target_repo.web_base_url()),
             str::to_string,
         );
         writeln!(stdout, "{url}/files")?;
@@ -1217,7 +1217,7 @@ fn run_create(
             .or_else(|| pull.get("html_url"))
             .or_else(|| pull.get("url"))
             .and_then(Value::as_str)
-            .map(create::format_created_pull_url)
+            .map(fga_core::map::pull_web_url)
             .unwrap_or_default();
         writeln!(stdout, "{url}")?;
     } else {
@@ -3058,7 +3058,7 @@ mod tests {
                 "isDraft": true,
                 "number": 7,
                 "title": "Ship it",
-                "url": "https://git.example.com/owner/repo/pulls/7",
+                "url": "https://git.example.com/owner/repo/pull/7",
             }))
         );
         let created = client.created_pulls.borrow();
@@ -3072,7 +3072,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_create_default_output_adds_codex_url_marker() {
+    fn pr_create_default_output_uses_githubs_pull_url() {
         let client = FakeApi::default();
 
         let (code, stdout, stderr) = run_fake(
@@ -3085,10 +3085,7 @@ mod tests {
         );
 
         assert_eq!(code, 0, "{stderr}");
-        assert_eq!(
-            stdout.trim(),
-            "https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7"
-        );
+        assert_eq!(stdout.trim(), "https://git.example.com/owner/repo/pull/7");
     }
 
     #[test]
@@ -3660,12 +3657,16 @@ mod tests {
             None,
         );
 
-        let url = "https://git.example.com/owner/repo/pulls/8#new-comment";
+        // It prints GitHub's /pull/8 and opens Forgejo's own /pulls/8, which needs no redirect.
         assert_eq!(code, 0, "{stderr}");
-        assert_eq!(stdout, format!("{url}\n"));
+        assert_eq!(
+            stdout,
+            "https://git.example.com/owner/repo/pull/8#new-comment\n"
+        );
         assert!(
-            crate::external::take_opened_web_urls().contains(&url.to_string()),
-            "web url should be opened"
+            crate::external::take_opened_web_urls()
+                .contains(&"https://git.example.com/owner/repo/pulls/8#new-comment".to_string()),
+            "Forgejo's page should be opened"
         );
         assert!(client.comments.borrow().is_empty());
     }
