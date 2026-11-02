@@ -274,15 +274,24 @@ what makes `gh pr list | head -1` behave as it does with plain gh.
 **Exit status.** After cleanup and the trace record:
 
 - gh exited with code *n*: the launcher exits *n*.
-- gh died by signal *s*: the launcher restores the default action for *s* and raises it on itself,
-  so its parent sees the same signal. If the raise returns, it exits 128 + *s*. A pipeline under
-  `set -o pipefail` then reports the same status for the wrapper as for plain gh. That means 141
-  for SIGPIPE and 143 for SIGTERM. The audit test `audit_route_signal_passthrough` asserts the
-  signal itself, not 143.
+- gh died by signal *s*: the launcher sends *s* to itself, so its parent sees the same death. The
+  audit test `audit_route_signal_passthrough` asserts the signal itself, not 143. If the launcher
+  survives the signal, it exits 128 + *s*.
 
-The survivor-fixes thread fixes R6 (`jko.16`) in `external.rs` and `git_recorder.rs`. L3 copies
-the mechanism R6 merges, including its choice of signal crate (the workspace forbids
-`unsafe_code`). It doesn't invent a second one. The same goes for the exec path in section 2.
+L3 uses R6's mechanism (`jko.16`, survivor-fixes PR #44) and doesn't build a second one.
+`external::inherited_exit_code` turns gh's status into its code, or 128 + *s*, and remembers *s*.
+`external::exit_like_child`, called last, after the trace is written, sends *s* to the process
+with rustix's safe `kill_process` (the workspace forbids `unsafe_code`).
+
+One step is the launcher's own. It handles SIGINT, SIGQUIT, SIGTERM and SIGHUP while gh runs, so a
+signal it sends itself would land in its own handler and do nothing. Before `exit_like_child`, it
+therefore puts those four back to their default action. rustix's `process` feature has no
+`sigaction`, so L3 needs a safe way to do this, such as signal-hook. SIGPIPE stays ignored. A gh
+killed by SIGPIPE therefore ends the launcher with exit 141, not a signal death, which matches
+#44's delegate path. A shell reports 141 for both, so `set -o pipefail` sees the same status as with
+plain gh.
+
+The exec path in section 2 needs none of this: after exec, gh's death is the wrapper's.
 
 **Launcher failures** happen before gh starts and print one line to stderr, prefixed
 `gh-forgejo-shim:`.
@@ -333,9 +342,12 @@ R1 (`jko.15`): `external.rs:260` compares canonical paths, so a copy or hardlink
 the "real gh" check. Under option B the launcher spawns that copy as gh. The copy sees a Forgejo
 invocation and launches again, and so on. Three guards stop it:
 
-1. **Identity.** Real-gh discovery rejects a candidate that is the running shim by file identity
-   (device and inode, which catches hardlinks), or that is a copy of it. The survivor thread's R1
-   fix defines how a copy is detected. The launcher calls the same discovery and adds nothing.
+1. **Identity.** Real-gh discovery rejects a candidate that is the running shim: the same file by
+   device and inode, which catches hardlinks, or a byte-for-byte copy (R1 fix, survivor-fixes PR
+   #44, `external::is_current_executable`). The launcher calls the same discovery. This guard
+   can't see a copy of a *different* shim version, or a hand-written script that runs the shim
+   without the managed marker. Guards 2 and 3 catch those, because they don't depend on what the
+   candidate is.
 2. **Direct child.** If `FJ_SHIM_LAUNCHER` equals the wrapper's parent pid
    (`std::os::unix::process::parent_id`), the launcher spawned this process as real gh, so
    discovery picked the shim. The wrapper exits 127 with
@@ -418,9 +430,10 @@ Each names the section it proves.
    Forgejo hosts. The gateway logs no request with a github.com `Host` and no request carrying the
    GitHub token. With `GH_ENTERPRISE_TOKEN` set, the Forgejo host still gets its own token.
 4. **Signals (§6).** SIGTERM to the launcher: gh gets SIGTERM, the launcher dies by SIGTERM, and
-   the run directory is gone. SIGINT to the process group: gh's status passes through and the
-   directory is gone. `gh pr list | head -1` reports the same status as plain gh. A gh that kills
-   itself with SIGTERM: the launcher dies by SIGTERM (R6's test, on the launch path).
+   the run directory is gone. SIGINT to the process group: when gh dies by SIGINT, so does the
+   launcher, and the directory is gone. Under `set -o pipefail`, `gh pr list | head -1` exits 141,
+   as plain gh does. A gh that kills itself with SIGTERM: the launcher dies by SIGTERM (R6's test,
+   on the launch path).
 5. **Stale directories (§4).** After a SIGKILL'd launch, the next launch removes the leftover
    directory. A live launcher's directory survives another launcher's sweep. A directory with an
    unknown file in it stays.
