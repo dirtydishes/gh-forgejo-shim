@@ -136,6 +136,18 @@ proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
 `/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
 for server mode routes as delegate. The config key belongs to `cwe.42` and the config bridge (L4).
 
+**Nor does a forge the user's gh is logged in to.** gh saves a login only after the host answers
+its API: `gh auth login` checks the token against the host before writing anything
+(`gh/pkg/cmd/auth/login/login.go:239`, `gh/pkg/cmd/auth/shared/login_flow.go:237`). A Forgejo
+host without server mode has no `/api/v3`, so that check fails there. A login in the user's own
+`hosts.yml`, an entry for the forge with an `oauth_token` or a `user`, therefore means the forge
+serves gh itself. The entry is keyed as gh looks the host up: its hostname, or `host:port` for a
+ported allowlist entry. When routing picks such a forge, the wrapper steps aside and runs plain
+gh as on the delegate path: no run directory, no gateway, and the user's environment unchanged
+apart from `FJ_SHIM_DEPTH` (§8). That holds for every route to the host, the "user's gh hosts"
+route included (§3), and such a host is never in *S*. Until `cwe.42` adds the server-mode key,
+this is how the shim recognizes server mode.
+
 ## 3. Where gh's config lives
 
 **Decision: a private config directory per invocation, built from the user's config, which the
@@ -265,7 +277,8 @@ Plain gh counts only the user's keys. So when the user's own `hosts.yml` lists a
 the shim serves as its only host, plain gh defaults to that host, while a launched gh, with the
 allowlist hosts added, may not. Before delegating, routing checks plain gh's own choice
 (`GhHosts::user`). When that choice is a served Forgejo host, routing marks the route "user's gh
-hosts" (L2). Plain gh would hit the forge's missing `/api/v3`, and every launch with a key set
+hosts" (L2). If the user's gh is logged in to that host, the wrapper steps aside (§2).
+Otherwise plain gh would hit the forge's missing `/api/v3`, and every launch with a key set
 that keeps plain gh's default host has broken token lookup or the default host itself. So the
 launcher doesn't run gh. It exits 1 with:
 `gh-forgejo-shim: your gh config lists <host>, which gh-forgejo-shim serves; remove it with: gh auth logout --hostname <host>`.
@@ -273,7 +286,8 @@ The user's config is left alone (§3). That state arises only from a `gh auth lo
 client mode, which the shim's own login replaces.
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
-token and doesn't share its hostname with another entry, so the status reports all of them.
+token, doesn't share its hostname with another entry, and isn't one the user's gh is logged in to
+(§2), so the status reports all of them.
 
 What this guarantees:
 
@@ -769,7 +783,14 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     `'x.y'='z'`. `gh sg`, with alias
     `sg: auth setup-git`, delegates and writes real gh's path, not the run directory's, into
     `~/.gitconfig`. `gh auth token --hostname <forge>` still prints the real token.
-15. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, and
+15. **Stepping aside (§2).** With the user's own `hosts.yml` holding a login for a served forge,
+    once as an `oauth_token` and once as a `user` alone, as gh's secure-storage login writes it,
+    `gh pr view`, `gh api repos/{owner}/{repo}` and the alias `co` = `pr view` in that
+    forge's checkout all run plain gh: no run directory is created, no socket is bound, and gh's
+    environment equals the wrapper's apart from `FJ_SHIM_DEPTH`. The same holds when that forge
+    is the user's only host. A host-less `gh auth status` in another forge's checkout leaves the
+    logged-in forge out of *S*.
+16. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, and
     two hosts on the allowlist, a call that routes "user's gh hosts" exits 1 with the logout
     message and leaves the user's config unchanged.
 
