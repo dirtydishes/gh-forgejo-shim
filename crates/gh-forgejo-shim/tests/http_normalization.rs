@@ -183,6 +183,6 @@ fn expected(id: &str) -> TestResult<Value> {
 
 fn load_contract() -> TestResult<Value> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v1.json");
+        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v2.json");
     Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }
