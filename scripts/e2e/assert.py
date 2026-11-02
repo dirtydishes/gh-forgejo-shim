@@ -13,7 +13,7 @@ def check(condition, message):
 check((root / 'gh-version.txt').read_text().startswith('gh version 2.103.3 '), 'official gh 2.103.3')
 check(read('user.json')['login'] == 'e2e', 'gh auth login and gh api user: e2e')
 for number, branch, title, draft in [(1, 's/pass', 'scenario: checks pass', False), (2, 's/draft', 'scenario: draft', True)]:
-    expected = dict(number=number, title=title, state='OPEN', url=f'https://forge.test/e2e/oracle/pulls/{number}', isDraft=draft, headRefName=branch, baseRefName='main')
+    expected = dict(number=number, title=title, state='OPEN', url=f'https://forge.test/e2e/oracle/pull/{number}', isDraft=draft, headRefName=branch, baseRefName='main')
     check(read(f'pr{number}.json') == expected, f'PR {number}: exact number/title/state/url/draft/head/base')
 headers = (root / 'root.headers').read_text().lower()
 check('x-oauth-scopes: repo, read:org, workflow' in headers

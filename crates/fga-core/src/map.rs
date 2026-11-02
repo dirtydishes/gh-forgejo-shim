@@ -40,13 +40,41 @@ pub fn repository(repo: &forgejo::Repository, owner_type: &str) -> Value {
     value
 }
 
+/// A pull request's web URL, or one under it (`/files`, `#issuecomment-…`), in GitHub's layout:
+/// Forgejo's `/{o}/{r}/pulls/{n}` becomes `/{o}/{r}/pull/{n}` (MAPPING §8). ChatGPT ignores a PR whose
+/// URL doesn't match `/pull/(\d+)`. Only that path segment changes: the host, the rest of the path,
+/// the query and the fragment stay as Forgejo sent them, and any other URL passes through.
+pub fn pull_web_url(url: &str) -> String {
+    let path_start = url
+        .find("://")
+        .and_then(|scheme| url[scheme + 3..].find('/').map(|slash| scheme + 3 + slash));
+    let Some(start) = path_start else {
+        return url.to_owned();
+    };
+    let end = url[start..]
+        .find(['?', '#'])
+        .map_or(url.len(), |end| start + end);
+    let mut segments: Vec<&str> = url[start..end].split('/').collect();
+    // Segment 0 is empty (the path's leading slash); owner and repository come before `pulls`.
+    let number = |segment: &str| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit());
+    match (3..segments.len().saturating_sub(1))
+        .find(|&i| segments[i] == "pulls" && number(segments[i + 1]))
+    {
+        Some(i) => {
+            segments[i] = "pull";
+            format!("{}{}{}", &url[..start], segments.join("/"), &url[end..])
+        }
+        None => url.to_owned(),
+    }
+}
+
 pub fn pull_request(pr: &forgejo::PullRequest, prefixes: &WipPrefixes) -> Value {
     json!({
         "number": pr.number,
         "title": title(pr, prefixes),
         "state": if pr.merged { "closed" } else { &pr.state },
         "draft": pr.draft,
-        "html_url": pr.html_url,
+        "html_url": pull_web_url(&pr.html_url),
         "head": {"ref": pr.head.name(), "sha": pr.head.sha, "label": pr.head.label()},
         "base": {"ref": pr.base.ref_name, "sha": pr.base.sha, "label": pr.base.label()},
         "user": {"login": pr.user.login},

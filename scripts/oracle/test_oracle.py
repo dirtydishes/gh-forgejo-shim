@@ -140,7 +140,7 @@ class OracleTests(unittest.TestCase):
                 for ext in ('stdout', 'stderr', 'exit'):
                     output = '{"title":"scenario: draft","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE"}\n' if ext == 'stdout' else '0\n' if ext == 'exit' else ''
                     if ext == 'stdout' and case['id'] == 'wide-1':
-                        output = json.dumps({'number': 1, 'headRefOid': 'a' * 40, 'url': 'https://forge.test/dirtydishes/gfj-oracle/pulls/1'}) + '\n'
+                        output = json.dumps({'number': 1, 'headRefOid': 'a' * 40, 'url': 'https://forge.test/dirtydishes/gfj-oracle/pull/1'}) + '\n'
                     (expected / f"{case['id']}.{ext}").write_text(output)
                     if ext == 'stdout' and case['id'] == 'probe-4':
                         output = output.replace('CLEAN', 'UNKNOWN').replace('MERGEABLE', 'UNKNOWN')
@@ -181,18 +181,16 @@ class OracleTests(unittest.TestCase):
         # The SHA normalizer would hide a base SHA served as the head, or commits in Forgejo's order.
         self.assertTrue(compare.invariants(outputs(oid='b' * 40), backend)['head-oid'])
         self.assertTrue(compare.invariants(outputs(commits=(head, 'b' * 40)), backend)['head-oid'])
-        # The URL normalizer would hide Forgejo's /pulls/N, which ChatGPT ignores.
-        self.assertTrue(compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls'])
+        # The URL normalizer would hide Forgejo's /pulls/N, which ChatGPT ignores: no expected failure covers it.
+        layout = compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls']
+        self.assertEqual(layout, ['layout list-me-head: https://forge.test/dirtydishes/gfj-oracle/pulls/1'])
+        self.assertNotIn('pr-urls', compare.INVARIANT_FAILURES)
         # A check with nothing to check fails rather than passing vacuously.
         self.assertTrue(compare.invariants({}, backend)['head-oid'])
         self.assertTrue(compare.invariants({}, backend)['pr-urls'])
-        # A link to the wrong host is its own problem, which the /pulls/N expected failure doesn't cover.
+        # A link to the wrong host is its own problem.
         wrong_host = compare.invariants(outputs(url='https://github.com/dirtydishes/gfj-oracle/pull/1'), backend)['pr-urls']
         self.assertEqual(wrong_host, ['host list-me-head: https://github.com/dirtydishes/gfj-oracle/pull/1'])
-        known = compare.INVARIANT_KNOWN['pr-urls']
-        self.assertTrue(all(map(known, compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls'])))
-        self.assertFalse(all(map(known, wrong_host)))
-        self.assertFalse(all(map(known, compare.invariants({}, backend)['pr-urls'])))
         self.assertEqual([compare.classify(*args) for args in [(True, True, False), (True, True, True), (False, True, True), (False, False, True), (False, True, False)]],
                          ['pass', 'unexpected', 'xfail', 'unexpected', 'unexpected'])
 

@@ -61,7 +61,7 @@ impl PullRequest {
         &self.source.body
     }
     async fn url(&self) -> Uri {
-        Uri(self.source.html_url.clone())
+        Uri(map::pull_web_url(&self.source.html_url))
     }
     async fn state(&self) -> map::PullRequestState {
         map::state(&self.source)

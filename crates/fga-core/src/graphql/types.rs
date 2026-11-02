@@ -277,8 +277,9 @@ impl IssueComment {
     async fn reaction_groups(&self) -> Option<Vec<ReactionGroup>> {
         no_reactions()
     }
+    /// A comment on a pull request links under its GitHub-style URL.
     async fn url(&self) -> Uri {
-        Uri(self.source.html_url.clone())
+        Uri(crate::map::pull_web_url(&self.source.html_url))
     }
     async fn viewer_did_author(&self) -> bool {
         self.source.user.login.eq_ignore_ascii_case(&self.viewer)
