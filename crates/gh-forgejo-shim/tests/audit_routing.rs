@@ -437,6 +437,31 @@ fn audit_route_non_utf8_environment_reaches_real_gh_unchanged() -> TestResult {
 }
 
 #[test]
+fn audit_route_non_utf8_variable_name_reaches_real_gh_unchanged() -> TestResult {
+    // A shell can't name this variable and may drop it, so real gh is `env` itself, run with no
+    // arguments: it prints every variable it got, raw.
+    let fixture = Fixture::new()?;
+    fs::remove_file(&fixture.real_gh)?;
+    symlink("/usr/bin/env", &fixture.real_gh)?;
+    let mut command = fixture.gh(&[]);
+    command.env(
+        OsString::from_vec(b"AUDIT_OPAQUE_\xff".to_vec()),
+        "audit-opaque-name",
+    );
+    let output = fixture.run(&mut command)?;
+    assert!(
+        output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .any(|line| line == b"AUDIT_OPAQUE_\xff=audit-opaque-name"),
+        "real gh must get the non-UTF-8 variable name byte for byte; stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_route_non_utf8_environment_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     let mut command = fixture.gh(&["--version"]);
