@@ -189,6 +189,9 @@ Node IDs are opaque base64 strings of `fga:<Type>:<owner>/<repo>:<number|id>`, p
 `databaseId` holds the Forgejo numeric ID. `fullDatabaseId` is the same value as a string.
 `PullRequestReviewThread` and `PullRequestReviewComment` IDs identify their node within a response,
 but `node(id:)` doesn't look them up; it returns null for them.
+A review thread's `viewerCanResolve` and `viewerCanUnresolve` follow Forgejo's `CanMarkConversation`:
+the PR's author or a repository writer. Forgejo also lets an official reviewer without write access
+resolve a conversation; the gateway reports `false` for them, since it can't tell cheaply.
 
 ## 8. Web URLs (v1.1)
 
