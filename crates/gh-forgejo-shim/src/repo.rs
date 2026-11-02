@@ -100,6 +100,13 @@ enum DefaultSource {
 }
 
 impl GhHosts {
+    /// gh compares hosts with `strings.EqualFold` (`gh/context/remote.go` `FilterByHosts`).
+    fn knows(&self, host: &str) -> bool {
+        self.known
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(host))
+    }
+
     /// What plain gh knows: the user's own `hosts.yml` alone.
     pub fn user(env: &HashMap<String, String>) -> Self {
         Self::load(env, &[])
@@ -116,7 +123,7 @@ impl GhHosts {
             env.get("GH_HOST").filter(|host| !host.is_empty()),
             configured.as_slice(),
         ) {
-            (Some(host), _) => (host.to_ascii_lowercase(), DefaultSource::Env),
+            (Some(host), _) => (host.clone(), DefaultSource::Env),
             (None, [only]) => (only.clone(), DefaultSource::Config),
             (None, _) => (GITHUB.to_string(), DefaultSource::Fallback),
         };
@@ -162,12 +169,7 @@ pub fn detect_repo(
     checkout: &Checkout<'_>,
     hosts: &GhHosts,
 ) -> Detection {
-    if let Some(repo_arg) = invocation.repo_override.as_deref() {
-        return override_repo(repo_arg, hosts).map_or_else(Detection::unknown, |repo| {
-            Detection::found(repo, "-R/--repo")
-        });
-    }
-
+    // A PR or issue URL argument names its own repository, and gh uses it even with -R.
     if let Some(url_arg) = invocation
         .positionals
         .iter()
@@ -182,12 +184,23 @@ pub fn detect_repo(
         }
     }
 
-    if let Some(gh_repo) = env.get("GH_REPO").filter(|value| !value.trim().is_empty()) {
+    // gh's `OverrideBaseRepoFunc`: an empty -R counts as none, and GH_REPO is checked next.
+    if let Some(repo_arg) = invocation
+        .repo_override
+        .as_deref()
+        .filter(|arg| !arg.is_empty())
+    {
+        return override_repo(repo_arg, hosts).map_or_else(Detection::unknown, |repo| {
+            Detection::found(repo, "-R/--repo")
+        });
+    }
+
+    if let Some(gh_repo) = env.get("GH_REPO").filter(|value| !value.is_empty()) {
         return override_repo(gh_repo, hosts)
             .map_or_else(Detection::unknown, |repo| Detection::found(repo, "GH_REPO"));
     }
 
-    let saved_default = honors_saved_default(&invocation.command);
+    let saved_default = honors_saved_default(&invocation.command, &user_gh_aliases(env));
     base_repo_from_remotes(checkout.remotes(), hosts, saved_default)
         .map_or_else(Detection::unknown, |(repo, source)| {
             Detection::found(repo, source)
@@ -196,11 +209,17 @@ pub fn detect_repo(
 
 /// gh reads `gh repo set-default` only in the commands it builds with `SmartBaseRepoFunc`
 /// (`gh/pkg/cmd/root/root.go:161-178`). The groups added before that line take the first ranked
-/// remote (`gh/pkg/cmd/factory/default.go:83-90`). A command the wrapper doesn't know, such as an
-/// alias, is taken to be a smart one: most aliases expand to `pr` or `issue`.
-fn honors_saved_default(command: &str) -> bool {
+/// remote (`gh/pkg/cmd/factory/default.go:83-90`). A plain alias counts as the command it expands
+/// to (`gh/pkg/cmd/root/alias.go` `NewCmdAlias`). A command the wrapper still doesn't know, such
+/// as a shell alias, is taken to be a smart one.
+fn honors_saved_default(command: &str, aliases: &HashMap<String, String>) -> bool {
+    let word = command.split_whitespace().next().unwrap_or_default();
+    let word = aliases
+        .get(word)
+        .and_then(|expansion| expansion.split_whitespace().next())
+        .unwrap_or(word);
     !matches!(
-        command.split_whitespace().next().unwrap_or_default(),
+        word,
         "version"
             | "accessibility"
             | "actions"
@@ -280,14 +299,17 @@ fn base_repo_from_remotes(
 ) -> Option<(RepoRef, &'static str)> {
     let mut remotes = remotes
         .iter()
-        .filter(|remote| hosts.known.contains(&remote.repo.host))
+        .filter(|remote| hosts.knows(&remote.repo.host))
         .cloned()
         .collect::<Vec<_>>();
+    // gh sorts with Go's `sort.Sort`, before filtering (`remote_resolver.go`). That sort isn't
+    // stable, but for 12 elements or fewer it is an insertion sort, which is, so this stable sort
+    // gives gh's order. Beyond 12 remotes, equally ranked remotes can come out in another order.
     remotes.sort_by_key(|remote| std::cmp::Reverse(remote_rank(&remote.name)));
     if hosts.default_source != DefaultSource::Fallback {
         let on_default = remotes
             .iter()
-            .filter(|remote| remote.repo.host == hosts.default)
+            .filter(|remote| remote.repo.host.eq_ignore_ascii_case(&hosts.default))
             .cloned()
             .collect::<Vec<_>>();
         if hosts.default_source == DefaultSource::Env || !on_default.is_empty() {
@@ -300,8 +322,9 @@ fn base_repo_from_remotes(
             Some("base") => return Some((remote.repo.clone(), "repo set-default")),
             Some(value) if !value.is_empty() => {
                 let saved = override_repo(value, hosts)?;
+                // `ghrepo.NewWithHost` normalizes the remote's host a second time.
                 return Some((
-                    RepoRef::new(remote.repo.host.as_str(), saved.owner, saved.name),
+                    gh_repo(&remote.repo.host, &saved.owner, &saved.name),
                     "repo set-default",
                 ));
             }
@@ -423,6 +446,9 @@ impl GitUrl {
             "git+ssh" => "ssh".to_string(),
             other => other.to_string(),
         };
+        // Go's url.Parse keeps `?query` and `#fragment` out of the path.
+        let rest = rest.split('#').next().unwrap_or(rest);
+        let rest = rest.split('?').next().unwrap_or(rest);
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
         let host = url_hostname(
             authority
@@ -448,7 +474,8 @@ impl GitUrl {
             .collect::<Vec<_>>()
             .as_slice()
         {
-            [owner, name] => Some(gh_repo(host, owner, name)),
+            // Only a URL's name loses `.git`; `-R o/r.git` keeps it (`ghrepo.FromURL`).
+            [owner, name] => Some(gh_repo(host, owner, &strip_git_suffix(name))),
             _ => None,
         }
     }
@@ -463,7 +490,7 @@ fn gh_repo(host: &str, owner: &str, name: &str) -> RepoRef {
     RepoRef {
         host,
         owner: owner.to_string(),
-        name: strip_git_suffix(name),
+        name: name.to_string(),
     }
 }
 
@@ -531,17 +558,22 @@ impl SshHosts {
     }
 }
 
-/// Top-level hosts in the user's gh `hosts.yml`, found the way go-gh's `ConfigDir` does. The file
-/// is only read; a missing or unreadable one lists no hosts.
-fn user_gh_hosts(env: &HashMap<String, String>) -> Vec<String> {
+/// The user's gh config directory, found the way go-gh's `ConfigDir` does.
+fn user_gh_config_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
     let non_empty = |name: &str| env.get(name).filter(|value| !value.is_empty());
-    let dir = if let Some(dir) = non_empty("GH_CONFIG_DIR") {
-        PathBuf::from(dir)
+    if let Some(dir) = non_empty("GH_CONFIG_DIR") {
+        Some(PathBuf::from(dir))
     } else if let Some(dir) = non_empty("XDG_CONFIG_HOME") {
-        Path::new(dir).join("gh")
-    } else if let Some(home) = non_empty("HOME") {
-        Path::new(home).join(".config").join("gh")
+        Some(Path::new(dir).join("gh"))
     } else {
+        non_empty("HOME").map(|home| Path::new(home).join(".config").join("gh"))
+    }
+}
+
+/// Top-level hosts in the user's gh `hosts.yml`. The file is only read; a missing or unreadable
+/// one lists no hosts.
+fn user_gh_hosts(env: &HashMap<String, String>) -> Vec<String> {
+    let Some(dir) = user_gh_config_dir(env) else {
         return Vec::new();
     };
     let Ok(text) = fs::read_to_string(dir.join("hosts.yml")) else {
@@ -551,10 +583,36 @@ fn user_gh_hosts(env: &HashMap<String, String>) -> Vec<String> {
         return Vec::new();
     };
     let mut result = Vec::new();
+    // Kept as written: gh counts the keys as they are, and `Forge.Test` and `forge.test` are two.
     for host in hosts.keys().filter_map(serde_yaml::Value::as_str) {
-        push_unique(&mut result, host.to_ascii_lowercase());
+        push_unique(&mut result, host.to_string());
     }
     result
+}
+
+/// Plain (not `!` shell) aliases in the user's gh `config.yml`: name to expansion.
+fn user_gh_aliases(env: &HashMap<String, String>) -> HashMap<String, String> {
+    let Some(dir) = user_gh_config_dir(env) else {
+        return HashMap::new();
+    };
+    let Ok(text) = fs::read_to_string(dir.join("config.yml")) else {
+        return HashMap::new();
+    };
+    let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return HashMap::new();
+    };
+    let Some(aliases) = config
+        .get("aliases")
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        return HashMap::new();
+    };
+    aliases
+        .iter()
+        .filter_map(|(name, expansion)| Some((name.as_str()?, expansion.as_str()?)))
+        .filter(|(_, expansion)| !expansion.starts_with('!'))
+        .map(|(name, expansion)| (name.to_string(), expansion.to_string()))
+        .collect()
 }
 
 fn push_unique(values: &mut Vec<String>, value: String) {
