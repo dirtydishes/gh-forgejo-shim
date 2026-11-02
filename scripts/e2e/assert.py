@@ -32,7 +32,10 @@ check(len(merged) == 1 and merged[0]['state'] == 'closed' and merged[0]['merged_
 for name, status, message in [('missing-token', '401', 'Bad credentials'), ('bad-token', '401', 'Bad credentials'), ('unknown-repo', '404', 'Not Found'), ('unknown-route', '404', 'Not Found')]:
     check((root / f'{name}.status').read_text() == status and read(f'{name}.json')['message'] == message, f'{name}: {status} {message}')
 check((root / 'other-host.status').read_text() == '421' and read('other-host.json')['message'] == 'This gateway serves only forge.test', 'another host: 421 before authentication')
-for name, kind in [('validation', 'GRAPHQL_VALIDATION_FAILED'), ('not-found-graphql', 'NOT_FOUND'), ('missing-graphql', 'UNAUTHORIZED'), ('invalid-graphql', 'UNAUTHORIZED')]:
+# GitHub answers bad credentials on GraphQL with 401 and its REST error body.
+for name in ('missing-graphql', 'invalid-graphql'):
+    check((root / f'{name}.status').read_text() == '401' and read(f'{name}.json')['message'] == 'Bad credentials', f'GraphQL {name}: 401 Bad credentials')
+for name, kind in [('validation', 'GRAPHQL_VALIDATION_FAILED'), ('not-found-graphql', 'NOT_FOUND')]:
     error = read(f'{name}.json')['errors'][0]
     check((root / f'{name}.status').read_text() == '200' and error['type'] == kind and isinstance(error['path'], list) and 'message' in error, f'GraphQL {name}: HTTP 200 and GitHub error shape')
 check(read('page1.json')[0]['number'] == 2 and read('page2.json')[0]['number'] == 1 and 'rel="next"' in (root / 'page1.headers').read_text(), 'REST pagination and next Link')
