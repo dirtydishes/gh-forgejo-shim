@@ -236,10 +236,10 @@ pub(crate) fn current_repo(
     }
     // GH_REPO or GH_HOST pins gh to a repository or a host; with nothing found there, gh and the
     // wrapper act on no remote, so neither does this.
-    if env.get("GH_REPO").is_some_and(|value| !value.is_empty())
-        || env
-            .get("GH_HOST")
-            .is_some_and(|value| !value.trim().is_empty())
+    // Tested as repo.rs tests them: a GH_HOST of spaces still pins gh to that host.
+    if ["GH_REPO", "GH_HOST"]
+        .iter()
+        .any(|name| env.get(*name).is_some_and(|value| !value.is_empty()))
     {
         return None;
     }
@@ -253,15 +253,19 @@ pub(crate) fn current_repo(
     })
 }
 
-/// Whether the wrapper routes a repository on `host` to Forgejo. gh drops a remote's port, so
-/// `git.example.com` matches an allowlist entry `git.example.com:3000`.
+/// Whether the wrapper routes a repository on `host` to Forgejo.
 pub(crate) fn routes_to_forgejo(config: &Config, host: &str) -> bool {
+    allowlist_entry(config, host).is_some()
+}
+
+/// The allowlist entry the wrapper routes a repository on `host` to. gh drops a remote's port, so
+/// `git.example.com` finds the entry `git.example.com:3000`.
+pub(crate) fn allowlist_entry(config: &Config, host: &str) -> Option<String> {
     DispatcherConfig {
         hosts: config.hosts.clone(),
         real_gh: None,
     }
     .forgejo_host(host)
-    .is_some()
 }
 
 pub fn format_checks(checks: &[Check]) -> String {
