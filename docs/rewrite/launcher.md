@@ -40,10 +40,10 @@ These facts decide most of the design. Each one was checked in the source.
    is `GH_PATH` if set, else `argv[0]` if it contains a slash, else a PATH lookup
    (`gh/internal/ghcmd/cmd.go:413-425`). Git then sends that token to the real forge over HTTPS,
    not through the socket. Extensions also get `GH_PATH` (`gh/pkg/cmd/extension/manager.go:134`).
-5. **gh migrates a config with no `version` key**, and the migration looks up each host's user
-   over the API (`gh/internal/config/config.go:207-226`,
-   `gh/internal/config/migration/multi_account.go:85-135`). A `config.yml` with `version: "1"`
-   skips it.
+5. **gh no longer migrates old configs.** v2.103.3 keeps the multi-account migration only as
+   documentation, and production startup never runs it
+   (`gh/internal/config/migration/multi_account.go:70-78`). The private `config.yml` still gets
+   `version: "1"`, the value every current gh writes, so it looks to gh like any config gh made.
 6. **The browser comes from `GH_BROWSER`, then the config `browser` key, then `BROWSER`**
    (`go-gh/pkg/browser/browser.go:82-93`). gh splits the value with shlex and appends the URL
    (`browser.go:64`).
