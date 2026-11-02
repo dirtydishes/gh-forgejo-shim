@@ -529,6 +529,7 @@ fn run_config(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) ->
     let path = config::config_path(runtime.home());
     match args {
         [command, host] if command == "add-host" => {
+            forgejo_host_arg(host)?;
             let config = config::add_host(host, Some(&path))?;
             writeln!(stdout, "added Forgejo host: {host}")?;
             print_hosts(&config.hosts, stdout)?;
@@ -937,7 +938,7 @@ fn auth_login(
     runtime: &mut dyn Runtime,
 ) -> Result<i32> {
     // Logout shares prompt_host, so it can still remove a token for any host an older version took.
-    let host = forgejo_login_host(&prompt_host(host_arg, runtime)?)?;
+    let host = forgejo_host_arg(&prompt_host(host_arg, runtime)?)?;
     let token = runtime
         .prompt_token(&format!("Forgejo access token for {host}: "))?
         .trim()
@@ -1063,14 +1064,13 @@ fn auth_logout(
     Ok(0)
 }
 
-/// A host `auth login` may send a token to: never a GitHub host, which would get the Forgejo
-/// token in its Authorization header during validation.
-/// The host `auth login` may send a token to, by the allowlist's own rule: never a GitHub host,
-/// and spelled the way the URL parser reads it back, so the token goes to the host named.
-fn forgejo_login_host(host: &str) -> Result<String> {
+/// A host `auth login` may send a token to and `config add-host` may allowlist, by the
+/// allowlist's own rule: never a GitHub host, and spelled the way the URL parser reads it back,
+/// so the token goes to the host named.
+fn forgejo_host_arg(host: &str) -> Result<String> {
     if config::is_known_github_host(Some(host)) {
         return Err(ShimError::new(format!(
-            "{host} is a GitHub host; use `gh auth login` for GitHub"
+            "{host} is a GitHub host; the shim leaves GitHub to the real gh"
         )));
     }
     config::normalized_forgejo_host(host).ok_or_else(|| {
@@ -1724,6 +1724,30 @@ mod tests {
         assert_eq!(code, 0);
         assert!(auth::read_stored_token("api.github.com", Some(&home), Some("linux")).is_none());
         fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn config_add_host_refuses_a_host_it_would_not_keep() -> Result<()> {
+        for host in ["acme.ghe.com", "local%68ost:3000"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["config", "add-host", host]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+            assert_eq!(code, 1, "{host}");
+            assert!(
+                !String::from_utf8_lossy(&stdout).contains("added"),
+                "{host} reported as added"
+            );
+            assert!(!config::config_path(Some(&home)).exists(), "{host}");
+            fs::remove_dir_all(home).ok();
+        }
         Ok(())
     }
 

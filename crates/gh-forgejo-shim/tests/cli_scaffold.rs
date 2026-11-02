@@ -216,6 +216,40 @@ fn install_shim_refuses_unmanaged_file_until_forced() -> TestResult {
 }
 
 #[test]
+fn bootstrap_leaves_out_a_remote_host_spelled_differently_from_where_it_leads() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    // `%2e` is a dot to the URL parser, so this remote leads to forge.example.com.
+    fixture.git([
+        "remote",
+        "set-url",
+        "origin",
+        "https://forge.example%2ecom/owner/repo.git",
+    ])?;
+
+    let output = fixture
+        .command("gfj")?
+        .args(["bootstrap", "--no-gui-path", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(!stdout.contains("allowlisted"), "{stdout}");
+    assert!(
+        stdout.contains("isn't a host name the shim can use"),
+        "{stdout}"
+    );
+    let config_path = fixture.home().join(".config/gh-forgejo-shim/config.toml");
+    assert!(
+        !fs::read_to_string(config_path)
+            .unwrap_or_default()
+            .contains("forge"),
+        "the spelling was allowlisted"
+    );
+    Ok(())
+}
+
+#[test]
 fn bootstrap_installs_shim_and_prints_temp_repo_repairs() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
