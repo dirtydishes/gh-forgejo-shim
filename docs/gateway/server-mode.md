@@ -55,8 +55,15 @@ Route three kinds of path to the gateway, and everything else to Forgejo as befo
 - `/{owner}/{repo}/pull/{n}`: GitHub-style PR links, which the gateway redirects to Forgejo's
   `/pulls/{n}`.
 
-Pass the client's `Host` header through unchanged. The gateway refuses any request for another host
-with `421`, so that a token meant for one host never reaches Forgejo.
+Put these routes only in the forge's own site or `server` block. In server mode, that block decides
+which host a request is for: the client connected to the forge's name, so its token is already with
+the forge. Pass the client's `Host` header through unchanged, and the gateway checks it again. If the
+routes end up in a block that serves other names too, or in the default server, the gateway refuses
+any request for another host with `421`, so another host's token never reaches Forgejo.
+
+A client can name one host in `Host` and another in its request line or HTTP/2 headers, and a proxy
+forwards only one of them. The gateway can't check what the proxy drops. That only sends the client's
+own token to the forge it connected to.
 
 **nginx.** Define the upstream once, then include the shipped
 [locations snippet](../../packaging/gateway/nginx/fga-locations.conf) in the forge's `server` block:
