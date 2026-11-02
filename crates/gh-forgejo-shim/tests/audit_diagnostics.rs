@@ -164,7 +164,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-#[ignore = "audit D10: fails until gh-forgejo-shim-jko.27 is fixed"]
 fn audit_diag_gh_trace_json_escaped_secret() -> TestResult {
     let f = Fixture::new()?;
     let text = f.gh_trace(
