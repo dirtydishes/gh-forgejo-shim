@@ -58,7 +58,7 @@ fn forge_full(
                     {"id":7,"user":user("other"),"body":"ok","state":"APPROVED","commit_id":"abc",
                      "submitted_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:01Z",
                      "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70","comments_count":2},
-                    {"id":8,"user":user("e2e"),"body":"draft","state":"PENDING","commit_id":"abc",
+                    {"id":8,"user":user("e2e"),"body":"draft","state":"PENDING","commit_id":"older",
                      "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z",
                      "html_url":"","pull_request_url":"https://forge.test/e2e/oracle/pulls/1","comments_count":1},
                     // Someone else's pending review: Forgejo shows it to site admins, GitHub to no one.
@@ -81,14 +81,16 @@ fn forge_full(
         )
         .route("/api/v1/repos/e2e/oracle/issues/1/timeline", get(move || async move { Json(timeline) }))
         // Forgejo's conversations: review 7 has a reply on a.rs:3 (new side); the viewer's pending
-        // review 8 has a resolved comment on old-side line 5 of b.rs, read on an older commit.
+        // review 8, made on an older head, has a resolved comment on old-side line 5 of b.rs. Forgejo
+        // records a.rs's line as 3, its line in the commit that last changed it; the hunk shows it
+        // was line 7 when the reviewer commented.
         .route(
             "/api/v1/repos/e2e/oracle/pulls/1/reviews/7/comments",
             // Forgejo's order varies between requests; this one is newest first.
             get(|| async {
                 Json(json!([
-                    review_comment(71, 7, "e2e", "a.rs", 3, 0, None),
-                    review_comment(70, 7, "other", "a.rs", 3, 0, None)
+                    with_hunk(review_comment(71, 7, "e2e", "a.rs", 3, 0, None), A_HUNK),
+                    with_hunk(review_comment(70, 7, "other", "a.rs", 3, 0, None), A_HUNK)
                 ]))
             }),
         )
@@ -102,11 +104,7 @@ fn forge_full(
         )
         .route(
             "/api/v1/repos/e2e/oracle/pulls/1/reviews/8/comments",
-            get(|| async {
-                let mut comment = review_comment(80, 8, "e2e", "b.rs", 0, 5, Some("other"));
-                comment["commit_id"] = json!("older");
-                Json(json!([comment]))
-            }),
+            get(|| async { Json(json!([review_comment(80, 8, "e2e", "b.rs", 0, 5, Some("other"))])) }),
         )
         // A required check still pending keeps the PR BLOCKED, so auto-merge can be enabled.
         .route(
@@ -125,6 +123,24 @@ fn forge_full(
         )
 }
 
+/// A hunk ending on a.rs's line 7, two lines below where Forgejo's blame puts it.
+const A_HUNK: &str = "@@ -5,2 +5,3 @@\n a\n+b\n c";
+
+fn with_hunk(mut comment: Value, diff_hunk: &str) -> Value {
+    comment["diff_hunk"] = json!(diff_hunk);
+    comment
+}
+
+/// A one-line hunk ending on the comment's line: a context line on the new side, or a removed
+/// line on the old side.
+fn hunk(position: u64, original_position: u64) -> String {
+    if position > 0 {
+        format!("@@ -{position},1 +{position},1 @@\n x")
+    } else {
+        format!("@@ -{original_position},1 +{original_position},0 @@\n-x")
+    }
+}
+
 fn review_comment(
     id: i64,
     review: i64,
@@ -136,7 +152,7 @@ fn review_comment(
 ) -> Value {
     json!({"id":id,"body":format!("c{id}"),"user":user(login),"resolver":resolver.map(user),
         "pull_request_review_id":review,"created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z",
-        "path":path,"commit_id":"abc","original_commit_id":"abc","diff_hunk":"@@ -1 +1 @@",
+        "path":path,"commit_id":"abc","original_commit_id":"abc","diff_hunk":hunk(position, original_position),
         "position":position,"original_position":original_position,
         "html_url":format!("https://forge.test/e2e/oracle/pulls/1/files#issuecomment-{id}"),
         "pull_request_url":"https://forge.test/e2e/oracle/pulls/1"})
@@ -274,25 +290,25 @@ async fn review_threads_follow_forgejo_conversations() {
         json!([{"comments":{"totalCount":2}},{"comments":{"totalCount":1}},{"comments":{"totalCount":0}}])
     );
     let review = |id| fga_core::ids::node_id("PullRequestReview", "e2e/oracle", id);
-    let comment = |id: i64, login: &str, review_id: i64, state: &str| {
+    let comment = |id: i64, login: &str, review_id: i64, state: &str, diff_hunk: &str| {
         json!({"author":{"login":login},"body":format!("c{id}"),"bodyHTML":format!("<p>c{id}</p>"),
-            "diffHunk":"@@ -1 +1 @@","state":state,
+            "diffHunk":diff_hunk,"state":state,
             "url":format!("https://forge.test/e2e/oracle/pulls/1/files#issuecomment-{id}"),
             "pullRequestReview":{"id":review(review_id)},"viewerCanUpdate":login == "e2e"})
     };
-    // b.rs's thread was read on an older commit than the head: Forgejo keeps its position after
-    // the line moves, so it has no current line, as an outdated thread on GitHub.
+    // a.rs's thread is on the line the reviewer saw. b.rs's review was made on an older head, so
+    // its line may have moved or gone: no current line, as an outdated thread on GitHub.
     assert_eq!(
         pull["reviewThreads"],
         json!({"totalCount":2,"nodes":[
             {"id":fga_core::ids::node_id("PullRequestReviewThread", "e2e/oracle", 70),"path":"a.rs",
-             "diffSide":"RIGHT","line":3,"originalLine":3,"startLine":null,
+             "diffSide":"RIGHT","line":7,"originalLine":7,"startLine":null,
              "isResolved":false,"viewerCanResolve":false,"viewerCanUnresolve":false,
-             "comments":{"nodes":[comment(70, "other", 7, "SUBMITTED"), comment(71, "e2e", 7, "SUBMITTED")]}},
+             "comments":{"nodes":[comment(70, "other", 7, "SUBMITTED", A_HUNK), comment(71, "e2e", 7, "SUBMITTED", A_HUNK)]}},
             {"id":fga_core::ids::node_id("PullRequestReviewThread", "e2e/oracle", 80),"path":"b.rs",
              "diffSide":"LEFT","line":null,"originalLine":5,"startLine":null,
              "isResolved":true,"viewerCanResolve":false,"viewerCanUnresolve":false,
-             "comments":{"nodes":[comment(80, "e2e", 8, "PENDING")]}}
+             "comments":{"nodes":[comment(80, "e2e", 8, "PENDING", &hunk(0, 5))]}}
         ]})
     );
     // The PR's author, or a writer, may resolve any conversation; a thread's own starter without
@@ -377,13 +393,24 @@ async fn auto_merge_follows_the_merge_allowlist_and_archiving() {
     )
     .await;
     assert_eq!(flags(outside), json!([false, false]));
-    // On the allowlist without push access: a schedule by someone else can be cancelled.
-    let listed = query(
+    // The branch summary says "may merge" from the user's own access, but a token that can't write
+    // to this repository (one limited to others) can't merge here: Forgejo checks the token.
+    let token = query(
         forge_full(false, true, false, open(), Some("other")),
         VIEWER_CAN,
     )
     .await;
-    assert_eq!(flags(listed), json!([false, true]));
+    assert_eq!(flags(token), json!([false, false]));
+    // A writer may cancel another user's schedule after the base branch is deleted: the summary is
+    // gone, and write access decides.
+    let mut gone = open();
+    gone["base"] = json!({"ref":"gone","label":"gone","sha":"def"});
+    let gone = query(
+        forge_full(true, true, false, gone, Some("other")),
+        VIEWER_CAN,
+    )
+    .await;
+    assert_eq!(gone["viewerCanDisableAutoMerge"], true);
     // Its scheduler may cancel it without being allowed to merge, unless the repository is archived.
     let own = query(
         forge_full(false, false, false, open(), Some("e2e")),

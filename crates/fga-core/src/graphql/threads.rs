@@ -110,7 +110,8 @@ pub struct PullRequestReviewThread {
     comments: Vec<PullRequestReviewComment>,
     /// The pull request's author, who may resolve any of its conversations.
     pr_author: Arc<str>,
-    /// The pull request's head commit, which the thread's line must have been read on.
+    /// The pull request's head commit, which the thread's review must have been made on for its
+    /// line to be current.
     head_sha: Arc<str>,
 }
 impl PullRequestReviewThread {
@@ -129,11 +130,15 @@ impl PullRequestReviewThread {
     fn resolved(&self) -> bool {
         self.comments.iter().any(|c| c.source.resolver.is_some())
     }
-    /// Line numbers are unsigned in GitHub; 0 means Forgejo recorded none.
+    /// The commented line as the reviewer saw it: the last line of the comment's diff hunk, which
+    /// Forgejo cuts to end there (`CutDiffAroundLine`, Forgejo v15.0.0 `modules/git/diff.go`).
+    /// Forgejo's own `position` is the line in the commit that last changed it (`LineBlame`), which
+    /// differs once later commits move the line, so it serves only when the hunk can't be read.
     fn line_number(&self) -> Option<i32> {
-        i32::try_from(self.first().source.line().unsigned_abs())
-            .ok()
-            .filter(|line| *line != 0)
+        let source = &self.first().source;
+        let line =
+            hunk_end(&source.diff_hunk, source.line() < 0).unwrap_or(source.line().unsigned_abs());
+        i32::try_from(line).ok().filter(|line| *line != 0)
     }
 }
 #[Object]
@@ -166,12 +171,12 @@ impl PullRequestReviewThread {
             DiffSide::Right
         }
     }
-    /// GitHub's current line, null once the thread is outdated. Forgejo keeps a comment's
-    /// position after a push moves or deletes its line and doesn't report the comment outdated
-    /// (`services/convert/pull_review.go`), so only a thread on the head commit has a current line.
+    /// GitHub's current line, null once the thread is outdated. Forgejo's API doesn't say whether
+    /// a later push moved or deleted the line, so the line is current only while the PR's head is
+    /// still the commit its review was made on.
     async fn line(&self) -> Option<i32> {
         self.line_number()
-            .filter(|_| self.first().source.commit_id == *self.head_sha)
+            .filter(|_| self.first().review.source.commit_id == *self.head_sha)
     }
     async fn original_line(&self) -> Option<i32> {
         self.line_number()
@@ -195,6 +200,36 @@ impl PullRequestReviewThread {
     async fn viewer_can_unresolve(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         Ok(self.resolved() && self.viewer_can_mark(ctx).await?)
     }
+}
+
+/// The number, on the old or new side, of a diff hunk's last line.
+fn hunk_end(hunk: &str, old: bool) -> Option<u64> {
+    let mut lines = hunk.lines();
+    let header = lines.next()?.strip_prefix("@@ -")?;
+    let (old_start, rest) = header.split_once(" +")?;
+    let new_start = rest.split_once(' ')?.0;
+    let start = |range: &str| range.split(',').next()?.parse::<u64>().ok();
+    let (mut old_line, mut new_line) = (start(old_start)?, start(new_start)?);
+    let mut last = None;
+    for line in lines {
+        match line.as_bytes().first() {
+            Some(b'+') => {
+                last = (!old).then_some(new_line);
+                new_line += 1;
+            }
+            Some(b'-') => {
+                last = old.then_some(old_line);
+                old_line += 1;
+            }
+            Some(b'\\') => {}
+            _ => {
+                last = Some(if old { old_line } else { new_line });
+                old_line += 1;
+                new_line += 1;
+            }
+        }
+    }
+    last
 }
 
 /// Every review's code comments, grouped into conversations, oldest conversation first.
