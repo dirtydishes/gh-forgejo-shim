@@ -351,9 +351,10 @@ fn remove_keeping_line_comments(array: &mut Array, index: usize) {
         return;
     };
     let carried = &prefix[..=line_end];
+    // With no line break there (`"b"]`, or another host on the same line), the comment goes first.
     let replace_head = |text: &str| match text.find('\n') {
         Some(end) => format!("{carried}{}", &text[end + 1..]),
-        None => text.to_string(),
+        None => format!("{carried}{text}"),
     };
     if let Some(next) = array.get_mut(index) {
         let text = next
@@ -647,6 +648,28 @@ future_setting = "keep" # why
         assert_eq!(
             fs::read_to_string(&path)?,
             "hosts = [ # forges\n  \"a.example.com\", # a reason\n  \"c.example.com\", # c reason\n]\n"
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn removing_a_host_keeps_comments_when_the_array_ends_on_its_line() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\n  \"a.example.com\", # a reason\n  \"b.example.com\", \"c.example.com\"]\n",
+        )?;
+
+        remove_host("b.example.com", Some(&path))?;
+        remove_host("c.example.com", Some(&path))?;
+
+        let text = fs::read_to_string(&path)?;
+        assert!(text.contains("\"a.example.com\" # a reason\n"), "{text}");
+        assert_eq!(
+            load_config_with_env(Some(&path), &EnvMap::new())?.hosts,
+            ["a.example.com"]
         );
         fs::remove_dir_all(root).ok();
         Ok(())
