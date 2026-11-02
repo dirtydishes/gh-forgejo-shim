@@ -142,8 +142,10 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   `git_protocol`, `editor`, `pager`, `prompt` and `browser` carry over. With no user
   `config.yml`, it holds only those two keys. If the user's file doesn't parse, the launcher stops
   with an error naming it (section 6); plain gh would fail on it too.
-- **`hosts.yml`:** one entry for every host in the user's own `hosts.yml`, and one for every
-  Forgejo host on the shim's allowlist, by gh's portless hostname. Each entry has an
+- **`hosts.yml`:** one entry for every host in the user's own `hosts.yml`, keyed exactly as the
+  user's file spells it, and one for every Forgejo host on the shim's allowlist, by gh's portless
+  hostname, unless that exact key is already there. gh counts keys as written, so `Forge.Test`
+  and `forge.test` are two, and routing counts them the same way (L2). Each entry has an
   `oauth_token`, plus the `git_protocol` from the user's entry for that host, if any. A host-level
   `oauth_token` needs no `user` key for gh to find it. `gh auth status` reads the account name from
   `user`, though, and fetches it only for tokens from the environment
@@ -688,5 +690,28 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    - Installed gh extensions always run through plain gh (§2).
 
    Kell, 2026-11-02: (a), the behavior above, with extensions through plain gh accepted.
+
+   Sol's round 1 then found one more gap, and it goes back to Kell. The placeholders cover only
+   the hosts in the user's own `hosts.yml`, while the Keychain is shared by every gh config
+   directory. A token saved by a login under another config directory, for a host this one
+   doesn't list, can still be sent by a launched gh that is asked for that host explicitly. It
+   reaches only the local gateway, which refuses it with 421 and forwards nothing (§3).
+   - **(a) Recommended:** accept this, and state the guarantee as "no other host's credential
+     leaves the machine through the launcher".
+   - **(b)** Always add a github.com placeholder too. That covers the usual case, a GitHub login
+     made elsewhere. But routing would then treat github.com as known for every user, so a
+     two-part `-R` would default to github.com even for someone with only a forge. Other hosts
+     stay as in (a).
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
+4. **`gh api` and `gh auth token` without `--hostname`, inside a Forgejo checkout** (§2). gh
+   itself picks these commands' host from its default host, not from the checkout.
+   - **(a) Recommended:** they talk to the forge. The launcher sets `GH_HOST` to the routed host
+     for the call. That is what today's shim does, and what an agent typing
+     `gh api repos/{owner}/{repo}/pulls` in a Forgejo checkout expects.
+   - **(b)** They follow gh and go to github.com, as plain gh does in a GitHub Enterprise
+     checkout. That sends an agent's forge request to GitHub, which answers for a different
+     repository or not at all.
+
+   ChatGPT and Claude pass `--hostname` or a three-part `--repo` themselves, so neither option
+   affects them. Waiting for Kell.
