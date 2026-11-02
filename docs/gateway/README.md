@@ -1,12 +1,13 @@
-# forgejo-github-api
+# Gateway: fga-server and fga-core
 
 A stateless gateway that serves GitHub Enterprise API routes for Forgejo. It forwards each client's
 Forgejo token to the upstream server and maps Forgejo responses to GitHub's JSON and GraphQL types.
+It was built as the separate forgejo-github-api repository and moved here with its history.
 
 The gateway supports `gh auth login`, `gh api user`, `gh pr view` with wide JSON field sets,
 `gh pr checks`, and `gh pr status` with gh 2.103.3. It also serves the repository and branch-to-PR
-REST lookups Claude Code uses. [G2a findings](docs/G2A-FINDINGS.md) records the draft PR differences
-and Forgejo API limits. See [the design](docs/DESIGN.md) for later milestones.
+REST lookups Claude Code uses. [G2a findings](G2A-FINDINGS.md) records the draft PR differences
+and Forgejo API limits. See [the design](DESIGN.md) for later milestones.
 
 Run with Rust 1.97.1:
 
@@ -36,21 +37,25 @@ Forgejo still checks each data request. Credentials and memoized data remain ins
 request. Concurrent GraphQL fields share each upstream response, including errors.
 
 The GraphQL subset covers gh's PR read documents, introspection, PR node lookup, checks, reviews,
-review requests, and empty project connections. `search` supports the repo-scoped author and
-review-request queries from `pr status`. Other search qualifiers return an error. Mutations remain
-outside this version. The [trimmed GitHub SDL](fixtures/github-g1.graphql) pins the source commit
-and checksum. Its contract test checks type kinds, fields, nullability, arguments, defaults, enums,
-interfaces, and unions. [The schema example](crates/fga-core/examples/schema.rs) emits the implemented
-SDL, and [pin-schema.py](scripts/oracle/pin-schema.py) trims the independent GitHub reference to it.
+review requests, and empty project connections. Its mutations cover `gh pr create`, `comment`,
+`edit`, `close`, `reopen`, `ready` (both ways) and `merge`, including auto-merge. `search`
+supports the repo-scoped author and review-request queries from `pr status`. Other search
+qualifiers return an error. The
+[trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the source commit and checksum. Its
+contract test checks type kinds, fields, nullability, arguments, defaults, enums, interfaces, and
+unions. [The schema example](../../crates/fga-core/examples/schema.rs) emits the implemented SDL,
+and [pin-schema.py](../../scripts/oracle/pin-schema.py) trims the independent GitHub reference to it.
 The full schema download remains ignored under `.local/`.
 
 The pull-list route filters `head=owner:branch` after reading Forgejo's pages, then applies GitHub
 `page` and `per_page` pagination and emits `Link` headers. It compares owner names without case and
 branch names with case. This first version reads all upstream pages per lookup, which costs more
 requests on repositories with many PRs. It emits Forgejo's real web URLs, including `/pulls/N`.
+[MAPPING §8](MAPPING.md#8-web-urls-v11) records the decision to switch PR URLs to GitHub's
+`/pull/N`, which isn't built yet.
 Merged PRs have GraphQL state `MERGED`, REST state `closed`, and their upstream `merged_at`.
 
-Run the gates from this checkout:
+Run the gates from the repository root:
 
 ```sh
 cargo fmt --all -- --check
@@ -76,7 +81,7 @@ The runner checks a read-only allowlist and verifies the expected exit codes bef
 replaces fixtures. It scrubs email addresses from stdout, stderr, and the seed snapshot before
 writing them. The comparison uses the same email placeholder for both hosts. This capture is
 separate from e2e, which needs no host GitHub credentials.
-[The findings note](docs/G2A-FINDINGS.md) lists the normalizers and every expected difference.
+[The findings note](G2A-FINDINGS.md) lists the normalizers and every expected difference.
 
-Related: [gh-forgejo-shim](https://github.com/dirtydishes/gh-forgejo-shim), a CLI alternative for
-hosts where you cannot add gateway routes.
+The shim in this repository (`crates/gh-forgejo-shim`) serves Forgejo hosts where you can't add
+gateway routes. [The rewrite plan](../rewrite/plan-review-2026-11-01.md) makes this gateway its core.

@@ -67,22 +67,23 @@ Forgejo has commit statuses only. Reads return the state in the field **`status`
     | Forgejo | `status` | `conclusion` |
     |---|---|---|
     | pending, description "Waiting to run" | `QUEUED` | null |
+    | pending, description "Blocked by required conditions" | `WAITING` | null |
     | pending, other descriptions ("Has started running") | `IN_PROGRESS` | null |
     | success | `COMPLETED` | `SUCCESS` |
-    | failure | `COMPLETED` | `FAILURE` |
-    | error | `COMPLETED` | `FAILURE` (gh: fail) |
-    | warning | `COMPLETED` | `NEUTRAL` (gh: skipping, i.e. not a failure and not pending) |
+    | success, description "Has been skipped" | `COMPLETED` | `SKIPPED` |
+    | failure, error or warning | `COMPLETED` | `FAILURE` (gh: fail) |
+    | failure, error or warning, description "Has been cancelled" | `COMPLETED` | `CANCELLED` |
 
-    Skipped Actions jobs report as `success` with a description such as "Has been skipped". If the
-    description says it was skipped, return `SKIPPED`.
+    A `warning` is a failure. Forgejo ranks it below pending and never lets it pass a required-status
+    gate (`modules/structs/commit_status.go:23-29,55`), so `gh pr checks` exits 1 on one.
 - **Non-Actions statuses** become `StatusContext {context, state, targetUrl, description, createdAt}`,
-  with `state` mapped pending→PENDING, success→SUCCESS, error→ERROR, failure→FAILURE and
-  warning→**SUCCESS**. The last is a decision: StatusState has no "warning", and gh would bucket an
-  unknown value as pending, which means exit 8 forever.
+  with `state` mapped pending→PENDING, success→SUCCESS, error→ERROR, and failure and
+  warning→FAILURE. StatusState has no "warning", and FAILURE is how Forgejo's own gate treats it.
 - **Latest per context only.** Forgejo returns status history, so keep the newest `updated_at` per
   `context`. gh dedupes too, but the rollup state must not count stale entries.
 - **`isRequired(pullRequestId:)`** is true when the base branch's protection has `enable_status_check`
-  and the context matches one of `status_check_contexts` (glob).
+  and the context matches one of `status_check_contexts` (glob). With no patterns, every context is
+  required, as in Forgejo (`services/pull/commit_status.go:23-71`).
 - **Rollup `state`:** apply GitHub's documented combined-status rule to the mapped contexts:
   - any FAILURE or ERROR (and CheckRun conclusions FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED) → `FAILURE`;
   - else any pending (CheckRun not COMPLETED, StatusContext PENDING) → `PENDING`;
@@ -92,16 +93,26 @@ Forgejo has commit statuses only. Reads return the state in the field **`status`
 
 ## 4. `reviewDecision`
 
-**Decision:** null unless the base branch protection has `required_approvals > 0` or
-`block_on_rejected_reviews`. This matches the commonly observed GitHub behavior, which is undocumented.
-When protection applies:
+**Decision:** null unless the base branch protection has `required_approvals > 0`,
+`block_on_rejected_reviews` or `block_on_official_review_requests`. This matches the commonly observed
+GitHub behavior, which is undocumented. When protection applies, follow Forgejo's own review gate
+(`models/issues/pull.go:901-952`):
 
-1. Take the reviews (`pulls/{n}/reviews`), drop `dismissed`, drop `stale` if `dismiss_stale_approvals`
-   is set, and drop state COMMENT and PENDING. Keep the **latest per user**.
-2. If any is REQUEST_CHANGES and `block_on_rejected_reviews` is set (or `official` is true) → `CHANGES_REQUESTED`.
-3. Else, if the count of APPROVED (official only, when `enable_approvals_whitelist` is set) ≥
-   `required_approvals` → `APPROVED`.
-4. Else → `REVIEW_REQUIRED`.
+1. Count only **official** reviews: each reviewer's latest approval or rejection, made while they
+   could write or were whitelisted (`models/issues/review.go:259-288,410-467`). Drop dismissed ones.
+2. If `block_on_rejected_reviews` is set and any official review is REQUEST_CHANGES →
+   `CHANGES_REQUESTED`.
+3. Count the official APPROVED reviews, leaving out stale ones only when `ignore_stale_approvals` is
+   set. If that count is below `required_approvals`, or `block_on_official_review_requests` is set and
+   an official review request is open → `REVIEW_REQUIRED`.
+4. Else, if the caller could read only the branch's protection summary (non-admins; see below) →
+   null. The flags it hides can still fail the gate.
+5. Else → `APPROVED`.
+
+Forgejo serves the full protection rules only to repo admins. Everyone else gets the branch's summary
+of its effective rule: status-check settings and `required_approvals`, but not the rejection,
+stale-approval, review-request or outdated-branch flags. With that partial rule, `reviewDecision` is
+null and `mergeStateStatus` is `UNKNOWN` (§5) wherever the visible gates pass.
 
 `latestReviews` is the latest non-pending review per user, in GitHub's `PullRequestReview` shape:
 `state` maps APPROVED → APPROVED, REQUEST_CHANGES → CHANGES_REQUESTED, COMMENT → COMMENTED, and dismissed
@@ -123,8 +134,9 @@ merged → `UNKNOWN`):
 5. Protection requirements unmet → `BLOCKED`. That means either `reviewDecision` ∈
    {REVIEW_REQUIRED, CHANGES_REQUESTED}, or required status contexts that are missing, pending or
    failing.
-6. Any context non-passing (rollup ≠ SUCCESS, and not null) → `UNSTABLE`.
-7. Otherwise → `CLEAN`.
+6. Only the partial protection summary was readable (§4) → `UNKNOWN`.
+7. Any context non-passing (rollup ≠ SUCCESS, and not null) → `UNSTABLE`.
+8. Otherwise → `CLEAN`.
 
 Never emit `HAS_HOOKS`. `isMergeQueueEnabled` is always false. `viewerCanMergeAsAdmin` ←
 `apply_to_admins == false` and the viewer is a repo admin (G3).

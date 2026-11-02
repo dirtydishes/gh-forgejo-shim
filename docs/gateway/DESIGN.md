@@ -153,16 +153,16 @@ client ──https──▶ reverse proxy (git.example.com)
    against the gateway, and assertions are on gh's stdout and exit code. This runs in GitHub Actions
    with Forgejo as a service container.
 3. **Live acceptance**, run by hand: the twin repo `git.dirtydishes.dev/dirtydishes/gfj-oracle`, with
-   Claude Code, Claude desktop and ChatGPT on clover. The badges must match the GitHub twin's.
+   Claude Code, Claude desktop and ChatGPT on a test Mac. The badges must match the GitHub twin's.
 
 ## Milestones
 
 - **G1, thin slice:** `/`, `/meta`, `/user`, `/repos/{o}/{r}`, `/pulls?head=`, GraphQL `UserCurrent`,
   and `PullRequestByNumber` with core fields. Real gh `pr view N --json number,title,state,url,isDraft,headRefName,baseRefName`
-  works against a Forgejo container, and the Claude Code footer shows the PR on clover.
+  works against a Forgejo container, and the Claude Code footer shows the PR on a test Mac.
 - **G2, gh read surface (T1):** list, search, status, checks with `statusCheckRollup`, diff, runs, and
   issue list, after A3.
 - **G3, gh write surface (T2):** the 6 mutations.
 - **G4, ChatGPT's documents.**
 - **G5, packaging:** image, proxy snippets, README.
-- **G6, acceptance on clover.**
+- **G6, acceptance on a test Mac.**
