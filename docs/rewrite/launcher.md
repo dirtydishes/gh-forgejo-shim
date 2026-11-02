@@ -119,9 +119,8 @@ then github.com. Routing these by the checkout's remote, as today, would make th
 print the placeholder for `gh auth token`, and send `gh api` to github.com, where the gateway
 refuses it with 421. So when routing sends a host-less `gh api` or `gh auth token` to a Forgejo
 host, the launcher sets `GH_HOST` to that host for the call, which makes it gh's default host.
-They then talk to the forge, as the shim's versions of them always have. This is §13 decision 4,
-waiting for Kell. The alternative is to follow gh, so they go to github.com like plain gh in a
-GHES checkout. `GH_HOST` is restored for nested calls like the other launcher variables (§7).
+They then talk to the forge, as the shim's versions of them always have. Kell chose this
+(§13, decision 4). The alternative, following gh to github.com, was declined. `GH_HOST` is restored for nested calls like the other launcher variables (§7).
 `auth status` and `auth git-credential` keep their current routing. L3 owns the exact table and
 proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
 
@@ -741,4 +740,6 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
      repository or not at all.
 
    ChatGPT and Claude pass `--hostname` or a three-part `--repo` themselves, so neither option
-   affects them. Waiting for Kell.
+   affects them.
+
+   Kell, 2026-11-02: (a).
