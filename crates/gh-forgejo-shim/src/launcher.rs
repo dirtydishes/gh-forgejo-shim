@@ -47,9 +47,6 @@ pub fn launches(invocation: &Invocation) -> bool {
             .positionals
             .iter()
             .any(|positional| positional.contains("://"))
-        // Until the browser helper (§9) lands, `--web` keeps the built-in path, which already
-        // opens Forgejo's `/pulls/N`.
-        && !invocation.flags.contains_key("web")
 }
 
 /// Guard 3's cap on nested wrapper invocations (§8).
@@ -104,8 +101,10 @@ mod tests {
         assert!(launches(&invocation(&["pr", "list", "--json", "number"])));
         assert!(!launches(&invocation(&["issue", "list"])));
         assert!(!launches(&invocation(&["issue", "view", "3"])));
-        assert!(!launches(&invocation(&["pr", "view", "12", "--web"])));
-        assert!(!launches(&invocation(&["pr", "view", "12", "-w"])));
+        assert!(
+            launches(&invocation(&["pr", "view", "12", "--web"])),
+            "the browser helper"
+        );
         assert!(!launches(&invocation(&["pr", "view", "--help"])));
         assert!(!launches(&invocation(&[
             "pr",

@@ -33,6 +33,15 @@ pub fn run_from_env(binary: BinaryName) -> i32 {
         args.remove(0);
         return external::exit_like_child(routing::run_gh_from_env(args));
     }
+    // The launcher's browser helper, which a launched gh's GH_BROWSER names (launcher spec §9).
+    // Hidden: it isn't in help or completion.
+    #[cfg(unix)]
+    if args
+        .first()
+        .is_some_and(|arg| arg == OsStr::new(crate::launcher::browser::SUBCOMMAND))
+    {
+        return crate::launcher::browser::run(&args[1..]);
+    }
     let string_args = args
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
