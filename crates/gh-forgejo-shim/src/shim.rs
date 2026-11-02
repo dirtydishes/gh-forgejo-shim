@@ -78,6 +78,23 @@ fn read_head(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// `fs::create_dir_all`, except that each directory it creates gets `mode` (which umask can only
+/// narrow) instead of 0777 & ~umask. Under umask 002 a group-writable directory would let another
+/// account in the group rename its own file over one the shim wrote, such as the `gh` wrapper.
+/// Directories that already exist keep their mode: they're the user's to choose.
+pub(crate) fn create_dirs(path: &Path, mode: u32) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    builder.create(path)
+}
+
 pub fn install_shim(
     bin_dir: Option<&Path>,
     home: Option<&Path>,
@@ -86,7 +103,7 @@ pub fn install_shim(
 ) -> Result<PathBuf> {
     let target = shim_path(bin_dir, home)?;
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
+        create_dirs(parent, 0o755)?;
     }
     // `symlink_metadata` so a dangling `gh` symlink counts as an existing, unmanaged target.
     if fs::symlink_metadata(&target).is_ok() && !is_managed_shim(&target) && !force {

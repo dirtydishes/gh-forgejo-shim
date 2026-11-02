@@ -412,18 +412,24 @@ fn make_wrapper_dir(
     if let Some(path) = wrapper_dir {
         let directory = absolute_path(path)?;
         let existed = directory.exists();
-        fs::create_dir_all(&directory)?;
+        shim::create_dirs(&directory, 0o755)?;
         return Ok((directory, !existed));
     }
 
     let root = root_dir.map_or_else(env::temp_dir, expand_home);
-    fs::create_dir_all(&root)?;
+    shim::create_dirs(&root, 0o755)?;
     for attempt in 0..1000 {
         let directory = root.join(format!(
             "gh-forgejo-shim-git-{}-{attempt}",
             std::process::id()
         ));
-        match fs::create_dir(&directory) {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o755);
+        }
+        match builder.create(&directory) {
             Ok(()) => return Ok((absolute_path(&directory)?, true)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
@@ -459,7 +465,7 @@ fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent)?;
+        shim::create_dirs(parent, 0o700)?;
     }
     let mut options = fs::OpenOptions::new();
     options.create(true).append(true);
