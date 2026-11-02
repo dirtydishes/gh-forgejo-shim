@@ -149,8 +149,31 @@ implemented: the schema has no such field, and `Protection` doesn't read `apply_
 | head mismatch | Forgejo returns 409. The gateway returns the GraphQL error `{"type":"UNPROCESSABLE","path":["mergePullRequest"],"message":"Head branch was modified. Review and try the merge again."}`. **Confirmed 2026-10-30** against the GitHub twin: gh prints `GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)` and exits 1 |
 | `enablePullRequestAutoMerge` | `POST pulls/{n}/merge {..., merge_when_checks_succeed: true}` |
 | `disablePullRequestAutoMerge` | `DELETE pulls/{n}/merge` (cancel scheduled merge) |
-| `autoMergeRequest` | **Open:** Forgejo's API has no "get scheduled merge". Candidates are the PR timeline (scheduled-merge comment type) or the issue comments API. Until verified, return `null`. G3 must solve this, because ChatGPT shows auto-merge state |
+| `autoMergeRequest` | The latest `pull_scheduled_merge` or `pull_cancel_scheduled_merge` event on the issue timeline. Non-null only for an open PR whose latest such event is a schedule ([G3 findings](G3-FINDINGS.md)). Forgejo's API has no read for the schedule itself |
 | REST `PUT pulls/{n}/merge` | The same mapping (not needed by any captured client yet) |
+
+**Limit: auto-merge can stay enabled after Forgejo drops the schedule (F16).** Forgejo's worker deletes
+the schedule before it tries the merge, and writes no event when that merge fails
+(`services/automerge/automerge.go:227-236`). It fails, for example, when the scheduled merge style was
+disallowed in the meantime, or when the base moves under it. The timeline's latest event is then still
+the schedule, so `autoMergeRequest` stays non-null for as long as the PR is open. Forgejo's own UI has the
+same blind spot (the FIXME at `automerge.go:231`).
+
+The gateway can't prove a schedule still exists. Forgejo 15 has no read for it, and the worker deletes it
+only after passing statuses and `CheckPullMergeable`, which the gateway can't reproduce exactly. A guess
+would trade a rare stale "enabled" for a wrong "disabled" on schedules that are still waiting.
+
+`gh pr merge --disable-auto` doesn't clear it either. With no schedule, Forgejo answers the cancel with
+404 and writes no cancel event (`RemoveScheduledAutoMerge`, `automerge.go:71-78`). The gateway reports
+that 404 as success, so gh says auto-merge is disabled while `autoMergeRequest` still shows it.
+
+To clear it, run `gh pr merge --auto` again. The gateway tries the merge at once (§6 code in
+`graphql/mutations.rs`), so one of three things happens:
+
+- the PR merges;
+- gh shows the error the worker hit, such as a disallowed merge style, which the user can then fix;
+- Forgejo refuses for a reason a later event can lift (branch protection, conflicts), and the gateway
+  schedules afresh. A later `--disable-auto` then writes the cancel event.
 
 ## 7. IDs
 
