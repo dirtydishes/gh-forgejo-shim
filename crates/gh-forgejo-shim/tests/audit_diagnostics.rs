@@ -298,7 +298,6 @@ fn audit_diag_smoke_utf8_stderr() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D7: fails until gh-forgejo-shim-jko.25 is fixed"]
 fn audit_diag_trace_existing_file_permissions() -> TestResult {
     let f = Fixture::new()?;
     f.tool("git", "#!/bin/sh\nexit 0\n")?;
