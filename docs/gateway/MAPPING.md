@@ -185,6 +185,19 @@ A review thread's `viewerCanResolve` and `viewerCanUnresolve` follow Forgejo's `
 the PR's author or a repository writer. Forgejo also lets an official reviewer without write access
 resolve a conversation; the gateway reports `false` for them, since it can't tell cheaply.
 
+The `viewerCan*` flags are hints for a client's buttons; Forgejo enforces every action. Editing,
+closing and reopening a PR or a comment, and resolving a conversation, need write access to Forgejo's
+pull request or issue unit, but its API reports only code access (`permissions.push`). The gateway
+uses code access for both. That is exact for owners, admins and collaborators, and for teams with
+one access level across units; for a team with different levels per unit, a flag can be wrong
+either way. Auto-merge flags are exact: they ask the base branch's `user_can_merge`, which follows a
+merge allowlist, and are false in an archived repository.
+
+A review thread's `line` is null unless its first comment was made on the PR's head commit. Forgejo
+keeps a comment's position after a push moves or deletes the line and doesn't report the comment
+outdated, so an older thread can't be placed on the current code; `originalLine` keeps the position.
+GitHub would still give a current line for a thread whose line survived the push.
+
 ## 8. Web URLs (v1.1)
 
 **Decision:** every pull request web URL the gateway or the shim emits uses GitHub's layout,
