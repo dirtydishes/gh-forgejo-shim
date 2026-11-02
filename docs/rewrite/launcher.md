@@ -149,8 +149,16 @@ down the socket. A non-empty token in `hosts.yml` wins over the Keychain
 `hosts.yml` has no Keychain token, since gh's login writes both together.
 
 The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
-`repo::GhHosts`) assumes gh knows. A launched gh therefore resolves the same default host
+`repo::GhHosts::load`) assumes gh knows. A launched gh therefore resolves the same default host
 (`go-gh/pkg/auth/auth.go:146-156`) and the same remote as the wrapper predicted.
+
+There is one exception. go-gh's default host depends on how many keys `hosts.yml` holds. Plain gh
+counts only the user's keys, so when the user's own `hosts.yml` holds exactly one host, and it is
+an allowlist host, plain gh defaults to that Forgejo host. Before delegating, routing checks plain
+gh's own choice (`GhHosts::user`). When that choice is a served Forgejo host, routing launches
+with the user's key set instead, marked "user's gh hosts" in the route reason. That call's
+`hosts.yml` then lists only the user's hosts, the served one with its real token and the others
+with the placeholder. The launched gh then resolves exactly as plain gh would.
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
 token, so the status reports all of them.
