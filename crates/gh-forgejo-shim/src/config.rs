@@ -199,20 +199,14 @@ fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
     }
 }
 
-/// Replaces everything between the first and last `quote` with `...`, unless every quoted span is
-/// one punctuation character, such as the parser's `` expected `]` ``.
+/// Replaces everything between the first and last `quote` with `...`, unless that text has no
+/// letter or digit, as in the parser's `` expected `]` ``. Pairing quotes up would let a value
+/// with quotes of its own slip through.
 fn cut_quoted(message: &mut String, quote: char) {
-    let only_punctuation = message
-        .split(quote)
-        .skip(1)
-        .step_by(2)
-        .all(|span| span.chars().count() <= 1 && !span.chars().any(char::is_alphanumeric));
-    if only_punctuation {
-        return;
-    }
     if let (Some(start), Some(end)) = (message.find(quote), message.rfind(quote)) {
-        if start < end {
-            message.replace_range(start + quote.len_utf8()..end, "...");
+        let inner = start + quote.len_utf8()..end;
+        if start < end && message[inner.clone()].chars().any(char::is_alphanumeric) {
+            message.replace_range(inner, "...");
         }
     }
 }
@@ -572,7 +566,11 @@ future_setting = "keep" # why
                 2,
             ),
             ("hosts = []\n[paths]\ngh = \"/bin/secret\n", 3),
-            // The parser puts duplicate keys in backticks.
+            // The parser puts duplicate keys in backticks, and a key can hold backticks too.
+            (
+                "'`https://u:secret@x.com`' = 1\n'`https://u:secret@x.com`' = 1\n",
+                2,
+            ),
             (
                 "[host]\n'https://u:secret@x.com' = {}\n'https://u:secret@x.com' = {}\n",
                 3,
