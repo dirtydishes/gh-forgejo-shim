@@ -316,6 +316,86 @@ async fn graphql_draft_title_uses_configured_prefixes_and_mergeability_is_unknow
     server.abort();
 }
 
+fn pull_commit(sha: &str) -> Value {
+    let author =
+        json!({"name":"Test User","email":"test@example.invalid","date":"2026-10-30T00:00:00Z"});
+    json!({"sha":sha,"author":user(),"commit":{"message":sha,"author":author,"committer":author}})
+}
+
+#[tokio::test]
+async fn pr_commits_are_oldest_first_so_last_one_is_the_head() {
+    // Forgejo pages `git log base..head`, newest first (`routers/api/v1/repo/pull.go`
+    // GetPullRequestCommits, `modules/git/repo_compare.go` GetCompareInfo).
+    let upstream = Router::new()
+        .route("/api/v1/user", get(memo_user))
+        .route("/api/v1/repos/e2e/oracle", get(memo_repo))
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/1",
+            get(|| async { Json(pr(1, "e2e", "s/two")) }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/1/commits",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                match query["page"].as_str() {
+                    "1" => (
+                        [("link", "<http://untrusted.invalid>; rel=\"next\"")],
+                        Json(json!([pull_commit("head"), pull_commit("middle")])),
+                    )
+                        .into_response(),
+                    "2" => Json(json!([pull_commit("oldest")])).into_response(),
+                    _ => panic!("unexpected page"),
+                }
+            }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/commits/{sha}/statuses",
+            get(|axum::extract::Path(sha): axum::extract::Path<String>| async move {
+                let state = if sha == "head" { "success" } else { "failure" };
+                Json(json!([{"id":1,"context":"ci","status":state,"target_url":"","description":"",
+                    "created_at":"2026-10-30T00:00:00Z","updated_at":"2026-10-30T00:00:02Z"}]))
+            }),
+        )
+        .with_state(Counters::default());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = Forgejo::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let session = forgejo.authenticate("token good").await.unwrap();
+    // gh reads checks through `commits(last: 1)` (cli/cli `api/query_builder.go`).
+    let response = fga_core::graphql::schema()
+        .execute(
+            async_graphql::Request::new(
+                r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
+                    all:commits(first:10){nodes{commit{oid}}}
+                    last:commits(last:1){nodes{commit{oid statusCheckRollup{state}}}}
+                }}}"#,
+            )
+            .data(session)
+            .data("https://forge.test".parse::<url::Url>().unwrap()),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let pull = &data["repository"]["pullRequest"];
+    assert_eq!(
+        pull["all"]["nodes"],
+        json!([
+            {"commit":{"oid":"oldest"}},
+            {"commit":{"oid":"middle"}},
+            {"commit":{"oid":"head"}}
+        ])
+    );
+    assert_eq!(
+        pull["last"]["nodes"],
+        json!([{"commit":{"oid":"head","statusCheckRollup":{"state":"SUCCESS"}}}])
+    );
+    server.abort();
+}
+
 #[tokio::test]
 async fn retries_ambiguous_mergeability_once_and_uses_reverse_compare_for_behind() {
     use std::sync::{Arc, Mutex};
