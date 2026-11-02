@@ -96,6 +96,11 @@ impl Host {
                 scheme.eq_ignore_ascii_case("token") || scheme.eq_ignore_ascii_case("bearer")
             })
             .map_or("", |(_, token)| token);
+        // A missing header or another scheme presents no token, which matches nothing, not even
+        // an empty expected token.
+        if presented.is_empty() {
+            return false;
+        }
         let presented: [u8; 32] = Sha256::digest(presented).into();
         presented
             .iter()

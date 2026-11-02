@@ -404,3 +404,30 @@ async fn an_upstream_token_requires_an_expected_token() {
     let open = host("https://a.test").await.upstream_token("real".into());
     assert!(AppState::new(vec![open], "3.19.0".into()).is_err());
 }
+
+/// A missing header or an unsupported scheme presents no token at all, which must never match, even
+/// an expected token that is empty (parallax r1#1).
+#[tokio::test]
+async fn no_presented_token_ever_matches_an_expected_one() {
+    let (forge, seen) = forgejo().await;
+    let addr = serve(vec![
+        Host::new(
+            "https://forge.test".parse().unwrap(),
+            forge,
+            WipPrefixes::default(),
+        )
+        .expecting(String::new())
+        .upstream_token("real".into()),
+    ])
+    .await;
+    for auth in [
+        "",
+        "Authorization: Basic anything",
+        "Authorization: token ",
+        "Authorization: token",
+    ] {
+        let head = format!("GET /api/v3/user HTTP/1.1\r\nHost: forge.test\r\n{auth}");
+        assert_eq!(send(addr, head.trim_end()).await, 401, "{head:?}");
+    }
+    assert_eq!(*seen.lock().unwrap(), Vec::<String>::new());
+}
