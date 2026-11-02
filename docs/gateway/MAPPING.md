@@ -187,6 +187,8 @@ To clear it, run `gh pr merge --auto` again. The gateway tries the merge at once
 
 Node IDs are opaque base64 strings of `fga:<Type>:<owner>/<repo>:<number|id>`, per DESIGN.md.
 `databaseId` holds the Forgejo numeric ID. `fullDatabaseId` is the same value as a string.
+`PullRequestReviewThread` and `PullRequestReviewComment` IDs identify their node within a response,
+but `node(id:)` doesn't look them up; it returns null for them.
 
 ## 8. Web URLs (v1.1)
 
