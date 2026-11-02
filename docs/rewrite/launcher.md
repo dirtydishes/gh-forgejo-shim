@@ -121,7 +121,9 @@ refuses it with 421. So when routing sends a host-less `gh api` or `gh auth toke
 host, the launcher sets `GH_HOST` to that host for the call, which makes it gh's default host.
 They then talk to the forge, as the shim's versions of them always have. Kell chose this
 (§13, decision 4). The alternative, following gh to github.com, was declined. `GH_HOST` is restored for nested calls like the other launcher variables (§7).
-`auth status` and `auth git-credential` keep their current routing. L3 owns the exact table and
+`auth status` keeps its current routing. `auth git-credential` under a launcher is answered by
+the wrapper itself (§3, "Git's credentials"); otherwise it keeps its current routing. L3 owns the
+exact table and
 proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
 
 **Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
@@ -160,15 +162,14 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     (`gh/api/http_client.go:284-290`), so it finds the portless key. gh's git credential helper
     looks up the host git passes, port included (`gh/pkg/cmd/auth/gitcredential/helper.go:119`),
     so a fetch from `https://forge.test:3443/…` finds `forge.test:3443`.
-    - The `host:port` entry gets the real token, which git then sends only to that port. In an
-      `auth status` call it gets the per-call token instead (§5). That call fetches nothing
-      with git, so it needs no real token.
+    - The `host:port` entry gets the real token, which `gh auth token --hostname
+      forge.test:3443` prints. gh's API never looks up `host:port`, and git never reads
+      `hosts.yml` (below). In an `auth status` call this entry gets the per-call token instead
+      (§5).
     - The portless entry gets a random token instead, 32 bytes from the OS RNG as hex, made for
       this call. The gateway accepts it for the host and authenticates upstream with the real
       token (§5).
 
-    A git fetch from the same hostname on another port, such as a portless remote on 443 that
-    may be a different service, then gets only the random token, which nothing else accepts.
     Routing counts both keys (L2, `GhHosts::load`), so gh's default host still matches the
     wrapper's model.
   - Two allowlist entries that share a hostname, such as `forge.test:3443` and
@@ -193,15 +194,31 @@ Keychain token two ways:
 - **Through the API**, when it's asked for github.com by an explicit URL, such as an alias
   expanding to `api https://api.github.com/user`. The token goes down the socket and reaches
   only the local gateway, which refuses it with 421 and forwards nothing (§5).
-- **Through git.** `gh pr checkout` can fetch from a GitHub remote even when the PR is on the
-  forge: gh matches remotes by owner and name without checking the host (`gh/context/remote.go`
-  `FindByRepo`). It also installs its credential helper for every host for that fetch
-  (`gh/pkg/cmd/pr/checkout/checkout.go:369-370`). The helper finds the Keychain token, and git
-  sends it to GitHub directly, as plain gh would.
+- **Not through git.** gh's own credential helper would find it, and would also retry a
+  `gist.<host>` request as `<host>` (`gh/pkg/cmd/auth/gitcredential/helper.go:123-126`). The
+  launcher replaces that helper with its own, which knows only the served hosts (below).
 
-Either way, a token only ever goes to its own site, or to the local gateway, which refuses it.
-That is the guarantee: the launcher never sends a login to a site it doesn't belong to. Kell
-accepted it (§13, decision 2).
+So a token goes only to the local gateway, which refuses it. That is the guarantee: the
+launcher never sends a login to a site it doesn't belong to. Kell accepted it (§13,
+decision 2).
+
+### Git's credentials
+
+gh installs its credential helper, `!"$GH_PATH" auth git-credential`, for every host on its
+fetches and pushes (`gh/git/client.go:148-155,905-913`). That helper reads `hosts.yml` and the
+Keychain, and retries `gist.<host>` as `<host>`. A push to a `gist.forge.test` remote would get
+the real `forge.test` token. So the launcher points `GH_PATH` at its own helper, a script `gh` in
+the run directory that runs `<shim> gh "$@"` (§7). Under a launcher, the wrapper answers
+`auth git-credential` itself instead of routing it:
+- `get` answers only for an `https` request whose `host` exactly matches a served host as git
+  reaches it: the hostname for a default-port entry, `host:port` for a ported one. The answer is
+  `username=x-access-token` and that host's real token, read from the run directory's
+  `credentials` file. Every other host, a `gist.` one included, gets no answer, and git goes on
+  without a credential.
+- `store` and `erase` do nothing, as gh's helper does.
+
+Installed extensions run through plain gh (§2), so nothing else in a launched call uses
+`GH_PATH`.
 
 The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
 `repo::GhHosts::load`) assumes gh knows. A launched gh therefore resolves the same default host
@@ -215,13 +232,10 @@ with the user's key set instead, marked "user's gh hosts" in the route reason. T
 `hosts.yml` then lists only the user's hosts, the served one with its real token and the others
 with the placeholder. The launched gh then resolves exactly as plain gh would.
 
-The token split for an entry with a port still applies in this case: the served hostname's key
-holds the random token, and a `host:port` key holds the real one. Otherwise a portless remote
-on that hostname would hand the real token to whatever answers on 443. That adds a key, which
-would change gh's default host, so the launcher also sets `GH_HOST` to the served hostname for
-the call. That pins the default to the host plain gh chose. `GH_HOST` filters remotes without
-the fallback a single configured key allows. But plain gh's choice came from a remote on that
-host or from an explicit override, so the result is the same.
+When this launch serves an entry with a port, the served hostname's key holds the per-call
+token, as in any launch. No `host:port` key is added, so the key count, and gh's default host,
+stay plain gh's. Git gets its credentials from the launcher's helper, not from `hosts.yml`
+(below), so a portless remote on that hostname gets nothing.
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
 token and doesn't share its hostname with another entry, so the status reports all of them.
@@ -252,12 +266,11 @@ The cost:
 - For a forge on a custom port, `gh auth token --hostname forge.test` prints the random per-call
   token, which works only through the gateway. `gh auth token --hostname forge.test:3443` prints
   the real one. A client that hands the token to its own HTTP calls has to spell the port.
-- Inside a launched gh, git fetches that gh starts, such as `gh pr checkout`, get only the
-  placeholder for other hosts. gh's fetch also clears the user's own git credential helpers for
-  every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
+- Inside a launched gh, git fetches and pushes that gh starts, such as `gh pr checkout`, get a
+  credential only for a served host. gh's fetch also clears the user's own git credential helpers
+  for every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
   `gh/pkg/cmd/pr/checkout/checkout.go:369-370`). A private GitHub submodule fetched by
-  `gh pr checkout` in a Forgejo repo therefore fails to authenticate. No credential leaks in this
-  case: the placeholder is all git ever sends.
+  `gh pr checkout` in a Forgejo repo therefore fails to authenticate.
 
 Rejected:
 
@@ -273,10 +286,12 @@ Rejected:
 ### Token handoff
 
 The launcher resolves each host's token with the shim's existing resolver (`auth::resolve_token`,
-Keychain or `auth.json`, then the configured env names). It writes the token into `hosts.yml`
-and hands the same token to the gateway for that host. The launched gh therefore holds the real
-Forgejo token, as today's shim does. It needs the real one, because gh hands it to git for HTTPS
-fetches and prints it for `gh auth token`, and both of those talk to the forge directly.
+Keychain or `auth.json`, then the configured env names). For a default-port host, it writes the
+token into `hosts.yml` and hands the same token to the gateway. The launched gh therefore holds
+the real Forgejo token, as today's shim does, and `gh auth token` prints it for clients that talk
+to the forge directly. A host with a port keeps its real token under `host:port` and the
+per-call token under its hostname (above). Either way, the token also goes into `credentials` for
+git (above).
 
 The launcher removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
 `GITHUB_ENTERPRISE_TOKEN` from gh's environment. Otherwise they would win over `hosts.yml`
@@ -287,7 +302,7 @@ If the routed host has no token, the launcher doesn't start gh. It prints
 code for missing authentication.
 
 **The token is on disk for the length of the call.** On macOS the stored token normally lives in
-the Keychain. While a launched call runs, a copy also sits in `hosts.yml`, mode 0600, in a 0700
+the Keychain. While a launched call runs, a copy also sits in `hosts.yml` and `credentials`, mode 0600, in a 0700
 directory under the user's temporary directory. The launcher deletes it on every exit it controls
 (section 6). A SIGKILL, crash or power loss leaves it behind until the next launch sweeps it
 (section 4). I think this is acceptable: the shim's own `auth.json` fallback is the same kind of
@@ -307,6 +322,8 @@ name. It holds:
 | `lock` | held with an exclusive `File::try_lock` (std, Rust 1.89+) for the launcher's lifetime |
 | `config.yml`, `hosts.yml` | section 3, created with `create_new` and mode 0600 |
 | `s` | the socket |
+| `credentials` | served hosts as git reaches them, with their real tokens, mode 0600, for the launcher's git credential helper (section 3) |
+| `gh` | the script `GH_PATH` names, mode 0700, running `<shim> gh "$@"` |
 | `panic` | only if a gateway task panicked with tracing off (section 5) |
 
 The order is fixed:
@@ -316,7 +333,7 @@ The order is fixed:
    opens the name `lock`, so it never finds an unlocked one in a live directory, and can't win a
    race against a launcher that is still setting up. If `try_lock` on the fresh file fails, which
    no other process can cause, the launcher stops with exit 1.
-3. Write `hosts.yml`, then `config.yml`.
+3. Write `hosts.yml`, `credentials` and the `gh` script, then `config.yml`.
 4. Bind the socket.
 
 The token is never on disk without a held lock named `lock` beside it.
@@ -336,7 +353,7 @@ the launcher's own. This isn't a boundary against processes running as the same 
 can read the token store anyway.
 
 **Shutdown.** When gh exits, the launcher stops accepting, drops in-flight connections without a
-grace period (their client is gone), removes `s`, `config.yml`, `hosts.yml`, `panic` and `lock` by name, and
+grace period (their client is gone), removes `s`, `config.yml`, `hosts.yml`, `credentials`, `gh`, `panic` and `lock` by name, and
 removes the directory. It removes only names it created. It never removes a directory recursively,
 the mistake behind audit D1.
 
@@ -507,9 +524,9 @@ the launcher never converts the environment to `String`.
 | Variable | In launched gh |
 |---|---|
 | `GH_CONFIG_DIR` | the run directory |
-| `GH_PATH` | real gh's absolute path, so gh's git credential helper and extensions run real gh, not the wrapper (fact 4) |
+| `GH_PATH` | the run directory's `gh` script, so gh's git credential helper is the launcher's (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
-| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2), and for a launch decided by the user's own hosts that serves an entry with a port (section 3); otherwise unchanged |
+| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
@@ -565,6 +582,10 @@ stop it:
    leaves a waiting `sh`, so the shim is a grandchild, not a child. Delegating at the cap, as an
    earlier draft did, would exec the same script again. Legitimate nesting, an alias shell
    running gh that runs another alias, stays far below 8.
+
+The run directory's `gh` script, which `GH_PATH` names, runs the wrapper too. Under a launcher,
+the wrapper answers `auth git-credential` itself and never launches for it (§3), so the helper
+can't start a chain. Anything else reaching that script is a nested call like any other.
 
 Guard 2 runs before the environment revert in section 7, which keeps `FJ_SHIM_DEPTH` for guard 3.
 
@@ -693,6 +714,10 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     a REST request (`gh api repos/{owner}/{repo}`) with 504, and a GraphQL request (`gh pr view`)
     with 200 and an `errors` body. A slow `/user` (9 s) followed by a stalled call answers within
     20.5 s. gh exits 1 in every case, and the launcher doesn't kill it.
+14. **Git's credentials (§3).** In a launched `gh pr checkout`, git fetching from the served
+    forge, with or without a custom port, gets the real token. A push to
+    `https://gist.forge.test/…` gets no credential. So does a fetch from a GitHub remote, even
+    with a GitHub token in the Keychain.
 
 ## 12. Ownership
 
