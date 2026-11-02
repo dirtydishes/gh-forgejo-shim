@@ -1612,6 +1612,36 @@ mod tests {
     }
 
     #[test]
+    fn login_with_corrupt_config_keeps_the_previous_token() -> Result<()> {
+        let home = temp_root()?;
+        auth::write_stored_token("git.example.com", "old-token", Some(&home), Some("linux"))?;
+        let config_path = config::config_path(Some(&home));
+        fs::write(&config_path, "hosts = [\"git.example.com\"\n")?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("new-token".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .as_deref(),
+            Some("old-token")
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
     fn login_empty_token_fails_before_validation_or_writes() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
