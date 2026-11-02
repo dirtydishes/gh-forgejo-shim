@@ -98,7 +98,9 @@ extension. Kell accepted this (§13, decision 2).
 The delegate list holds commands that call no API, or that write gh's own state, which a launched
 gh would write to a throwaway copy (section 3):
 
-- `--version`, `version`, `help`, `--help` with no command, `completion`;
+- `--version`, `version`, `completion`;
+- help for any command: `help …`, and any argv containing `--help` or `-h` before a `--`. Help
+  needs no token, so `gh pr view --help` prints help even where the forge has no stored token;
 - `config …`, `alias …`;
 - `auth login`, `auth logout`, `auth switch`, `auth refresh`, `auth setup-git`;
 - `extension …`, because install, upgrade, browse and search call github.com.
