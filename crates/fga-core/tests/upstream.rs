@@ -595,3 +595,46 @@ async fn non_admins_read_protection_from_the_branch_and_team_requests_parse() {
         server.abort();
     }
 }
+
+/// Diffs are read unpaged, so a huge one must stop at the response cap with a clear error rather
+/// than be buffered whole.
+#[tokio::test]
+async fn an_oversized_diff_fails_at_the_response_cap() {
+    const CAP: usize = 16 * 1024 * 1024;
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/e2e/oracle/pulls/{file}",
+            get(
+                |axum::extract::Path(file): axum::extract::Path<String>| async move {
+                    let size = if file == "1.diff" { CAP } else { CAP + 1 };
+                    "d".repeat(size)
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = Forgejo::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let session = forgejo.authenticate("token good").await.unwrap();
+    let diff = |name: &'static str| {
+        let session = session.clone();
+        async move {
+            session
+                .text(&["repos", "e2e", "oracle", "pulls", name], &[])
+                .await
+        }
+    };
+    assert_eq!(diff("1.diff").await.unwrap().len(), CAP);
+    let error = diff("2.diff").await.unwrap_err();
+    assert!(matches!(error, Error::TooLarge), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "Forgejo's reply is too large: the gateway reads at most 16 MiB per response and 64 MiB per request"
+    );
+    server.abort();
+}
