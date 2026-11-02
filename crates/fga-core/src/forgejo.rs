@@ -136,10 +136,11 @@ impl Forgejo {
             .lock()
             .expect("session cache lock")
             .get(&key, Instant::now());
+        // The identity lookup on a cache miss is part of this request, so it draws on its budget.
+        let budget = Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES));
         let viewer = match cached {
             Some(viewer) => viewer,
             None => {
-                let budget = AtomicUsize::new(MAX_RESPONSE_BYTES);
                 let viewer: User = ok(self
                     .send::<()>(Method::GET, &["user"], &[], None, authorization, &budget)
                     .await?)?
@@ -158,7 +159,7 @@ impl Forgejo {
             viewer,
             memo: Arc::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
-            budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
+            budget,
         })
     }
 
@@ -581,6 +582,28 @@ mod tests {
         let result = session.get::<serde_json::Value>(&["slow"], &[]).await;
         assert!(matches!(result, Err(Error::Timeout)), "{result:?}");
         upstream.join().unwrap();
+    }
+
+    /// The identity lookup on a cache miss counts toward the request's budget (parallax r1#1).
+    #[tokio::test]
+    async fn authentication_draws_on_the_request_budget() {
+        let user = r#"{"id":1,"login":"t","avatar_url":""}"#;
+        let upstream = axum::Router::new().route(
+            "/api/v1/user",
+            axum::routing::get(move || async move { user }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let forgejo = Forgejo::new(base.parse().unwrap()).unwrap();
+        let missed = forgejo.authenticate("token one").await.unwrap();
+        assert_eq!(
+            missed.budget.load(Ordering::Relaxed),
+            MAX_REQUEST_BYTES - user.len()
+        );
+        let cached = forgejo.authenticate("token one").await.unwrap();
+        assert_eq!(cached.budget.load(Ordering::Relaxed), MAX_REQUEST_BYTES);
+        server.abort();
     }
 
     /// Every upstream read in one incoming request, memoized or concurrent, draws on one budget.
