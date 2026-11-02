@@ -575,6 +575,64 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        name: "an alias's flags don't hide the selector after it",
+        remotes: &[("origin", "https://github.com/me/repo.git", None)],
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["co", "-b", "review", "https://forge.test/o/r/pull/1"]),
+        aliases: &[("co", "pr checkout")],
+        host_only: true,
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias's own first argument is the selector",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "t5",
+            "https://github.com/other/target",
+            "-R",
+            "forge.test/local/project",
+        ]),
+        aliases: &[("t5", "issue transfer 5")],
+        host_only: true,
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias expansion may start with a flag",
+        remotes: &[UPSTREAM_GITHUB],
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["vars"]),
+        aliases: &[("vars", "-R forge.test/a/b variable list")],
+        expected: Some((FORGE, "a", "b")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a control byte in a remote URL's fragment doesn't drop it",
+        remotes: &[
+            ("origin", "https://forge.test/local/project.git", None),
+            ("upstream", "https://github.com/up/stream.git#a\u{1}b", None),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        base: Base::First,
+        expected: Some((GITHUB, "up", "stream")),
+        ..BASE
+    },
+    Case {
+        name: "a bracketed host that isn't IPv6 drops the remote",
+        remotes: &[
+            ("origin", "https://forge.test/local/project.git", None),
+            ("upstream", "https://[github.com]/up/stream.git", None),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
         name: "gh api with an absolute URL goes where the URL says",
         remotes: &[ORIGIN_FORGE],
         command: Some(&["api", "https://api.github.com/user"]),
