@@ -23,7 +23,6 @@ use crate::launcher::rundir::{self, RunDir};
 /// The text of each file §3 puts in the run directory.
 #[derive(Debug, Clone, Default)]
 pub struct Files {
-    pub hosts_yml: String,
     pub credentials: String,
     pub gh_script: String,
     pub config_yml: String,
@@ -31,6 +30,9 @@ pub struct Files {
 
 /// The variables a launch changes in gh's environment (§7), by name.
 pub type Edits = Vec<(&'static str, Edit)>;
+
+/// Builds `hosts.yml` from each served host's login, `None` where there is none.
+pub type HostsYmlBuilder<'a> = Box<dyn FnOnce(&[Option<String>]) -> String + 'a>;
 
 /// Everything one launch needs. The closures run once the run directory exists, because the
 /// files and gh's environment name its path.
@@ -45,6 +47,11 @@ pub struct Launch<'a> {
     pub sweep_parents: Vec<PathBuf>,
     pub gateway: Vec<GatewayHost>,
     pub files: Box<dyn FnOnce(&Path) -> Files + 'a>,
+    /// `hosts.yml`, given each served host's login, in `gateway` order: `None` unless
+    /// `look_up_logins`, or when a lookup fails (§3).
+    pub hosts_yml: HostsYmlBuilder<'a>,
+    /// An `auth status` call: look up each served host's login before gh starts (§3).
+    pub look_up_logins: bool,
     /// The environment edits for gh, given the run directory.
     pub edits: Box<dyn FnOnce(&Path) -> Edits + 'a>,
 }
@@ -89,8 +96,8 @@ pub fn run(launch: Launch<'_>) -> i32 {
     // Dropped before `run_dir`, on every path out of here.
     let _panics = PanicFile::set(run_dir.path().join("panic"));
     let files = (launch.files)(run_dir.path());
-    // §4's order: hosts.yml, credentials and the gh script, then config.yml, then the socket.
-    // An empty `credentials` or `gh` isn't written: nothing would read it.
+    // Credentials and the gh script, then config.yml; hosts.yml comes once the logins are known,
+    // still before the socket (§4). An empty `credentials` or `gh` isn't written.
     let optional = |name, text: &str, mode| {
         if text.is_empty() {
             Ok(())
@@ -98,9 +105,7 @@ pub fn run(launch: Launch<'_>) -> i32 {
             run_dir.write(name, text.as_bytes(), mode).map(drop)
         }
     };
-    let written = run_dir
-        .write("hosts.yml", files.hosts_yml.as_bytes(), 0o600)
-        .and_then(|_| optional("credentials", &files.credentials, 0o600))
+    let written = optional("credentials", &files.credentials, 0o600)
         .and_then(|_| optional("gh", &files.gh_script, 0o700))
         .and_then(|_| run_dir.write("config.yml", files.config_yml.as_bytes(), 0o600));
     if let Err(error) = written {
@@ -124,6 +129,10 @@ pub fn run(launch: Launch<'_>) -> i32 {
         &launch.gh,
         &launch.args,
         launch.gateway,
+        HostsYml {
+            build: launch.hosts_yml,
+            look_up_logins: launch.look_up_logins,
+        },
         &run_dir,
         &caught,
     ));
@@ -157,13 +166,23 @@ fn assert_single_threaded() {
     }
 }
 
+struct HostsYml<'a> {
+    build: HostsYmlBuilder<'a>,
+    look_up_logins: bool,
+}
+
 async fn serve_gh(
     gh: &Path,
     args: &[OsString],
     gateway_hosts: Vec<GatewayHost>,
+    hosts_yml: HostsYml<'_>,
     run_dir: &RunDir,
     caught: &AtomicUsize,
 ) -> Outcome {
+    let upstream_tokens: Vec<String> = gateway_hosts
+        .iter()
+        .map(|host| host.upstream.clone())
+        .collect();
     let mut signals = match Signals::install() {
         Ok(signals) => signals,
         Err(error) => {
@@ -173,12 +192,31 @@ async fn serve_gh(
             ))
         }
     };
-    let router = match gateway::router(gateway_hosts) {
-        Ok(router) => router,
+    let (router, clients) = match gateway::router(gateway_hosts) {
+        Ok(built) => built,
         Err(error) => {
             return Outcome::Code(fail(1, &format!("could not set up the gateway: {error}")))
         }
     };
+    // gh's `auth status` shows the account from `user` in hosts.yml and fetches it only for
+    // environment tokens, so the launcher looks each login up first, through the gateway's own
+    // client, which warms its session cache (§3).
+    let mut logins = vec![None; clients.len()];
+    if hosts_yml.look_up_logins {
+        for ((client, token), login) in clients.iter().zip(&upstream_tokens).zip(&mut logins) {
+            *login = client
+                .authenticate(&format!("token {token}"))
+                .await
+                .ok()
+                .map(|session| session.viewer.login.clone());
+        }
+    }
+    if let Err(error) = run_dir.write("hosts.yml", (hosts_yml.build)(&logins).as_bytes(), 0o600) {
+        return Outcome::Code(fail(
+            1,
+            &format!("could not write the run directory: {error}"),
+        ));
+    }
     // Bound and listening before gh starts: an early connection waits in the backlog.
     let listener = match tokio::net::UnixListener::bind(run_dir.socket_path()) {
         Ok(listener) => listener,
