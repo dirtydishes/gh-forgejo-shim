@@ -221,12 +221,21 @@ name. It holds:
 
 | Name | What |
 |---|---|
-| `lock` | created first, and held with an exclusive `File::try_lock` (std, Rust 1.89+) for the launcher's lifetime |
+| `lock` | held with an exclusive `File::try_lock` (std, Rust 1.89+) for the launcher's lifetime |
 | `config.yml`, `hosts.yml` | section 3, created with `create_new` and mode 0600 |
 | `s` | the socket |
 
-The order is fixed: directory, lock, `hosts.yml`, `config.yml`, socket. The token is never on disk
-without a held lock beside it.
+The order is fixed:
+1. `mkdir` the directory.
+2. Create the lock as `.lock-<random>` with `create_new`, take the exclusive lock on it, then
+   rename it to `lock`. The lock belongs to the open file, so the rename keeps it. A sweeper only
+   opens the name `lock`, so it never finds an unlocked one in a live directory, and can't win a
+   race against a launcher that is still setting up. If `try_lock` on the fresh file fails, which
+   no other process can cause, the launcher stops with exit 1.
+3. Write `hosts.yml`, then `config.yml`.
+4. Bind the socket.
+
+The token is never on disk without a held lock named `lock` beside it.
 
 **Path length.** `sun_path` holds 104 bytes on macOS and 108 on Linux, including the terminating
 NUL. A typical macOS `$TMPDIR` (`/var/folders/xx/…/T/`, about 49 bytes) plus `gfj-<16>/s` comes to
@@ -252,7 +261,8 @@ parent for `gfj-*` entries:
 
 - skip anything that isn't a real directory owned by the current uid (`symlink_metadata`, no
   following links);
-- skip a directory with no `lock` file;
+- skip a directory with no `lock` file. That is either a launcher before step 2's rename, or one
+  that died before it; neither has written a token yet;
 - open `lock` and try the exclusive lock. If it's held, a launcher is still running there: skip.
   If the lock is taken, its owner is dead, since the kernel releases the lock when a process dies,
   SIGKILL included;
