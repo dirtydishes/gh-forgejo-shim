@@ -227,6 +227,7 @@ name. It holds:
 | `lock` | held with an exclusive `File::try_lock` (std, Rust 1.89+) for the launcher's lifetime |
 | `config.yml`, `hosts.yml` | section 3, created with `create_new` and mode 0600 |
 | `s` | the socket |
+| `panic` | only if a gateway task panicked with tracing off (section 5) |
 
 The order is fixed:
 1. `mkdir` the directory.
@@ -255,7 +256,7 @@ the launcher's own. This isn't a boundary against processes running as the same 
 can read the token store anyway.
 
 **Shutdown.** When gh exits, the launcher stops accepting, drops in-flight connections without a
-grace period (their client is gone), removes `s`, `config.yml`, `hosts.yml` and `lock` by name, and
+grace period (their client is gone), removes `s`, `config.yml`, `hosts.yml`, `panic` and `lock` by name, and
 removes the directory. It removes only names it created. It never removes a directory recursively,
 the mistake behind audit D1.
 
@@ -307,6 +308,12 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
 A request for any host not in the set gets 421 with no upstream contact. The gateway crates deny
 print macros, so the gateway writes nothing to stdout or stderr, which gh owns and clients parse.
 The peer-uid check in section 4 is the launcher's.
+
+**Panics stay off gh's stderr.** A panic in a gateway task still reaches stderr through the
+process's panic hook. Before it starts the runtime, the launcher replaces that hook with one that
+writes the panic message to the trace, when tracing is on, or else to a `panic` file in the run
+directory. That file is removed with the directory, and the sweep removes it as a known name.
+The panic ends only that connection's task, so gh sees that one request fail and carries on.
 
 ## 6. Signals and exit codes
 
