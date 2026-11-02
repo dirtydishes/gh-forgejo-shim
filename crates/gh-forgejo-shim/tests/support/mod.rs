@@ -187,7 +187,7 @@ pub struct GoldenProbe {
 
 pub fn load_contract() -> Result<CompatibilityContract, Box<dyn std::error::Error>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v1.json");
+        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v2.json");
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
 }

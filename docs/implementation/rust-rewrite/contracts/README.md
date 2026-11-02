@@ -14,3 +14,5 @@ This directory freezes the Python behavior that the Rust rewrite must either pre
 Future Rust phases should consume this JSON directly in tests. The fixture is intentionally static so Rust validation can run without launching Codex or hitting live Forgejo/GitHub services.
 
 When behavior changes intentionally, add a new contract version and reference the bead or decision that authorizes the migration.
+
+`compatibility-contract.v2.json` supersedes v1, which stays as the frozen record. It changes only pull request web URLs to GitHub's `/pull/{number}` layout (decision D2, bead `gh-forgejo-shim-65s`). The Rust tests load v2.
