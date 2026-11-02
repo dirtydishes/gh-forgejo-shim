@@ -147,7 +147,7 @@ fn action_status_and_conclusion_table() {
             S::Warning,
             "Warning",
             CheckStatusState::Completed,
-            Some(CheckConclusionState::Neutral),
+            Some(CheckConclusionState::Failure),
         ),
         (
             S::Success,
@@ -190,7 +190,7 @@ fn plain_status_and_action_detection_table() {
         (S::Success, StatusState::Success),
         (S::Failure, StatusState::Failure),
         (S::Error, StatusState::Error),
-        (S::Warning, StatusState::Success),
+        (S::Warning, StatusState::Failure),
     ] {
         let rows = mapped(&[status("external", source, "description")]);
         assert!(
@@ -245,7 +245,7 @@ fn rollup_order_table() {
     for (states, expected) in [
         (vec![], None),
         (vec![S::Success], Some(StatusState::Success)),
-        (vec![S::Success, S::Warning], Some(StatusState::Success)),
+        (vec![S::Success, S::Warning], Some(StatusState::Failure)),
         (vec![S::Pending, S::Success], Some(StatusState::Pending)),
         (vec![S::Pending, S::Failure], Some(StatusState::Failure)),
         (vec![S::Success, S::Error], Some(StatusState::Failure)),

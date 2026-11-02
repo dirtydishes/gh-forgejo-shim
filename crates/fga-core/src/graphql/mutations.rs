@@ -78,8 +78,8 @@ impl Mutation {
             .await
             .map_err(write_error)?;
         // Forgejo's create ignores maintainer edits (`modules/structs/pull.go:80-91`), which only
-        // matter for a fork. The PR exists now, so a refused edit returns it as it stands rather
-        // than an error that invites creating it again.
+        // matter for a fork. The PR exists now, so a refused edit returns it alongside an error
+        // that names it, rather than failing in a way that invites creating it again.
         let fork = source.head.repo.as_ref().is_some_and(|head| {
             !head.owner.login.eq_ignore_ascii_case(&id.owner)
                 || head
@@ -92,11 +92,19 @@ impl Mutation {
                 allow_maintainer_edit: Some(true),
                 ..Default::default()
             };
-            if let Ok(edited) = session
+            match session
                 .edit_pull(&id.owner, &id.repository, source.number, edit)
                 .await
             {
-                source = edited;
+                Ok(edited) => source = edited,
+                Err(_) => ctx.add_error(
+                    async_graphql::Error::new(format!(
+                        "Created {}, but Forgejo refused to let maintainers edit its branch",
+                        source.html_url
+                    ))
+                    .extend_with(|_, e| e.set("type", "UNPROCESSABLE"))
+                    .into_server_error(ctx.item.pos),
+                ),
             }
         }
         Ok(Some(CreatePullRequestPayload {
@@ -342,23 +350,36 @@ async fn merge(
     let id = id(value, "PullRequest")?;
     let session = ctx.data_unchecked::<Session>();
     let method = method.unwrap_or(PullRequestMergeMethod::Merge);
-    // Forgejo schedules an auto-merge without checking the style, and its worker later drops a
-    // disallowed one silently (`services/automerge/automerge.go:227`, `services/pull/merge.go:239`).
-    let repository = session
-        .repository(&id.owner, &id.repository)
-        .await
-        .map_err(error)?;
-    let (method, allowed, style) = match method {
-        PullRequestMergeMethod::Merge => ("merge", repository.allow_merge_commits, "Merge commits"),
-        PullRequestMergeMethod::Squash => {
-            ("squash", repository.allow_squash_merge, "Squash merges")
-        }
-        PullRequestMergeMethod::Rebase => ("rebase", repository.allow_rebase, "Rebase merges"),
+    let (method, style) = match method {
+        PullRequestMergeMethod::Merge => ("merge", "Merge commits"),
+        PullRequestMergeMethod::Squash => ("squash", "Squash merges"),
+        PullRequestMergeMethod::Rebase => ("rebase", "Rebase merges"),
     };
-    if !allowed {
-        return Err(write_error(forgejo::WriteError::DisallowedMergeStyle(
-            style,
-        )));
+    if auto {
+        // A schedule stores no expected head and later merges whatever head the PR has
+        // (`routers/api/v1/repo/pull.go:993-1009`), so it can't honor one.
+        if expected.is_some() {
+            return Err(async_graphql::Error::new(
+                "Forgejo can't tie an auto-merge to a head commit; merge without auto-merge to check the head",
+            )
+            .extend_with(|_, e| e.set("type", "UNPROCESSABLE")));
+        }
+        // Nor does it check the style; its worker drops a disallowed one silently
+        // (`services/automerge/automerge.go:227`). A direct merge checks it itself.
+        let repository = session
+            .repository(&id.owner, &id.repository)
+            .await
+            .map_err(error)?;
+        let allowed = match method {
+            "merge" => repository.allow_merge_commits,
+            "squash" => repository.allow_squash_merge,
+            _ => repository.allow_rebase,
+        };
+        if !allowed {
+            return Err(write_error(forgejo::WriteError::DisallowedMergeStyle(
+                style,
+            )));
+        }
     }
     let source = session
         .merge_pull(
@@ -369,23 +390,13 @@ async fn merge(
                 method,
                 headline,
                 body,
-                head_commit_id: expected.as_ref().map(|e| e.0.clone()),
+                head_commit_id: expected.map(|e| e.0),
                 merge_when_checks_succeed: auto,
                 delete_branch_after_merge: false,
             },
         )
         .await
         .map_err(write_error)?;
-    // A merge checks the expected head itself, but a schedule stores none and later merges
-    // whatever head the PR has (`routers/api/v1/repo/pull.go:993-1009`). Check after scheduling,
-    // so a push that raced the request cancels it.
-    if auto && !source.merged && expected.is_some_and(|e| source.head.sha != e.0) {
-        session
-            .cancel_auto_merge(&id.owner, &id.repository, id.number)
-            .await
-            .map_err(write_error)?;
-        return Err(write_error(forgejo::WriteError::HeadMismatch));
-    }
     Ok(PullRequest::new(source, &id.owner, &id.repository))
 }
 

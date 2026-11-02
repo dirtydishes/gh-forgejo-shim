@@ -240,7 +240,8 @@ async fn merge_errors_keep_the_github_type_message_and_mutation_path() {
                     let method = method.clone();
                     async move {
                         assert_eq!(input["Do"], method);
-                        assert_eq!(input["head_commit_id"], "abc");
+                        let auto = mutation == "enablePullRequestAutoMerge";
+                        assert_eq!(input.get("head_commit_id").is_some(), !auto);
                         assert_eq!(input["MergeTitleField"], "headline");
                         assert_eq!(input["MergeMessageField"], "body");
                         assert_eq!(input["delete_branch_after_merge"], false);
@@ -252,7 +253,13 @@ async fn merge_errors_keep_the_github_type_message_and_mutation_path() {
                     }
                 }),
             );
-            let response = execute(app, format!(r#"mutation {{ {mutation}(input: {{pullRequestId: "{}", mergeMethod:{graphql_method}, expectedHeadOid:"abc", commitHeadline:"headline", commitBody:"body"}}) {{clientMutationId}} }}"#, node_id("PullRequest", "o/r", 1))).await;
+            // Auto-merge refuses an expected head before writing.
+            let head = if mutation == "mergePullRequest" {
+                r#"expectedHeadOid:"abc","#
+            } else {
+                ""
+            };
+            let response = execute(app, format!(r#"mutation {{ {mutation}(input: {{pullRequestId: "{}", mergeMethod:{graphql_method}, {head} commitHeadline:"headline", commitBody:"body"}}) {{clientMutationId}} }}"#, node_id("PullRequest", "o/r", 1))).await;
             assert_eq!(response.errors.len(), 1, "{description}");
             let error = &response.errors[0];
             let actual_kind = error.extensions.as_ref().unwrap().get("type");
@@ -399,30 +406,22 @@ async fn disallowed_merge_styles_are_refused_before_writing() {
     );
 }
 
-/// A schedule stores no expected head, so a push racing the request must cancel it.
+/// A schedule stores no expected head, so auto-merge refuses one before writing.
 #[tokio::test]
-async fn auto_merge_cancels_a_schedule_whose_head_moved() {
-    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+async fn auto_merge_refuses_an_expected_head() {
     let app = router().route(
         "/api/v1/repos/o/r/pulls/1/merge",
-        axum::routing::post(|| async { StatusCode::CREATED }).delete({
-            let cancelled = cancelled.clone();
-            move || async move {
-                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
-                StatusCode::NO_CONTENT
-            }
-        }),
+        axum::routing::post(|| async { panic!("must not write") as StatusCode }),
     );
     let query = format!(
-        r#"mutation {{enablePullRequestAutoMerge(input:{{pullRequestId:"{}", mergeMethod:SQUASH, expectedHeadOid:"old"}}){{pullRequest{{number}}}}}}"#,
+        r#"mutation {{enablePullRequestAutoMerge(input:{{pullRequestId:"{}", mergeMethod:SQUASH, expectedHeadOid:"abc"}}){{pullRequest{{number}}}}}}"#,
         node_id("PullRequest", "o/r", 1)
     );
     let response = execute(app, query).await;
     assert_eq!(
         response.errors[0].message,
-        "Head branch was modified. Review and try the merge again."
+        "Forgejo can't tie an auto-merge to a head commit; merge without auto-merge to check the head"
     );
-    assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -509,5 +508,37 @@ async fn fork_prs_get_maintainer_edits_after_create() {
     assert_eq!(
         response.data.into_json().unwrap(),
         json!({"createPullRequest":{"pullRequest":{"maintainerCanModify":true}}})
+    );
+}
+
+/// A refused maintainer-edit setting still returns the created PR, with an error naming it.
+#[tokio::test]
+async fn refused_maintainer_edits_report_the_created_pr() {
+    let fork = || {
+        let mut pull = pull();
+        pull["head"]["repo"] = json!({"name":"r","owner":{"id":2,"login":"fork","avatar_url":""}});
+        pull
+    };
+    let app = router()
+        .route(
+            "/api/v1/repos/o/r/pulls",
+            axum::routing::post(move || async move { (StatusCode::CREATED, Json(fork())) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            axum::routing::patch(|| async { StatusCode::FORBIDDEN }),
+        );
+    let query = format!(
+        r#"mutation {{createPullRequest(input:{{repositoryId:"{}", baseRefName:"main", headRefName:"fork:head", title:"T"}}){{pullRequest{{number maintainerCanModify}}}}}}"#,
+        node_id("Repository", "o/r", 1)
+    );
+    let response = execute(app, query).await;
+    assert_eq!(
+        response.errors[0].message,
+        "Created https://forge.test/o/r/pulls/1, but Forgejo refused to let maintainers edit its branch"
+    );
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"createPullRequest":{"pullRequest":{"number":1,"maintainerCanModify":false}}})
     );
 }

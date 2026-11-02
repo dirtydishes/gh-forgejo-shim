@@ -181,6 +181,10 @@ pub struct Protection {
     pub ignore_stale_approvals: bool,
     pub block_on_official_review_requests: bool,
     pub block_on_outdated_branch: bool,
+    /// Set when only the branch summary was readable: the review and outdated-branch flags above
+    /// are unknown, not off.
+    #[serde(skip)]
+    pub partial: bool,
 }
 
 impl Protection {
@@ -229,11 +233,12 @@ impl Protection {
 }
 
 /// The effective rule as `GET /branches/{name}` summarizes it for anyone who can read code
-/// (`services/convert/convert.go:58-112`). It omits the review and outdated-branch flags.
+/// (`services/convert/convert.go:58-112`). It omits the review and outdated-branch flags, and the
+/// rule's name unless the caller is a repository admin.
 #[derive(Debug, Deserialize)]
 pub struct BranchSummary {
     #[serde(default)]
-    pub effective_branch_protection_name: String,
+    pub protected: bool,
     #[serde(default)]
     pub required_approvals: i32,
     #[serde(default)]

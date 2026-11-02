@@ -214,17 +214,15 @@ pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) 
                             CheckConclusionState::Success
                         }),
                     ),
-                    CommitStatusState::Failure | CommitStatusState::Error => (
+                    CommitStatusState::Failure
+                    | CommitStatusState::Error
+                    | CommitStatusState::Warning => (
                         CheckStatusState::Completed,
                         Some(if description == "Has been cancelled" {
                             CheckConclusionState::Cancelled
                         } else {
                             CheckConclusionState::Failure
                         }),
-                    ),
-                    CommitStatusState::Warning => (
-                        CheckStatusState::Completed,
-                        Some(CheckConclusionState::Neutral),
                     ),
                 };
                 Check::Action {
@@ -239,9 +237,11 @@ pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) 
             } else {
                 let state = match source.state {
                     CommitStatusState::Pending => StatusState::Pending,
-                    CommitStatusState::Success | CommitStatusState::Warning => StatusState::Success,
+                    CommitStatusState::Success => StatusState::Success,
                     CommitStatusState::Error => StatusState::Error,
-                    CommitStatusState::Failure => StatusState::Failure,
+                    // Forgejo ranks a warning below pending and never lets it pass its gate
+                    // (`modules/structs/commit_status.go:23-29,55`).
+                    CommitStatusState::Failure | CommitStatusState::Warning => StatusState::Failure,
                 };
                 Check::Status {
                     source: source.clone(),
