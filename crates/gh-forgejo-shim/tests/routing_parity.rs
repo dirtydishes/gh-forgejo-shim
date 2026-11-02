@@ -62,6 +62,12 @@ struct Case {
     env: &'static [(&'static str, &'static str)],
     args: &'static [&'static str],
     base: Base,
+    /// Replaces the command words `base` picks, for both the wrapper and real gh.
+    command: Option<&'static [&'static str]>,
+    /// `(name, expansion)` aliases in the user's gh `config.yml`.
+    aliases: &'static [(&'static str, &'static str)],
+    /// Compare only the host with real gh: its GraphQL request names no repository in the URL.
+    host_only: bool,
     /// `(host, owner, name)` the wrapper detects, or `None` when there's no repository.
     expected: Option<(&'static str, &'static str, &'static str)>,
     /// The allowlist entry the wrapper routes to, or `None` when it delegates.
@@ -78,6 +84,9 @@ const BASE: Case = Case {
     env: &[],
     args: &[],
     base: Base::Smart,
+    command: None,
+    aliases: &[],
+    host_only: false,
     expected: None,
     route: None,
     keys: Keys::Shim,
@@ -310,6 +319,89 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        name: "a URL's query and fragment aren't part of its path",
+        remotes: &[("origin", "https://forge.test/o/r?ref=a/b#c/d", None)],
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias counts as the command it expands to",
+        remotes: &[
+            ("origin", "https://github.com/me/fork.git", None),
+            ("upstream", "https://forge.test/up/stream.git", None),
+        ],
+        resolved: &[("origin", "base")],
+        gh_hosts: &[GITHUB],
+        command: Some(&["vars"]),
+        aliases: &[("vars", "variable list")],
+        expected: Some((FORGE, "up", "stream")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a PR URL argument wins over -R",
+        gh_hosts: &[GITHUB],
+        command: Some(&[
+            "pr",
+            "view",
+            "https://forge.test/o/r/pull/1",
+            "-R",
+            "github.com/a/b",
+        ]),
+        host_only: true,
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an empty -R counts as none",
+        remotes: &[ORIGIN_FORGE],
+        args: &["-R", ""],
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a portless entry and a ported entry on one hostname are ambiguous",
+        remotes: &[("origin", "https://forge.test:3443/owner/repo.git", None)],
+        allowlist: "forge.test,forge.test:3443",
+        expected: Some((FORGE, "owner", "repo")),
+        ..BASE
+    },
+    Case {
+        name: "GH_HOST keeps its spelling until gh normalizes it",
+        env: &[("GH_HOST", "WWW.forge.test")],
+        args: &["-R", "o/r"],
+        expected: Some(("www.forge.test", "o", "r")),
+        ..BASE
+    },
+    Case {
+        name: "a saved default normalizes its remote's host again",
+        remotes: &[("origin", "https://WWW.forge.test/o/r", None)],
+        resolved: &[("origin", "fork/target")],
+        gh_hosts: &["www.forge.test", GITHUB],
+        expected: Some((FORGE, "fork", "target")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "user host keys count as written",
+        gh_hosts: &["Forge.Test"],
+        args: &["-R", "o/r"],
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        keys: Keys::User,
+        ..BASE
+    },
+    Case {
+        name: "-R owner/repo.git keeps .git",
+        args: &["-R", "forge.test/o/r.git"],
+        expected: Some((FORGE, "o", "r.git")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
         name: "a push URL stands in for a local fetch URL",
         remotes: &[(
             "origin",
@@ -340,10 +432,16 @@ fn wrapper_matches_table() -> TestResult {
             });
         let route = (trace["route"]["kind"] == "forgejo")
             .then(|| trace["host"].as_str().unwrap_or_default().to_string());
-        if actual != owned(case.expected) || route.as_deref() != case.route {
+        // Routing marks a launch decided by plain gh's own hosts in its reason.
+        let user_keys = trace["route"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.ends_with("user's gh hosts"));
+        let keys_match = case.route.is_none() || user_keys == (case.keys == Keys::User);
+        if actual != owned(case.expected) || route.as_deref() != case.route || !keys_match {
             failures.push(format!(
-                "{}: expected {:?} routed to {:?}, wrapper chose {actual:?} routed to {route:?}",
-                case.name, case.expected, case.route
+                "{}: expected {:?} routed to {:?}, wrapper chose {actual:?} routed to {route:?} \
+                 (reason {})",
+                case.name, case.expected, case.route, trace["route"]["reason"]
             ));
         }
     }
@@ -369,7 +467,13 @@ fn real_gh_matches_table() -> TestResult {
         let fixture = Fixture::new(case)?;
         if case.route.is_some() {
             let actual = fixture.real_gh_target(&gh, case, case.keys)?;
-            if actual != owned(case.expected) {
+            let matches = if case.host_only {
+                actual.as_ref().map(|(host, _, _)| host.as_str())
+                    == case.expected.map(|(host, _, _)| host)
+            } else {
+                actual == owned(case.expected)
+            };
+            if !matches {
                 failures.push(format!(
                     "{}: table says {:?}, gh chose {actual:?}",
                     case.name, case.expected
@@ -506,7 +610,7 @@ impl Fixture {
     }
 
     /// A gh config directory holding `hosts`, with a socket nobody listens on.
-    fn gh_config(&self, label: &str, hosts: &[&str]) -> io::Result<PathBuf> {
+    fn gh_config(&self, label: &str, hosts: &[&str], case: &Case) -> io::Result<PathBuf> {
         let dir = self.root.join(label);
         fs::create_dir_all(&dir)?;
         if !hosts.is_empty() {
@@ -519,8 +623,12 @@ impl Fixture {
         fs::write(
             dir.join("config.yml"),
             format!(
-                "version: \"1\"\nhttp_unix_socket: {}\n",
-                self.root.join("no-socket").display()
+                "version: \"1\"\nhttp_unix_socket: {}\naliases:\n{}",
+                self.root.join("no-socket").display(),
+                case.aliases
+                    .iter()
+                    .map(|(name, expansion)| format!("    {name}: {expansion}\n"))
+                    .collect::<String>()
             ),
         )?;
         Ok(dir)
@@ -530,15 +638,19 @@ impl Fixture {
         let trace = self.root.join("trace.jsonl");
         let mut command = Command::new(env!("CARGO_BIN_EXE_gh-forgejo-shim"));
         self.isolate(&mut command);
-        let words: &[&str] = match case.base {
-            Base::Smart => &["pr", "view", "--help"],
-            Base::First => &["variable", "list", "--help"],
+        let words: &[&str] = match (case.command, case.base) {
+            (Some(words), _) => words,
+            (None, Base::Smart) => &["pr", "view", "--help"],
+            (None, Base::First) => &["variable", "list", "--help"],
         };
         command
             .arg("gh")
             .args(words)
             .args(case.args)
-            .env("GH_CONFIG_DIR", self.gh_config("gh-user", case.gh_hosts)?)
+            .env(
+                "GH_CONFIG_DIR",
+                self.gh_config("gh-user", case.gh_hosts, case)?,
+            )
             .env("FJ_SHIM_HOSTS", case.allowlist)
             .env("FJ_SHIM_REAL_GH", self.bin.join("real-gh"))
             .env("FJ_SHIM_AUTH_STORE", "file")
@@ -571,26 +683,39 @@ impl Fixture {
             Keys::Shim => "gh-shim-keys",
             Keys::User => "gh-user-keys",
         };
-        let words: &[&str] = match case.base {
-            Base::Smart => &["browse", "-n"],
-            Base::First => &["variable", "list"],
+        let words: &[&str] = match (case.command, case.base) {
+            (Some(words), _) => words,
+            (None, Base::Smart) => &["browse", "-n"],
+            (None, Base::First) => &["variable", "list"],
         };
         let mut command = Command::new(gh);
         self.isolate(&mut command);
         command
             .args(words)
             .args(case.args)
-            .env("GH_CONFIG_DIR", self.gh_config(label, &hosts)?)
+            .env("GH_CONFIG_DIR", self.gh_config(label, &hosts, case)?)
             .env("GH_DEBUG", "api")
             .env("GH_TELEMETRY", "0")
             .env("GH_NO_UPDATE_NOTIFIER", "1")
             .envs(case.env.iter().copied());
         let output = run(&mut command)?;
         let log = String::from_utf8_lossy(&output.stderr);
-        Ok(log
+        let mut requests = log
             .lines()
-            .find_map(|line| line.strip_prefix("* Request to https://"))
-            .and_then(parse_request_target))
+            .filter_map(|line| line.strip_prefix("* Request to https://"));
+        if case.host_only {
+            // The first request names the host, even when it is gh's `/api/v3/meta` probe.
+            return Ok(requests.next().and_then(|rest| {
+                let host = rest.split('/').next()?;
+                let host = if host == "api.github.com" {
+                    GITHUB
+                } else {
+                    host
+                };
+                Some((host.to_string(), "?".into(), "?".into()))
+            }));
+        }
+        Ok(requests.find_map(parse_request_target))
     }
 }
 
