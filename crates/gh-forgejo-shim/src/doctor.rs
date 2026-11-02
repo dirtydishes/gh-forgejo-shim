@@ -294,6 +294,28 @@ fn real_gh_check(model: &setup::SetupModel, platform: &str) -> Check {
 fn managed_gh_check(model: &setup::SetupModel) -> Check {
     if model.first_current_gh_is_managed {
         let first_gh = model.first_current_gh.as_ref().expect("managed gh path");
+        // A wrapper whose binary was moved or deleted fails every call, real gh or not.
+        if let Some(target) = crate::shim::wrapper_target(first_gh)
+            .filter(|target| !setup::is_executable_file(target))
+        {
+            let bin_dir = first_gh.parent().unwrap_or(&model.target_bin_dir);
+            return Check::new(
+                "managed gh",
+                false,
+                format!(
+                    "{} runs {}, which is missing or not executable",
+                    first_gh.display(),
+                    target.display()
+                ),
+                vec![
+                    format!(
+                        "gh-forgejo-shim install-shim --bin-dir {}",
+                        setup::shell_quote(&bin_dir.display().to_string())
+                    ),
+                    "gh-forgejo-shim doctor".to_string(),
+                ],
+            );
+        }
         if model.real_gh.is_some() {
             return Check::new(
                 "managed gh",
@@ -488,6 +510,7 @@ mod tests {
         fs::create_dir_all(&shim_a)?;
         fs::create_dir_all(&shim_b)?;
         fs::create_dir_all(&real_dir)?;
+        write_executable(&fixture.root.join("gh-forgejo-shim"), "#!/bin/sh\nexit 0\n")?;
         write_executable(
             &shim_a.join("gh"),
             &crate::shim::shim_script(&fixture.root.join("gh-forgejo-shim")),
