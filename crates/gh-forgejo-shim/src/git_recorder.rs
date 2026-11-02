@@ -498,7 +498,7 @@ fn redact_argv(args: &[String]) -> Vec<String> {
             continue;
         }
 
-        let (key, separator, value) = split_assignment(arg);
+        let (key, separator, _) = split_assignment(arg);
         if key.starts_with('-') && is_sensitive_key(key) {
             if separator.is_some() {
                 redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
@@ -512,11 +512,8 @@ fn redact_argv(args: &[String]) -> Vec<String> {
             redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
             continue;
         }
-        if separator.is_some() {
-            redacted.push(format!("{key}={}", redact_text(value)));
-        } else {
-            redacted.push(redact_text(arg));
-        }
+        // The whole argument: the part before `=` can hold a URL's userinfo too.
+        redacted.push(redact_text(arg));
     }
     redacted
 }
@@ -582,6 +579,25 @@ mod tests {
                 "https://[REDACTED]@example.com/repo.git",
             ]
         );
+    }
+
+    #[test]
+    fn redacts_url_passwords_and_secrets_that_contain_separators() {
+        let argv = redact_argv(&[
+            "fetch".to_string(),
+            "https://alice:hunter2@host/r?ref=main".to_string(),
+            "https://user:dGVzdA==@host/repo".to_string(),
+            "--config=user.password=a;b".to_string(),
+        ])
+        .join(" ");
+        let excerpt = redact_text("protocol=https\nhost=x\npassword=p@ss;w,rd\n");
+
+        for secret in ["hunter2", "dGVzdA", ";b", ";w,rd"] {
+            assert!(
+                !argv.contains(secret) && !excerpt.contains(secret),
+                "{argv} {excerpt}"
+            );
+        }
     }
 
     #[test]
