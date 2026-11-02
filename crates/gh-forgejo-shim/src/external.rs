@@ -207,10 +207,7 @@ pub fn git_run(args: &[&str], cwd: Option<&Path>) -> GitRunResult {
     }
 }
 
-/// Opens a web page in the browser. Pull request URLs use GitHub's `/pull/{n}`, which Forgejo
-/// serves only behind a redirect, so the browser gets Forgejo's own `/pulls/{n}` page.
 pub fn open_web_url(url: &str) {
-    let url = &fga_core::map::forgejo_pull_web_url(url);
     #[cfg(test)]
     {
         opened_web_urls()
