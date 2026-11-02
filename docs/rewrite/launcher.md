@@ -111,8 +111,19 @@ gh would write to a throwaway copy (section 3):
 - `auth login`, `auth logout`, `auth switch`, `auth refresh`, `auth setup-git`;
 - `extension …`, because install, upgrade, browse and search call github.com.
 
-`auth status`, `auth token` and `auth git-credential` keep their current routing. L3 owns the exact
-table and proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
+**Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
+`--hostname`, don't use the checkout's repository to pick a host. They use gh's default host
+(`gh/pkg/cmd/api/api.go:417-420`, `gh/pkg/cmd/auth/token/token.go:71-73`). A launched gh's
+`hosts.yml` holds several keys whenever the user has a host of their own, so its default host is
+then github.com. Routing these by the checkout's remote, as today, would make the launched gh
+print the placeholder for `gh auth token`, and send `gh api` to github.com, where the gateway
+refuses it with 421. So when routing sends a host-less `gh api` or `gh auth token` to a Forgejo
+host, the launcher sets `GH_HOST` to that host for the call, which makes it gh's default host.
+They then talk to the forge, as the shim's versions of them always have. This is §13 decision 4,
+waiting for Kell. The alternative is to follow gh, so they go to github.com like plain gh in a
+GHES checkout. `GH_HOST` is restored for nested calls like the other launcher variables (§7).
+`auth status` and `auth git-credential` keep their current routing. L3 owns the exact table and
+proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
 
 **Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
 `/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
@@ -168,8 +179,15 @@ host, gh falls back to the Keychain's unkeyed slot for it (`gh:<host>`, user `""
 slot (`config.go:651-652`), and moving `GH_CONFIG_DIR` doesn't move the Keychain. Without a
 placeholder, a github.com request from a launched gh would carry the user's real GitHub token
 down the socket. A non-empty token in `hosts.yml` wins over the Keychain
-(`config.go:301-304`), so the placeholder blocks that fallback. A host missing from the user's
-`hosts.yml` has no Keychain token, since gh's login writes both together.
+(`config.go:301-304`), so the placeholder blocks that fallback.
+
+The placeholders cover every host the user's `hosts.yml` lists, and nothing else. The Keychain is
+shared by every gh config directory, though. Say the user once logged in to github.com under
+another `GH_CONFIG_DIR`, and this one doesn't list github.com. A launched gh asked for github.com
+by an explicit URL, such as an alias expanding to `api https://api.github.com/user`, finds that
+Keychain token and sends it down the socket. It reaches only the local gateway, which refuses it
+with 421 and forwards nothing (§5). No credential leaves the machine for the wrong host, but the
+gateway does see it. §13 decision 2 records this.
 
 The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
 `repo::GhHosts::load`) assumes gh knows. A launched gh therefore resolves the same default host
@@ -461,6 +479,7 @@ the launcher never converts the environment to `String`.
 | `GH_CONFIG_DIR` | the run directory |
 | `GH_PATH` | real gh's absolute path, so gh's git credential helper and extensions run real gh, not the wrapper (fact 4) |
 | `GH_BROWSER` | the URL helper (section 9) |
+| `GH_HOST` | the routed host, for a host-less `gh api` or `gh auth token` only (section 2); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
