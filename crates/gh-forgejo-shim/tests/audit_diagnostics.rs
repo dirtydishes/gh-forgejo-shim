@@ -633,6 +633,13 @@ fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
         .ok_or("no recorder directory")??
         .path();
     let mode = |path: &Path| fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
+    // `trace git-recorder remove` trusts the marker to say whether it made the directory.
+    let marker = recorder.join(".gh-forgejo-shim-git-recorder");
+    assert_eq!(
+        mode(&marker)?,
+        0o600,
+        "the recorder marker was written group-editable"
+    );
     let mut created = vec![
         (f.root.join("fresh-trace"), 0o700),
         (f.home.join(".local"), 0o755),
