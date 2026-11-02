@@ -125,6 +125,7 @@ fn exit_code_passes_through_and_the_run_directory_goes() {
 
 #[test]
 fn a_signal_death_becomes_128_plus_the_signal() {
+    let _serial = serial();
     let dir = scratch();
     let parent = dir.join("p");
     fs::create_dir(&parent).expect("parent");
@@ -157,6 +158,7 @@ curl -s -o /dev/null -w '%{http_code}\n' --unix-socket "$GH_CONFIG_DIR/s" -H 'Au
 
 #[test]
 fn a_missing_gh_exits_127_and_cleans_up() {
+    let _serial = serial();
     let dir = scratch();
     let parent = dir.join("p");
     fs::create_dir(&parent).expect("parent");
@@ -252,4 +254,40 @@ fn sigint_without_a_terminal_reaches_gh() {
     let _serial = serial();
     // Agents and `timeout -s INT` signal the wrapper's pid directly, with no terminal (spec §6).
     assert_eq!(forwarded("INT"), (Some(3), "INT".to_string()));
+}
+
+#[test]
+fn a_configured_gh_that_is_not_executable_exits_126() {
+    let _serial = serial();
+    let dir = scratch();
+    let home = dir.join("home");
+    let config = home.join(".config/gh-forgejo-shim");
+    fs::create_dir_all(&config).expect("config dir");
+    fs::write(
+        config.join("config.toml"),
+        "hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\n",
+    )
+    .expect("config");
+    let gh = dir.join("not-executable-gh");
+    fs::write(&gh, "#!/bin/sh\nexit 0\n").expect("gh");
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o644)).expect("chmod");
+    let output = Command::new(env!("CARGO_BIN_EXE_gh-forgejo-shim"))
+        .args(["gh", "pr", "view", "1", "-R", "forge.test/o/r"])
+        .current_dir(&dir)
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", "/nonexistent")
+        .env("TMPDIR", "/tmp")
+        .env("FJ_SHIM_AUTH_STORE", "file")
+        .env("FJ_SHIM_REAL_GH", &gh)
+        .env("HOST_TOKEN", "host-secret")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run wrapper");
+    fs::remove_dir_all(&dir).expect("cleanup");
+    assert_eq!(output.status.code(), Some(126), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("is not executable"),
+        "{output:?}"
+    );
 }
