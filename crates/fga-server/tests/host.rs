@@ -431,3 +431,42 @@ async fn no_presented_token_ever_matches_an_expected_one() {
     }
     assert_eq!(*seen.lock().unwrap(), Vec::<String>::new());
 }
+
+/// gh and ChatGPT link PRs as GitHub does, `/{o}/{r}/pull/{n}`, which Forgejo doesn't serve, so the
+/// gateway redirects a browser there to Forgejo's `/pulls/{n}` without asking for a token
+/// (MAPPING §8, D2).
+#[tokio::test]
+async fn pull_links_redirect_to_forgejo_without_a_token() {
+    let (addr, seen) = gateway("https://forge.test").await;
+    for (target, location) in [
+        ("/o/r/pull/12", "/o/r/pulls/12"),
+        ("/o/r/pull/12/files?w=1", "/o/r/pulls/12/files?w=1"),
+        (
+            "/Some-Org/r%C3%A9po.x/pull/3",
+            "/Some-Org/r%C3%A9po.x/pulls/3",
+        ),
+    ] {
+        let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
+        assert!(
+            response.starts_with("HTTP/1.1 301 "),
+            "{target}: {response}"
+        );
+        assert!(
+            response.to_ascii_lowercase().contains(&format!(
+                "\r\nlocation: {}\r\n",
+                location.to_ascii_lowercase()
+            )),
+            "{target}: {response}"
+        );
+    }
+    // Not a PR number, or another host: no redirect, and still no upstream contact.
+    assert_eq!(
+        send(addr, "GET /o/r/pull/abc HTTP/1.1\r\nHost: forge.test").await,
+        404
+    );
+    assert_eq!(
+        send(addr, "GET /o/r/pull/12 HTTP/1.1\r\nHost: api.github.com").await,
+        421
+    );
+    assert_eq!(*seen.lock().unwrap(), Vec::<String>::new());
+}
