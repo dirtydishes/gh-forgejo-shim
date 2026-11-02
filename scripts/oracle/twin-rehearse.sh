@@ -25,10 +25,12 @@ token=$(curl -fsS -u dirtydishes:rehearse-disposable-password -H 'Content-Type: 
     -d '{"name":"rehearse","scopes":["all"]}' "http://127.0.0.1:$port/api/v1/users/dirtydishes/tokens" | jq -er .sha1)
 curl -fsS -H "Authorization: token $token" -H 'Content-Type: application/json' \
     -d '{"name":"gfj-oracle","private":false}' "http://127.0.0.1:$port/api/v1/user/repos" >/dev/null
-# A read-only copy of the live twin's main, so branches start from the same tree.
+# A read-only copy of the live twin's main as it was before the seed, whose merges added notes the
+# plan writes again, so branches start from the same tree.
+base=a3972cc9bd36f1380cf266f1e9dfed892ad0485e
 git clone -q --branch main --single-branch https://git.dirtydishes.dev/dirtydishes/gfj-oracle.git "$work/main"
 git -C "$work/main" -c "http.extraHeader=Authorization: token $token" \
-    push -q "http://127.0.0.1:$port/dirtydishes/gfj-oracle.git" main
+    push -q "http://127.0.0.1:$port/dirtydishes/gfj-oracle.git" "$base:refs/heads/main"
 # Forgejo processes the push asynchronously; the repository lists PRs only once it isn't empty.
 for attempt in $(seq 1 30); do
     curl -fsS "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle" | jq -e '.empty == false' >/dev/null && break
@@ -66,7 +68,7 @@ expect 'issues?state=all&type=issues' '[.[] | [.number, .state]] | sort == [[11,
 expect 'pulls/13/commits' 'length == 2'
 expect 'pulls/13/files' '[.[].filename] == []'
 # The PR opened on a failing commit, and the fix landed on top of it (F4): the oldest commit
-# failed and the head didn't.
+# failed. The head has no failure; with no runner here it has no statuses at all.
 oldest=$(api 'pulls/13/commits' | jq -r '.[-1].sha')
 head=$(api 'pulls/13/commits' | jq -r '.[0].sha')
 expect "commits/$oldest/statuses" 'any(.[]; .context == "ci / check (pull_request)" and .status == "failure")'

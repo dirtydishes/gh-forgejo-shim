@@ -307,6 +307,8 @@ class OracleTests(unittest.TestCase):
         self.assertEqual(env['GIT_CONFIG_GLOBAL'], twin_seed.os.devnull)
         self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')
         self.assertEqual(env['GIT_CONFIG_KEY_0'], 'http.extraHeader')
+        self.assertEqual((env['GIT_CONFIG_COUNT'], env['GIT_CONFIG_KEY_1'], env['GIT_CONFIG_VALUE_1']),
+                         ('2', 'http.followRedirects', 'false'))
 
 
 if __name__ == '__main__':
