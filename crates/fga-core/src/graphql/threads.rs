@@ -130,15 +130,8 @@ impl PullRequestReviewThread {
     fn resolved(&self) -> bool {
         self.comments.iter().any(|c| c.source.resolver.is_some())
     }
-    /// The commented line as the reviewer saw it: the last line of the comment's diff hunk, which
-    /// Forgejo cuts to end there (`CutDiffAroundLine`, Forgejo v15.0.0 `modules/git/diff.go`).
-    /// Forgejo's own `position` is the line in the commit that last changed it (`LineBlame`), which
-    /// differs once later commits move the line, so it serves only when the hunk can't be read.
     fn line_number(&self) -> Option<i32> {
-        let source = &self.first().source;
-        let line =
-            hunk_end(&source.diff_hunk, source.line() < 0).unwrap_or(source.line().unsigned_abs());
-        i32::try_from(line).ok().filter(|line| *line != 0)
+        commented_line(&self.first().source)
     }
 }
 #[Object]
@@ -200,6 +193,16 @@ impl PullRequestReviewThread {
     async fn viewer_can_unresolve(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         Ok(self.resolved() && self.viewer_can_mark(ctx).await?)
     }
+}
+
+/// The commented line as the reviewer saw it: the last line of the comment's diff hunk, which
+/// Forgejo cuts to end there (`CutDiffAroundLine`, Forgejo v15.0.0 `modules/git/diff.go`). Without
+/// a hunk (Forgejo's `CODE_COMMENT_LINES = 0`, or one that can't be read) the line is unknown:
+/// Forgejo's own `position` is the line in the commit that last changed it (`LineBlame`), which
+/// can be another line entirely.
+fn commented_line(source: &forgejo::ReviewComment) -> Option<i32> {
+    let line = hunk_end(&source.diff_hunk, source.line() < 0)?;
+    i32::try_from(line).ok().filter(|line| *line != 0)
 }
 
 /// The number, on the old or new side, of a diff hunk's last line.
@@ -277,4 +280,34 @@ pub(super) async fn review_threads(
     }
     threads.sort_by_key(|t| t.first().source.id);
     Ok(threads)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn comment(diff_hunk: &str, position: u64, original_position: u64) -> forgejo::ReviewComment {
+        serde_json::from_value(
+            serde_json::json!({"id":1,"body":"","user":null,"resolver":null,
+            "pull_request_review_id":1,"created_at":"","path":"a.rs","diff_hunk":diff_hunk,
+            "position":position,"original_position":original_position,"html_url":""}),
+        )
+        .unwrap()
+    }
+
+    /// Forgejo blames a comment's line to the commit that last changed it, so its `position` is
+    /// no stand-in for the line the reviewer saw: without a hunk, the line is unknown.
+    #[test]
+    fn a_comment_without_a_hunk_has_no_line() {
+        assert_eq!(
+            commented_line(&comment("@@ -5,2 +5,3 @@\n a\n+b\n c", 3, 0)),
+            Some(7)
+        );
+        assert_eq!(
+            commented_line(&comment("@@ -5,1 +5,0 @@\n-x", 0, 5)),
+            Some(5)
+        );
+        assert_eq!(commented_line(&comment("", 3, 0)), None);
+        assert_eq!(commented_line(&comment("not a hunk", 3, 0)), None);
+    }
 }
