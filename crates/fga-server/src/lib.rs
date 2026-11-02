@@ -171,19 +171,34 @@ pub fn app(state: AppState) -> Router {
 }
 
 /// gh and ChatGPT link PRs as GitHub does, `/{o}/{r}/pull/{n}`, which Forgejo doesn't serve, so
-/// send the browser to Forgejo's `/pulls/{n}` (MAPPING §8). The raw path is kept as sent, and a
-/// fragment stays with the browser across the redirect.
+/// send the browser to Forgejo's `/pulls/{n}` (MAPPING §8). This answers without a token, so the
+/// owner and repository must look like Forgejo names: anything else, such as an empty, encoded or
+/// backslashed segment that a browser would read as another origin, gets 404. `api` is Forgejo's
+/// own. A fragment stays with the browser across the redirect.
 async fn pull_link(uri: axum::http::Uri) -> Response {
-    let mut segments: Vec<&str> = uri.path().split('/').collect();
-    if segments.len() < 5
-        || segments[3] != "pull"
-        || !segments[4].bytes().all(|b| b.is_ascii_digit())
-        || segments[4].is_empty()
+    let name = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    let segments: Vec<&str> = uri.path().split('/').collect();
+    let [_, owner, repo, "pull", number, rest @ ..] = segments.as_slice() else {
+        return rest_error(Error::NotFound);
+    };
+    if !name(owner)
+        || !name(repo)
+        || owner.eq_ignore_ascii_case("api")
+        || number.is_empty()
+        || !number.bytes().all(|b| b.is_ascii_digit())
     {
         return rest_error(Error::NotFound);
     }
-    segments[3] = "pulls";
-    let mut location = segments.join("/");
+    let mut location = format!("/{owner}/{repo}/pulls/{number}");
+    for segment in rest {
+        location = format!("{location}/{segment}");
+    }
     if let Some(query) = uri.query() {
         location = format!("{location}?{query}");
     }

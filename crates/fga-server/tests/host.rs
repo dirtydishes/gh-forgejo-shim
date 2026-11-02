@@ -375,10 +375,7 @@ async fn pull_links_redirect_to_forgejo_without_a_token() {
     for (target, location) in [
         ("/o/r/pull/12", "/o/r/pulls/12"),
         ("/o/r/pull/12/files?w=1", "/o/r/pulls/12/files?w=1"),
-        (
-            "/Some-Org/r%C3%A9po.x/pull/3",
-            "/Some-Org/r%C3%A9po.x/pulls/3",
-        ),
+        ("/Some-Org/repo.x_y/pull/3", "/Some-Org/repo.x_y/pulls/3"),
     ] {
         let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
         assert!(
@@ -398,6 +395,24 @@ async fn pull_links_redirect_to_forgejo_without_a_token() {
         send(addr, "GET /o/r/pull/abc HTTP/1.1\r\nHost: forge.test").await,
         404
     );
+    // Never a Location that leaves the forge: an empty, encoded or backslashed owner or repo would
+    // make it protocol-relative (Opus o1#1), and `api` is Forgejo's own (o1#8).
+    for target in [
+        "//evil.com/pull/1",
+        "//evil.com/pull/1/x%2F..%2F..%2Fa%2Fb%2Fpull%2F1",
+        "/\\evil.com/r/pull/1",
+        "/%2F%2Fevil.com/r/pull/1",
+        "/o/%2e%2e/pull/1",
+        "/./r/pull/1",
+        "/../r/pull/1",
+        "/api/v3/pull/1",
+    ] {
+        let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
+        assert!(
+            !response.to_ascii_lowercase().contains("\r\nlocation:"),
+            "{target}: {response}"
+        );
+    }
     assert_eq!(
         send(addr, "GET /o/r/pull/12 HTTP/1.1\r\nHost: api.github.com").await,
         421
