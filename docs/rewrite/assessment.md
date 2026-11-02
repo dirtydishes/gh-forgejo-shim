@@ -21,7 +21,7 @@ was tested in a throwaway clone.
   because they pin the old Python shim's output, not gh's. Upstream churn is real but moderate, and the
   design turns each change into a silent "status unavailable" instead of a visible error.
 - **Recommendation: rewrite the gh-emulation core, contract-first. Keep the installation and diagnostics
-  shell. Harvest `lavender/chatgpt-support`; don't merge it.** Details in [Recommendation](#repair-or-rewrite).
+  shell. Harvest `lavender/chatgpt-support`; don't merge it.** Details in [Recommendation](#4-repair-or-rewrite).
 
 ## 1. What it does today
 
