@@ -642,10 +642,21 @@ trace when tracing is on, and is otherwise silent. Its leftovers fall to the nex
 
 ## 7. Environment
 
-The launcher builds gh's environment from `std::env::vars_os()` and changes only the variables
-named here. A non-UTF-8 value elsewhere passes through untouched. That is R7 (`jko.7`):
-`routing.rs:90` collects `std::env::vars()`, which panics on one. L2 fixes it in `routing.rs`, and
-the launcher never converts the environment to `String`.
+Real gh inherits the wrapper's own environment, and the wrapper changes only the variables named
+here, in place, with `std::env::set_var` and `remove_var`. Then it execs or spawns gh with no
+`Command` environment call. That matters because any `Command::env`, `env_remove` or `env_clear`
+call makes Rust rebuild the child's environment from `vars_os()` into a sorted map, which drops
+entries without `=` after their first byte (a bare `NAME`, an empty entry, `=value`), keeps only
+one of a repeated name, and reorders the rest. Untouched, every other entry reaches gh byte for
+byte and in order, non-UTF-8 values included (R7, `jko.7`; `z9u`).
+
+Editing the environment is sound only while no other thread can read it, so the wrapper does it
+while single-threaded: at entry (the §7 revert below, and `FJ_SHIM_DEPTH`, §8), and on the launch
+path after the run directory and its files exist but before the gateway's runtime, or any other
+thread, starts. The signal handlers that §6 requires before the run directory are signal-hook
+flags, registered without a runtime. A debug build on Linux checks that the process has one
+thread at the edit point. Building gh's environment by hand and spawning it with `posix_spawn` or
+`execve` instead would need `unsafe`, which the workspace forbids, or a new dependency.
 
 | Variable | In launched gh |
 |---|---|
