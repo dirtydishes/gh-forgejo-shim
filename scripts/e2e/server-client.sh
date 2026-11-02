@@ -55,8 +55,11 @@ status=$(curl -sS -o /dev/null -w '%{http_code}' --connect-to forge.test:8443:fo
 check '[ "$status" = 421 ]' 'the proxy keeps the port: forge.test:8443 gets 421'
 # A path a browser would resolve to another origin never redirects (raw path, as sent).
 evil='//evil.com/pull/1/x%2F..%2F..%2F..%2F..%2Fa%2Fb%2Fpull%2F1'
-hostile=$(curl -sS --path-as-is -o /dev/null -w '%{http_code} %{redirect_url}' "https://forge.test$evil")
-check '[ "${hostile%% *}" != 301 ] && [ -z "${hostile#* }" ]' "no redirect for $evil through nginx ($hostile)"
+# The gateway's own 404, so the check proves the path reached it rather than something else.
+hostile=$(curl -sS --path-as-is -o /tmp/hostile.json -w '%{http_code} %{redirect_url}' "https://forge.test$evil")
+check '[ "$hostile" = "404 " ] && grep -q "\"message\":\"Not Found\"" /tmp/hostile.json' "the gateway refuses $evil through nginx ($hostile)"
+# A repository named like an asset still reaches the gateway, not NPM's asset-cache regex location.
+check '[ "$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: token $token" https://forge.test/api/v3/repos/e2e/site.js)" = 404 ] && [ "$(curl -sS -H "Authorization: token $token" https://forge.test/api/v3/repos/e2e/site.js | jq -r .message)" = "Not Found" ]' '/api/v3 paths ending in .js still reach the gateway'
 
 # The shipped Caddyfile, run with its three settings from the environment.
 caddy() { curl -sS --connect-to forge.test:80:caddy:80 "$@"; }
@@ -64,8 +67,8 @@ check '[ "$(caddy -o /dev/null -w "%{http_code}" -H "Authorization: token $token
 check '[ "$(caddy http://forge.test/api/v1/version | jq -r "has(\"version\")")" = true ]' 'Caddy routes /api/v1 to Forgejo'
 link=$(caddy -o /dev/null -w '%{http_code} %{redirect_url}' http://forge.test/e2e/oracle/pull/1)
 check '[ "$link" = "301 http://forge.test/e2e/oracle/pulls/1" ]' 'Caddy: /pull/1 redirects to /pulls/1'
-hostile=$(caddy --path-as-is -o /dev/null -w '%{http_code} %{redirect_url}' "http://forge.test$evil")
-check '[ "${hostile%% *}" != 301 ] && [ -z "${hostile#* }" ]' "no redirect for $evil through Caddy ($hostile)"
+hostile=$(caddy --path-as-is -o /tmp/hostile.json -w '%{http_code} %{redirect_url}' "http://forge.test$evil")
+check '[ "$hostile" = "404 " ] && grep -q "\"message\":\"Not Found\"" /tmp/hostile.json' "the gateway refuses $evil through Caddy ($hostile)"
 # Caddy's site block answers only its own hostname, so another host's token never gets an answer.
 other=$(curl -sS -o /tmp/other.json -w '%{http_code}' --connect-to other.test:80:caddy:80 \
     -H "Authorization: token $token" http://other.test/api/v3/user)
