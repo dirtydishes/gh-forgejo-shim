@@ -98,6 +98,23 @@ mod tests {
     }
 
     #[test]
+    fn the_contract_runner_mirrors_the_launch_list() {
+        let mirror = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../contract/launch-list.txt"
+        ));
+        let listed: Vec<&str> = mirror
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        assert_eq!(
+            listed, LAUNCH_LIST,
+            "update contract/launch-list.txt with LAUNCH_LIST"
+        );
+    }
+
+    #[test]
     fn depth_cap_trips_at_eight() {
         let env = |depth: &str| HashMap::from([("FJ_SHIM_DEPTH".to_string(), depth.to_string())]);
         assert_eq!(depth(&env("7")), 7);
