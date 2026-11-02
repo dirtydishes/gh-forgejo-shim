@@ -401,6 +401,16 @@ pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
     let mut line = serde_json::to_vec(record)?;
     line.push(b'\n');
     let mut file = options.open(path)?;
+    // The mode above applies only to a new file. Records can hold repo paths and command lines,
+    // so an existing file others can read is narrowed before anything is added to it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if file.metadata()?.permissions().mode() & 0o077 != 0 {
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+    }
     let _ = file.lock();
     file.write_all(&line)
 }
