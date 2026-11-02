@@ -108,7 +108,11 @@ def seed(forgejo, directory):
         elif scenario["state"] == "CLOSED":
             forgejo.api(f"repos/{REPO}/pulls/{number}", {"state": "closed"}, method="PATCH")
     for number in (1, 2):
-        for index, job in enumerate(("check", "lint"), start=1):
+        # gh's `pr checks --json` lists the newest status first, keeping input order on ties
+        # (gh `aggregate.go:97`); the oracle lists check first. Posting lint first makes check
+        # never older, so the order holds when the two posts fall in different seconds (1u7).
+        # Each job keeps its index, which the target URL records.
+        for index, job in ((2, "lint"), (1, "check")):
             forgejo.api(f"repos/{REPO}/statuses/{pulls[number]['head']['sha']}", {
                 "context": f"ci / {job} (pull_request)",
                 "target_url": f"/{REPO}/actions/runs/{number}/jobs/{index}",
