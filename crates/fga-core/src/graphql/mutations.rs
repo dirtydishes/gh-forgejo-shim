@@ -393,14 +393,21 @@ async fn merge(
         // Forgejo always schedules, and only a later status, review or push wakes its worker
         // (`services/automerge/automerge.go:56-67`, `services/shared/automerge/automerge.go:26`),
         // so a PR that is ready now would wait. Merge it now if Forgejo allows; schedule only
-        // after a refusal that such an event can lift.
-        match session
-            .merge_pull(&id.owner, &id.repository, id.number, input(false))
-            .await
-        {
-            Ok(source) => return Ok(PullRequest::new(source, &id.owner, &id.repository)),
-            Err(forgejo::WriteError::ProtectedBranch | forgejo::WriteError::MergeConflicts) => {}
-            Err(e) => return Err(write_error(e)),
+        // after a refusal that such an event can lift. A push that lost a race to the base changed
+        // nothing (`services/pull/merge.go:393-404`), so it gets one more try.
+        let mut retries = 1;
+        loop {
+            match session
+                .merge_pull(&id.owner, &id.repository, id.number, input(false))
+                .await
+            {
+                Ok(source) => return Ok(PullRequest::new(source, &id.owner, &id.repository)),
+                Err(forgejo::WriteError::BaseMismatch) if retries > 0 => retries -= 1,
+                Err(forgejo::WriteError::ProtectedBranch | forgejo::WriteError::MergeConflicts) => {
+                    break;
+                }
+                Err(e) => return Err(write_error(e)),
+            }
         }
     }
     let source = session

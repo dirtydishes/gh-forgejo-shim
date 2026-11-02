@@ -556,6 +556,8 @@ async fn auto_merge_merges_ready_prs_and_schedules_after_a_policy_refusal() {
         StatusCode::METHOD_NOT_ALLOWED,
         "User not allowed to merge PR",
     );
+    let checking = (StatusCode::METHOD_NOT_ALLOWED, "Please try again later");
+    let raced = (StatusCode::CONFLICT, "merge push out of date");
     let (ok, scheduled) = ((StatusCode::OK, ""), (StatusCode::CREATED, ""));
     // (mutation, Forgejo's replies, merge_when_checks_succeed per request, error)
     let cases = [
@@ -565,6 +567,26 @@ async fn auto_merge_merges_ready_prs_and_schedules_after_a_policy_refusal() {
             vec![refusal, scheduled],
             vec![false, true],
             None,
+        ),
+        // Still checking: the direct attempt retries, then the schedule is accepted.
+        (
+            "enablePullRequestAutoMerge",
+            vec![checking, checking, checking, checking, scheduled],
+            vec![false, false, false, false, true],
+            None,
+        ),
+        // A push that lost a race to the base gets one fresh direct attempt.
+        (
+            "enablePullRequestAutoMerge",
+            vec![raced, ok],
+            vec![false, false],
+            None,
+        ),
+        (
+            "enablePullRequestAutoMerge",
+            vec![raced, raced],
+            vec![false, false],
+            Some("Base branch was modified. Review and try the merge again."),
         ),
         (
             "enablePullRequestAutoMerge",
