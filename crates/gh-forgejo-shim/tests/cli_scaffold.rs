@@ -1187,11 +1187,17 @@ fn managed_gh_missing_real_gh_preserves_error_shape() -> TestResult {
 fn managed_gh_forgejo_repo_selects_native_route_without_delegating() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
-    fixture.write_executable("gh", "#!/bin/sh\necho delegated\nexit 17\n")?;
+    // Real gh: a launched `auth status` runs it with the run directory as its config (L3);
+    // a delegation would leave GH_CONFIG_DIR alone.
+    let real_gh = fixture.write_executable(
+        "gh",
+        "#!/bin/sh\ncase \"$GH_CONFIG_DIR\" in */gfj-*) echo \"launched for git.example.com: Logged in\" ;; *) echo delegated; exit 17 ;; esac\n",
+    )?;
 
     let output = fixture
         .command("gh-forgejo-shim")?
         .env("FJ_SHIM_TOKEN", "secret-token")
+        .env("FJ_SHIM_REAL_GH", &real_gh)
         .arg("gh")
         .arg("auth")
         .arg("status")
@@ -1199,8 +1205,7 @@ fn managed_gh_forgejo_repo_selects_native_route_without_delegating() -> TestResu
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("git.example.com"), "{stdout}");
-    assert!(stdout.contains("Logged in"), "{stdout}");
+    assert!(stdout.contains("launched for git.example.com"), "{stdout}");
     assert!(!stdout.contains("secret-token"), "{stdout}");
     let stderr = String::from_utf8(output.stderr)?;
     assert_eq!(stderr, "");
@@ -1261,12 +1266,18 @@ fn managed_gh_delegation_writes_minimal_redacted_trace() -> TestResult {
 fn managed_gh_forgejo_auth_status_records_trace() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
-    fixture.write_executable("gh", "#!/bin/sh\necho delegated\nexit 17\n")?;
+    // Real gh: a launched `auth status` runs it with the run directory as its config (L3);
+    // a delegation would leave GH_CONFIG_DIR alone.
+    let real_gh = fixture.write_executable(
+        "gh",
+        "#!/bin/sh\ncase \"$GH_CONFIG_DIR\" in */gfj-*) echo \"launched for git.example.com: Logged in\" ;; *) echo delegated; exit 17 ;; esac\n",
+    )?;
     let trace_path = fixture.root().join("forgejo-trace.jsonl");
 
     let output = fixture
         .command("gh-forgejo-shim")?
         .env("FJ_SHIM_TOKEN", "secret-token")
+        .env("FJ_SHIM_REAL_GH", &real_gh)
         .env("FJ_SHIM_TRACE", &trace_path)
         .arg("gh")
         .arg("auth")
