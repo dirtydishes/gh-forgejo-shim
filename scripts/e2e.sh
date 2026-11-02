@@ -44,6 +44,9 @@ docker exec --user git "$run-forgejo" forgejo --config /data/gitea/conf/app.ini 
     --username e2e --password e2e-disposable-password --email e2e@example.invalid --admin --must-change-password=false >/dev/null
 docker exec --user git "$run-forgejo" forgejo --config /data/gitea/conf/app.ini admin user create \
     --username dirtydishes --password e2e-disposable-password --email dirtydishes@users.noreply.invalid --admin --must-change-password=false >/dev/null
+# A non-admin collaborator reads protection through the branch summary, not the admin-only rules.
+docker exec --user git "$run-forgejo" forgejo --config /data/gitea/conf/app.ini admin user create \
+    --username reader --password e2e-disposable-password --email reader@example.invalid --must-change-password=false >/dev/null
 docker run -d --name "$run-gateway" --network "$run" --network-alias forge.test \
     -v "$run-tls:/tls:ro" -e FGA_FORGEJO_URL=http://forgejo:3000 -e FGA_PUBLIC_URL=https://forge.test \
     -e FGA_LISTEN=0.0.0.0:443 -e FGA_TLS_CERT=/tls/cert.pem -e FGA_TLS_KEY=/tls/key.pem \

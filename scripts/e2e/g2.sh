@@ -15,5 +15,12 @@ E2E_TOKEN="$token" python3 /test/read-contract.py
 cd /tmp/g2-seed
 python3 /test/oracle-scripts/run.py forge.test /artifacts/oracle
 python3 /test/oracle-scripts/compare.py /test/oracle /artifacts/oracle /artifacts/forgejo-pulls.json
+curl -fsS -X PUT -H "Authorization: token $token" -H 'Content-Type: application/json' -d '{"permission":"read"}' \
+    http://forgejo:3000/api/v1/repos/dirtydishes/gfj-oracle/collaborators/reader
+reader=$(curl -fsS -u reader:e2e-disposable-password -H 'Content-Type: application/json' \
+    -d '{"name":"g2-reader","scopes":["read:repository","read:user","read:issue","read:organization"]}' \
+    http://forgejo:3000/api/v1/users/reader/tokens | jq -er .sha1)
+GH_ENTERPRISE_TOKEN="$reader" python3 /test/oracle-scripts/run.py forge.test /artifacts/oracle-reader
+python3 /test/oracle-scripts/compare-viewers.py /artifacts/oracle /artifacts/oracle-reader
 python3 /test/write-seed.py
 python3 /test/oracle-scripts/compare-writes.py /test/oracle/writes /artifacts/writes

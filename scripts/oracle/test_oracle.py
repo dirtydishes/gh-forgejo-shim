@@ -19,6 +19,9 @@ import writes
 spec = importlib.util.spec_from_file_location('compare_writes', Path(__file__).with_name('compare-writes.py'))
 compare_writes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compare_writes)
+spec = importlib.util.spec_from_file_location('compare_viewers', Path(__file__).with_name('compare-viewers.py'))
+compare_viewers = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(compare_viewers)
 
 
 class OracleTests(unittest.TestCase):
@@ -183,6 +186,32 @@ class OracleTests(unittest.TestCase):
         # A check with nothing to check fails rather than passing vacuously.
         self.assertTrue(compare.invariants({}, backend)['head-oid'])
         self.assertTrue(compare.invariants({}, backend)['pr-urls'])
+
+    def test_viewer_comparison_allows_only_an_empty_me(self):
+        with tempfile.TemporaryDirectory() as temp:
+            admin, reader = Path(temp) / 'admin', Path(temp) / 'reader'
+            admin.mkdir(); reader.mkdir()
+            status = 'Created by you\n  #1  mine\n\nRequesting a code review from you\n'
+            for case in run.CASES:
+                for ext, value in (('exit', '0\n'), ('stderr', ''), ('stdout', '[{"number":1}]\n')):
+                    if ext == 'stdout' and case['id'] == 'status': value = status
+                    for root in (admin, reader): (root / f"{case['id']}.{ext}").write_text(value)
+            def check():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    return compare_viewers.main(admin, reader)
+            self.assertEqual(check(), 1, 'a declared viewer case that no longer differs must be removed')
+            (reader / 'list-me-head.stdout').write_text('[]\n')
+            (reader / 'issues-author.stdout').write_text('[]\n')
+            (reader / 'status.stdout').write_text(status.replace('  #1  mine', '  You have no open pull requests'))
+            self.assertEqual(check(), 0)
+            (reader / 'list-me-head.stdout').write_text('[{"number":2}]\n')
+            self.assertEqual(check(), 1, 'a viewer case may only become empty')
+            (reader / 'list-me-head.stdout').write_text('[]\n')
+            (reader / 'list-me-head.exit').write_text('1\n')
+            self.assertEqual(check(), 1, 'exit codes must still match')
+            (reader / 'list-me-head.exit').write_text('0\n')
+            (reader / 'wide-1.stdout').write_text('[]\n')
+            self.assertEqual(check(), 1, 'any other case must match exactly')
 
 
 if __name__ == '__main__':
