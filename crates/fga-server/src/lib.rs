@@ -1,3 +1,5 @@
+//! The gateway router. It writes nothing to stdout or stderr: launched in-process, gh owns both.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 pub mod config;
 mod rest;
 mod runs;
@@ -21,29 +23,68 @@ use fga_core::{
     map::WipPrefixes,
 };
 use serde_json::{Value, json};
+use std::sync::Arc;
 use url::Url;
+
+/// One forge the gateway serves: requests addressed to `public_url` go to `forgejo`.
+pub struct Host {
+    pub public_url: Url,
+    pub forgejo: Forgejo,
+    pub wip_prefixes: WipPrefixes,
+    /// When set, the only credential accepted for this host. A launcher hands each host's token
+    /// over; server mode leaves it unset and lets Forgejo judge every user's token.
+    expected_token: Option<String>,
+}
+
+impl Host {
+    pub fn new(public_url: Url, forgejo: Forgejo, wip_prefixes: WipPrefixes) -> Self {
+        Self {
+            public_url,
+            forgejo,
+            wip_prefixes,
+            expected_token: None,
+        }
+    }
+
+    pub fn expecting(self, token: String) -> Self {
+        Self {
+            expected_token: Some(token),
+            ..self
+        }
+    }
+
+    /// Whether `authorization` may be used for this host at all, compared in constant time.
+    fn admits(&self, authorization: &str) -> bool {
+        let Some(expected) = &self.expected_token else {
+            return true;
+        };
+        let presented = authorization
+            .split_once(' ')
+            .filter(|(scheme, _)| {
+                scheme.eq_ignore_ascii_case("token") || scheme.eq_ignore_ascii_case("bearer")
+            })
+            .map_or("", |(_, token)| token);
+        presented.len() == expected.len()
+            && presented
+                .bytes()
+                .zip(expected.bytes())
+                .fold(0, |diff, (a, b)| diff | (a ^ b))
+                == 0
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
-    pub forgejo: Forgejo,
-    pub public_url: Url,
+    hosts: Arc<[Arc<Host>]>,
     pub ghes_version: String,
-    pub wip_prefixes: WipPrefixes,
     schema: GithubSchema,
 }
 
 impl AppState {
-    pub fn new(
-        forgejo: Forgejo,
-        public_url: Url,
-        ghes_version: String,
-        wip_prefixes: WipPrefixes,
-    ) -> Self {
+    pub fn new(hosts: Vec<Host>, ghes_version: String) -> Self {
         Self {
-            forgejo,
-            public_url,
+            hosts: hosts.into_iter().map(Arc::new).collect(),
             ghes_version,
-            wip_prefixes,
             schema: graphql::schema(),
         }
     }
@@ -86,23 +127,39 @@ pub fn app(state: AppState) -> Router {
 
 async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next: Next) -> Response {
     // gh's socket setting sends every host's requests here, each with that host's token, so a
-    // request for another host is refused before its token is used.
-    if !addressed_to(&state.public_url, &req) {
-        let host = state.public_url.host_str().unwrap_or_default();
+    // request for a host not served, or with a token not meant for it, is refused before the
+    // token is used.
+    let Some(host) = state
+        .hosts
+        .iter()
+        .find(|host| addressed_to(&host.public_url, &req))
+        .cloned()
+    else {
+        let served: Vec<_> = state
+            .hosts
+            .iter()
+            .filter_map(|host| host.public_url.host_str())
+            .collect();
         return (
             StatusCode::MISDIRECTED_REQUEST,
-            Json(json!({"message": format!("This gateway serves only {host}")})),
+            Json(json!({"message": format!("This gateway serves only {}", served.join(", "))})),
         )
             .into_response();
-    }
+    };
     let auth = req
         .headers()
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    match state.forgejo.authenticate(auth).await {
+    let result = if host.admits(auth) {
+        host.forgejo.authenticate(auth).await
+    } else {
+        Err(Error::Unauthorized)
+    };
+    match result {
         Ok(session) => {
             req.extensions_mut().insert(session);
+            req.extensions_mut().insert(host);
             next.run(req).await
         }
         Err(error) if req.uri().path() == "/api/graphql" => {
@@ -162,6 +219,7 @@ fn names(authority: &[u8], host: &url::Host, port: u16, default: u16) -> bool {
 async fn graphql_request(
     State(state): State<AppState>,
     Extension(session): Extension<Session>,
+    Extension(host): Extension<Arc<Host>>,
     Json(request): Json<Request>,
 ) -> Json<Value> {
     let response = state
@@ -169,8 +227,8 @@ async fn graphql_request(
         .execute(
             request
                 .data(session)
-                .data(state.public_url)
-                .data(state.wip_prefixes),
+                .data(host.public_url.clone())
+                .data(host.wip_prefixes.clone()),
         )
         .await;
     let mut value = serde_json::to_value(response).expect("GraphQL response is serializable");

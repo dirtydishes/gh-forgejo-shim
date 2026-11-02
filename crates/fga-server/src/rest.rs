@@ -1,4 +1,4 @@
-use crate::{AppState, rest_error};
+use crate::{AppState, Host, rest_error};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
@@ -8,9 +8,10 @@ use axum::{
 use fga_core::{forgejo::Session, map};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 
-pub async fn root(State(state): State<AppState>) -> impl IntoResponse {
-    let public = state.public_url.as_str().trim_end_matches('/');
+pub async fn root(Extension(host): Extension<Arc<Host>>) -> impl IntoResponse {
+    let public = host.public_url.as_str().trim_end_matches('/');
     (
         [
             ("x-oauth-scopes", "repo, read:org, workflow"),
@@ -27,10 +28,10 @@ pub async fn meta(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn user(
-    State(state): State<AppState>,
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
 ) -> impl IntoResponse {
-    Json(map::user(&session.viewer, &state.public_url))
+    Json(map::user(&session.viewer, &host.public_url))
 }
 
 pub async fn repository(
@@ -55,7 +56,7 @@ pub struct PullsQuery {
 }
 
 pub async fn pulls(
-    State(state): State<AppState>,
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, name)): Path<(String, String)>,
     query: Result<Query<PullsQuery>, axum::extract::rejection::QueryRejection>,
@@ -81,12 +82,12 @@ pub async fn pulls(
         .iter()
         .skip(start)
         .take(per_page)
-        .map(|pr| map::pull_request(pr, &state.wip_prefixes))
+        .map(|pr| map::pull_request(pr, &host.wip_prefixes))
         .collect();
     let last = pulls.len().div_ceil(per_page).max(1);
     let mut headers = HeaderMap::new();
     if last > 1 {
-        let mut url = state.public_url.clone();
+        let mut url = host.public_url.clone();
         url.path_segments_mut()
             .expect("validated base URL")
             .pop_if_empty()
@@ -128,7 +129,7 @@ fn invalid_query() -> Response {
 
 // gh pr status reads this REST resource for its mergeability detail.
 pub async fn pull(
-    State(state): State<AppState>,
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo, number)): Path<(String, String, i32)>,
     headers: HeaderMap,
@@ -156,7 +157,7 @@ pub async fn pull(
     }
     match session.pull_request(&owner, &repo, number).await {
         Ok(pr) => {
-            let mut value = map::pull_request(&pr, &state.wip_prefixes);
+            let mut value = map::pull_request(&pr, &host.wip_prefixes);
             // MAPPING §2: Forgejo's false never proves a conflict, so REST reports null, not false.
             let mergeable = map::mergeable(&pr) == map::MergeableState::Mergeable;
             value["mergeable"] = json!(mergeable.then_some(true));
@@ -167,7 +168,7 @@ pub async fn pull(
 }
 
 pub async fn commit_pulls(
-    State(state): State<AppState>,
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo, sha)): Path<(String, String, String)>,
 ) -> Response {
@@ -204,7 +205,7 @@ pub async fn commit_pulls(
         Ok(Json(
             pulls
                 .iter()
-                .map(|p| map::pull_request(p, &state.wip_prefixes))
+                .map(|p| map::pull_request(p, &host.wip_prefixes))
                 .collect::<Vec<_>>(),
         )
         .into_response())
