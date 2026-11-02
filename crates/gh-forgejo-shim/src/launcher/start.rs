@@ -1,7 +1,7 @@
 //! From a routing decision to a running launch (launcher spec §2, §3, §6, §7).
 
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,7 @@ use url::Url;
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::external::find_program;
+use crate::launcher::credentials::git_config_parameters;
 use crate::launcher::gateway::GatewayHost;
 use crate::launcher::ghconfig::{self, ServedHost, ServedToken};
 use crate::launcher::run::{self, Environment, Files, Launch};
@@ -127,6 +128,7 @@ pub fn launch(
         login: None,
     }];
     let allowlist = config.hosts.clone();
+    let shim = std::env::current_exe().unwrap_or_default();
     let base_env = env_os();
     let launcher_pid = std::process::id().to_string();
     let depth = (crate::launcher::depth(env) + 1).to_string();
@@ -155,10 +157,9 @@ pub fn launch(
                     &served,
                     ServedToken::PerCall(&per_call),
                 ),
-                // Git's credentials come with the launcher's helper (L3's second change). Until
-                // then nothing reads these, so the real token isn't written at all.
-                credentials: String::new(),
-                gh_script: String::new(),
+                // Git's credentials: the launcher's own helper answers every git in the call (§3).
+                credentials: ghconfig::credentials(&served),
+                gh_script: ghconfig::gh_script(run_dir, &shim),
                 // Checked above, so this only fails on a non-UTF-8 socket path, which §4's
                 // path check rules out.
                 config_yml: ghconfig::config_yml(user_config.as_deref(), &socket)
@@ -201,29 +202,38 @@ fn env_os() -> Environment {
     std::env::vars_os().collect()
 }
 
-/// gh's environment for a launch: the wrapper's own, without the token variables, with the run
-/// directory as gh's config directory. The §7 bookkeeping for nested calls comes with the
-/// credential helper (L3's second change).
+/// gh's environment for a launch (§7): the wrapper's own, without the token variables, with the
+/// run directory as gh's config directory and the launcher's git credential helper (§3).
 fn launched_env(
     mut env: Environment,
     run_dir: &Path,
     launcher_pid: &str,
     depth: &str,
 ) -> Environment {
-    let set: [(&str, &OsStr); 5] = [
-        ("GH_CONFIG_DIR", run_dir.as_os_str()),
-        ("GH_NO_UPDATE_NOTIFIER", OsStr::new("1")),
-        ("GH_NO_EXTENSION_UPDATE_NOTIFIER", OsStr::new("1")),
-        ("FJ_SHIM_LAUNCHER", OsStr::new(launcher_pid)),
-        ("FJ_SHIM_DEPTH", OsStr::new(depth)),
+    let inherited_git_config = env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "GIT_CONFIG_PARAMETERS")
+        .map(|(_, value)| value.clone());
+    let set: [(&str, OsString); 7] = [
+        ("GH_CONFIG_DIR", run_dir.as_os_str().to_owned()),
+        ("GH_PATH", run_dir.join("gh").into_os_string()),
+        (
+            "GIT_CONFIG_PARAMETERS",
+            git_config_parameters(inherited_git_config.as_deref(), run_dir),
+        ),
+        ("GH_NO_UPDATE_NOTIFIER", OsString::from("1")),
+        ("GH_NO_EXTENSION_UPDATE_NOTIFIER", OsString::from("1")),
+        ("FJ_SHIM_LAUNCHER", OsString::from(launcher_pid)),
+        ("FJ_SHIM_DEPTH", OsString::from(depth)),
     ];
     env.retain(|(name, _)| {
         !TOKEN_VARIABLES.iter().any(|token| name == token)
             && !set.iter().any(|(set_name, _)| name == set_name)
     });
     env.extend(
-        set.iter()
-            .map(|(name, value)| (OsString::from(name), value.to_os_string())),
+        set.into_iter()
+            .map(|(name, value)| (OsString::from(name), value)),
     );
     env
 }
@@ -313,5 +323,12 @@ mod tests {
         assert_eq!(get("GH_CONFIG_DIR"), [OsString::from("/t/gfj-x")]);
         assert_eq!(get("FJ_SHIM_LAUNCHER"), [OsString::from("42")]);
         assert_eq!(get("FJ_SHIM_DEPTH"), [OsString::from("3")]);
+        assert_eq!(get("GH_PATH"), [OsString::from("/t/gfj-x/gh")]);
+        assert_eq!(
+            get("GIT_CONFIG_PARAMETERS"),
+            [OsString::from(
+                "'credential.helper=' 'credential.helper=!/t/gfj-x/gh auth git-credential'"
+            )]
+        );
     }
 }
