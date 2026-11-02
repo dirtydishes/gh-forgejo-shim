@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -28,13 +28,14 @@ impl Fixture {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             let candidate = std::env::temp_dir()
                 .join(format!("gfj-audit-diagnostics-{}-{id}", std::process::id()));
-            match fs::create_dir(&candidate) {
+            // Private from the start: under umask 000 a plain create_dir is briefly writable
+            // by anyone, who could plant a symlink before a later chmod.
+            match fs::DirBuilder::new().mode(0o700).create(&candidate) {
                 Ok(()) => break candidate,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
         };
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         let fixture = Self {
             home: root.join("home"),
             bin: root.join("tools"),
@@ -445,11 +446,9 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
     // executable by others but not by its owner, this user (0655); or sits at a path with a
     // newline, which the wrapper's exec line must still be read back from. As root, 0655 is
     // runnable, so that case only means something otherwise.
-    // The fixture's root is private and new, so nothing else can be at this path.
+    // A directory this process just made is owned by this user.
     let probe_fixture = Fixture::new()?;
-    let probe = probe_fixture.root.join("uid-probe");
-    fs::write(&probe, "")?;
-    let root = std::os::unix::fs::MetadataExt::uid(&fs::metadata(&probe)?) == 0;
+    let root = fs::metadata(&probe_fixture.root)?.uid() == 0;
     let mut cases = vec![
         ("release/gfj", None),
         ("release/gfj", Some(0o644)),
