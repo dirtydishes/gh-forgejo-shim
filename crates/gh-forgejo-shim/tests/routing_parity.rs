@@ -402,6 +402,114 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        // 13 remotes: gh's sort.Sort is no longer an insertion sort, and isn't stable.
+        name: "thirteen equally ranked remotes come out in Go's sort order",
+        remotes: &[
+            ("a00", "https://github.com/o00/r.git", None),
+            ("a01", "https://github.com/o01/r.git", None),
+            ("a02", "https://github.com/o02/r.git", None),
+            ("a03", "https://github.com/o03/r.git", None),
+            ("a04", "https://github.com/o04/r.git", None),
+            ("a05", "https://github.com/o05/r.git", None),
+            ("a06", "https://forge.test/o06/r.git", None),
+            ("a07", "https://github.com/o07/r.git", None),
+            ("a08", "https://github.com/o08/r.git", None),
+            ("a09", "https://github.com/o09/r.git", None),
+            ("a10", "https://github.com/o10/r.git", None),
+            ("a11", "https://github.com/o11/r.git", None),
+            ("upstream", "https://unknown.test/x/y.git", None),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        expected: Some((FORGE, "o06", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "nineteen equally ranked remotes come out in Go's sort order",
+        remotes: &[
+            ("b00", "https://github.com/o00/r.git", None),
+            ("b01", "https://github.com/o01/r.git", None),
+            ("b02", "https://github.com/o02/r.git", None),
+            ("b03", "https://github.com/o03/r.git", None),
+            ("b04", "https://github.com/o04/r.git", None),
+            ("b05", "https://forge.test/o05/r.git", None),
+            ("b06", "https://github.com/o06/r.git", None),
+            ("b07", "https://github.com/o07/r.git", None),
+            ("b08", "https://github.com/o08/r.git", None),
+            ("b09", "https://github.com/o09/r.git", None),
+            ("b10", "https://github.com/o10/r.git", None),
+            ("b11", "https://forge.test/o11/r.git", None),
+            ("b12", "https://github.com/o12/r.git", None),
+            ("b13", "https://github.com/o13/r.git", None),
+            ("b14", "https://github.com/o14/r.git", None),
+            ("b15", "https://github.com/o15/r.git", None),
+            ("b16", "https://github.com/o16/r.git", None),
+            ("b17", "https://github.com/o17/r.git", None),
+            ("b18", "https://github.com/o18/r.git", None),
+            ("upstream", "https://unknown.test/x/y.git", None),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        expected: Some((GITHUB, "o10", "r")),
+        ..BASE
+    },
+    Case {
+        name: "a release URL argument is data, and -R wins",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "release",
+            "view",
+            "https://github.com/o/r",
+            "-R",
+            "forge.test/a/b",
+        ]),
+        expected: Some((FORGE, "a", "b")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a remote URL Go's parser refuses is dropped",
+        remotes: &[
+            ("origin", "https://forge.test/o/r.git", None),
+            ("upstream", "https://bad%ZZ@github.com/up/stream.git", None),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        expected: Some((FORGE, "o", "r")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias expansion splits as a shell would",
+        remotes: &[
+            ("origin", "https://github.com/me/fork.git", None),
+            ("upstream", "https://forge.test/up/stream.git", None),
+        ],
+        resolved: &[("origin", "base")],
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["vars"]),
+        aliases: &[("vars", "\"variable\" list")],
+        expected: Some((FORGE, "up", "stream")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias named like a gh command is ignored",
+        remotes: &[ORIGIN_FORGE, UPSTREAM_GITHUB],
+        resolved: &[("origin", "base")],
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["pr", "view", "1"]),
+        aliases: &[("pr", "variable list")],
+        host_only: true,
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "gh api with an absolute URL goes where the URL says",
+        remotes: &[ORIGIN_FORGE],
+        command: Some(&["api", "https://api.github.com/user"]),
+        ..BASE
+    },
+    Case {
         name: "a push URL stands in for a local fetch URL",
         remotes: &[(
             "origin",
@@ -627,7 +735,9 @@ impl Fixture {
                 self.root.join("no-socket").display(),
                 case.aliases
                     .iter()
-                    .map(|(name, expansion)| format!("    {name}: {expansion}\n"))
+                    .map(|(name, expansion)| {
+                        format!("    {name}: '{}'\n", expansion.replace('\'', "''"))
+                    })
                     .collect::<String>()
             ),
         )?;
