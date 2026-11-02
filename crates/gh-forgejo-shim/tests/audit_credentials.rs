@@ -165,13 +165,22 @@ fn audit_cred_github_subdomains_never_receive_the_forgejo_token() -> TestResult 
     )?;
     let env = config::EnvMap::from([("FJ_SHIM_TOKEN".into(), "audit-forgejo-token".into())]);
     let loaded = config::load_config_with_env(Some(&fixture.config_path()), &env)?;
+    // A token stored for a GitHub host, say by an older version, stays where it is.
+    for host in ["gist.github.com", "api.github.com:443"] {
+        auth::write_stored_token(
+            host,
+            "audit-stored-token",
+            Some(&fixture.home),
+            Some("linux"),
+        )?;
+    }
 
     assert!(
         loaded.hosts.is_empty(),
         "GitHub subdomains allowlisted: {:?}",
         loaded.hosts
     );
-    for host in ["api.github.com", "gist.github.com"] {
+    for host in ["api.github.com", "gist.github.com", "api.github.com:443"] {
         assert!(
             auth::resolve_token(host, &loaded, &env, Some(&fixture.home), Some("linux")).is_none(),
             "Forgejo token resolved for {host}"
