@@ -114,8 +114,8 @@ pub fn remove_git_recorder(path: &Path) -> Result<PathBuf> {
         )));
     }
     let created = created_directory(&marker);
-    fs::remove_file(&wrapper)?;
-    fs::remove_file(&marker)?;
+    remove_recorder_file(&wrapper, &wrapper_header())?;
+    remove_recorder_file(&marker, &marker_header())?;
     if created {
         match fs::remove_dir(&directory) {
             Err(error) if error.kind() != io::ErrorKind::DirectoryNotEmpty => {
@@ -125,6 +125,20 @@ pub fn remove_git_recorder(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(directory)
+}
+
+/// Removes `path` after checking it again: a name checked earlier can have been replaced since.
+/// A replacement in the moment between this check and the unlink can't be ruled out, since
+/// POSIX removes files by name, but anyone who can make one can delete that file themselves.
+fn remove_recorder_file(path: &Path, header: &str) -> Result<()> {
+    if !written_by_recorder(path, header) {
+        return Err(ShimError::new(format!(
+            "{} changed during removal; it was left in place",
+            path.display()
+        )));
+    }
+    fs::remove_file(path)?;
+    Ok(())
 }
 
 fn wrapper_header() -> String {
