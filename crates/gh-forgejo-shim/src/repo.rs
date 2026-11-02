@@ -326,46 +326,62 @@ fn shell_split(text: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-/// The command word cobra's `Find` reaches in `words` (`stripFlags` in spf13/cobra 1.10). Every
-/// `-x` or `--name` flag without `=` is taken to swallow the next word, except gh's root flags
-/// that take no value (`--help`, `-h`, `--version`).
-fn command_word(words: &[String]) -> Option<&str> {
-    let mut words = words.iter().map(String::as_str);
-    while let Some(word) = words.next() {
-        match word {
-            "--" => return None,
-            "--help" | "-h" | "--version" | "" => {}
-            flag if flag.starts_with('-')
-                && !flag.contains('=')
-                && (flag.starts_with("--") || flag.len() == 2) =>
-            {
-                words.next()?;
-            }
-            flag if flag.starts_with('-') => {}
-            word => return Some(word),
+/// The position of the command word cobra's `Find` reaches in `words`, scanning as spf13/cobra
+/// 1.10's `stripFlags` does on gh's root command. A `-x` or a `--name` without `=` takes the next
+/// word as its value, except `--help` and `--version`, gh's root flags that take none. gh's root
+/// has no short flags, so `-h` takes a value too. A value-taking flag with at most one word after
+/// it ends the search, as does `--`.
+fn command_position(words: &[String]) -> Option<usize> {
+    let mut pos = 0;
+    while pos < words.len() {
+        let word = words[pos].as_str();
+        let takes_value = word.starts_with('-')
+            && !word.contains('=')
+            && match word.strip_prefix("--") {
+                Some(name) => !name.is_empty() && !matches!(name, "help" | "version"),
+                None => word.len() == 2,
+            };
+        if word == "--" {
+            return None;
         }
+        if takes_value {
+            if words.len() - pos - 1 <= 1 {
+                return None;
+            }
+            pos += 2;
+            continue;
+        }
+        if !word.is_empty() && !word.starts_with('-') {
+            return Some(pos);
+        }
+        pos += 1;
     }
     None
 }
 
-/// `argv` as gh runs it when its first word is a plain alias in the user's gh `config.yml`, or
-/// `None`. gh registers an alias only when its name isn't a gh command and its expansion's
-/// command word is one (`gh/pkg/cmd/alias/shared/validations.go`). It then expands it with
-/// `expandAlias` (`gh/pkg/cmd/root/alias.go`): each argument replaces `$N` while the expansion
-/// still holds a `$`, and otherwise is appended after the split expansion.
+/// `argv` as gh runs it when its command word, found past any flags before it, is a plain alias
+/// in the user's gh `config.yml`, or `None`. gh registers an alias only when its name isn't a gh
+/// command and its expansion's command word is one (`gh/pkg/cmd/alias/shared/validations.go`).
+/// cobra hands the alias every other argument, flags before its name included
+/// (`argsMinusFirstX`). gh then expands it with `expandAlias` (`gh/pkg/cmd/root/alias.go`): each
+/// argument replaces `$N` while the expansion still holds a `$`, and otherwise is appended after
+/// the split expansion.
 pub fn expand_alias(argv: &[String], env: &HashMap<String, String>) -> Option<Vec<String>> {
-    let name = argv.first()?;
+    let position = command_position(argv)?;
+    let name = &argv[position];
     if GH_COMMANDS.contains(&name.as_str()) {
         return None;
     }
     let aliases = user_gh_aliases(env);
     let expansion = aliases.get(name)?;
-    if !command_word(&shell_split(expansion)?).is_some_and(|word| GH_COMMANDS.contains(&word)) {
+    let words = shell_split(expansion)?;
+    if !command_position(&words).is_some_and(|i| GH_COMMANDS.contains(&words[i].as_str())) {
         return None;
     }
+    let args = argv[..position].iter().chain(&argv[position + 1..]);
     let mut expanded = expansion.clone();
     let mut extra = Vec::new();
-    for (i, arg) in argv[1..].iter().enumerate() {
+    for (i, arg) in args.enumerate() {
         if expanded.contains('$') {
             expanded = expanded.replace(&format!("${}", i + 1), arg);
         } else {
