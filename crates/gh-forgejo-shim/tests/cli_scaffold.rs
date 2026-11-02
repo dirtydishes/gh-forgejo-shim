@@ -651,6 +651,60 @@ fn bootstrap_says_why_gh_acts_on_no_remote_when_gh_host_points_elsewhere() -> Te
 }
 
 #[test]
+fn bootstrap_gives_no_auth_advice_for_an_allowlisted_github_enterprise_host() -> TestResult {
+    // The user allowlisted a host their gh hosts.yml lists. Bootstrap writes nothing for it and
+    // never offers `auth login` or `auth import` for it: either would send it the Forgejo token.
+    let fixture = checkout_with_origin("https://ghe.corp.example/me/proj.git", "unused")?;
+    write_gh_hosts(&fixture, &["ghe.corp.example"])?;
+
+    let stdout = bootstrap(&fixture, &[("FJ_SHIM_HOSTS", "ghe.corp.example")])?;
+
+    assert!(!stdout.contains("auth login ghe.corp.example"), "{stdout}");
+    assert!(!stdout.contains("--hostname ghe.corp.example"), "{stdout}");
+    assert!(
+        stdout.contains("ghe.corp.example is in your gh hosts.yml and in the Forgejo allowlist"),
+        "{stdout}"
+    );
+    assert_eq!(shim_config(&fixture)?, "", "bootstrap wrote the GHES host");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_reads_the_remote_spelling_even_with_gh_repo_set() -> TestResult {
+    // GH_REPO wins over the remotes; the spelling check must look past it.
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+
+    let stdout = bootstrap(&fixture, &[("GH_REPO", "not a repository")])?;
+
+    assert!(
+        stdout.contains("run gh-forgejo-shim config add-host forge.example.com"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("isn't a host gh reads"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_never_says_it_leaves_out_a_host_already_allowlisted() -> TestResult {
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+    let config = "hosts = [\"forge.example.com\"]\n";
+    write_shim_config(&fixture, config)?;
+
+    let stdout = bootstrap(&fixture, &[("GH_HOST", "github.com")])?;
+
+    assert!(
+        stdout.contains("forge.example.com is already in the Forgejo allowlist"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("leaving forge.example.com out"),
+        "{stdout}"
+    );
+    assert_eq!(shim_config(&fixture)?, config);
+    Ok(())
+}
+
+#[test]
 fn bootstrap_in_a_fork_leaves_an_unknown_forge_upstream_alone() -> TestResult {
     // Unchanged from before: gh knows github.com and not the forge, so it resolves the GitHub
     // origin, and bootstrap allowlists nothing. Run `config add-host` for the forge instead.
