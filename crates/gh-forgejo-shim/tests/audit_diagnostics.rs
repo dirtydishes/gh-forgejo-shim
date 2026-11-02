@@ -322,7 +322,6 @@ fn audit_diag_trace_existing_file_permissions() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D6: fails until gh-forgejo-shim-jko.11 is fixed"]
 fn audit_diag_trace_concurrent_jsonl() -> TestResult {
     let f = Fixture::new()?;
     let path = f.root.join("concurrent.jsonl");
