@@ -590,7 +590,7 @@ spawn reaches no gh and isn't forwarded; pressing it again works. Forwarding it 
 pre-spawn flag can't tell that instant from the next, when the terminal already reached gh.
 
 The handlers are installed before the run directory exists. Any of these four signals arriving
-before gh is spawned aborts the launch. The launcher cleans up what it made and dies by that
+before the launcher's final pre-spawn check aborts the launch; one after it reaches gh through the run loop. The launcher cleans up what it made and dies by that
 signal.
 
 gh gets the default SIGPIPE disposition, because Rust's `Command` resets it in the child. That is
