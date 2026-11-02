@@ -217,6 +217,17 @@ async fn serve_gh(
         }
     };
     let pid = child.id().and_then(|id| Pid::from_raw(id as i32));
+    // A signal that landed between the check above and the spawn reached no gh, even from a
+    // terminal: gh didn't exist yet. Forward it whatever the terminal rule says.
+    let late = caught.swap(0, Ordering::SeqCst);
+    if late != 0 {
+        if let Some(signal) = SIGNALS
+            .into_iter()
+            .find(|signal| signal.as_raw() as usize == late)
+        {
+            forward(pid, signal);
+        }
+    }
 
     let serve = axum::serve(PeerChecked::new(listener), router).into_future();
     tokio::pin!(serve);

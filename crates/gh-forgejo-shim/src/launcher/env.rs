@@ -33,6 +33,8 @@ pub enum Edit {
 pub fn apply(edits: &[(&str, Edit)]) {
     let mut saved: Vec<&str> = Vec::new();
     for (name, edit) in edits {
+        // The user's value is the one before the first edit of a name, not a later one.
+        let first = !saved.contains(name);
         let original = env::var_os(name);
         match edit {
             Edit::Set(value) => {
@@ -44,11 +46,11 @@ pub fn apply(edits: &[(&str, Edit)]) {
                 env::remove_var(format!("{SET}{name}"));
             }
         }
-        match original {
-            Some(value) => env::set_var(format!("{ORIG}{name}"), value),
-            None => env::remove_var(format!("{ORIG}{name}")),
-        }
-        if !saved.contains(name) {
+        if first {
+            match original {
+                Some(value) => env::set_var(format!("{ORIG}{name}"), value),
+                None => env::remove_var(format!("{ORIG}{name}")),
+            }
             saved.push(name);
         }
     }
