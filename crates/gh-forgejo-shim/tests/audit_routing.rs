@@ -141,7 +141,7 @@ impl Fixture {
             .stdout(File::create(&stdout)?)
             .stderr(File::create(&stderr)?)
             .process_group(0);
-        let mut child = command.spawn()?;
+        let mut child = spawn_retrying_busy(command)?;
         let started = Instant::now();
         let status = loop {
             if let Some(status) = child.try_wait()? {
@@ -182,6 +182,22 @@ fn is_script(path: &Path) -> bool {
     File::open(path)
         .and_then(|mut file| io::Read::read_exact(&mut file, &mut start))
         .map_or(true, |()| &start == b"#!")
+}
+
+/// Linux refuses to exec a file that any process holds open for writing. A test that writes an
+/// executable and runs it can lose that race: another test's fork inherits the write descriptor
+/// and keeps it until its own exec. The window is short, so a few retries ride it out (jko.42).
+fn spawn_retrying_busy(command: &mut Command) -> io::Result<std::process::Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
 }
 
 fn executable(path: &Path, contents: &str) -> io::Result<()> {
@@ -377,7 +393,11 @@ fn audit_route_signal_passthrough_restores_default_actions() -> TestResult {
         executable(&fixture.real_gh, &format!("#!/bin/sh\nkill -{signal} $$\n"))?;
         // A signal ignored on entry can't be reset by sh (Docker leaves SIGRTMIN ignored), so
         // the fake gh can't die of it there and the case doesn't run.
-        if Command::new(&fixture.real_gh).status()?.signal() != Some(signal) {
+        if spawn_retrying_busy(&mut Command::new(&fixture.real_gh))?
+            .wait()?
+            .signal()
+            != Some(signal)
+        {
             eprintln!("skipped signal {signal}: this environment starts processes with it ignored");
             continue;
         }
