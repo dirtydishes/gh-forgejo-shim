@@ -5,13 +5,18 @@
 
 PRs and issue numbers can't be undone, so every write is fenced to this repository, its `s/*`
 branches and the routes below, and the run stops as soon as Forgejo returns a number the plan
-didn't expect. It is resumable: items that already exist must match the plan by number and title,
-or the run refuses before writing anything. `--rehearse` runs the same code against a loopback
-Forgejo, such as a disposable container holding a copy of the twin.
+didn't expect. It is resumable: items that already exist must match the plan by number, title and
+head branch, or the run refuses before writing anything. `--rehearse` runs the same code against a
+loopback Forgejo, such as a disposable container holding a copy of the twin.
 
 PRs 1-10 and issues 11-12 mirror the GitHub twin (fixtures/oracle/seed.json) and get their CI from
 the twin's own workflow on its runner, as `scenarios/github.sh` does on GitHub. The rest exist only
-here: a fix pushed on a failing commit (F4), and reviews by a non-admin user.
+here: a fix pushed on a failing commit (F4), and reviews by a non-admin user. Those reviews aren't
+official (gfj-e2e can't write), so they feed review lists and threads, not reviewDecision, which
+the GitHub twin can't show either: it has no branch protection.
+
+The token never reaches argv or error output: git gets it through GIT_CONFIG_* variables, and the
+user's own git config is ignored, so no insteadOf rule can reroute the push over SSH.
 """
 import base64
 import json
@@ -29,17 +34,20 @@ import urllib.request
 LIVE = 'https://git.dirtydishes.dev'
 REPO = 'dirtydishes/gfj-oracle'
 REVIEWER = 'gfj-e2e'
+CHECK = 'ci / check (pull_request)'
 FIXTURES = Path(__file__).resolve().parents[2] / 'fixtures/oracle'
 SEED = {pr['number']: pr for pr in json.loads((FIXTURES / 'seed.json').read_text())}
 
 
-def pr(number, branch, commits, after=None, title=None, body=None, reviews=()):
-    """`commits` is a list of {path: content or None to delete}; `after` is 'merge' or 'close'."""
+def pr(number, branch, commits, after=None, title=None, body=None, reviews=(), then=None):
+    """`commits` are {path: content, or None to delete}, pushed before the PR opens. `then` holds
+    commits pushed after it: 'failed' ones once the PR's first run has failed, 'last' ones at the
+    very end of the run. `after` is 'merge' or 'close'."""
     seed = SEED.get(number, {})
     title = title or seed['title']
     return dict(kind='pr', number=number, branch=branch, commits=commits, after=after,
                 title=('WIP: ' if seed.get('draft') else '') + title,
-                body=body if body is not None else seed.get('body') or '', reviews=reviews)
+                body=body if body is not None else seed.get('body') or '', reviews=reviews, then=then)
 
 
 def note(name):
@@ -49,7 +57,8 @@ def note(name):
 PLAN = [
     pr(1, 's/pass', [{'notes/pass.txt': 'pass\n'}]),
     pr(2, 's/fail', [{'ci/fail': 'scenario s/fail\n'}]),
-    pr(3, 's/pending', [{'ci/slow': '2700\n'}]),
+    # The 45-minute job comes last, so no other run ever queues behind it on the twin's runner.
+    pr(3, 's/pending', note('pending'), then=('last', [{'ci/slow': '2700\n'}])),
     pr(4, 's/draft', [{'notes/draft.txt': 'draft\n'}]),
     pr(5, 's/nochecks', [{'.github/workflows/ci.yml': None}]),
     pr(6, 's/merged', note('merged'), after='merge'),
@@ -59,7 +68,8 @@ PLAN = [
     pr(10, 's/gw-flow', note('gw-flow'), after='merge'),
     *(dict(kind='issue', number=n, **{k: json.loads((FIXTURES / f'issue-{n}.seed.json').read_text())[k]
           for k in ('title', 'body', 'state')}) for n in (11, 12)),
-    pr(13, 's/fixed', [{'ci/fail': 'the first commit fails\n'}, {'ci/fail': None}],
+    # F4: the first commit's run must fail before the fix lands on top of it.
+    pr(13, 's/fixed', [{'ci/fail': 'the first commit fails\n'}], then=('failed', [{'ci/fail': None}]),
        title='scenario: fixed on top', body='Oracle scenario `s/fixed`: the head passes, the first commit fails.'),
     pr(14, 's/reviewed', note('reviewed'), title='scenario: approved with a comment',
        body='Oracle scenario `s/reviewed`.',
@@ -78,10 +88,12 @@ class Twin:
 
     def api(self, method, route, body=None, sudo=None):
         """Every write is checked against the plan; reads stay inside the repository or the reviewer."""
-        allowed = route.startswith(f'repos/{REPO}') or route == f'users/{REVIEWER}' if method == 'GET' else (
-            (method, route) in {('POST', f'repos/{REPO}/pulls'), ('POST', f'repos/{REPO}/issues'), ('POST', 'admin/users')}
-            or re.fullmatch(rf'repos/{REPO}/pulls/\d+/(merge|reviews)', route) and method == 'POST'
-            or re.fullmatch(rf'repos/{REPO}/(pulls|issues)/\d+', route) and method == 'PATCH' and body == {'state': 'closed'})
+        repo = f'repos/{REPO}'
+        allowed = (route == repo or route.startswith(repo + '/') or route.startswith(repo + '?')
+                   or route == f'users/{REVIEWER}') if method == 'GET' else (
+            (method, route) in {('POST', f'{repo}/pulls'), ('POST', f'{repo}/issues'), ('POST', 'admin/users')}
+            or re.fullmatch(rf'{repo}/pulls/\d+/(merge|reviews)', route) and method == 'POST'
+            or re.fullmatch(rf'{repo}/(pulls|issues)/\d+', route) and method == 'PATCH' and body == {'state': 'closed'})
         if not allowed or (sudo not in (None, REVIEWER)) or (route == 'admin/users' and body.get('username') != REVIEWER):
             raise SystemExit(f'refusing {method} {route}: outside the twin-seed fence')
         headers = {'Authorization': 'token ' + self.token, 'Content-Type': 'application/json'}
@@ -105,67 +117,105 @@ class Twin:
             raise
 
     def git(self, *args, cwd):
+        """git without the user's config (no insteadOf to SSH, no hooks or signing), with the token
+        in the environment, never in argv or in an error message."""
         header = 'Authorization: Basic ' + base64.b64encode(f'dirtydishes:{self.token}'.encode()).decode()
-        return subprocess.run(['git', '-c', f'http.extraHeader={header}', *args], cwd=cwd, check=True,
-                              capture_output=True, text=True).stdout.strip()
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0',
+                   GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.extraHeader', GIT_CONFIG_VALUE_0=header)
+        result = subprocess.run(['git', *args], cwd=cwd, env=env, capture_output=True, text=True)
+        if result.returncode:
+            stderr = result.stderr.replace(self.token, '<token>').replace(header, '<header>')
+            raise SystemExit(f'git {args[0]} failed ({result.returncode}): {stderr.strip()}')
+        return result.stdout.strip()
 
 
 def existing(twin):
-    """Every PR and issue already in the twin, by number, with its title."""
+    """Every PR and issue already in the twin, by number, with its title and head branch."""
     found = {}
     for kind in ('pulls', 'issues'):
         page = 1
         while True:
             query = f'state=all&limit=50&page={page}' + ('&type=issues' if kind == 'issues' else '')
             batch = twin.api('GET', f'repos/{REPO}/{kind}?{query}')
-            for item in batch: found[item['number']] = item['title']
+            for item in batch: found[item['number']] = (item['title'], (item.get('head') or {}).get('ref'))
             if len(batch) < 50: break
             page += 1
     return found
 
 
 def check_resumable(found):
-    planned = {item['number']: item['title'] for item in PLAN}
-    for number, title in found.items():
-        if planned.get(number) != title:
-            raise SystemExit(f'#{number} {title!r} is not in the plan; refusing to seed on top of it')
+    planned = {item['number']: (item['title'], item.get('branch')) for item in PLAN}
+    for number, seen in found.items():
+        if planned.get(number) != seen:
+            raise SystemExit(f'#{number} {seen!r} is not in the plan; refusing to seed on top of it')
     missing = [n for n in planned if n not in found]
     if missing and any(n > missing[0] for n in found):
         raise SystemExit(f'#{missing[0]} is missing but later numbers exist; the numbering cannot be repaired')
 
 
-def push_branch(twin, checkout, item):
-    twin.git('switch', '-q', '-C', item['branch'], 'origin/main', cwd=checkout)
-    for i, commit in enumerate(item['commits']):
-        for path, content in commit.items():
-            target = checkout / path
-            if content is None:
-                twin.git('rm', '-q', path, cwd=checkout)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content)
-                twin.git('add', path, cwd=checkout)
-        message = item['title'].removeprefix('WIP: ') + (f' ({i + 1}/{len(item["commits"])})' if len(item['commits']) > 1 else '')
-        twin.git('commit', '-q', '-m', message, cwd=checkout)
+def commit(twin, checkout, changes, message):
+    for path, content in changes.items():
+        if content is None:
+            twin.git('rm', '-q', path, cwd=checkout)
+        else:
+            (checkout / path).parent.mkdir(parents=True, exist_ok=True)
+            (checkout / path).write_text(content)
+            twin.git('add', path, cwd=checkout)
+    twin.git('commit', '-q', '-m', message, cwd=checkout)
+
+
+def push(twin, checkout, item):
     if item['branch'] not in BRANCHES: raise SystemExit('branch outside the plan')
     twin.git('push', '-q', 'origin', f'refs/heads/{item["branch"]}:refs/heads/{item["branch"]}', cwd=checkout)
 
 
-def wait(condition, what, timeout=120):
+def push_branch(twin, checkout, item):
+    twin.git('switch', '-q', '-C', item['branch'], 'origin/main', cwd=checkout)
+    for i, changes in enumerate(item['commits']):
+        commit(twin, checkout, changes, item['title'].removeprefix('WIP: ') + f' ({i + 1})')
+    push(twin, checkout, item)
+
+
+def push_then(twin, checkout, item):
+    """Push the commits that come after the PR opens, unless a resumed run finds them pushed."""
+    pushed = twin.api('GET', f'repos/{REPO}/pulls/{item["number"]}/commits')
+    if len(pushed) > len(item['commits']): return
+    twin.git('fetch', '-q', 'origin', f'refs/heads/{item["branch"]}', cwd=checkout)
+    twin.git('switch', '-q', '-C', item['branch'], 'FETCH_HEAD', cwd=checkout)
+    for i, changes in enumerate(item['then'][1]):
+        commit(twin, checkout, changes, item['title'].removeprefix('WIP: ') + f' ({len(item["commits"]) + i + 1})')
+    push(twin, checkout, item)
+    print(f'pushed the later commits of #{item["number"]}')
+
+
+def wait(condition, what, timeout):
     deadline = time.monotonic() + timeout
     while not condition():
         if time.monotonic() > deadline: raise SystemExit(f'timed out waiting for {what}')
-        time.sleep(2)
+        time.sleep(5)
+
+
+def failed(twin, number):
+    """Whether the PR head's own CI check has finished failing."""
+    head = twin.api('GET', f'repos/{REPO}/pulls/{number}')['head']['sha']
+    statuses = twin.api('GET', f'repos/{REPO}/commits/{head}/statuses')
+    return any(s['context'] == CHECK and s['status'] == 'failure' for s in statuses)
+
+
+def reviewer(twin):
+    if not twin.exists(f'users/{REVIEWER}'):
+        password = base64.b64encode(os.urandom(24)).decode() + '!aA1'
+        twin.api('POST', 'admin/users', dict(username=REVIEWER, email=f'{REVIEWER}@users.noreply.invalid',
+                 password=password, must_change_password=False, send_notify=False, visibility='public'))
+        print(f'created non-admin user {REVIEWER}')
+    if twin.api('GET', f'users/{REVIEWER}').get('is_admin') is not False:
+        raise SystemExit(f'{REVIEWER} exists but isn\'t a confirmed non-admin; refusing to review as it')
 
 
 def seed(twin, checkout):
     found = existing(twin)
     check_resumable(found)
-    if not twin.exists(f'users/{REVIEWER}'):
-        twin.api('POST', 'admin/users', dict(username=REVIEWER, email=f'{REVIEWER}@users.noreply.invalid',
-                 password=base64.b64encode(os.urandom(24)).decode(), must_change_password=False,
-                 send_notify=False, visibility='public'))
-        print(f'created non-admin user {REVIEWER}')
+    reviewer(twin)
     for item in PLAN:
         number = item['number']
         if number not in found:
@@ -181,8 +231,12 @@ def seed(twin, checkout):
             print(f'created #{number} {item["title"]}')
         kind = 'issues' if item['kind'] == 'issue' else 'pulls'
         current = twin.api('GET', f'repos/{REPO}/{kind}/{number}')
+        if item.get('then') and item['then'][0] == 'failed':
+            wait(lambda: failed(twin, number) or len(twin.api('GET', f'repos/{REPO}/pulls/{number}/commits')) > 1,
+                 f"#{number}'s first run to fail", timeout=1800)
+            push_then(twin, checkout, item)
         if item.get('after') == 'merge' and not current.get('merged'):
-            wait(lambda: twin.api('GET', f'repos/{REPO}/pulls/{number}')['mergeable'], f'#{number} to become mergeable')
+            wait(lambda: twin.api('GET', f'repos/{REPO}/pulls/{number}')['mergeable'], f'#{number} to become mergeable', 120)
             twin.api('POST', f'repos/{REPO}/pulls/{number}/merge', dict(Do='merge', delete_branch_after_merge=False))
             print(f'merged #{number}')
         if (item.get('after') == 'close' or item.get('state') == 'closed') and current['state'] != 'closed':
@@ -194,6 +248,9 @@ def seed(twin, checkout):
                 for review in item['reviews']:
                     twin.api('POST', f'repos/{REPO}/pulls/{number}/reviews', review, sudo=REVIEWER)
                 print(f'reviewed #{number} as {REVIEWER}')
+    for item in PLAN:
+        if item.get('then') and item['then'][0] == 'last':
+            push_then(twin, checkout, item)
 
 
 def main(argv):
@@ -212,7 +269,7 @@ def main(argv):
         twin.git('config', 'user.name', 'dirtydishes', cwd=checkout)
         twin.git('config', 'user.email', 'dirtydishes@users.noreply.invalid', cwd=checkout)
         seed(twin, checkout)
-    print(json.dumps(existing(twin), indent=2, sort_keys=True))
+    print(json.dumps({n: title for n, (title, _) in existing(twin).items()}, indent=2, sort_keys=True))
 
 
 if __name__ == '__main__':

@@ -35,14 +35,39 @@ for attempt in $(seq 1 30); do
     [ "$attempt" -eq 30 ] && { echo 'the copied main did not settle' >&2; exit 1; }
     sleep 1
 done
+api() { curl -fsS -H "Authorization: token $token" "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/$1"; }
+# Stand in for the runner: fail #13's first commit once it exists, as the twin's CI would.
+(
+    for attempt in $(seq 1 300); do
+        sha=$(api 'pulls/13' 2>/dev/null | jq -r '.head.sha // empty') || true
+        if [ -n "$sha" ]; then
+            curl -fsS -H "Authorization: token $token" -H 'Content-Type: application/json' \
+                -d '{"context":"ci / check (pull_request)","state":"failure"}' \
+                "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/statuses/$sha" >/dev/null
+            exit 0
+        fi
+        sleep 1
+    done
+) &
 TWIN_TOKEN="$token" python3 scripts/oracle/twin-seed.py --rehearse "http://127.0.0.1:$port" | tee "$work/first.log"
 TWIN_TOKEN="$token" python3 scripts/oracle/twin-seed.py --rehearse "http://127.0.0.1:$port" | tee "$work/second.log"
-if grep -E '^(created|merged|closed|reviewed) ' "$work/second.log"; then
+if grep -E '^(created|merged|closed|reviewed|pushed) ' "$work/second.log"; then
     echo 'a resumed run wrote again' >&2; exit 1
 fi
-api() { curl -fsS -H "Authorization: token $token" "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/$1"; }
-api 'pulls?state=all&limit=50' | jq -c '[.[] | {n: .number, s: .state, m: .merged, d: .draft}] | sort_by(.n)'
-api 'pulls/13/commits' | jq -c '[.[].commit.message]'
-api 'pulls/14/reviews' | jq -c '[.[] | {u: .user.login, s: .state, c: .comments_count}]'
-api 'pulls/15/reviews' | jq -c '[.[] | {u: .user.login, s: .state}]'
-echo 'PASS twin-seed rehearsal: seeded once, resumed without writing'
+expect() { # what, jq filter that must be true
+    api "$1" | jq -e "$2" >/dev/null || { echo "FAIL $1: $2" >&2; api "$1" | jq -c . >&2; exit 1; }
+    echo "PASS $1"
+}
+expect 'pulls?state=all&limit=50' '[.[] | [.number, .state, .merged, .draft]] | sort ==
+    [[1,"open",false,false],[2,"open",false,false],[3,"open",false,false],[4,"open",false,true],[5,"open",false,false],
+     [6,"closed",true,false],[7,"closed",false,false],[8,"closed",true,false],[9,"open",false,false],[10,"closed",true,false],
+     [13,"open",false,false],[14,"open",false,false],[15,"open",false,false]]'
+expect 'issues?state=all&type=issues' '[.[] | [.number, .state]] | sort == [[11,"open"],[12,"closed"]]'
+expect 'pulls/13/commits' 'length == 2'
+expect 'pulls/13/files' '[.[].filename] == []'
+expect 'pulls/3/commits' 'length == 2'
+expect 'pulls/3/files' '[.[].filename] | sort == ["ci/slow","notes/pending.txt"]'
+expect 'pulls/14/reviews' '[.[] | [.user.login, .state, .comments_count]] == [["gfj-e2e","APPROVED",1]]'
+expect 'pulls/15/reviews' '[.[] | [.user.login, .state]] == [["gfj-e2e","REQUEST_CHANGES"]]'
+curl -fsS -H "Authorization: token $token" "http://127.0.0.1:$port/api/v1/users/gfj-e2e" | jq -e '.is_admin == false' >/dev/null
+echo 'PASS twin-seed rehearsal: every planned state, and a resumed run wrote nothing'

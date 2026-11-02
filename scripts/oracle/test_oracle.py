@@ -270,15 +270,36 @@ class OracleTests(unittest.TestCase):
             urlopen.assert_not_called()
 
     def test_twin_seed_resumes_only_onto_its_own_plan(self):
-        planned = {item['number']: item['title'] for item in twin_seed.PLAN}
+        planned = {item['number']: (item['title'], item.get('branch')) for item in twin_seed.PLAN}
         self.assertEqual(sorted(planned), list(range(1, 16)))
-        self.assertEqual(planned[4], 'WIP: scenario: draft')
+        self.assertEqual(planned[4], ('WIP: scenario: draft', 's/draft'))
         twin_seed.check_resumable({})
         twin_seed.check_resumable({n: planned[n] for n in (1, 2, 3)})
-        with self.assertRaises(SystemExit): twin_seed.check_resumable({1: 'someone else'})
-        with self.assertRaises(SystemExit): twin_seed.check_resumable({16: 'beyond the plan'})
-        with self.assertRaises(SystemExit): twin_seed.check_resumable({1: planned[1], 3: planned[3]})
-        with self.assertRaises(SystemExit): twin_seed.main(['--rehearse', 'https://git.dirtydishes.dev'])
+        for found in ({1: ('someone else', 's/pass')}, {1: (planned[1][0], 'other-branch')},
+                      {16: ('beyond the plan', None)}, {1: planned[1], 3: planned[3]}):
+            with self.assertRaises(SystemExit, msg=str(found)): twin_seed.check_resumable(found)
+
+    def test_twin_seed_rehearses_only_on_loopback(self):
+        with patch.dict(twin_seed.os.environ, {'TWIN_TOKEN': 'disposable'}), \
+                patch.object(twin_seed.subprocess, 'run', side_effect=AssertionError('no git')), \
+                patch.object(twin_seed.urllib.request, 'urlopen', side_effect=AssertionError('no network')):
+            with self.assertRaisesRegex(SystemExit, 'loopback'):
+                twin_seed.main(['--rehearse', 'https://git.dirtydishes.dev'])
+
+    def test_twin_seed_keeps_the_token_out_of_argv_errors_and_user_git_config(self):
+        token = 'SECRET-TOKEN-123'
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', token)
+        failure = subprocess.CompletedProcess([], 128, '', f'fatal: rejected for {token}\n')
+        with patch.object(twin_seed.subprocess, 'run', return_value=failure) as run:
+            with self.assertRaises(SystemExit) as raised:
+                twin.git('push', '-q', 'origin', 'refs/heads/s/pass:refs/heads/s/pass', cwd='.')
+        argv, env = run.call_args.args[0], run.call_args.kwargs['env']
+        self.assertFalse(any(token in arg or 'Authorization' in arg for arg in argv), argv)
+        self.assertNotIn(token, str(raised.exception))
+        self.assertIn('<token>', str(raised.exception))
+        self.assertEqual(env['GIT_CONFIG_GLOBAL'], twin_seed.os.devnull)
+        self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')
+        self.assertEqual(env['GIT_CONFIG_KEY_0'], 'http.extraHeader')
 
 
 if __name__ == '__main__':
