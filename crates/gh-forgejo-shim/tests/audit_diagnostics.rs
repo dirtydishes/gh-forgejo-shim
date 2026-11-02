@@ -614,6 +614,20 @@ fn audit_diag_release_documented_extract() -> TestResult {
         "packaging fixture failed: {}",
         String::from_utf8_lossy(&packaged.stderr)
     );
+    // Extract the members exactly as docs/installation.md documents them.
+    let docs = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/installation.md"),
+    )?;
+    let documented = docs
+        .lines()
+        .find(|line| line.trim_start().starts_with("tar -xzf"))
+        .ok_or("docs/installation.md documents no tar -xzf command")?;
+    let words = documented.split_whitespace().collect::<Vec<_>>();
+    let members = words
+        .iter()
+        .position(|word| *word == "-C")
+        .and_then(|index| words.get(index + 2..))
+        .ok_or("the documented tar command has no -C DIR")?;
     let destination = f.home.join(".local/bin");
     fs::create_dir_all(&destination)?;
     let extracted = Command::new("tar")
@@ -624,7 +638,7 @@ fn audit_diag_release_documented_extract() -> TestResult {
         )
         .arg("-C")
         .arg(destination)
-        .args(["gh-forgejo-shim", "gfj"])
+        .args(members)
         .env_clear()
         .envs(f.env())
         .current_dir(&f.root)
