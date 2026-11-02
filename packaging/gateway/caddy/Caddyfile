@@ -1,0 +1,18 @@
+# The forge's site with the gateway mounted. Caddy passes the client's Host through by default.
+# Replace the hostname and the two upstream addresses with your own.
+forge.example.com {
+	handle /api/v3/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /api/graphql {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# gh and ChatGPT link pull requests as /{owner}/{repo}/pull/{n}; the gateway redirects them.
+	@pull_link path_regexp ^/[^/]+/[^/]+/pull/[0-9]+(/.*)?$
+	handle @pull_link {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}
