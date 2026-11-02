@@ -747,3 +747,124 @@ fn a_users_gh_hosts_route_with_no_usable_login_is_refused() {
         );
     }
 }
+
+/// A stub Forgejo whose `/api/v1/user` answers with a login chosen by the request's token, for
+/// as long as the test runs.
+fn stub_forgejo(logins: &'static [(&'static str, &'static str)]) -> String {
+    use std::io::{BufRead, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream);
+            let mut token = String::new();
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                if let Some(value) = line
+                    .to_ascii_lowercase()
+                    .strip_prefix("authorization: token ")
+                {
+                    token = value.trim().to_string();
+                }
+                line.clear();
+            }
+            let login = logins
+                .iter()
+                .find(|(known, _)| *known == token)
+                .map_or("nobody", |(_, login)| login);
+            let body = format!(r#"{{"id":1,"login":"{login}","avatar_url":""}}"#);
+            let _ = write!(
+                reader.get_mut(),
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{address}")
+}
+
+#[test]
+fn host_less_auth_status_serves_every_eligible_host_with_its_login() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("host-secret", "login-a"), ("other-secret", "login-b")]);
+    let fixture = Fixture::new(&api);
+    let host = |entry: &str, token_env: &str| {
+        format!("[host.\"{entry}\"]\ntoken_env = \"{token_env}\"\napi_url = \"{api}\"\n")
+    };
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\", \"a.test:3443\", \"a.test:8443\", \"logged.test\"]\n{}{}{}{}{}",
+            host("forge.test", "HOST_TOKEN"),
+            host("other.test", "OTHER_TOKEN"),
+            host("a.test:3443", "HOST_TOKEN"),
+            host("a.test:8443", "HOST_TOKEN"),
+            host("logged.test", "HOST_TOKEN"),
+        ),
+    )
+    .expect("config");
+    fixture.user_hosts("logged.test:\n    oauth_token: user-login\n");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .env("OTHER_TOKEN", "other-secret")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Mapping = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    let field = |key: &str, name: &str| {
+        hosts
+            .get(key)
+            .and_then(|entry| entry.get(name))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+    };
+    let per_call = field("forge.test", "oauth_token").expect("forge.test token");
+    assert_eq!(per_call.len(), 64, "a per-call token, not the real one");
+    assert_eq!(field("forge.test", "user").as_deref(), Some("login-a"));
+    assert_eq!(field("other.test", "oauth_token"), Some(per_call.clone()));
+    assert_eq!(field("other.test", "user").as_deref(), Some("login-b"));
+    for unserved in ["a.test", "a.test:3443", "a.test:8443", "logged.test"] {
+        assert_eq!(
+            field(unserved, "oauth_token").as_deref(),
+            Some("gfj-not-served"),
+            "{unserved}"
+        );
+        assert_eq!(field(unserved, "user"), None, "{unserved}");
+    }
+}
+
+#[test]
+fn show_token_puts_the_real_token_in_hosts_yml_and_the_gateway_accepts_it() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("host-secret", "login-a")]);
+    let fixture = Fixture::new(&api);
+    let gh = fixture.fake_gh(
+        r#"token=$(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)
+code=$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" http://forge.test/api/v3/user)
+printf '%s %s\n' "$token" "$code" > "$REPORT""#,
+    );
+    for args in [
+        &["auth", "status", "-t"][..],
+        &["auth", "status", "--show-token=false"][..],
+    ] {
+        let output = fixture
+            .command(&gh, args)
+            .env("GH_REPO", "forge.test/o/r")
+            .output()
+            .expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = fixture.report();
+        let (token, code) = report.trim().split_once(' ').expect("report");
+        assert_eq!(
+            code, "200",
+            "{args:?}: the gateway accepts gh's token: {report}"
+        );
+        assert_eq!(
+            token == "host-secret",
+            args[2] == "-t",
+            "{args:?}: {report}"
+        );
+    }
+}
