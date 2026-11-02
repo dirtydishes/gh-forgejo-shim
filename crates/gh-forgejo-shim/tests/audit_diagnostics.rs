@@ -201,7 +201,6 @@ fn audit_diag_gh_trace_url_password_at_sign() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D3: fails until gh-forgejo-shim-jko.9 is fixed"]
 fn audit_diag_git_trace_json_secret() -> TestResult {
     let f = Fixture::new()?;
     f.tool(
@@ -220,7 +219,6 @@ fn audit_diag_git_trace_json_secret() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D2: fails until gh-forgejo-shim-jko.23 is fixed"]
 fn audit_diag_git_trace_query_token() -> TestResult {
     let f = Fixture::new()?;
     f.tool("git", "#!/bin/sh\nexit 0\n")?;

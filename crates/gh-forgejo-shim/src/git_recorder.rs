@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::trace::append_jsonl;
+use crate::trace::{append_jsonl, is_sensitive_key, redact_text_with};
 use crate::{external, shim, Result, ShimError};
 
 pub const MARKER: &str = "managed by gh-forgejo-shim git recorder";
@@ -500,7 +500,7 @@ fn redact_argv(args: &[String]) -> Vec<String> {
         }
 
         let (key, separator, value) = split_assignment(arg);
-        if key.starts_with('-') && is_secret_key(key) {
+        if key.starts_with('-') && is_sensitive_key(key) {
             if separator.is_some() {
                 redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
             } else {
@@ -509,7 +509,7 @@ fn redact_argv(args: &[String]) -> Vec<String> {
             }
             continue;
         }
-        if separator.is_some() && is_secret_key(key) {
+        if separator.is_some() && is_sensitive_key(key) {
             redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
             continue;
         }
@@ -530,132 +530,7 @@ fn split_assignment(value: &str) -> (&str, Option<char>, &str) {
 }
 
 fn redact_text(value: &str) -> String {
-    let mut result = redact_url_userinfo(value);
-    result = redact_authorization(&result);
-    result = redact_secret_assignments(&result);
-    redact_known_tokens(&result)
-}
-
-fn redact_url_userinfo(value: &str) -> String {
-    let mut output = String::new();
-    let mut rest = value;
-    while let Some(scheme_index) = rest.find("://") {
-        let credential_start = scheme_index + 3;
-        let Some(at_relative) = rest[credential_start..].find('@') else {
-            output.push_str(&rest[..credential_start]);
-            rest = &rest[credential_start..];
-            continue;
-        };
-        let at_index = credential_start + at_relative;
-        let authority = &rest[credential_start..at_index];
-        if authority.contains('/') || authority.contains(char::is_whitespace) {
-            output.push_str(&rest[..=at_index]);
-        } else {
-            output.push_str(&rest[..credential_start]);
-            output.push_str(SECRET_REPLACEMENT);
-            output.push('@');
-        }
-        rest = &rest[at_index + 1..];
-    }
-    output.push_str(rest);
-    output
-}
-
-fn redact_authorization(value: &str) -> String {
-    let lower = value.to_ascii_lowercase();
-    for prefix in ["authorization:", "authorization="] {
-        if let Some(index) = lower.find(prefix) {
-            let secret_start = index + prefix.len();
-            let after = &value[secret_start..];
-            let token_end = after.find(['\n', '\r', ';', '&']).unwrap_or(after.len());
-            return format!(
-                "{}{}{}",
-                &value[..secret_start],
-                SECRET_REPLACEMENT,
-                &after[token_end..]
-            );
-        }
-    }
-    value.to_string()
-}
-
-fn redact_secret_assignments(value: &str) -> String {
-    let mut words = Vec::new();
-    for word in value.split_whitespace() {
-        let (key, separator, _rest) = split_key_value(word);
-        if separator.is_some() && is_secret_key(key) {
-            let delimiter = separator.unwrap_or('=');
-            words.push(format!("{key}{delimiter}{SECRET_REPLACEMENT}"));
-        } else {
-            words.push(word.to_string());
-        }
-    }
-    words.join(" ")
-}
-
-fn split_key_value(value: &str) -> (&str, Option<char>, &str) {
-    if let Some(index) = value.find('=') {
-        return (&value[..index], Some('='), &value[index + 1..]);
-    }
-    if let Some(index) = value.find(':') {
-        return (&value[..index], Some(':'), &value[index + 1..]);
-    }
-    (value, None, "")
-}
-
-fn redact_known_tokens(value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|word| {
-            if is_known_token(word) {
-                SECRET_REPLACEMENT.to_string()
-            } else {
-                word.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn is_known_token(value: &str) -> bool {
-    let normalized = value.trim_matches(|character: char| {
-        !character.is_ascii_alphanumeric() && !matches!(character, '_' | '-')
-    });
-    normalized.starts_with("github_pat_")
-        || normalized.starts_with("ghp_")
-        || normalized.starts_with("gho_")
-        || normalized.starts_with("ghu_")
-        || normalized.starts_with("ghs_")
-        || normalized.starts_with("ghr_")
-        || normalized.starts_with("glpat-")
-        || normalized.starts_with("gitea_")
-}
-
-fn is_secret_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase();
-    [
-        "token",
-        "secret",
-        "pass",
-        "password",
-        "passwd",
-        "api-key",
-        "api_key",
-        "authorization",
-        "auth-token",
-        "auth_token",
-        "credential",
-        "client-secret",
-        "client_secret",
-        "access-token",
-        "access_token",
-        "refresh-token",
-        "refresh_token",
-        "private-key",
-        "private_key",
-    ]
-    .iter()
-    .any(|part| normalized.contains(part))
+    redact_text_with(value, SECRET_REPLACEMENT)
 }
 
 fn utc_timestamp() -> String {
