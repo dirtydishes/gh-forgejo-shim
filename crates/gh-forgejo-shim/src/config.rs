@@ -293,7 +293,7 @@ fn replace_config_file(path: &Path, contents: &[u8]) -> Result<()> {
     let could_not_write = |error: &dyn std::fmt::Display| {
         ShimError::new(format!("could not write {}: {error}", path.display()))
     };
-    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = config_file_target(path);
     let permissions = fs::metadata(&target)
         .ok()
         .map(|metadata| metadata.permissions());
@@ -302,6 +302,20 @@ fn replace_config_file(path: &Path, contents: &[u8]) -> Result<()> {
         fs::set_permissions(&target, permissions).map_err(|error| could_not_write(&error))?;
     }
     Ok(())
+}
+
+/// The file a config write replaces: the end of any symlink chain, so a dotfiles link survives.
+/// A dangling link is followed one step and its target created, rather than the link replaced.
+fn config_file_target(path: &Path) -> PathBuf {
+    if let Ok(target) = fs::canonicalize(path) {
+        return target;
+    }
+    match fs::read_link(path) {
+        Ok(link) => path
+            .parent()
+            .map_or(link.clone(), |parent| parent.join(&link)),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -724,6 +738,23 @@ future_setting = "keep" # why
         assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
         assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o600);
         assert!(fs::read_to_string(&target)?.contains("new.example.com"));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_edits_through_a_dangling_symlink_create_its_target() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        symlink("dotfiles-config.toml", &path)?;
+
+        add_host("new.example.com", Some(&path))?;
+
+        assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
+        assert!(fs::read_to_string(root.join("dotfiles-config.toml"))?.contains("new.example.com"));
         fs::remove_dir_all(root).ok();
         Ok(())
     }
