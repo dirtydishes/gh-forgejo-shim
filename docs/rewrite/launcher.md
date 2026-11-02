@@ -418,7 +418,7 @@ the launcher never converts the environment to `String`.
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
-| `FJ_SHIM_LAUNCH_DEPTH` | the inherited depth plus 1 |
+| `FJ_SHIM_DEPTH` | the inherited depth plus 1. Every wrapper invocation sets it, on the delegate path too (section 8) |
 | `FJ_SHIM_SAVED` | the names of the variables above that the launcher changed |
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
@@ -432,7 +432,7 @@ name in `FJ_SHIM_SAVED`, it restores the variable from `FJ_SHIM_ORIG_<NAME>`, or
 there's no saved value. It skips any variable whose current state no longer matches what the
 launcher left: a different value from `FJ_SHIM_SET_<NAME>`, or, for a removed variable, any value
 at all. Something in between changed it on purpose. It then removes the
-bookkeeping variables, except `FJ_SHIM_LAUNCH_DEPTH`. A shell alias that runs
+bookkeeping variables, except `FJ_SHIM_DEPTH`. A shell alias that runs
 `gh api https://api.github.com/user` therefore runs plain gh with the user's own config and token.
 
 ## 8. Recursion
@@ -457,12 +457,17 @@ invocation and launches again, and so on. Three guards stop it:
    nested calls are grandchildren, through gh or a shell, and never trip this. gh never replaces
    itself with exec: v2.103.3 has no `syscall.Exec` call, and runs aliases and extensions as
    children.
-3. **Depth cap.** If `FJ_SHIM_LAUNCH_DEPTH` is 4 or more, the wrapper delegates and never launches.
-   That catches a loop that runs through an intermediate process, for example a wrapper script
-   that doesn't exec. Plain gh can't loop back into the launcher.
+3. **Depth cap.** Every wrapper invocation, delegating or launching, increments `FJ_SHIM_DEPTH`
+   in the environment it passes on. If the inherited value is already 8 or more, the wrapper
+   doesn't run anything. It exits 127 with
+   `gh-forgejo-shim: gh resolves back to gh-forgejo-shim (depth 8); set FJ_SHIM_REAL_GH`.
+   That catches a loop through an intermediate process that guard 2 can't see. An example is an
+   unmarked script that runs `gh-forgejo-shim gh "$@"` without exec. Each turn of the loop then
+   leaves a waiting `sh`, so the shim is a grandchild, not a child. Delegating at the cap, as an
+   earlier draft did, would exec the same script again. Legitimate nesting, an alias shell
+   running gh that runs another alias, stays far below 8.
 
-Guard 2 runs before the environment revert in section 7, which keeps `FJ_SHIM_LAUNCH_DEPTH` for
-guard 3.
+Guard 2 runs before the environment revert in section 7, which keeps `FJ_SHIM_DEPTH` for guard 3.
 
 ## 9. PR URLs and the browser (D2)
 
