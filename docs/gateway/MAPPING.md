@@ -200,6 +200,21 @@ emitted link opens.
 
 This replaces DESIGN.md's earlier "emit what Forgejo actually serves" rule for PR URLs.
 
+## 9. Bodies (`bodyHTML`)
+
+**Decision (2026-11-02):** `bodyHTML` on pull requests, issue comments and review comments is the body
+as escaped paragraphs: the source text, HTML-escaped, with blank lines as paragraph breaks and single
+newlines as `<br>`. Markdown isn't rendered.
+
+**Limitation:** ChatGPT's PR pane shows Markdown as written. A heading reads `## Heading`, and links
+and emphasis stay as source text.
+
+**Why:** Forgejo's API returns no rendered HTML. Rendering through Forgejo's markdown endpoint costs one
+request per body, and the timeline document can carry about 200 bodies. Rendering inside the gateway
+would pass raw HTML from a PR body to clients that trust `bodyHTML` as sanitized, as GitHub's is.
+Escaping costs nothing and can't inject markup. Optional sanitized rendering is
+`gh-forgejo-shim-xml`, if the pane turns out to need it.
+
 ## Open items to verify against the live twin (G2/G3)
 
 1. ~~Forgejo "checking" vs "conflict"~~: **resolved v1**. Not distinguishable; see §2.
