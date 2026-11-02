@@ -116,3 +116,32 @@ fn audit_diag_recorder_remove_preserves_unrelated_files() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn audit_diag_recorder_recreate_prevents_self_recursion() -> TestResult {
+    let f = Fixture::new()?;
+    let directory = f.root.join("recorder");
+    let first = git_recorder::create_git_recorder(
+        &f.root.join("git.jsonl"),
+        Some(&f.bin.join("git")),
+        None,
+        Some(&directory),
+        &f.env(),
+        Path::new(env!("CARGO_BIN_EXE_gfj")),
+    )?;
+    let mut env = f.env();
+    env.insert("PATH".into(), first.path);
+    let second = git_recorder::create_git_recorder(
+        &f.root.join("git.jsonl"),
+        None,
+        None,
+        Some(&directory),
+        &env,
+        Path::new(env!("CARGO_BIN_EXE_gfj")),
+    )?;
+    assert!(
+        second.real_git != second.wrapper_path,
+        "recreating the recorder selected itself as real git and rewrote itself to recurse forever"
+    );
+    Ok(())
+}
