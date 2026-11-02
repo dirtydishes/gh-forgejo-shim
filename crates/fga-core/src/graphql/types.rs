@@ -277,18 +277,15 @@ impl PullRequestReview {
                 .unwrap_or_default(),
         )
     }
-    /// A pending review has no comment yet, so Forgejo sends an empty URL
-    /// (`models/issues/review.go:1009-1021`); it falls back to the PR's page.
-    async fn url(&self, ctx: &Context<'_>) -> Uri {
-        if !self.source.html_url.is_empty() {
-            return Uri(self.source.html_url.clone());
+    /// A pending review has no comment yet, so Forgejo sends an empty URL (Forgejo v15.0.0
+    /// `models/issues/review.go:1009-1021`); it falls back to the PR's page as Forgejo gives it, so
+    /// every review URL shares Forgejo's root.
+    async fn url(&self) -> Uri {
+        if self.source.html_url.is_empty() {
+            Uri(self.source.pull_request_url.clone())
+        } else {
+            Uri(self.source.html_url.clone())
         }
-        let mut url = ctx.data_unchecked::<url::Url>().clone();
-        url.path_segments_mut()
-            .expect("validated HTTP URL")
-            .pop_if_empty()
-            .extend([&self.owner, &self.repo, "pulls", &self.number.to_string()]);
-        Uri(url.to_string())
     }
     async fn is_minimized(&self) -> bool {
         false
