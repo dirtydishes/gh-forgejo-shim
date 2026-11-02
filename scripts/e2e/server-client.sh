@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Server mode as a user sees it: real gh and Claude's REST lookups against https://forge.test, where
-# nginx serves Forgejo and mounts the gateway with packaging/gateway/nginx/fga-locations.conf.
+# nginx serves Forgejo and mounts the gateway with packaging/gateway/nginx/fga-locations.conf; then
+# the same routes through the shipped Caddyfile, over HTTP.
 set -euo pipefail
 cp /tls/cert.pem /usr/local/share/ca-certificates/forge-test.crt
 update-ca-certificates >/dev/null 2>&1
@@ -46,3 +47,26 @@ check '[ "$link" = "301 https://forge.test/e2e/oracle/pulls/1" ]' '/pull/1 redir
 landing=$(curl -sSL -o /tmp/landing.html -w '%{http_code} %{url_effective}' https://forge.test/e2e/oracle/pull/1)
 check '[ "$landing" = "200 https://forge.test/e2e/oracle/pulls/1" ] && grep -q "scenario: checks pass" /tmp/landing.html' 'the redirect lands on the PR page'
 check '[ "$(curl -sS -o /dev/null -w "%{http_code}" https://forge.test/)" = 200 ]' 'Forgejo'"'"'s own pages still load'
+# Forgejo's own API still reaches Forgejo: only /api/v3/ and /api/graphql go to the gateway.
+check '[ "$(curl -fsS https://forge.test/api/v1/version | jq -r "has(\"version\")")" = true ]' 'Forgejo'"'"'s /api/v1 still reaches Forgejo'
+# $http_host keeps a non-default port, so a request for forge.test:8443 is another host.
+status=$(curl -sS -o /dev/null -w '%{http_code}' --connect-to forge.test:8443:forge.test:443 \
+    -H "Authorization: token $token" https://forge.test:8443/api/v3/user)
+check '[ "$status" = 421 ]' 'the proxy keeps the port: forge.test:8443 gets 421'
+# A path a browser would resolve to another origin never redirects (raw path, as sent).
+evil='//evil.com/pull/1/x%2F..%2F..%2F..%2F..%2Fa%2Fb%2Fpull%2F1'
+hostile=$(curl -sS --path-as-is -o /dev/null -w '%{http_code} %{redirect_url}' "https://forge.test$evil")
+check '[ "${hostile%% *}" != 301 ] && [ -z "${hostile#* }" ]' "no redirect for $evil through nginx ($hostile)"
+
+# The shipped Caddyfile, run with its three settings from the environment.
+caddy() { curl -sS --connect-to forge.test:80:caddy:80 "$@"; }
+check '[ "$(caddy -o /dev/null -w "%{http_code}" -H "Authorization: token $token" http://forge.test/api/v3/meta)" = 200 ]' 'Caddy routes /api/v3 to the gateway'
+check '[ "$(caddy http://forge.test/api/v1/version | jq -r "has(\"version\")")" = true ]' 'Caddy routes /api/v1 to Forgejo'
+link=$(caddy -o /dev/null -w '%{http_code} %{redirect_url}' http://forge.test/e2e/oracle/pull/1)
+check '[ "$link" = "301 http://forge.test/e2e/oracle/pulls/1" ]' 'Caddy: /pull/1 redirects to /pulls/1'
+hostile=$(caddy --path-as-is -o /dev/null -w '%{http_code} %{redirect_url}' "http://forge.test$evil")
+check '[ "${hostile%% *}" != 301 ] && [ -z "${hostile#* }" ]' "no redirect for $evil through Caddy ($hostile)"
+# Caddy's site block answers only its own hostname, so another host's token never gets an answer.
+other=$(curl -sS -o /tmp/other.json -w '%{http_code}' --connect-to other.test:80:caddy:80 \
+    -H "Authorization: token $token" http://other.test/api/v3/user)
+check '! grep -q "\"login\"" /tmp/other.json' "another host gets no gateway answer through Caddy (HTTP $other)"
