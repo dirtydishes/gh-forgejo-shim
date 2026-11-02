@@ -45,7 +45,7 @@ pub fn launch(
         expect_real,
         all_hosts,
         look_up_logins,
-        extra_edits,
+        mut extra_edits,
     } = Plan::for_invocation(routed, host, env);
     let env_map: EnvMap = env
         .iter()
@@ -224,6 +224,12 @@ pub fn launch(
         .collect();
     let allowlist = config.hosts.clone();
     let shim = std::env::current_exe().unwrap_or_default();
+    // Every `--web` open and `gh browse` goes through the browser helper (§9).
+    let served_entries: Vec<String> = served.iter().map(|host| host.entry.clone()).collect();
+    extra_edits.push((
+        "GH_BROWSER",
+        Edit::Set(crate::launcher::browser::gh_browser(&shim, &served_entries)),
+    ));
     let credentials = ghconfig::credentials(&served);
 
     Some(run::run(Launch {

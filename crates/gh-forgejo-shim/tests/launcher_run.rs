@@ -868,3 +868,48 @@ fn a_repeated_depth_entry_still_counts_toward_the_cap() {
     );
     assert_eq!(output.status.code(), Some(127), "{output:?}");
 }
+
+#[test]
+fn the_browser_helper_rewrites_served_pr_pages_and_never_calls_itself() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let recorder = fixture.fake_gh(r#"printf '%s\n' "$@" > "$REPORT""#);
+    let open = |url: &str, original: &str, browser: Option<&Path>| {
+        let mut command = Command::new(SHIM);
+        command
+            .args(["__gfj-browser", "forge.test", "port.test:3443", url])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("REPORT", &fixture.report)
+            .env("FJ_SHIM_ORIG_GH_BROWSER", original);
+        if let Some(browser) = browser {
+            command.env("BROWSER", browser);
+        }
+        let output = command.output().expect("helper");
+        assert_eq!(output.status.code(), Some(0), "{url}: {output:?}");
+        fixture.report().trim().to_string()
+    };
+    let recorder_text = recorder.to_string_lossy().into_owned();
+    assert_eq!(
+        open("https://forge.test/o/r/pull/3", &recorder_text, None),
+        "https://forge.test/o/r/pulls/3"
+    );
+    assert_eq!(
+        open(
+            "https://port.test:3443/o/r/pull/3/files",
+            &recorder_text,
+            None
+        ),
+        "https://port.test:3443/o/r/pulls/3/files"
+    );
+    // The user's GH_BROWSER names this helper: skip it, use BROWSER; a GitHub URL is unchanged.
+    let itself = format!("'{SHIM}' __gfj-browser forge.test");
+    assert_eq!(
+        open("https://github.com/o/r/pull/3", &itself, Some(&recorder)),
+        "https://github.com/o/r/pull/3"
+    );
+    assert_eq!(
+        open("https://forge.test/o/r/pull/4", SHIM, Some(&recorder)),
+        "https://forge.test/o/r/pulls/4"
+    );
+}

@@ -166,7 +166,7 @@ pub fn gh_script(run_dir: &Path, shim: &Path) -> String {
     )
 }
 
-fn single_quote(text: &str) -> String {
+pub(crate) fn single_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
