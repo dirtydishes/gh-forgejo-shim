@@ -18,7 +18,9 @@ def main():
         cases = Path(temporary) / "cases"
         shutil.copytree(ROOT / "contract/cases", cases)
         # Any committed expected failure will do; a fixed name goes stale when its case is fixed.
-        expected_failure = next(case["id"] for _, case in source_cases if "xfail" in case)
+        expected_failure = next((case["id"] for _, case in source_cases if "xfail" in case), None)
+        if expected_failure is None:
+            raise RuntimeError("the ratchet self-test needs one committed case marked xfail")
         missing = cases / f"{expected_failure}.json"
         original = json.loads(missing.read_text())
         edited = dict(original)

@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -125,6 +126,26 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(launched(decoy, commands))
         self.assertTrue(any(case.get("kind") == "decoy" for _, case in load_cases(ROOT / "contract/cases")),
                         "a committed case must prove an off-list command still reaches the decoy")
+
+    def test_launch_list_gh_runs_real_gh_only_for_a_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            real = directory / "real gh"
+            real.write_text("#!/bin/sh\nprintf real\n")
+            real.chmod(0o755)
+            wrapper = directory / "gh"
+            wrapper.write_text(runner.gh_script(real))
+            wrapper.chmod(0o755)
+            for config, launched_call in ((directory / "gfj-0123456789abcdef", True),
+                                          (directory / "gh-config", False),
+                                          (directory / "gfj-backup", False)):
+                marker = directory / "marker"
+                result = subprocess.run([str(wrapper), "pr", "view"], capture_output=True, text=True,
+                                        env={"GH_CONFIG_DIR": str(config), "GFJS_DECOY_MARKER": str(marker)})
+                self.assertEqual((result.returncode, result.stdout), (0, "real") if launched_call else (97, ""),
+                                 config.name)
+                self.assertEqual(marker.exists(), not launched_call, config.name)
+                marker.unlink(missing_ok=True)
 
     def test_checksum_mismatch_refuses_executable(self):
         class Download:
