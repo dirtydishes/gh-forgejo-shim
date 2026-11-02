@@ -441,45 +441,54 @@ fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
 
 #[test]
 fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
-    let f = Fixture::new()?;
-    let managed_dir = f.home.join(".local/bin");
-    shim::install_shim(
-        Some(&managed_dir),
-        Some(&f.home),
-        &f.root.join("deleted-release/gfj"),
-        false,
-    )?;
-    let mut env = BTreeMap::from_iter(f.env());
-    env.insert(
-        "PATH".into(),
-        std::env::join_paths([&managed_dir, &f.bin])?
-            .to_string_lossy()
-            .into_owned(),
-    );
-    env.insert("FJ_SHIM_TOKEN".into(), "audit-dummy-token".into());
-    let mut options = doctor::CheckOptions::new(env.clone());
-    options.home = Some(f.home.clone());
-    options.config = Some(config::load_config_with_env(
-        Some(&f.home.join(".config/gh-forgejo-shim/config.toml")),
-        &env,
-    )?);
-    options.cwd = Some(f.root.clone());
-    options.fallback_dirs = Some(Vec::new());
-    options.check_current_repo = Some(false);
-    options.check_gui_path = Some(false);
-    options.platform = "linux".into();
-    let checks = doctor::run_checks(options)?;
-    let broken = Command::new(managed_dir.join("gh"))
-        .env_clear()
-        .envs(f.env())
-        .current_dir(&f.root)
-        .arg("--version")
-        .output()?;
-    assert!(!broken.status.success());
-    assert!(
-        doctor::has_failures(&checks),
-        "doctor reported a broken wrapper as healthy"
-    );
+    // The wrapper's binary is missing (a moved release), or exists but isn't executable.
+    for executable in [false, true] {
+        let f = Fixture::new()?;
+        let target = f.root.join("release/gfj");
+        if executable {
+            fs::create_dir_all(f.root.join("release"))?;
+            fs::write(&target, "#!/bin/sh\nexit 0\n")?;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644))?;
+        }
+        let managed_dir = f.home.join(".local/bin");
+        shim::install_shim(Some(&managed_dir), Some(&f.home), &target, false)?;
+        let mut env = BTreeMap::from_iter(f.env());
+        env.insert(
+            "PATH".into(),
+            std::env::join_paths([&managed_dir, &f.bin])?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        env.insert("FJ_SHIM_TOKEN".into(), "audit-dummy-token".into());
+        let mut options = doctor::CheckOptions::new(env.clone());
+        options.home = Some(f.home.clone());
+        options.config = Some(config::load_config_with_env(
+            Some(&f.home.join(".config/gh-forgejo-shim/config.toml")),
+            &env,
+        )?);
+        options.cwd = Some(f.root.clone());
+        options.fallback_dirs = Some(Vec::new());
+        options.check_current_repo = Some(false);
+        options.check_gui_path = Some(false);
+        options.platform = "linux".into();
+        let checks = doctor::run_checks(options)?;
+        let broken = Command::new(managed_dir.join("gh"))
+            .env_clear()
+            .envs(f.env())
+            .current_dir(&f.root)
+            .arg("--version")
+            .output()?;
+        assert!(!broken.status.success());
+        let managed = checks
+            .iter()
+            .find(|check| check.name == "managed gh")
+            .ok_or("no managed gh check")?;
+        assert!(
+            !managed.ok,
+            "doctor reported a broken wrapper as healthy (target exists: {executable}): {}",
+            managed.detail
+        );
+    }
     Ok(())
 }
 
