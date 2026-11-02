@@ -147,27 +147,44 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
     )))
 }
 
-/// Removes the managed wrapper from `~/.local/bin` and from every `PATH` directory under
-/// `home`, since `bootstrap` installs into the first writable one of those. Returns the paths it
-/// removed. With none to remove, it behaves as [`uninstall_shim`] on the default directory.
-pub fn uninstall_default_shims(home: Option<&Path>, path: Option<&str>) -> Result<Vec<PathBuf>> {
-    let mut candidates = vec![shim_path(None, home)?];
-    if let (Some(home), Some(path)) = (home, path) {
+/// Removes the managed wrapper from `~/.local/bin` and from every directory in `path_dirs` under
+/// `home`, since `bootstrap` installs into the first writable one of those. Pass the PATH as
+/// bootstrap reads it (`setup::current_path_dirs`). Only a regular file is removed: the shim never
+/// installs a symlink, so a `gh` symlink is the user's even when it points at a wrapper. Returns
+/// the paths removed. With none to remove, an existing `~/.local/bin/gh` gets [`uninstall_shim`]'s
+/// handling, and an absent one gives an empty list.
+pub fn uninstall_default_shims(home: Option<&Path>, path_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let default = shim_path(None, home)?;
+    let mut candidates = vec![default.clone()];
+    if let Some(home) = home {
         candidates.extend(
-            std::env::split_paths(path)
-                .filter(|dir| dir.is_absolute() && dir.starts_with(home))
+            path_dirs
+                .iter()
+                .filter(|dir| crate::setup::is_under_home(dir, home))
                 .map(|dir| dir.join("gh")),
         );
     }
-    let mut removed = Vec::new();
+    let mut removed = Vec::<PathBuf>::new();
     for candidate in candidates {
         // A directory listed twice finds the wrapper already gone the second time.
-        if is_managed_shim(&candidate) {
-            fs::remove_file(&candidate)?;
-            removed.push(candidate);
+        let regular = fs::symlink_metadata(&candidate).is_ok_and(|metadata| metadata.is_file());
+        if !regular || !is_managed_shim(&candidate) {
+            continue;
         }
+        if let Err(error) = fs::remove_file(&candidate) {
+            let mut message = format!("could not remove {}: {error}", candidate.display());
+            if !removed.is_empty() {
+                let done = removed.iter().map(|path| path.display().to_string());
+                message.push_str(&format!(
+                    "; already removed {}",
+                    done.collect::<Vec<_>>().join(", ")
+                ));
+            }
+            return Err(ShimError::new(message));
+        }
+        removed.push(candidate);
     }
-    if removed.is_empty() {
+    if removed.is_empty() && fs::symlink_metadata(&default).is_ok() {
         removed.push(uninstall_shim(None, home)?);
     }
     Ok(removed)
@@ -300,24 +317,45 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
     fn default_uninstall_removes_managed_wrappers_on_path_under_home() -> Result<()> {
         let home = unique_path("gh-forgejo-shim-uninstall-default");
-        let (cargo, other) = (home.join(".cargo/bin"), home.join("bin"));
+        let (cargo, other, linked) = (
+            home.join(".cargo/bin"),
+            home.join("bin"),
+            home.join("linked"),
+        );
         let outside = unique_path("gh-forgejo-shim-uninstall-outside");
-        for dir in [&cargo, &other, &outside] {
+        for dir in [&cargo, &other, &linked, &outside] {
             fs::create_dir_all(dir)?;
         }
         install_shim(Some(&cargo), Some(&home), Path::new("/opt/gfj"), false)?;
         install_shim(Some(&outside), Some(&home), Path::new("/opt/gfj"), false)?;
         fs::write(other.join("gh"), "#!/bin/sh\n")?;
-        let path = std::env::join_paths([&other, &cargo, &outside])
-            .map_err(|error| ShimError::new(error.to_string()))?;
+        // A user's symlink to a wrapper, and a `..` path that leaves HOME, are both left alone.
+        std::os::unix::fs::symlink(outside.join("gh"), linked.join("gh"))?;
+        let escape = home.join("..").join(
+            outside
+                .file_name()
+                .ok_or_else(|| ShimError::new("outside has no name"))?,
+        );
+        let path_dirs = [
+            other.clone(),
+            cargo.clone(),
+            linked.clone(),
+            escape,
+            outside.clone(),
+        ];
 
-        let removed = uninstall_default_shims(Some(&home), path.to_str())?;
+        let removed = uninstall_default_shims(Some(&home), &path_dirs)?;
 
         assert_eq!(removed, [cargo.join("gh")]);
         assert!(other.join("gh").exists(), "an unmanaged gh stays");
+        assert!(
+            fs::symlink_metadata(linked.join("gh")).is_ok(),
+            "a user's symlink stays"
+        );
         assert!(
             outside.join("gh").exists(),
             "a wrapper outside HOME needs --bin-dir"

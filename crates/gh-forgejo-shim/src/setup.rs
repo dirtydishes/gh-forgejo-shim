@@ -315,10 +315,7 @@ fn safe_visible_target_dir(directory: &Path, home: Option<&Path>) -> bool {
     if !directory.is_absolute() || !directory.is_dir() || !is_writable_dir(directory) {
         return false;
     }
-    let Some(home) = home else {
-        return false;
-    };
-    if !(directory == home || directory.starts_with(home)) {
+    if !home.is_some_and(|home| is_under_home(directory, home)) {
         return false;
     }
     let candidate = directory.join("gh");
@@ -362,7 +359,18 @@ fn default_fallback_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
-fn current_path_dirs(env: &EnvMap) -> Vec<PathBuf> {
+/// Whether `directory` is `home` or inside it. A `..` part is refused: `starts_with` compares path
+/// parts as text, so `$HOME/../other` would count as inside.
+pub(crate) fn is_under_home(directory: &Path, home: &Path) -> bool {
+    directory.is_absolute()
+        && !directory
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+        && directory.starts_with(home)
+}
+
+/// The PATH directories as bootstrap sees them, with `~` expanded.
+pub(crate) fn current_path_dirs(env: &EnvMap) -> Vec<PathBuf> {
     env.get("PATH")
         .map(|path| {
             std::env::split_paths(path)
