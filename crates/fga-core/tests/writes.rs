@@ -1,5 +1,5 @@
 use async_graphql::Request;
-use axum::{Json, Router, extract::Query, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
 use fga_core::{forgejo::Forgejo, graphql, ids::node_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -476,22 +476,10 @@ async fn ready_removes_one_prefix_and_refuses_an_unrepresentable_title() {
 
 /// A forge whose WIP prefix the gateway doesn't know (Forgejo derives draft from server-configured
 /// title prefixes, `models/issues/pull.go:798`, which no API exposes). Records every PATCHed title.
-fn draft_prefix_forge(title: &str) -> (Router, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-    draft_prefix_forge_with(title, Quirk::None)
-}
-
-#[derive(Clone, Copy)]
-enum Quirk {
-    None,
-    /// Another editor retitles the PR before Forgejo re-reads it for the first PATCH's reply.
-    Concurrent,
-    /// The PATCH that would put the title back fails.
-    RestoreFails,
-}
-
-fn draft_prefix_forge_with(
+/// `concurrent`: another editor retitles the PR before Forgejo re-reads it for the PATCH's reply.
+fn draft_prefix_forge(
     title: &str,
-    quirk: Quirk,
+    concurrent: Option<&'static str>,
 ) -> (Router, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     let current = std::sync::Arc::new(std::sync::Mutex::new(title.to_owned()));
     let patched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -508,28 +496,22 @@ fn draft_prefix_forge_with(
             "/api/v1/repos/o/r/pulls/1",
             get(move || async move { state(&read.lock().unwrap()) }).patch(
                 move |Json(body): Json<Value>| async move {
-                    let mut title = body["title"].as_str().unwrap().to_owned();
-                    let restore = !log.lock().unwrap().is_empty();
-                    log.lock().unwrap().push(title.clone());
-                    match quirk {
-                        Quirk::RestoreFails if restore => {
-                            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                        }
-                        Quirk::Concurrent => title = "someone else's title".into(),
-                        _ => {}
-                    }
+                    let written = body["title"].as_str().unwrap().to_owned();
+                    log.lock().unwrap().push(written.clone());
+                    let title = concurrent.map_or(written, str::to_owned);
                     *write.lock().unwrap() = title.clone();
-                    (StatusCode::CREATED, state(&title)).into_response()
+                    (StatusCode::CREATED, state(&title))
                 },
             ),
         );
     (app, patched)
 }
 
-/// gh prints success for any payload, so a draft change Forgejo didn't make must fail, and leave
-/// the title as it was.
+/// gh prints success for any payload, so a draft change Forgejo didn't make must fail. Forgejo's
+/// edit has no conditional write, so the gateway never rolls the title back over what may by then
+/// be someone else's edit; it reports the title Forgejo now shows (parallax r1#1, r2#1, r2#2).
 #[tokio::test]
-async fn draft_changes_fail_unchanged_when_the_forge_uses_another_prefix() {
+async fn draft_changes_fail_and_report_the_title_when_the_forge_uses_another_prefix() {
     let mutation = |name: &str| {
         format!(
             r#"mutation {{{name}(input:{{pullRequestId:"{}"}}){{pullRequest{{isDraft}}}}}}"#,
@@ -538,40 +520,26 @@ async fn draft_changes_fail_unchanged_when_the_forge_uses_another_prefix() {
     };
     let message = "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's";
 
-    let (app, patched) = draft_prefix_forge("T");
+    let (app, patched) = draft_prefix_forge("T", None);
     let response = execute(app, mutation("convertPullRequestToDraft")).await;
-    assert_eq!(response.errors[0].message, message);
-    assert_eq!(*patched.lock().unwrap(), ["WIP: T", "T"]);
-
-    let (app, patched) = draft_prefix_forge("DRAFT: T");
-    let response = execute(app, mutation("markPullRequestReadyForReview")).await;
-    assert_eq!(response.errors[0].message, message);
-    assert_eq!(*patched.lock().unwrap(), Vec::<String>::new());
-}
-
-/// The title goes back only if it is still the one the gateway wrote, and a failed restore is
-/// reported with the reason it was attempted (parallax r1#1, r1#2).
-#[tokio::test]
-async fn draft_rollback_never_overwrites_another_edit_or_hides_its_own_failure() {
-    let mutation = format!(
-        r#"mutation {{convertPullRequestToDraft(input:{{pullRequestId:"{}"}}){{pullRequest{{isDraft}}}}}}"#,
-        node_id("PullRequest", "o/r", 1)
-    );
-    let (app, patched) = draft_prefix_forge_with("T", Quirk::Concurrent);
-    let response = execute(app, mutation.clone()).await;
     assert_eq!(
         response.errors[0].message,
-        "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's; the title has since changed, so it was left as it is"
+        format!("{message}; the title is now \"WIP: T\"")
     );
     assert_eq!(*patched.lock().unwrap(), ["WIP: T"]);
 
-    let (app, patched) = draft_prefix_forge_with("T", Quirk::RestoreFails);
-    let response = execute(app, mutation).await;
+    let (app, patched) = draft_prefix_forge("T", Some("someone else's title"));
+    let response = execute(app, mutation("convertPullRequestToDraft")).await;
     assert_eq!(
         response.errors[0].message,
-        "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's; putting the title back failed, so it is still \"WIP: T\""
+        format!("{message}; the title is now \"someone else's title\"")
     );
-    assert_eq!(*patched.lock().unwrap(), ["WIP: T", "T"]);
+    assert_eq!(*patched.lock().unwrap(), ["WIP: T"]);
+
+    let (app, patched) = draft_prefix_forge("DRAFT: T", None);
+    let response = execute(app, mutation("markPullRequestReadyForReview")).await;
+    assert_eq!(response.errors[0].message, message);
+    assert_eq!(*patched.lock().unwrap(), Vec::<String>::new());
 }
 
 /// Forgejo's create ignores maintainer edits, so a fork PR gets them in a follow-up edit.

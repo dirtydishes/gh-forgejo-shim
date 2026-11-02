@@ -329,7 +329,7 @@ async fn set_draft(
     };
     // Forgejo decides draft by its own configured prefixes, which no API exposes
     // (`models/issues/pull.go:798`). A title the gateway's prefixes leave alone can't change it,
-    // and a changed draft state is checked, with the title put back if it didn't flip.
+    // and a changed draft state is checked.
     let unchanged = |outcome: &str| {
         async_graphql::Error::new(format!(
             "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's{outcome}"
@@ -339,9 +339,9 @@ async fn set_draft(
     if title == source.title {
         return Err(unchanged(""));
     }
-    let session = ctx.data_unchecked::<Session>();
-    let retitle = |title: String| {
-        session.edit_pull(
+    let edited = ctx
+        .data_unchecked::<Session>()
+        .edit_pull(
             &id.owner,
             &id.repository,
             id.number,
@@ -350,21 +350,12 @@ async fn set_draft(
                 ..Default::default()
             },
         )
-    };
-    let edited = retitle(title.clone()).await.map_err(write_error)?;
+        .await
+        .map_err(write_error)?;
     if edited.draft != draft {
-        // Put the title back only while it is still the one written here; never over another edit.
-        if edited.title != title {
-            return Err(unchanged(
-                "; the title has since changed, so it was left as it is",
-            ));
-        }
-        if retitle(source.title.clone()).await.is_err() {
-            return Err(unchanged(&format!(
-                "; putting the title back failed, so it is still {title:?}"
-            )));
-        }
-        return Err(unchanged(""));
+        // Forgejo's edit has no conditional write, so putting the title back could overwrite
+        // someone else's edit made meanwhile. Say what the title is now instead.
+        return Err(unchanged(&format!("; the title is now {:?}", edited.title)));
     }
     Ok(PullRequest::new(edited, &id.owner, &id.repository))
 }
