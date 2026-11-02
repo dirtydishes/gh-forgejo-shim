@@ -196,15 +196,22 @@ resolve a conversation; the gateway reports `false` for them, since it can't tel
 The `viewerCan*` flags are hints for a client's buttons; Forgejo enforces every action. Editing,
 closing and reopening a PR or a comment, and resolving a conversation, need write access to Forgejo's
 pull request or issue unit, but its API reports only code access (`permissions.push`). The gateway
-uses code access for both. That is exact for owners, admins and collaborators, and for teams with
-one access level across units; for a team with different levels per unit, a flag can be wrong
-either way. Auto-merge flags are exact: they ask the base branch's `user_can_merge`, which follows a
-merge allowlist, and are false in an archived repository.
+uses code access for both (Kell, 2026-11-02, rather than rebuilding Forgejo's team and collaborator
+rules from extra reads). That is exact for owners, admins, collaborators and personal repositories;
+in an organization repository where a team grants different access to code and pull requests, a flag
+can be wrong either way.
 
-A review thread's `line` is null unless its first comment was made on the PR's head commit. Forgejo
-keeps a comment's position after a push moves or deletes the line and doesn't report the comment
-outdated, so an older thread can't be placed on the current code; `originalLine` keeps the position.
-GitHub would still give a current line for a thread whose line survived the push.
+Auto-merge flags follow Forgejo's merge check. They are false in an archived repository, need code
+write access as the request's token allows it, and ask the base branch's `user_can_merge`, which
+reflects a merge allowlist; only code writers can join one. If the base branch is deleted, write
+access decides.
+
+A review thread's `originalLine` is the line the reviewer commented on, read from the end of the
+comment's diff hunk. Forgejo's own `position` is the line in the commit that last changed it, which
+differs once later commits move the line. `line` is the same value while the PR's head is still the
+commit the thread's review was made on, and null after a push: Forgejo's API doesn't say whether the
+push moved or deleted the line. GitHub would still give a current line for a thread whose line
+survived the push.
 
 ## 8. Web URLs (v1.1)
 
