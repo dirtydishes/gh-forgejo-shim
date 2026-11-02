@@ -481,8 +481,10 @@ helper. Every gh `--web` open and every `gh browse` goes through it.
 
 - `GH_BROWSER` is the shim's absolute path, shell-quoted for shlex, plus a hidden subcommand. gh
   appends the URL (fact 6).
-- The helper rewrites the URL only when its host is in *S* and its path is
-  `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a fragment. It changes
+- The helper rewrites the URL only when its host names a host in *S*, and its path is
+  `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a fragment. For an
+  allowlist entry with a port, both spellings count, the same two the gateway admits (§5). The
+  gateway's own links carry the port, from `public_url`, while URLs gh builds itself don't. It changes
   `/pull/` to `/pulls/` and leaves everything else as it was. Other URLs pass through unchanged.
 - It then opens the URL with the browser the user would have got, in gh's order: the user's
   original `GH_BROWSER` (from `FJ_SHIM_ORIG_GH_BROWSER`), the `browser` key in their
@@ -571,8 +573,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    path). gh's environment has none of the four token variables.
 9. **Socket path (§4).** A `TMPDIR` long enough to overflow `sun_path`: exit 1, a message naming
    `TMPDIR`, and nothing created.
-10. **Browser (§9).** `gh pr view --web` invokes the user's browser with `/pulls/N`. A non-PR URL
-    and a URL on another host pass through unchanged.
+10. **Browser (§9).** `gh pr view --web` invokes the user's browser with `/pulls/N`, for a forge on
+    the default port and for one on a custom port. A non-PR URL and a URL on another host pass
+    through unchanged.
 11. **Tokens (§3).** `gh auth token --hostname <forge>` prints the stored token. With no stored
     token, a launched `gh pr view` exits 4 with the login hint.
 12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
