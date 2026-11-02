@@ -470,6 +470,94 @@ fn bootstrap_keeps_the_port_of_an_allowlisted_host() -> TestResult {
     Ok(())
 }
 
+/// A checkout whose only remote is origin at `url`, with `ssh -G` answering `ssh_host` for any
+/// alias, as the user's SSH config would.
+fn checkout_with_origin(
+    url: &str,
+    ssh_host: &str,
+) -> Result<CliFixture, Box<dyn std::error::Error>> {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.git(["remote", "set-url", "origin", url])?;
+    fixture.write_executable("ssh", &format!("#!/bin/sh\necho 'hostname {ssh_host}'\n"))?;
+    Ok(fixture)
+}
+
+#[test]
+fn bootstrap_never_allowlists_a_remote_gh_reads_differently() -> TestResult {
+    // gh drops `www.`, resolves an SSH alias with `ssh -G`, and can't parse a path with three
+    // parts, so it resolves no repository here even with the remote's host allowlisted, and the
+    // wrapper delegates. Allowlisting the host as git spells it would route nothing.
+    for (url, ssh_host) in [
+        ("https://www.forge.example.com/me/proj.git", "unused"),
+        ("git@forge-alias:me/proj.git", "forge.example.com"),
+        ("https://forge.example.com/forgejo/me/proj.git", "unused"),
+    ] {
+        let fixture = checkout_with_origin(url, ssh_host)?;
+
+        let stdout = bootstrap(&fixture, &[])?;
+
+        assert!(!stdout.contains("allowlisted"), "{url}: {stdout}");
+        assert!(
+            !stdout.contains("config add-host www")
+                && !stdout.contains("config add-host forge-alias"),
+            "{url}: a command names a host gh never uses: {stdout}"
+        );
+        assert_eq!(shim_config(&fixture)?, "", "{url} was allowlisted");
+    }
+    Ok(())
+}
+
+#[test]
+fn bootstrap_never_names_an_ssh_alias_of_github_in_a_command() -> TestResult {
+    // The usual setup for two GitHub accounts: gh turns github-work into github.com everywhere.
+    let fixture = checkout_with_origin("git@github-work:org/repo.git", "github.com")?;
+
+    let stdout = bootstrap(&fixture, &[])?;
+
+    assert!(!stdout.contains("add-host github-work"), "{stdout}");
+    assert!(
+        stdout.contains("detected GitHub repository github.com/org/repo"),
+        "{stdout}"
+    );
+    assert_eq!(shim_config(&fixture)?, "", "something was allowlisted");
+    Ok(())
+}
+
+#[test]
+fn bootstrap_reports_two_entries_for_one_hostname_and_adds_none() -> TestResult {
+    // Two entries for one hostname route neither; a third, or a hint to add one, can't help.
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+    let config_dir = fixture.home().join(".config/gh-forgejo-shim");
+    fs::create_dir_all(&config_dir)?;
+    let config = "hosts = [\"forge.example.com\", \"forge.example.com:3000\"]\n";
+    fs::write(config_dir.join("config.toml"), config)?;
+
+    let stdout = bootstrap(&fixture, &[])?;
+
+    assert!(
+        stdout.contains("the allowlist has more than one entry for forge.example.com"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("config add-host"), "{stdout}");
+    assert_eq!(shim_config(&fixture)?, config);
+    Ok(())
+}
+
+#[test]
+fn bootstrap_says_when_fj_shim_hosts_hides_the_entry_it_wrote() -> TestResult {
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+
+    let stdout = bootstrap(&fixture, &[("FJ_SHIM_HOSTS", "other.example.com")])?;
+
+    assert!(stdout.contains("allowlisted forge.example.com"), "{stdout}");
+    assert!(
+        stdout.contains("FJ_SHIM_HOSTS is set, and replaces the config file's hosts"),
+        "{stdout}"
+    );
+    Ok(())
+}
+
 #[test]
 fn bootstrap_in_a_fork_leaves_an_unknown_forge_upstream_alone() -> TestResult {
     // Unchanged from before: gh knows github.com and not the forge, so it resolves the GitHub
