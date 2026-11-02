@@ -25,6 +25,8 @@ const MARKER_FILE: &str = ".gh-forgejo-shim-git-recorder";
 const CREATED_DIRECTORY: &str = "created directory";
 const SECRET_REPLACEMENT: &str = "[REDACTED]";
 const EXCERPT_LIMIT: usize = 4096;
+// The recorder's own files carry their marker in the first few lines.
+const MAX_HEAD_BYTES: u64 = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitRecorder {
@@ -136,13 +138,26 @@ fn marker_header() -> String {
 /// Whether `path` is a regular file, not a symlink, that starts the way the recorder writes it.
 fn written_by_recorder(path: &Path, header: &str) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
-        && fs::read(path).is_ok_and(|bytes| bytes.starts_with(header.as_bytes()))
+        && read_head(path).is_some_and(|bytes| bytes.starts_with(header.as_bytes()))
 }
 
 fn created_directory(marker: &Path) -> bool {
-    fs::read_to_string(marker).is_ok_and(|text| {
+    read_head(marker).is_some_and(|bytes| {
+        let text = String::from_utf8_lossy(&bytes);
         text.contains(MARKER) && text.lines().any(|line| line == CREATED_DIRECTORY)
     })
+}
+
+/// The first bytes of `path`, following symlinks. Bytes, not text: a check that fails on
+/// non-UTF-8 content would let a recorder pass as something else.
+fn read_head(path: &Path) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_HEAD_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(bytes)
 }
 
 pub fn git_recorder_script(recorder_program: &Path, real_git: &Path, trace_path: &Path) -> String {
@@ -415,10 +430,14 @@ fn prepend_path(directory: &Path, path_value: &str) -> String {
     }
 }
 
-fn is_recorder_wrapper(wrapper: &Path) -> bool {
-    fs::read_to_string(wrapper)
-        .map(|text| text.contains(MARKER))
-        .unwrap_or(false)
+/// Whether `path`, following symlinks, mentions the recorder marker. It refuses recorders as
+/// real git, so it matches more loosely than `written_by_recorder`.
+fn is_recorder_wrapper(path: &Path) -> bool {
+    read_head(path).is_some_and(|bytes| {
+        bytes
+            .windows(MARKER.len())
+            .any(|window| window == MARKER.as_bytes())
+    })
 }
 
 fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
@@ -849,6 +868,20 @@ mod tests {
         };
 
         assert!(refused(&first.wrapper_path));
+        // Non-UTF-8 bytes must not hide a recorder, including as its own real git.
+        let mut script = fs::read(&first.wrapper_path)?;
+        script.extend_from_slice(b"#\xff\n");
+        fs::write(&first.wrapper_path, script)?;
+        assert!(refused(&first.wrapper_path));
+        let own = create_git_recorder(
+            &root.join("trace.jsonl"),
+            Some(&first.wrapper_path),
+            None,
+            Some(&first.wrapper_dir),
+            &HashMap::new(),
+            Path::new("/tmp/gfj"),
+        );
+        assert!(own.is_err_and(|error| error.message().contains("not the real git")));
         assert!(refused(&directory.join("git")));
         assert!(refused(&directory.join("..").join("second").join("git")));
         assert!(
