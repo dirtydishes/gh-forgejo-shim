@@ -139,7 +139,13 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         .unwrap_or_else(|| config::config_path(options.home.as_deref()));
     let mut config = config::load_config_with_env(Some(&config_path), &options.env)?;
     let plan = plan_repo(options.cwd.as_deref(), &options.env, &config);
-    let left_to_gh = matches!(plan, Some(RepoPlan::LeaveToGh { .. }));
+    let left_to_gh = matches!(
+        plan,
+        Some(RepoPlan::LeaveToGh { .. } | RepoPlan::NotResolved { .. })
+    );
+    // Auth advice names a repository's host only when bootstrap allowlists it; any other host
+    // here may be GitHub's, and `auth login` would send it the Forgejo token to validate.
+    let allowlisting = matches!(plan, Some(RepoPlan::Allowlist { .. }));
     let setup_model = setup::inspect(SetupInspectOptions {
         env: options.env.clone(),
         home: options.home.clone(),
@@ -211,14 +217,58 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
             ));
             Some(repo)
         }
-        Some(RepoPlan::Conflict { repo, hostname }) => {
+        Some(RepoPlan::NotResolved { first, notes }) => {
+            let pinned = ["GH_HOST", "GH_REPO"]
+                .iter()
+                .find_map(|name| {
+                    options
+                        .env
+                        .get(*name)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| format!(" ({name} is {value})"))
+                })
+                .unwrap_or_default();
+            let mut message = format!(
+                "gh resolves no repository here{pinned}, so the wrapper hands this checkout to \
+                 real gh; leaving {} out of the Forgejo allowlist",
+                first.host
+            );
+            for note in notes {
+                message.push_str("; ");
+                message.push_str(&note);
+            }
             checks.push(BootstrapCheck::new(
                 "repository",
-                false,
+                true,
+                message,
+                Vec::<String>::new(),
+            ));
+            Some(first)
+        }
+        Some(RepoPlan::Conflict {
+            repo,
+            hostname,
+            entries,
+        }) => {
+            let message = if entries.len() > 1 {
                 format!(
                     "the allowlist has more than one entry for {hostname}, so the wrapper routes \
                      none of them; keep one with gh-forgejo-shim config remove-host"
-                ),
+                )
+            } else {
+                format!(
+                    "the allowlist's entry {} doesn't serve {}: a host with a port needs an entry \
+                     with that port, and a second entry for {hostname} would leave both \
+                     unrouted; replace it with gh-forgejo-shim config remove-host and config \
+                     add-host",
+                    entries.join(", "),
+                    repo.host
+                )
+            };
+            checks.push(BootstrapCheck::new(
+                "repository",
+                false,
+                message,
                 Vec::<String>::new(),
             ));
             Some(repo)
@@ -317,7 +367,7 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         ));
     } else {
         checks.push(auth_check(
-            repo.as_ref(),
+            repo.as_ref().filter(|_| allowlisting),
             &config,
             &options.env,
             options.home.as_deref(),
@@ -340,12 +390,19 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
 enum RepoPlan {
     /// Allowlist `entry`: the wrapper routes `repo` to it, or will once it's allowlisted.
     Allowlist { repo: RepoRef, entry: String },
-    /// Real gh keeps `repo`. `notes` say what was passed over and why, each a clause of the
-    /// message.
+    /// gh resolves `repo` and real gh keeps it. `notes` say what was passed over and why, each a
+    /// clause of the message.
     LeaveToGh { repo: RepoRef, notes: Vec<String> },
-    /// The allowlist already has entries for `hostname` that route nowhere, as two entries for
-    /// one hostname do; adding another wouldn't help.
-    Conflict { repo: RepoRef, hostname: String },
+    /// gh resolves no repository here, so the wrapper hands every command to real gh: `GH_HOST`
+    /// or `GH_REPO` points elsewhere, or gh can't read `first`, the first remote.
+    NotResolved { first: RepoRef, notes: Vec<String> },
+    /// `entries` share `hostname` and don't serve this checkout: two or more route none of
+    /// them, and one has another port. Adding an entry wouldn't help.
+    Conflict {
+        repo: RepoRef,
+        hostname: String,
+        entries: Vec<String>,
+    },
     /// `repo`'s host isn't a host name the shim can use.
     Unusable { repo: RepoRef },
 }
@@ -356,18 +413,33 @@ enum RepoPlan {
 /// the wrapper would then route this checkout to it: whether it does depends on what else gh
 /// knows, such as a hosts.yml that names github.com.
 fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPlan> {
-    let current = doctor::current_repo(cwd, env, config)?;
-    let resolved = current.resolved_by_gh;
-    let current = current.repo;
+    let found = doctor::current_repo(cwd, env, config);
+    let first_remote = repo::detect_from_git(cwd);
+    // What gh acts on here, if it resolves anything itself; doctor's first-remote fallback is
+    // not that, and with GH_HOST or GH_REPO pointing elsewhere there's nothing at all.
+    let resolved = found
+        .as_ref()
+        .filter(|found| found.resolved_by_gh)
+        .map(|found| found.repo.clone());
+    let first = found.map(|found| found.repo).or(first_remote.clone())?;
+    let leave = |notes: Vec<String>| match resolved.clone() {
+        Some(repo) => RepoPlan::LeaveToGh { repo, notes },
+        None => RepoPlan::NotResolved {
+            first: first.clone(),
+            notes,
+        },
+    };
     // Already routed: write the entry that routes it. gh drops a remote's port, and its spelling
     // beside an entry with one would leave two entries for one hostname, which routes neither.
-    if let Some(entry) = doctor::allowlist_entry(config, &current.host).filter(|_| resolved) {
-        return Some(RepoPlan::Allowlist {
-            repo: current,
-            entry,
-        });
+    if let Some(repo) = resolved.as_ref() {
+        if let Some(entry) = doctor::allowlist_entry(config, &repo.host) {
+            return Some(RepoPlan::Allowlist {
+                repo: repo.clone(),
+                entry,
+            });
+        }
     }
-    let candidates = [Some(current.clone()), repo::detect_from_git(cwd)]
+    let candidates = [resolved.clone(), first_remote]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
@@ -389,19 +461,13 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
         .into_iter()
         .find(|repo| !doctor::is_github_host(env, &repo.host))
     else {
-        return Some(RepoPlan::LeaveToGh {
-            repo: current,
-            notes,
-        });
+        return Some(leave(notes));
     };
     let Some(entry) = config::normalized_forgejo_host(&candidate.host) else {
-        return Some(if candidate.host == current.host {
-            RepoPlan::Unusable { repo: current }
+        return Some(if candidate.host == first.host && resolved.is_none() {
+            RepoPlan::Unusable { repo: candidate }
         } else {
-            RepoPlan::LeaveToGh {
-                repo: current,
-                notes,
-            }
+            leave(notes)
         });
     };
     let hostname = repo::gh_hostname(&candidate.host);
@@ -409,11 +475,14 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
     let sharing = config
         .hosts
         .iter()
-        .any(|listed| repo::gh_hostname(listed) == hostname);
-    if sharing && allowlisted.is_none() {
+        .filter(|listed| repo::gh_hostname(listed) == hostname)
+        .cloned()
+        .collect::<Vec<_>>();
+    if allowlisted.is_none() && !sharing.is_empty() {
         return Some(RepoPlan::Conflict {
-            repo: current,
+            repo: candidate,
             hostname,
+            entries: sharing,
         });
     }
     let mut trial = config.clone();
@@ -438,10 +507,10 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
     // An allowlisted host needs no hint: there's nothing to add.
     if allowlisted.is_none() {
         if gh_reads_a_remote_on(cwd, env, config, &hostname) {
-            if candidate.host != current.host {
+            if let Some(repo) = resolved.as_ref().filter(|repo| repo.host != candidate.host) {
                 notes.push(format!(
                     "{} was left out too, because gh, and so the wrapper, acts on {}/{}/{} here",
-                    candidate.host, current.host, current.owner, current.name
+                    candidate.host, repo.host, repo.owner, repo.name
                 ));
             }
             notes.push(format!(
@@ -458,10 +527,7 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
             ));
         }
     }
-    Some(RepoPlan::LeaveToGh {
-        repo: current,
-        notes,
-    })
+    Some(leave(notes))
 }
 
 /// Whether gh reads a remote on `hostname` in this checkout, as it spells remotes: `GH_HOST`

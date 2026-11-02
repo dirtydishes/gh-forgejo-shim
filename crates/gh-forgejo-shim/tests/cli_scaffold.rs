@@ -558,6 +558,98 @@ fn bootstrap_says_when_fj_shim_hosts_hides_the_entry_it_wrote() -> TestResult {
     Ok(())
 }
 
+fn write_shim_config(fixture: &CliFixture, text: &str) -> io::Result<()> {
+    let dir = fixture.home().join(".config/gh-forgejo-shim");
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join("config.toml"), text)
+}
+
+#[test]
+fn bootstrap_never_names_a_github_enterprise_host_in_auth_advice() -> TestResult {
+    // gh resolves the GHES upstream; the forge origin's two entries conflict. Auth advice that
+    // named the GHES host would send it the Forgejo token when the user ran it.
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+    write_gh_hosts(&fixture, &["github.com", "ghe.corp.example"])?;
+    fixture.git([
+        "remote",
+        "add",
+        "upstream",
+        "https://ghe.corp.example/team/proj.git",
+    ])?;
+    write_shim_config(
+        &fixture,
+        "hosts = [\"forge.example.com\", \"forge.example.com:3000\"]\n",
+    )?;
+
+    let stdout = bootstrap(&fixture, &[])?;
+
+    assert!(!stdout.contains("auth login ghe.corp.example"), "{stdout}");
+    assert!(!stdout.contains("add-host ghe.corp.example"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn doctor_never_names_a_github_enterprise_host_from_hosts_yml_in_a_command() -> TestResult {
+    // The hosts.yml key carries a port, so gh resolves nothing and doctor falls back to origin.
+    let fixture = checkout_with_origin("https://ghe.corp.example:8443/team/proj.git", "unused")?;
+    write_gh_hosts(&fixture, &["ghe.corp.example:8443"])?;
+
+    let stdout = doctor(&fixture, &[("FJ_SHIM_HOSTS", "")])?;
+
+    assert!(!stdout.contains("add-host ghe.corp.example"), "{stdout}");
+    assert!(
+        stdout.contains("ghe.corp.example is in your gh hosts.yml"),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn bootstrap_reports_one_entry_with_another_port_as_a_mismatch() -> TestResult {
+    // One entry, not two: it doesn't serve the :8443 repository, and a second entry for the
+    // hostname would leave both unrouted.
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+    let config = "hosts = [\"forge.example.com:3000\"]\n";
+    write_shim_config(&fixture, config)?;
+
+    let stdout = bootstrap(
+        &fixture,
+        &[("GH_REPO", "forge.example.com:8443/owner/repo")],
+    )?;
+
+    assert!(!stdout.contains("more than one entry"), "{stdout}");
+    assert!(
+        stdout.contains("forge.example.com:3000 doesn't serve forge.example.com:8443"),
+        "{stdout}"
+    );
+    assert_eq!(shim_config(&fixture)?, config);
+    Ok(())
+}
+
+#[test]
+fn bootstrap_says_why_gh_acts_on_no_remote_when_gh_host_points_elsewhere() -> TestResult {
+    // GH_HOST=github.com keeps only GitHub remotes, of which there are none, so the wrapper
+    // hands this checkout to real gh; the forge origin can still be allowlisted elsewhere.
+    let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
+
+    let stdout = bootstrap(&fixture, &[("GH_HOST", "github.com")])?;
+
+    assert!(
+        stdout.contains("gh resolves no repository here (GH_HOST is github.com)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("run gh-forgejo-shim config add-host forge.example.com"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("could not detect a Forgejo repository"),
+        "{stdout}"
+    );
+    assert_eq!(shim_config(&fixture)?, "", "something was allowlisted");
+    Ok(())
+}
+
 #[test]
 fn bootstrap_in_a_fork_leaves_an_unknown_forge_upstream_alone() -> TestResult {
     // Unchanged from before: gh knows github.com and not the forge, so it resolves the GitHub

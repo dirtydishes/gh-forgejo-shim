@@ -160,16 +160,28 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                     ),
                     Vec::<String>::new(),
                 ));
-            } else if resolved_by_gh || config::is_known_github_host(Some(&repo.host)) {
-                // gh resolves it, through github.com or the user's own gh hosts (GitHub
-                // Enterprise, say), so the wrapper hands it to real gh.
+            } else if resolved_by_gh || is_github_host(&options.env, &repo.host) {
+                // gh resolves it, or it's GitHub's: github.com, or a host in the user's own gh
+                // hosts.yml (GitHub Enterprise, say). The wrapper hands it to real gh, and no
+                // command here may name it: allowlisting GHES would send it the Forgejo token.
+                let mut message = format!(
+                    "{} will delegate to the real GitHub CLI for {}/{}",
+                    repo.host, repo.owner, repo.name
+                );
+                if !config::is_known_github_host(Some(&repo.host))
+                    && in_gh_hosts_yml(&options.env, &repo.host)
+                {
+                    message.push_str(&format!(
+                        "; {} is in your gh hosts.yml, so doctor takes it for GitHub Enterprise; \
+                         if it's a Forgejo server, allowlist it with gh-forgejo-shim config \
+                         add-host HOST",
+                        repo.host
+                    ));
+                }
                 checks.push(Check::new(
                     "current repo host",
                     true,
-                    format!(
-                        "{} will delegate to the real GitHub CLI for {}/{}",
-                        repo.host, repo.owner, repo.name
-                    ),
+                    message,
                     Vec::<String>::new(),
                 ));
             } else {
