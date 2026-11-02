@@ -350,6 +350,11 @@ fn audit_route_signal_passthrough_restores_default_actions() -> TestResult {
     for &signal in signals {
         let fixture = Fixture::new()?;
         executable(&fixture.real_gh, &format!("#!/bin/sh\nkill -{signal} $$\n"))?;
+        // A signal ignored on entry can't be reset by sh (Docker leaves SIGRTMIN ignored), so
+        // gh can't die of it there and the case doesn't apply.
+        if Command::new(&fixture.real_gh).status()?.signal() != Some(signal) {
+            continue;
+        }
         let output = fixture.run(&mut fixture.gh(&["--version"]))?;
         assert_eq!(
             output.status.signal(),
