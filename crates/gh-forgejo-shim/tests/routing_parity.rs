@@ -519,6 +519,62 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        name: "only the first argument selects the repository",
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&[
+            "issue",
+            "transfer",
+            "123",
+            "https://github.com/other/target",
+            "-R",
+            "forge.test/local/project",
+        ]),
+        host_only: true,
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a bad escape in a remote URL's fragment drops it",
+        remotes: &[
+            ("origin", "https://forge.test/local/project.git", None),
+            (
+                "upstream",
+                "https://github.com/up/stream.git?q#bad%ZZ",
+                None,
+            ),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "a remote URL with a port that isn't digits is dropped",
+        remotes: &[
+            ("origin", "https://forge.test/local/project.git", None),
+            ("upstream", "https://github.com:bad/up/stream.git", None),
+        ],
+        gh_hosts: &[GITHUB, FORGE],
+        expected: Some((FORGE, "local", "project")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
+        name: "an alias expansion skips shlex comments",
+        remotes: &[
+            ("origin", "https://github.com/me/fork.git", None),
+            ("upstream", "https://forge.test/up/stream.git", None),
+        ],
+        resolved: &[("origin", "base")],
+        gh_hosts: &[GITHUB, FORGE],
+        command: Some(&["vars"]),
+        aliases: &[("vars", "# comment\nvariable list")],
+        expected: Some((FORGE, "up", "stream")),
+        route: Some(FORGE),
+        ..BASE
+    },
+    Case {
         name: "gh api with an absolute URL goes where the URL says",
         remotes: &[ORIGIN_FORGE],
         command: Some(&["api", "https://api.github.com/user"]),
@@ -748,8 +804,9 @@ impl Fixture {
                 self.root.join("no-socket").display(),
                 case.aliases
                     .iter()
+                    // A JSON string is a double-quoted YAML scalar, so `\n` stays a newline.
                     .map(|(name, expansion)| {
-                        format!("    {name}: '{}'\n", expansion.replace('\'', "''"))
+                        format!("    {name}: {}\n", Value::from(*expansion))
                     })
                     .collect::<String>()
             ),
