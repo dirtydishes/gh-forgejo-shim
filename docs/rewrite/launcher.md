@@ -114,13 +114,28 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   `git_protocol`, `editor`, `pager`, `prompt` and `browser` carry over. With no user
   `config.yml`, it holds only those two keys. If the user's file doesn't parse, the launcher stops
   with an error naming it (section 6); plain gh would fail on it too.
-- **`hosts.yml`:** one entry per served host (the set *S*, below), each with `oauth_token` and the
-  `git_protocol` from the user's `hosts.yml` entry for that host, if any. It has no `user` key,
-  so `gh auth status` asks the gateway for the login. It has no github.com entry and no other
-  host.
+- **`hosts.yml`:** one entry for every host in the user's own `hosts.yml`, and one for every
+  Forgejo host on the shim's allowlist, by gh's portless hostname. Each entry has an
+  `oauth_token`, plus the `git_protocol` from the user's entry for that host, if any. No entry has
+  a `user` key, so `gh auth status` asks the gateway for the login.
+  - A served host (the set *S*, below) gets its real token.
+  - Every other host gets the placeholder `gfj-not-served`.
 
-*S* is the routed host. For a host-less `gh auth status` it is every configured Forgejo host that
-has a token, so the status lists all of them.
+The placeholders matter because of how gh finds a token. With no token in `hosts.yml` for a
+host, gh falls back to the Keychain's unkeyed slot for it (`gh:<host>`, user `""`;
+`gh/internal/config/config.go:320-324,382-384`). Every normal secure-storage login fills that
+slot (`config.go:651-652`), and moving `GH_CONFIG_DIR` doesn't move the Keychain. Without a
+placeholder, a github.com request from a launched gh would carry the user's real GitHub token
+down the socket. A non-empty token in `hosts.yml` wins over the Keychain
+(`config.go:301-304`), so the placeholder blocks that fallback. A host missing from the user's
+`hosts.yml` has no Keychain token, since gh's login writes both together.
+
+The key set, the user's hosts plus the allowlist hosts, is also what routing (L2,
+`repo::GhHosts`) assumes gh knows. A launched gh therefore resolves the same default host
+(`go-gh/pkg/auth/auth.go:146-156`) and the same remote as the wrapper predicted.
+
+*S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
+token, so the status reports all of them.
 
 What this guarantees:
 
@@ -131,7 +146,8 @@ What this guarantees:
 - **Aliases and settings work inside a Forgejo checkout.** Extensions work too, since the data
   directory is untouched.
 - **The launched gh holds credentials only for the hosts in *S*.** github.com and every other host
-  have none, so a request to them carries no token, and the gateway rejects it (L1).
+  have the placeholder, which no server accepts, and the gateway rejects their requests with 421
+  without contacting any upstream (L1).
 
 The cost:
 
@@ -139,8 +155,9 @@ The cost:
   The delegate list in section 2 keeps the commands that write config out of the launcher. An
   alias that expands to `config set` inside a Forgejo checkout loses its write. This is rare, and
   L3's docs name it.
-- A host-less `gh auth status` inside a Forgejo checkout shows only Forgejo hosts. Outside one, it
-  delegates and shows the user's normal hosts.
+- A host-less `gh auth status` inside a Forgejo checkout reports the Forgejo hosts as logged in.
+  The user's other hosts, github.com included, show as failing, because a launched gh can't reach
+  them. Outside a Forgejo checkout, it delegates and shows the user's normal hosts.
 - Inside a launched gh, git fetches that gh starts, such as `gh pr checkout`, get no gh credential
   for other hosts. A private GitHub submodule fetched by `gh pr checkout` in a Forgejo repo fails
   to authenticate. Git's own credential helpers still apply.
@@ -436,10 +453,12 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 2. **Aliases (§2, §3).** In a Forgejo checkout, an alias `co` = `pr view` runs through the
    launcher and prints the PR. A shell alias `!gh api https://api.github.com/user` runs plain gh
    with the user's original environment (§7).
-3. **No foreign credential reaches the gateway (§3, §5).** With `GH_TOKEN` set and a github.com
-   entry in the user's `hosts.yml`, a host-less `gh auth status` in a Forgejo checkout lists the
-   Forgejo hosts. The gateway logs no request with a github.com `Host` and no request carrying the
-   GitHub token. With `GH_ENTERPRISE_TOKEN` set, the Forgejo host still gets its own token.
+3. **No foreign credential reaches the gateway (§3, §5).** Set up `GH_TOKEN`, a github.com entry
+   in the user's `hosts.yml`, and a GitHub token in the Keychain's unkeyed `gh:github.com` slot
+   (Linux gate: a test keyring). A host-less `gh auth status` in a Forgejo checkout reports the
+   Forgejo hosts as logged in. Every request the gateway sees for any other host carries only the
+   placeholder, and gets 421 without any upstream contact. No request carries the GitHub token.
+   With `GH_ENTERPRISE_TOKEN` set, the Forgejo host still gets its own token.
 4. **Signals (§6).** SIGTERM to the launcher: gh gets SIGTERM, the launcher dies by SIGTERM, and
    the run directory is gone. SIGINT to the process group: when gh dies by SIGINT, so does the
    launcher, and the directory is gone. In `gh pr list | head -1`, when gh dies of SIGPIPE, the
@@ -478,8 +497,12 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 
 1. **The token sits in a private `hosts.yml` for the length of a launched call** (§3). The
    alternative, the environment, leaks across hosts through gh's git credential helper.
-2. **A launched gh has no credential for any host but the served Forgejo hosts** (§3). A host-less
-   `gh auth status` in a Forgejo checkout shows only Forgejo hosts. Git fetches started by gh get
-   no gh credential for other hosts.
+2. **A launched gh has no credential for any host but the served Forgejo hosts** (§3). Kell
+   approved this at `cc8b38b`. Review then found the original mechanism leaked: gh fell back to the
+   Keychain. The fix lists the user's other hosts in the private `hosts.yml` with a placeholder
+   token, which changes two things the user sees, so this goes back to Kell. A host-less
+   `gh auth status` in a Forgejo checkout now shows the user's other hosts as failing, not absent.
+   The gateway sees those requests, with the placeholder only, and refuses them locally. Git
+   fetches started by gh get no working credential for other hosts.
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
