@@ -181,7 +181,6 @@ fn audit_cred_import_rejects_github_default_port() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C2: fails until gh-forgejo-shim-jko.19 is fixed"]
 fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(

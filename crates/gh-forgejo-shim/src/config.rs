@@ -94,12 +94,7 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         let text = fs::read_to_string(&config_path).map_err(|error| {
             ShimError::new(format!("could not read {}: {error}", config_path.display()))
         })?;
-        raw = toml::from_str(&text).map_err(|error| {
-            ShimError::new(format!(
-                "could not parse {}: {error}",
-                config_path.display()
-            ))
-        })?;
+        raw = toml::from_str(&text).map_err(|error| parse_error(&config_path, &text, &error))?;
     }
 
     let mut hosts = raw
@@ -185,6 +180,25 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
         paths: PathsConfig { gh, fj },
         path: config_path,
     })
+}
+
+/// Names the line but never quotes the source, which can hold a URL password. Serde quotes a
+/// mistyped string value inside the message itself, so that is cut out too.
+fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
+    let mut message = error.message().to_string();
+    if let (Some(start), Some(end)) = (message.find('"'), message.rfind('"')) {
+        if start < end {
+            message.replace_range(start + 1..end, "...");
+        }
+    }
+    match error.span().and_then(|span| text.get(..span.start)) {
+        Some(before) => ShimError::new(format!(
+            "could not parse {} at line {}: {message}",
+            path.display(),
+            before.matches('\n').count() + 1
+        )),
+        None => ShimError::new(format!("could not parse {}: {message}", path.display())),
+    }
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
@@ -504,6 +518,28 @@ gh = "/bin/gh#real"
             .expect_err("relative ca_file")
             .to_string()
             .contains("expected an absolute path"));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn parse_errors_name_the_line_without_quoting_values() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        for (text, line) in [
+            (
+                "hosts = []\nhost = \"https://user:secret@git.example.com\"\n",
+                2,
+            ),
+            ("hosts = []\n[paths]\ngh = \"/bin/secret\n", 3),
+        ] {
+            fs::write(&path, text)?;
+            let error = load_config_with_env(Some(&path), &EnvMap::new())
+                .expect_err("invalid config")
+                .to_string();
+            assert!(error.contains(&format!("at line {line}:")), "{error}");
+            assert!(!error.contains("secret"), "{error}");
+        }
         fs::remove_dir_all(root).ok();
         Ok(())
     }
