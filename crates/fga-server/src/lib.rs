@@ -330,7 +330,7 @@ fn rest_error(error: Error) -> Response {
         Error::NotFound => StatusCode::NOT_FOUND,
         Error::Forbidden => StatusCode::FORBIDDEN,
         Error::Timeout => StatusCode::GATEWAY_TIMEOUT,
-        Error::Upstream => StatusCode::BAD_GATEWAY,
+        Error::Upstream | Error::TooLarge => StatusCode::BAD_GATEWAY,
     };
     let mut body = json!({"message": error.to_string()});
     if matches!(error, Error::Unauthorized) {
