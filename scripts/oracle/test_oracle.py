@@ -131,9 +131,13 @@ class OracleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=root) as temp:
             expected, actual = Path(temp) / 'expected', Path(temp) / 'actual'
             expected.mkdir(); actual.mkdir()
+            backend = Path(temp) / 'forgejo-pulls.json'
+            backend.write_text(json.dumps([{'number': 1, 'head': {'sha': 'a' * 40}}]))
             for case in run.CASES:
                 for ext in ('stdout', 'stderr', 'exit'):
                     output = '{"title":"scenario: draft","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE"}\n' if ext == 'stdout' else '0\n' if ext == 'exit' else ''
+                    if ext == 'stdout' and case['id'] == 'wide-1':
+                        output = json.dumps({'number': 1, 'headRefOid': 'a' * 40, 'url': 'https://forge.test/dirtydishes/gfj-oracle/pulls/1'}) + '\n'
                     (expected / f"{case['id']}.{ext}").write_text(output)
                     if ext == 'stdout' and case['id'] == 'probe-4':
                         output = output.replace('CLEAN', 'UNKNOWN').replace('MERGEABLE', 'UNKNOWN')
@@ -141,7 +145,7 @@ class OracleTests(unittest.TestCase):
             def check():
                 with contextlib.redirect_stdout(io.StringIO()):
                     with patch.object(compare, 'EXPECTED_FAILURES', {'probe-4': compare.EXPECTED_FAILURES['probe-4']}):
-                        return compare.main(expected, actual)
+                        return compare.main(expected, actual, backend)
             self.assertEqual(check(), 0)
             draft = actual / 'probe-4.stdout'
             original = draft.read_text()
@@ -163,6 +167,22 @@ class OracleTests(unittest.TestCase):
             self.assertEqual(check(), 1, 'missing JSON must produce an unexpected result, not crash')
             report = json.loads((actual / 'report.json').read_text())
             self.assertEqual(next(c for c in report if c['id'] == 'probe-4')['result'], 'unexpected')
+
+    def test_raw_invariants_check_values_the_normalizers_replace(self):
+        head = 'a' * 40
+        backend = [{'number': 1, 'head': {'sha': head}}]
+        def outputs(oid=head, commits=(head,), url='https://forge.test/dirtydishes/gfj-oracle/pull/1'):
+            return {'wide-1': json.dumps({'number': 1, 'headRefOid': oid, 'commits': [{'oid': c} for c in commits]}),
+                    'list-me-head': json.dumps([{'number': 1, 'url': url}])}
+        self.assertEqual(compare.invariants(outputs(), backend), {'head-oid': [], 'pr-urls': []})
+        # The SHA normalizer would hide a base SHA served as the head, or commits in Forgejo's order.
+        self.assertTrue(compare.invariants(outputs(oid='b' * 40), backend)['head-oid'])
+        self.assertTrue(compare.invariants(outputs(commits=(head, 'b' * 40)), backend)['head-oid'])
+        # The URL normalizer would hide Forgejo's /pulls/N, which ChatGPT ignores.
+        self.assertTrue(compare.invariants(outputs(url='https://forge.test/dirtydishes/gfj-oracle/pulls/1'), backend)['pr-urls'])
+        # A check with nothing to check fails rather than passing vacuously.
+        self.assertTrue(compare.invariants({}, backend)['head-oid'])
+        self.assertTrue(compare.invariants({}, backend)['pr-urls'])
 
 
 if __name__ == '__main__':
