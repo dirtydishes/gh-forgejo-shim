@@ -10,7 +10,7 @@ use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::invocation::Invocation;
 use crate::read_only;
-use crate::repo::{detect_repo, gh_hostname, GhHosts, RepoRef};
+use crate::repo::{detect_repo, gh_hostname, Checkout, GhHosts, RepoRef};
 use crate::trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,18 +24,25 @@ impl DispatcherConfig {
         config::is_forgejo_host(&self.hosts, host)
     }
 
-    /// The allowlist entry that serves `host`. gh drops the port from a remote URL, so an entry
-    /// with a port also serves its bare hostname; an exact match wins over that.
+    /// The allowlist entry that serves `host`. gh drops the port from a remote URL, so a host
+    /// without a port is served by the one entry with that hostname, port or not. A host with a
+    /// port needs an entry with that exact port. Two entries sharing the hostname make a portless
+    /// host ambiguous, and it serves neither.
     pub fn forgejo_host(&self, host: &str) -> Option<String> {
         let host = normalize_host(host);
         if self.is_forgejo_host(Some(&host)) {
             return Some(host);
         }
-        let hostname = gh_hostname(&host);
-        self.hosts
+        if gh_hostname(&host) != host {
+            return None;
+        }
+        let mut entries = self
+            .hosts
             .iter()
             .map(|entry| normalize_host(entry))
-            .find(|entry| gh_hostname(entry) == hostname && self.is_forgejo_host(Some(entry)))
+            .filter(|entry| gh_hostname(entry) == host && self.is_forgejo_host(Some(entry)));
+        let entry = entries.next()?;
+        entries.next().is_none().then_some(entry)
     }
 }
 
@@ -150,7 +157,33 @@ fn decide_invocation_route(
             return host_route(host, config);
         }
     }
-    let detection = detect_repo(invocation, env, cwd, &GhHosts::load(env, &config.hosts));
+    let checkout = Checkout::new(cwd);
+    let detection = detect_repo(
+        invocation,
+        env,
+        &checkout,
+        &GhHosts::load(env, &config.hosts),
+    );
+    // A launched gh knows the user's hosts plus the allowlist hosts, so routing models that.
+    // Plain gh knows only the user's hosts. Before delegating, check that plain gh wouldn't pick a
+    // Forgejo host itself: it does when the user's own hosts.yml lists one. Such a call launches
+    // with the user's key set instead, which the launched gh then resolves exactly as plain gh.
+    if detection
+        .repo
+        .as_ref()
+        .is_none_or(|repo| config.forgejo_host(&repo.host).is_none())
+    {
+        let plain = detect_repo(invocation, env, &checkout, &GhHosts::user(env));
+        if let Some(repo) = plain.repo {
+            if let Some(host) = config.forgejo_host(&repo.host) {
+                return RouteDecision::forgejo(
+                    format!("{}, user's gh hosts", plain.source),
+                    Some(repo),
+                    Some(host),
+                );
+            }
+        }
+    }
     let Some(repo) = detection.repo else {
         if let Some(host) = env.get("GH_HOST").filter(|host| !host.trim().is_empty()) {
             return host_route(host, config);
