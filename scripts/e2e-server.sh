@@ -21,6 +21,13 @@ trap 'exit 143' TERM
 docker run --rm -v "$PWD/packaging/gateway/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 \
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 printf 'PASS the shipped Caddyfile validates\n'
+# Every gateway route sends the client's Host, which Caddy would rewrite for an HTTPS upstream.
+hosts=$(docker run --rm -e FGA_UPSTREAM=https://gateway.test:8443 \
+    -v "$PWD/packaging/gateway/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 \
+    caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null |
+    grep -o '"Host":\["{http.request.hostport}"\]' | wc -l | tr -d ' ')
+[ "$hosts" = 3 ] || { echo "FAIL the Caddyfile sets Host on $hosts of 3 gateway routes" >&2; exit 1; }
+printf 'PASS the Caddyfile sends the client'"'"'s Host on all 3 gateway routes\n'
 docker build -q -f packaging/gateway/Dockerfile -t fga-server:e2e . >/dev/null
 docker build -q -f scripts/e2e/Dockerfile -t fga-g2a-e2e:local . >/dev/null
 docker network create "$run" >/dev/null

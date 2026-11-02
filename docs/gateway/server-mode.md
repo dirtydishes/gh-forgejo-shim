@@ -87,8 +87,9 @@ whose first line names a host (`GET https://forge.example.com:8443/api/v3/user`)
 forward it without that host. Clients send such lines only to forward proxies.
 
 **Caddy.** Copy the [site block](../../packaging/gateway/caddy/Caddyfile) and set its hostname and two
-upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. Caddy passes `Host`
-through by default, and its site block answers only the forge's hostname.
+upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. It sends the client's
+`Host` to the gateway explicitly, because Caddy rewrites `Host` for an HTTPS upstream, and its site
+block answers only the forge's hostname.
 
 **Nginx Proxy Manager.** NPM's nginx runs inside the NPM container, so the gateway must be on a Docker
 network NPM shares, reached by its container name, with no published port. Forgejo must be reachable
