@@ -334,7 +334,7 @@ only when a call with that environment runs. In each parent it looks at `gfj-*` 
   running there: skip. If the lock is taken, its owner is dead, since the kernel releases the lock
   when a process dies, SIGKILL included;
 - read `lock`, and skip the directory unless its content is exactly the marker line. A directory
-  of the user's own, say `/tmp/gfj-backup`, fails the name check. One that passes the name check
+  of the user's own named `gfj-backup` fails the name check. One that passes the name check
   by chance still lacks the marker. Nothing in it is touched either way;
 - remove the known names, then `rmdir`. If anything unknown remains, `rmdir` fails and the
   directory stays.
