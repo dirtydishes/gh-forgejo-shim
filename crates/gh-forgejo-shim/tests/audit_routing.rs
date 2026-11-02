@@ -269,6 +269,34 @@ fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
 }
 
 #[test]
+fn audit_route_hardlinked_dispatcher_rejects_a_copied_gfj() -> TestResult {
+    // Run through a hardlink in another directory: there is no sibling gfj to compare with, so
+    // only the marker can show that the copy on PATH is the shim. Kell accepted this case as a
+    // known limit on PR #44; this closes it.
+    let fixture = Fixture::new()?;
+    let alias = fixture.root.join("alias");
+    fs::create_dir(&alias)?;
+    let dispatcher = fixture.root.join("dispatcher");
+    fs::copy(env!("CARGO_BIN_EXE_gh-forgejo-shim"), &dispatcher)?;
+    fs::hard_link(&dispatcher, alias.join("dispatcher"))?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = Command::new(alias.join("dispatcher"));
+    fixture.isolate(&mut command);
+    command
+        .args(["gh", "--version"])
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not pass as real gh when the dispatcher runs through a hardlink"
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_route_unreadable_dispatcher_copy_on_path() -> TestResult {
     // A copy that can be executed but not read can't be shown to differ, so it's skipped.
     let fixture = Fixture::new()?;

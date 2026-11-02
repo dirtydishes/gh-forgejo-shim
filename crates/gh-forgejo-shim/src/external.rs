@@ -340,50 +340,54 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
     is_managed_shim(path) || is_current_executable(path)
 }
 
-/// Whether `path` may run this dispatcher: the running binary or its sibling entry point (`gfj`
-/// beside `gh-forgejo-shim`, which differs in bytes), under any name or as a copy. Only copies of
-/// this build are caught; a copy left by an older install differs and passes. The launcher's own
-/// recursion guards cover that case.
+/// Compiled into both entry points of every build from here on, so discovery recognizes a copy
+/// of either without knowing where it came from. `#[used]` keeps the bytes in the binary in one
+/// piece, even where the optimizer would otherwise fold the comparison into the code.
+#[used]
+static DISPATCHER_MARKER: [u8; 47] = *b"gh-forgejo-shim dispatcher, not real gh: 7f3c1e";
+
+/// Whether `path` may run this dispatcher: the running binary under any name (a symlink or a
+/// hardlink), a byte-for-byte copy of it, or a binary of about its size that carries
+/// [`DISPATCHER_MARKER`], such as a copy of the other entry point (`gfj` and `gh-forgejo-shim`
+/// differ in bytes). A copy of a build from before the marker passes; the launcher's own recursion
+/// guards cover that case.
 fn is_current_executable(path: &Path) -> bool {
-    let Ok(current) = std::env::current_exe() else {
-        return false;
-    };
-    // macOS returns the path as exec'd, so a symlinked install would look for its sibling in the
-    // wrong directory.
-    let current = fs::canonicalize(&current).unwrap_or(current);
     // On Linux the running binary stays readable here even after its file is deleted.
     let running = if cfg!(target_os = "linux") {
         PathBuf::from("/proc/self/exe")
     } else {
-        current.clone()
+        match std::env::current_exe() {
+            Ok(current) => current,
+            Err(_) => return false,
+        }
     };
-    [
-        running,
-        current.with_file_name("gh-forgejo-shim"),
-        current.with_file_name("gfj"),
-    ]
-    .iter()
-    .any(|reference| may_be_same_binary(path, reference))
+    let (Ok(candidate_meta), Ok(running_meta)) = (path.metadata(), running.metadata()) else {
+        return false;
+    };
+    same_file(path, &candidate_meta, &running, &running_meta)
+        || is_copy(path, &candidate_meta, &running, &running_meta)
 }
 
-/// Whether `candidate` is `reference` or may be a copy of it. A candidate of another size costs a
-/// `stat` of each and no reads. A same-length candidate that can't be read counts as a copy: it
-/// may still be executable, and it can't be shown to differ.
-fn may_be_same_binary(candidate: &Path, reference: &Path) -> bool {
-    let (Ok(candidate_meta), Ok(reference_meta)) = (candidate.metadata(), reference.metadata())
-    else {
+/// A copy of the running binary, or of any dispatcher build of about its size. Real gh is a
+/// different size, so it costs only the `stat` already made. A candidate in range that can't be
+/// read counts as a copy: it may still be executable, and it can't be shown to differ.
+fn is_copy(
+    candidate: &Path,
+    candidate_meta: &fs::Metadata,
+    running: &Path,
+    running_meta: &fs::Metadata,
+) -> bool {
+    let (len, running_len) = (candidate_meta.len(), running_meta.len());
+    if len.abs_diff(running_len) > running_len / 10 {
         return false;
-    };
-    if same_file(candidate, &candidate_meta, reference, &reference_meta) {
+    }
+    let Ok(bytes) = fs::read(candidate) else {
         return true;
-    }
-    if candidate_meta.len() != reference_meta.len() {
-        return false;
-    }
-    match (fs::read(candidate), fs::read(reference)) {
-        (Ok(candidate), Ok(reference)) => candidate == reference,
-        _ => true,
-    }
+    };
+    bytes
+        .windows(DISPATCHER_MARKER.len())
+        .any(|window| window == DISPATCHER_MARKER)
+        || (len == running_len && fs::read(running).map_or(true, |running| running == bytes))
 }
 
 /// Whether both paths reach one file, through symlinks or as hardlinks.
