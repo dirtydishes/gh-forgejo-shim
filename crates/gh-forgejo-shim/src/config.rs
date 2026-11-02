@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use toml_edit::{DocumentMut, Item};
+use toml_edit::{Array, DocumentMut, Item, Value};
 
 use crate::{shim, Result, ShimError};
 
@@ -262,12 +262,7 @@ fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
             )))
         }
     };
-    let mut hosts = toml_edit::Value::from(config.hosts.iter().collect::<toml_edit::Array>());
-    // The old value's decor holds a comment at the end of the `hosts` line.
-    if let Some(old) = document.get("hosts").and_then(Item::as_value) {
-        *hosts.decor_mut() = old.decor().clone();
-    }
-    document["hosts"] = Item::Value(hosts);
+    set_hosts(&mut document, &config.hosts);
     if let (Some(removed), Some(tables)) = (
         removed,
         document.get_mut("host").and_then(Item::as_table_like_mut),
@@ -283,6 +278,50 @@ fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
     }
 
     replace_config_file(path, document.to_string().as_bytes())
+}
+
+/// Makes the `hosts` array hold `hosts`. An existing array is edited in place, so its comments,
+/// spellings and order stay with the hosts they describe: dropped hosts are removed, new ones
+/// appended.
+fn set_hosts(document: &mut DocumentMut, hosts: &[String]) {
+    let Some(array) = document.get_mut("hosts").and_then(Item::as_array_mut) else {
+        document["hosts"] = toml_edit::value(hosts.iter().collect::<Array>());
+        return;
+    };
+    let mut kept = Vec::<String>::new();
+    array.retain(|value| {
+        let host = value.as_str().and_then(normalized_forgejo_host);
+        match host {
+            Some(host) if hosts.contains(&host) && !kept.contains(&host) => {
+                kept.push(host);
+                true
+            }
+            _ => false,
+        }
+    });
+    for host in hosts.iter().filter(|host| !kept.contains(host)) {
+        let trailing = array.trailing().as_str().unwrap_or_default().to_string();
+        if !trailing.contains('\n') {
+            array.push(host.as_str());
+            continue;
+        }
+        // One host per line: indent like the last one, after any comment that ended its line.
+        let indent = array
+            .iter()
+            .last()
+            .and_then(|value| value.decor().prefix())
+            .and_then(|prefix| prefix.as_str())
+            .and_then(|prefix| prefix.rsplit('\n').next())
+            .unwrap_or("  ")
+            .to_string();
+        let mut value = Value::from(host.as_str());
+        value.decor_mut().set_prefix(format!(
+            "{}{indent}",
+            trailing.trim_end_matches([' ', '\t'])
+        ));
+        array.push_formatted(value);
+        array.set_trailing("\n");
+    }
 }
 
 /// Writes a new file and renames it into place, so a failed write leaves the old config whole.
@@ -520,6 +559,29 @@ future = "keep"
 [host."git.example.com"]
 future_setting = "keep" # why
 "#
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn host_edits_keep_comments_inside_a_multiline_hosts_array() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [\n  # keep this forge\n  \"git.example.com\", # important reason\n]\n",
+        )?;
+
+        add_host("new.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "hosts = [\n  # keep this forge\n  \"git.example.com\", # important reason\n  \"new.example.com\",\n]\n"
+        );
+        assert_eq!(
+            load_config_with_env(Some(&path), &EnvMap::new())?.hosts,
+            ["git.example.com", "new.example.com"]
         );
         fs::remove_dir_all(root).ok();
         Ok(())
