@@ -103,7 +103,7 @@ enum DefaultSource {
 
 impl GhHosts {
     /// gh compares hosts with `strings.EqualFold` (`gh/context/remote.go` `FilterByHosts`).
-    pub(crate) fn knows(&self, host: &str) -> bool {
+    fn knows(&self, host: &str) -> bool {
         self.known
             .iter()
             .any(|known| known.eq_ignore_ascii_case(host))
@@ -846,7 +846,7 @@ pub(crate) fn user_gh_config_dir(env: &HashMap<String, String>) -> Option<PathBu
 
 /// Top-level hosts in the user's gh `hosts.yml`. The file is only read; a missing or unreadable
 /// one lists no hosts.
-fn user_gh_hosts(env: &HashMap<String, String>) -> Vec<String> {
+pub(crate) fn user_gh_hosts(env: &HashMap<String, String>) -> Vec<String> {
     let Some(dir) = user_gh_config_dir(env) else {
         return Vec::new();
     };
