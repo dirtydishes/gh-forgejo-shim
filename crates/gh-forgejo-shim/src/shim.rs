@@ -86,7 +86,8 @@ pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> 
         fs::rename(&temp, target)?;
         Ok(())
     })();
-    if result.is_err() {
+    // Clean up only a name that still holds this file: one swapped in by someone else stays.
+    if result.is_err() && is_same_file(&file, &temp) {
         let _ = fs::remove_file(&temp);
     }
     result
