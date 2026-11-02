@@ -288,7 +288,6 @@ fn audit_route_https_port_allowlist() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R6: fails until gh-forgejo-shim-jko.16 is fixed"]
 fn audit_route_signal_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     executable(&fixture.real_gh, "#!/bin/sh\nkill -TERM $$\n")?;

@@ -5,7 +5,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
@@ -89,7 +90,7 @@ pub fn run_program_capture(
 ) -> io::Result<ProgramOutput> {
     let output = command_with_env(path, argv, env, cwd).output()?;
     Ok(ProgramOutput {
-        code: output.status.code().unwrap_or(1),
+        code: exit_code(output.status),
         stdout: output.stdout,
         stderr: output.stderr,
     })
@@ -102,7 +103,53 @@ pub fn run_program_inherit(
     cwd: Option<&Path>,
 ) -> io::Result<i32> {
     let status = command_with_env(path, argv, env, cwd).status()?;
-    Ok(status.code().unwrap_or(1))
+    Ok(inherited_exit_code(status))
+}
+
+/// The status a shell reports for a child: its exit code, or 128 plus the signal that killed it.
+fn exit_code(status: ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    status.code().unwrap_or(1)
+}
+
+/// The signal that killed the last child this process waited on in the foreground, or 0.
+static CHILD_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+/// [`exit_code`] for a child that shares this process's terminal. A signal that killed it is
+/// remembered, so [`exit_like_child`] can end this process with the same signal.
+pub fn inherited_exit_code(status: ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        CHILD_SIGNAL.store(status.signal().unwrap_or(0), Ordering::Relaxed);
+    }
+    exit_code(status)
+}
+
+/// Returns `code`, unless it is the one [`inherited_exit_code`] gave for a child killed by a
+/// signal. Then this process sends itself that signal, so its parent sees the death that the
+/// child's parent saw. Call it last, once traces are written. When the signal is ignored or
+/// blocked here, the process survives it and `code` is returned: Rust ignores SIGPIPE, so a
+/// child's SIGPIPE ends this process with exit 141.
+pub fn exit_like_child(code: i32) -> i32 {
+    #[cfg(unix)]
+    {
+        let signal = CHILD_SIGNAL.load(Ordering::Relaxed);
+        if signal != 0 && code == 128 + signal {
+            if let Some(signal) = rustix::process::Signal::from_named_raw(signal) {
+                let _ = rustix::process::kill_process(rustix::process::getpid(), signal);
+            }
+        }
+    }
+    code
 }
 
 pub fn git_output(args: &[&str], cwd: Option<&Path>) -> Option<String> {
@@ -147,7 +194,7 @@ pub fn git_run(args: &[&str], cwd: Option<&Path>) -> GitRunResult {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     GitRunResult {
-        code: output.status.code().unwrap_or(1),
+        code: exit_code(output.status),
         message: if stderr.is_empty() { stdout } else { stderr },
     }
 }
