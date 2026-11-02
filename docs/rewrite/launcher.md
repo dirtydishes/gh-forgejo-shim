@@ -254,8 +254,8 @@ name. It holds:
 
 The order is fixed:
 1. `mkdir` the directory.
-2. Create the lock as `.lock-<random>` with `create_new`, take the exclusive lock on it, then
-   rename it to `lock`. The lock belongs to the open file, so the rename keeps it. A sweeper only
+2. Create the lock as `.lock-<random>` with `create_new`, take the exclusive lock on it, write
+   the marker line `gh-forgejo-shim run directory v1` into it, then rename it to `lock`. The lock belongs to the open file, so the rename keeps it. A sweeper only
    opens the name `lock`, so it never finds an unlocked one in a live directory, and can't win a
    race against a launcher that is still setting up. If `try_lock` on the fresh file fails, which
    no other process can cause, the launcher stops with exit 1.
@@ -291,13 +291,16 @@ by a killed launch under one parent would never be swept by launches under anoth
 remains: a parent set only for one run (a `TMPDIR` that later calls don't share) is swept again
 only when a call with that environment runs. In each parent it looks at `gfj-*` entries:
 
-- skip anything that isn't a real directory owned by the current uid (`symlink_metadata`, no
-  following links);
+- skip anything whose name isn't exactly `gfj-` plus 16 lowercase hex characters, or that isn't a
+  real directory owned by the current uid (`symlink_metadata`, no following links);
 - skip a directory with no `lock` file. That is either a launcher before step 2's rename, or one
   that died before it; neither has written a token yet;
-- open `lock` and try the exclusive lock. If it's held, a launcher is still running there: skip.
-  If the lock is taken, its owner is dead, since the kernel releases the lock when a process dies,
-  SIGKILL included;
+- open `lock` (`O_NOFOLLOW`) and try the exclusive lock. If it's held, a launcher is still
+  running there: skip. If the lock is taken, its owner is dead, since the kernel releases the lock
+  when a process dies, SIGKILL included;
+- read `lock`, and skip the directory unless its content is exactly the marker line. A directory
+  of the user's own, say `/tmp/gfj-backup`, fails the name check. One that passes the name check
+  by chance still lacks the marker. Nothing in it is touched either way;
 - remove the known names, then `rmdir`. If anything unknown remains, `rmdir` fails and the
   directory stays.
 
