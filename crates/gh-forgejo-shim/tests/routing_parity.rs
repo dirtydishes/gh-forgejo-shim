@@ -278,6 +278,13 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        name: "a hostname two entries share isn't routed even with its port",
+        args: &["-R", "forge.test:3443/o/r"],
+        allowlist: "forge.test:3443,forge.test:8443",
+        expected: Some(("forge.test:3443", "o", "r")),
+        ..BASE
+    },
+    Case {
         name: "a port no entry has is not routed",
         args: &["-R", "forge.test:9999/o/r"],
         allowlist: "forge.test:3443",
@@ -624,17 +631,15 @@ fn owned(value: Option<(&str, &str, &str)>) -> Option<(String, String, String)> 
     value.map(|(host, owner, name)| (host.to_string(), owner.to_string(), name.to_string()))
 }
 
-/// Whether the allowlist serves `host`: the same entry, or the one entry with its hostname when
-/// `host` has no port.
+/// Whether the allowlist serves `host`: the one entry on its hostname, matching its port when
+/// `host` names one. A hostname two entries share serves neither.
 fn served(host: &str, allowlist: &str) -> bool {
-    let entries = allowlist.split(',').collect::<Vec<_>>();
-    entries.contains(&host)
-        || (!host.contains(':')
-            && entries
-                .iter()
-                .filter(|entry| entry.split(':').next() == Some(host))
-                .count()
-                == 1)
+    let hostname = host.split(':').next().unwrap_or(host);
+    let on_hostname = allowlist
+        .split(',')
+        .filter(|entry| entry.split(':').next() == Some(hostname))
+        .collect::<Vec<_>>();
+    on_hostname.len() == 1 && (host == hostname || on_hostname[0] == host)
 }
 
 struct Fixture {

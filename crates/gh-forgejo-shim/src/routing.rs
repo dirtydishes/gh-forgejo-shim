@@ -26,21 +26,22 @@ impl DispatcherConfig {
 
     /// The allowlist entry that serves `host`. gh drops the port from a remote URL, so a host
     /// without a port is served by the one entry with that hostname, port or not. A host with a
-    /// port needs an entry with that exact port. Two entries sharing the hostname make a portless
-    /// host ambiguous, and it serves neither.
+    /// port needs an entry with that exact port. A hostname that two entries share serves
+    /// neither, under any spelling: gh's API client looks up tokens by hostname alone
+    /// (`gh/api/http_client.go:284-290`), so a launched gh could present neither entry's token.
     pub fn forgejo_host(&self, host: &str) -> Option<String> {
         let host = normalize_host(host);
-        if gh_hostname(&host) != host {
-            return self.is_forgejo_host(Some(&host)).then_some(host);
-        }
-        // A portless host matches every entry on its hostname, a portless entry included.
+        let hostname = gh_hostname(&host);
         let mut entries = self
             .hosts
             .iter()
             .map(|entry| normalize_host(entry))
-            .filter(|entry| gh_hostname(entry) == host && self.is_forgejo_host(Some(entry)));
+            .filter(|entry| gh_hostname(entry) == hostname && self.is_forgejo_host(Some(entry)));
         let entry = entries.next()?;
-        entries.next().is_none().then_some(entry)
+        if entries.next().is_some() {
+            return None;
+        }
+        (host == hostname || entry == host).then_some(entry)
     }
 }
 
