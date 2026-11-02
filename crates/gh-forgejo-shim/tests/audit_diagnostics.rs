@@ -410,7 +410,6 @@ fn audit_diag_recorder_remove_preserves_unrelated_files() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R6: fails until gh-forgejo-shim-jko.16 is fixed"]
 fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
     let f = Fixture::new()?;
     let git = f.tool("git", "#!/bin/sh\nkill -TERM $$\n")?;

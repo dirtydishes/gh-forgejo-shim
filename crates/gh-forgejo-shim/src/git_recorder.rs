@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::{shim, Result, ShimError};
+use crate::{external, shim, Result, ShimError};
 
 pub const MARKER: &str = "managed by gh-forgejo-shim git recorder";
 pub const TRACE_PATH_ENV: &str = "FJ_SHIM_TRACE";
@@ -246,7 +246,7 @@ pub fn run_git_recorder(real_git: &Path, trace_path: &Path, args: &[String]) -> 
             return 127;
         }
     };
-    let exit_code = status.code().unwrap_or(1);
+    let exit_code = external::inherited_exit_code(status);
     let stdout_stats = stdout_forwarder
         .map(|handle| handle.join().unwrap_or_default())
         .unwrap_or_default();

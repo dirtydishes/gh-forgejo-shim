@@ -699,6 +699,7 @@ dependencies = [
  "glob",
  "reqwest",
  "rpassword",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
