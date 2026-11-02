@@ -52,6 +52,13 @@ pub fn launch(
     let forgejo_url = upstream_url(host, &config, env)?;
 
     let Some(gh) = find_program("gh", real_gh, env) else {
+        // Discovery skips a file it can't run; a configured one that exists is 126, not 127 (§6).
+        if let Some(path) = real_gh.filter(|path| path.is_file() && !is_executable(path)) {
+            return Some(fail(
+                126,
+                &format!("the real gh at {} is not executable", path.display()),
+            ));
+        }
         return Some(fail(
             127,
             "could not find the real gh executable; set FJ_SHIM_REAL_GH",
@@ -162,8 +169,17 @@ pub fn launch(
     }))
 }
 
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+}
+
 /// The forge's own base URL, or `None` while the gateway can't honour this host's settings.
 fn upstream_url(host: &str, config: &Config, env: &HashMap<String, String>) -> Option<Url> {
+    // gh can't use an IPv6 host, and routing declines them (L2); never launch one.
+    if config::normalize_host(host).starts_with('[') {
+        return None;
+    }
     let settings = config.host.get(&config::normalize_host(host));
     let custom_ca = settings.is_some_and(|settings| settings.ca_file.is_some())
         || env
@@ -268,6 +284,12 @@ mod tests {
         let plain = config("hosts = [\"forge.test\"]\n");
         let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), "/etc/ca.pem".to_string())]);
         assert_eq!(upstream_url("forge.test", &plain, &env), None);
+    }
+
+    #[test]
+    fn an_ipv6_host_keeps_the_built_in_path() {
+        let plain = config("hosts = [\"forge.test\"]\n");
+        assert_eq!(upstream_url("[::1]:3000", &plain, &HashMap::new()), None);
     }
 
     #[test]
