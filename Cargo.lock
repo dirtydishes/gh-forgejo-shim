@@ -696,7 +696,9 @@ dependencies = [
 name = "gh-forgejo-shim"
 version = "0.1.2"
 dependencies = [
+ "axum",
  "fga-core",
+ "fga-server",
  "glob",
  "reqwest",
  "rpassword",
@@ -707,9 +709,11 @@ dependencies = [
  "serde_yaml",
  "signal-hook",
  "time",
+ "tokio",
  "toml",
  "toml_edit 0.22.27",
  "ureq",
+ "url",
 ]
 
 [[package]]
