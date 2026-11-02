@@ -360,17 +360,23 @@ what makes `gh pr list | head -1` behave as it does with plain gh.
 
 - gh exited with code *n*: the launcher exits *n*.
 - gh died by signal *s*: the launcher sends *s* to itself, so its parent sees the same death. The
-  audit test `audit_route_signal_passthrough` asserts the signal itself, not 143. If the launcher
-  survives the signal, it exits 128 + *s*.
+  audit test `audit_route_signal_passthrough` asserts the signal itself, not 143. It exits
+  128 + *s* instead in two cases:
+  - as pid 1 (a container's init, in any PID namespace), the kernel drops a signal the process
+    sends itself under the default action, so #44 skips the send. Otherwise signal-hook would
+    fall back to `abort()`, and the launcher would die of the wrong signal;
+  - a Linux real-time signal the launcher inherited as ignored stays ignored. gh inherited that
+    ignore too, though, so it couldn't have died of that signal.
 
 L3 uses R6's mechanism (`jko.16`, survivor-fixes PR #44) and doesn't build a second one.
 `external::inherited_exit_code` turns gh's status into its code, or 128 + *s*, and remembers *s*.
 `external::exit_like_child` is called last, after the trace is written. When the code is 128 + *s*,
 it calls signal-hook's `low_level::emulate_default_handler(s)`, which puts back the default action
-for *s*, overriding any handler the launcher installed, then unblocks *s* and raises it. A signal
-outside signal-hook's table, such as a Linux real-time signal, is raised as it is. The launcher
-therefore needs no reset of its own before the call. It restores nothing else either, since the
-process ends there.
+for *s*, overriding any handler the launcher installed, then unblocks *s* and raises it. It then
+calls `low_level::raise(s)` as well. That covers the signals `emulate_default_handler` returns on
+without raising: those missing from its table, such as Linux real-time signals, and those it lists
+as ignored, such as SIGIO, which terminates on Linux. The launcher therefore needs no reset of its
+own before the call. It restores nothing else either, since the process ends there.
 
 The same rule covers SIGPIPE. The launcher ignores it while it runs, but when gh dies of SIGPIPE,
 the launcher dies of SIGPIPE too, as plain gh would. A shell reports 141 either way.
