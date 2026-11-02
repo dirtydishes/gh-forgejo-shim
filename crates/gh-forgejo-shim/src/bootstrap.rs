@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
+use crate::doctor;
 use crate::external;
 use crate::gui_path;
 use crate::repo::{self, RepoRef};
@@ -132,12 +133,14 @@ impl BootstrapOptions {
 }
 
 pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
-    let repo = repo::detect_from_git(options.cwd.as_deref());
     let config_path = options
         .config_path
         .clone()
         .unwrap_or_else(|| config::config_path(options.home.as_deref()));
     let mut config = config::load_config_with_env(Some(&config_path), &options.env)?;
+    // The repository the wrapper would route, or, if gh knows none of the remotes' hosts, the
+    // first remote: see `doctor::current_repo`.
+    let repo = doctor::current_repo(options.cwd.as_deref(), &options.env, &config);
     let setup_model = setup::inspect(SetupInspectOptions {
         env: options.env.clone(),
         home: options.home.clone(),
