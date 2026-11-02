@@ -14,25 +14,30 @@ docker run -d --name "$run" -p "127.0.0.1:$port:3000" \
     -e FORGEJO__service__DISABLE_REGISTRATION=true -e FORGEJO__mailer__ENABLED=false \
     codeberg.org/forgejo/forgejo:15 >/dev/null
 for attempt in $(seq 1 90); do
-    curl -fsS "http://127.0.0.1:$port/api/v1/version" >/dev/null 2>&1 && break
+    curl -q -fsS "http://127.0.0.1:$port/api/v1/version" >/dev/null 2>&1 && break
     [ "$attempt" -eq 90 ] && { echo 'Forgejo did not become ready' >&2; exit 1; }
     sleep 1
 done
 docker exec --user git "$run" forgejo --config /data/gitea/conf/app.ini admin user create --admin \
     --username dirtydishes --password rehearse-disposable-password --email dirtydishes@example.invalid \
     --must-change-password=false >/dev/null
-token=$(curl -fsS -u dirtydishes:rehearse-disposable-password -H 'Content-Type: application/json' \
+token=$(curl -q -fsS -u dirtydishes:rehearse-disposable-password -H 'Content-Type: application/json' \
     -d '{"name":"rehearse","scopes":["all"]}' "http://127.0.0.1:$port/api/v1/users/dirtydishes/tokens" | jq -er .sha1)
-# The token stays out of argv: curl reads its header from a private file.
+# The token stays out of argv: curl reads its header from a private file. Every curl starts with
+# -q, so no .curlrc can make it follow a redirect with that header.
 (umask 077; printf 'Authorization: token %s\n' "$token" > "$work/auth")
 # git runs as twin-seed.py runs it: no user or system config (no insteadOf to SSH, no credential
-# helpers), nothing inherited from GIT_*, the header from the environment, and no redirects.
-safegit() {
-    env -i PATH="$PATH" HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
-        GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="${GIT_HEADER:-}" \
-        GIT_CONFIG_KEY_1=http.followRedirects GIT_CONFIG_VALUE_1=false git "$@"
-}
-curl -fsS -H @"$work/auth" -H 'Content-Type: application/json' \
+# helpers), nothing inherited from GIT_*, the header from the environment, and no redirects. The
+# variables are exported in a subshell, never passed as arguments, so the token stays out of argv.
+safegit() (
+    header=${GIT_HEADER:-}
+    for name in $(compgen -e); do case $name in GIT_*) unset "$name" ;; esac; done
+    export HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+        GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="$header" \
+        GIT_CONFIG_KEY_1=http.followRedirects GIT_CONFIG_VALUE_1=false
+    exec git "$@"
+)
+curl -q -fsS -H @"$work/auth" -H 'Content-Type: application/json' \
     -d '{"name":"gfj-oracle","private":false}' "http://127.0.0.1:$port/api/v1/user/repos" >/dev/null
 # A read-only copy of the live twin's main as it was before the seed, whose merges added notes the
 # plan writes again, so branches start from the same tree.
@@ -42,17 +47,17 @@ GIT_HEADER="Authorization: token $token" safegit -C "$work/main" \
     push -q "http://127.0.0.1:$port/dirtydishes/gfj-oracle.git" "$base:refs/heads/main"
 # Forgejo processes the push asynchronously; the repository lists PRs only once it isn't empty.
 for attempt in $(seq 1 30); do
-    curl -fsS "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle" | jq -e '.empty == false' >/dev/null && break
+    curl -q -fsS "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle" | jq -e '.empty == false' >/dev/null && break
     [ "$attempt" -eq 30 ] && { echo 'the copied main did not settle' >&2; exit 1; }
     sleep 1
 done
-api() { curl -fsS -H @"$work/auth" "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/$1"; }
+api() { curl -q -fsS -H @"$work/auth" "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/$1"; }
 # Stand in for the runner: fail #13's first commit once it exists, as the twin's CI would.
 (
     for attempt in $(seq 1 300); do
         sha=$(api 'pulls/13' 2>/dev/null | jq -r '.head.sha // empty') || true
         if [ -n "$sha" ]; then
-            curl -fsS -H @"$work/auth" -H 'Content-Type: application/json' \
+            curl -q -fsS -H @"$work/auth" -H 'Content-Type: application/json' \
                 -d '{"context":"ci / check (pull_request)","state":"failure"}' \
                 "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/statuses/$sha" >/dev/null
             exit 0
@@ -86,5 +91,5 @@ expect 'pulls/3/commits' 'length == 2'
 expect 'pulls/3/files' '[.[].filename] | sort == ["ci/slow","notes/pending.txt"]'
 expect 'pulls/14/reviews' '[.[] | [.user.login, .state, .comments_count]] == [["gfj-e2e","APPROVED",1]]'
 expect 'pulls/15/reviews' '[.[] | [.user.login, .state]] == [["gfj-e2e","REQUEST_CHANGES"]]'
-curl -fsS -H @"$work/auth" "http://127.0.0.1:$port/api/v1/users/gfj-e2e" | jq -e '.is_admin == false' >/dev/null
+curl -q -fsS -H @"$work/auth" "http://127.0.0.1:$port/api/v1/users/gfj-e2e" | jq -e '.is_admin == false' >/dev/null
 echo 'PASS twin-seed rehearsal: every planned state, and a resumed run wrote nothing'
