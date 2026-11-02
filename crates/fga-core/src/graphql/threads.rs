@@ -77,17 +77,24 @@ impl PullRequestReviewComment {
     }
 }
 
-/// One review's code comments, in Forgejo's order.
+/// One review's code comments, oldest first. Forgejo builds the list by walking a map, so its own
+/// order changes between requests (`services/convert/pull_review.go:117-128`).
 pub(super) async fn review_comments(
     ctx: &Context<'_>,
     review: &PullRequestReview,
 ) -> async_graphql::Result<Vec<PullRequestReviewComment>> {
+    // Reviews without code comments, such as plain approvals, need no read.
+    if review.source.comments_count == Some(0) {
+        return Ok(Vec::new());
+    }
     let review = Arc::new(review.clone());
-    Ok(ctx
+    let mut comments = ctx
         .data_unchecked::<Session>()
         .review_comments(&review.owner, &review.repo, review.number, review.source.id)
         .await
-        .map_err(error)?
+        .map_err(error)?;
+    comments.sort_by_key(|comment| comment.id);
+    Ok(comments
         .into_iter()
         .map(|source| PullRequestReviewComment {
             source,
@@ -100,8 +107,18 @@ pub(super) async fn review_comments(
 pub struct PullRequestReviewThread {
     /// Never empty: a thread starts with its first comment.
     comments: Vec<PullRequestReviewComment>,
+    /// The pull request's author, who may resolve any of its conversations.
+    pr_author: Arc<str>,
 }
 impl PullRequestReviewThread {
+    /// Forgejo lets the PR's author or a repository writer resolve a conversation
+    /// (`CanMarkConversation`, `models/issues/review.go:900-928`), as GitHub does.
+    async fn viewer_can_mark(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        let review = &self.first().review;
+        let viewer = &ctx.data_unchecked::<Session>().viewer.login;
+        Ok(self.pr_author.eq_ignore_ascii_case(viewer)
+            || viewer_can_write(ctx, &review.owner, &review.repo).await?)
+    }
     fn first(&self) -> &PullRequestReviewComment {
         &self.comments[0]
     }
@@ -165,10 +182,10 @@ impl PullRequestReviewThread {
         self.resolved()
     }
     async fn viewer_can_resolve(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        Ok(!self.resolved() && self.first().viewer_can_change(ctx).await?)
+        Ok(!self.resolved() && self.viewer_can_mark(ctx).await?)
     }
     async fn viewer_can_unresolve(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        Ok(self.resolved() && self.first().viewer_can_change(ctx).await?)
+        Ok(self.resolved() && self.viewer_can_mark(ctx).await?)
     }
 }
 
@@ -178,15 +195,16 @@ pub(super) async fn review_threads(
     owner: &str,
     repo: &str,
     number: i32,
+    pr_author: &str,
 ) -> async_graphql::Result<Vec<PullRequestReviewThread>> {
-    let reviews = ctx
-        .data_unchecked::<Session>()
-        .reviews(owner, repo, number)
-        .await
-        .map_err(error)?;
+    let session = ctx.data_unchecked::<Session>();
+    let reviews = session.reviews(owner, repo, number).await.map_err(error)?;
+    let pr_author: Arc<str> = pr_author.into();
     let mut threads: Vec<PullRequestReviewThread> = Vec::new();
-    // Review requests appear as reviews but carry no comments.
-    for source in reviews.into_iter().filter(|r| r.state != "REQUEST_REVIEW") {
+    for source in reviews
+        .into_iter()
+        .filter(|r| listed(r, &session.viewer.login))
+    {
         let review = PullRequestReview {
             source,
             owner: owner.into(),
@@ -206,6 +224,7 @@ pub(super) async fn review_threads(
                 Some(thread) => thread.comments.push(comment),
                 None => threads.push(PullRequestReviewThread {
                     comments: vec![comment],
+                    pr_author: pr_author.clone(),
                 }),
             }
         }
