@@ -383,6 +383,30 @@ impl Session {
         .await
     }
 
+    pub async fn review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i32,
+        review: i64,
+    ) -> Result<Vec<ReviewComment>, Error> {
+        // No `page` parameter in swagger: one request returns every comment.
+        self.get(
+            &[
+                "repos",
+                owner,
+                repo,
+                "pulls",
+                &number.to_string(),
+                "reviews",
+                &review.to_string(),
+                "comments",
+            ],
+            &[],
+        )
+        .await
+    }
+
     pub async fn commits(
         &self,
         owner: &str,
