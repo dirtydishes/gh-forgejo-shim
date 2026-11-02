@@ -948,9 +948,10 @@ fn auth_login(
     let login = runtime.validate_token(&host, &token)?;
     let home = runtime.home().map(Path::to_path_buf);
     let platform = runtime.platform().to_string();
-    let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
+    // The config first: when it is corrupt, the command fails before replacing a stored token.
     let config_path = config::config_path(home.as_deref());
     config::add_host(&host, Some(&config_path))?;
+    let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
 
     writeln!(
         stdout,
@@ -991,13 +992,14 @@ fn auth_import(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtim
         runtime.env(),
         runtime.platform(),
     )?;
+    // The config first: when it is corrupt, the command fails before replacing a stored token.
+    config::add_host(&imported.host, Some(&config::config_path(Some(&home))))?;
     let storage = auth::write_stored_token(
         &imported.host,
         &imported.token,
         Some(&home),
         Some(runtime.platform()),
     )?;
-    config::add_host(&imported.host, Some(&config::config_path(Some(&home))))?;
     writeln!(
         stdout,
         "imported auth for {} from {}",
