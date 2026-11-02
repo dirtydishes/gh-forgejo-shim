@@ -126,7 +126,11 @@ def launch_list():
 
 def launched(case, commands):
     """Whether real gh, not the decoy, sits on this case's PATH: oracle cases on the list."""
-    return case.get("kind", "oracle") == "oracle" and " ".join(case["argv"][:2]) in commands
+    argv = case["argv"]
+    # An entry is one word (`api`) or two (`pr view`); match as many leading words as it has.
+    return case.get("kind", "oracle") == "oracle" and any(
+        argv[:len(command.split())] == command.split() for command in commands
+    )
 
 
 def load_cases(directory):
