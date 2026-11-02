@@ -454,8 +454,11 @@ The order is fixed:
    opens the name `lock`, so it never finds an unlocked one in a live directory, and can't win a
    race against a launcher that is still setting up. If `try_lock` on the fresh file fails, which
    no other process can cause, the launcher stops with exit 1.
-3. Write `hosts.yml`, `credentials` and the `gh` script, then `config.yml`.
-4. Bind the socket.
+3. Write `credentials` and the `gh` script, then `config.yml`, and make gh's environment edits
+   (§7), all before any thread starts.
+4. Start the gateway's runtime. For an `auth status` call, look up each served host's login
+   through the gateway's own client (§3). Write `hosts.yml`, with those logins.
+5. Bind the socket.
 
 The token is never on disk without a held lock named `lock` beside it.
 

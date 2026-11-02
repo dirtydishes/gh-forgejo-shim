@@ -34,14 +34,18 @@ pub struct GatewayHost {
     pub wip_prefixes: WipPrefixes,
 }
 
-/// Builds the router for every served host.
-pub fn router(hosts: Vec<GatewayHost>) -> Result<Router, String> {
+/// Builds the router for every served host, and returns each host's upstream client in order.
+/// A client shares its session cache with the router's, so a lookup through it (an `auth
+/// status` login, §3) warms the cache for gh's own requests.
+pub fn router(hosts: Vec<GatewayHost>) -> Result<(Router, Vec<Forgejo>), String> {
     let mut built = Vec::with_capacity(hosts.len());
+    let mut clients = Vec::with_capacity(hosts.len());
     for host in hosts {
         let public_url = Url::parse(&format!("https://{}", host.entry))
             .map_err(|error| format!("{}: {error}", host.entry))?;
         let forgejo = Forgejo::new(host.forgejo_url.clone())
             .map_err(|error| format!("{}: {error}", host.entry))?;
+        clients.push(forgejo.clone());
         let mut gateway_host = Host::new(public_url, forgejo, host.wip_prefixes.clone())
             .expecting(host.expected.clone())
             .upstream_token(host.upstream.clone());
@@ -54,7 +58,7 @@ pub fn router(hosts: Vec<GatewayHost>) -> Result<Router, String> {
         built.push(gateway_host);
     }
     let state = AppState::new(built, GHES_VERSION.to_string()).map_err(str::to_string)?;
-    Ok(fga_server::app(state))
+    Ok((fga_server::app(state), clients))
 }
 
 /// A unix listener that drops any connection whose peer runs as another uid (§4). The 0700 run
