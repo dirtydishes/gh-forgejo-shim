@@ -71,7 +71,8 @@ checksum-verified official gh 2.103.3 Linux release for the container architectu
 certificate lets gh use the gateway as `https://forge.test`. No host gh config or credentials enter
 the containers. Results and gh's query capture go under `.local/e2e/`; the script removes its
 containers, network, and certificate volume on exit. Every test resource name starts with `fga-`.
-CI runs the same gates. The oracle comparison checks exit code, stdout, and stderr for 14 cases.
+CI runs the same gates. The oracle comparison checks exit code, stdout, and stderr for 42 read
+cases and 14 write cases.
 It fails on new differences and on an expected failure that starts passing.
 
 To refresh the committed GitHub oracle, run `scripts/oracle/capture.sh` with a host gh login and
