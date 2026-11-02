@@ -612,3 +612,79 @@ right after M1.
   F11 (`cwe.40`) stays fix-or-delete until then.
 - **D5: approved.** Seeding PR states on `dirtydishes/gfj-oracle` and adding a non-admin e2e user are
   both OK. Both are build work for their beads (`cwe.32`, `cwe.31`), not part of this review. (F15)
+
+## 4. Where the shell audit's bugs land
+
+A separate audit of the code that survives the restructure found 34 bugs. It covered credentials and
+config, routing and the `gh` wrapper, and diagnostics, tracing and install. Each bug has a failing,
+`#[ignore]`d test. The audit tracks them under epic `jko` and documents them in
+`docs/audits/2026-11-01-surviving-shell.md`, both on local branch `audit/shell-sweep` at `8d2bfd9`,
+which isn't merged yet. This section says what happens to each bug under option B.
+
+**On `main`** means the file is byte-identical on `main` and `rewrite`, so released users have the bug
+today. For files that differ between the branches, nobody has run the tests against `main` yet. Those
+rows say "not checked".
+
+### Fix now
+
+This code survives the restructure, and none of these fixes depends on the launcher. They are listed in
+fix order: data loss first, then crashes and broken commands, then leaks and low-severity items.
+
+| ID | Bead | Where | On `main` | Note |
+|---|---|---|---|---|
+| R3 | jko.1 | `shim.rs:63` | yes | `install-shim --force` overwrites the real `gh` through a symlink |
+| D1 | jko.3 | `git_recorder.rs:101` | yes | recorder removal deletes its whole directory |
+| D18 | jko.4 | `git_recorder.rs:307` | yes | the recorder execs itself without bound |
+| C5 | jko.21 | `config.rs:270` | not checked | a failed write empties `config.toml` |
+| C3 | jko.8 | `auth.rs:245` | not checked | a malformed `hosts` resets stored tokens |
+| R7 | jko.7 | `routing.rs:90` | not checked | a non-UTF-8 env value panics the wrapper; the launcher passes env through too |
+| D14 | jko.13 | `cli.rs:390` | not checked | uninstall misses bootstrap's directory; part of the rollback proof in `cwe.39` |
+| D15 | jko.14 | `docs/installation.md:59` | yes | the documented Linux extract fails on GNU tar |
+| D13 | jko.12 | `doctor.rs:297` | not checked | `doctor` passes with a missing wrapper target; `cwe.39` reworks the same checks for D3 |
+| D6 | jko.11 | `trace.rs:399` | yes | concurrent trace writes interleave; L3 runs concurrent calls, so fix this first |
+| D3, D4 | jko.9, jko.10 | `git_recorder.rs` | yes | redaction gaps |
+| C1 | jko.18 | `config.rs:303` | not checked | `github.com:443` gets the Forgejo token; the config-side half of F2 (L1 is the gateway side) |
+| C2, C4, C6 | jko.19, .20, .22 | `config.rs`, `cli.rs` | not checked | |
+| R8, D5 | jko.17, jko.24 | `shim.rs` | yes | |
+| D2, D7, D9, D10 | jko.23, .25, .26, .27 | `git_recorder.rs`, `trace.rs` | yes | |
+| D19 | jko.30 | `trace_summary.rs:25` | yes | |
+
+### Fix before the launcher slice
+
+These two survive, and option B makes them matter more. L3 (`cwe.28`) now depends on both.
+
+- **R1, `jko.15`** (`external.rs:260`). A copied or hardlinked dispatcher passes the "real gh" check.
+  Today delegation drops the `gh` argument, so it can't loop. Under option B the launcher runs real gh as
+  a child, with the socket configured. If discovery picks a copy of the shim instead, the copy sees a
+  Forgejo invocation and starts the launcher again. That loop is **speculation**, since the launcher
+  doesn't exist yet. It is the same class of bug as the old C2c hang.
+- **R6, `jko.16`** (`external.rs:104`, `git_recorder.rs:177`). A child killed by a signal is reported as
+  exit 1. The L0 spec has to define signal and exit-code passthrough for the gh child. This fix is the
+  pattern it should copy.
+
+### Absorbed by L2 (routing parity)
+
+L2 (`cwe.27`) replaces repo resolution in `repo.rs`, so these two are fixed there. Their tests become
+part of L2's acceptance. Fix them in `repo.rs` first only if a release ships from `rewrite` before L2
+(D4).
+
+- **R2, `jko.2`.** `-R owner/repo` and `GH_REPO=owner/repo` are ignored inside a checkout.
+- **R5, `jko.6`.** HTTPS remotes lose their port.
+
+### Gone after the restructure
+
+- **R4, `jko.5`** (`routing.rs:135`). `gh --version` in a Forgejo checkout routes to the Forgejo path.
+  Under option B, real gh answers it. Keep its test as an L3 acceptance case rather than fixing the
+  emulator path.
+
+### Fix or drop with `trace smoke`
+
+- **D11, `jko.28`, and D12, `jko.29`** (`codex_smoke.rs`). The 2026-10-30 assessment proposed dropping
+  `codex_smoke.rs`, because contract tests supersede it. If `trace smoke` survives, fix both. If it's
+  dropped, the tests go with it. Decide this at cutover (`cwe.19`).
+
+### Open question for Kell (D6)
+
+R3, D1 and D18 are high, and they ship in released code today. Should they go out as a patch release
+from `main` ahead of the restructure? This is separate from D4, which is about shipping from `rewrite`.
+The fixes are small and don't touch code the restructure replaces.
