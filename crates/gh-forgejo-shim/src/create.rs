@@ -173,25 +173,6 @@ pub fn fill_body(verbose: bool, cwd: Option<&Path>) -> String {
     git_output(&["log", "-1", "--pretty=%b"], cwd).unwrap_or_default()
 }
 
-pub fn format_created_pull_url(value: &str) -> String {
-    if value.is_empty() || codex_pull_marker_present(value) {
-        return value.to_string();
-    }
-    let Some(number) = pull_number_from_url(value) else {
-        return value.to_string();
-    };
-    let marker = format!("codex-pr=/pull/{number}");
-    let (url, fragment) = value.split_once('#').unwrap_or((value, ""));
-    if codex_pull_marker_present(fragment) {
-        return value.to_string();
-    }
-    if fragment.is_empty() {
-        format!("{url}#{marker}")
-    } else {
-        format!("{url}#{fragment}&{marker}")
-    }
-}
-
 fn value_flag_kind(flag: &str) -> Option<CreateValue> {
     FLAGS_WITH_VALUES
         .iter()
@@ -238,39 +219,6 @@ fn split_fields(value: &str) -> Vec<String> {
         .filter(|field| !field.is_empty())
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn pull_number_from_url(value: &str) -> Option<String> {
-    let scheme_end = value.find("://")?;
-    let rest = &value[scheme_end + 3..];
-    let path_start = rest.find('/')?;
-    let path = &rest[path_start + 1..];
-    let path = path.split(['?', '#']).next().unwrap_or(path);
-    let parts = path
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    parts.windows(2).find_map(|window| {
-        matches!(window[0], "pulls" | "pull")
-            .then(|| all_digits(window[1]).then(|| window[1].to_string()))
-            .flatten()
-    })
-}
-
-fn codex_pull_marker_present(value: &str) -> bool {
-    let Some(start) = value.find("/pull/") else {
-        return false;
-    };
-    let rest = &value[start + "/pull/".len()..];
-    let digits = rest
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .collect::<Vec<_>>();
-    !digits.is_empty()
-}
-
-fn all_digits(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -331,18 +279,6 @@ mod tests {
         assert_eq!(
             error.message(),
             "unsupported Forgejo PR create flag: --reviewer"
-        );
-    }
-
-    #[test]
-    fn created_pull_url_adds_codex_marker_to_forgejo_pulls_url() {
-        assert_eq!(
-            format_created_pull_url("https://git.example.com/owner/repo/pulls/7"),
-            "https://git.example.com/owner/repo/pulls/7#codex-pr=/pull/7"
-        );
-        assert_eq!(
-            format_created_pull_url("https://git.example.com/owner/repo/pull/7"),
-            "https://git.example.com/owner/repo/pull/7"
         );
     }
 }

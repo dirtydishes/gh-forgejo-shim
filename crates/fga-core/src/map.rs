@@ -45,6 +45,16 @@ pub fn repository(repo: &forgejo::Repository, owner_type: &str) -> Value {
 /// URL doesn't match `/pull/(\d+)`. Only that path segment changes: the host, the rest of the path,
 /// the query and the fragment stay as Forgejo sent them, and any other URL passes through.
 pub fn pull_web_url(url: &str) -> String {
+    rename_pull_segment(url, "pulls", "pull")
+}
+
+/// The inverse of [`pull_web_url`]: the page Forgejo serves, for opening in a browser where no
+/// redirect from `/pull/{n}` exists.
+pub fn forgejo_pull_web_url(url: &str) -> String {
+    rename_pull_segment(url, "pull", "pulls")
+}
+
+fn rename_pull_segment(url: &str, from: &str, to: &str) -> String {
     let path_start = url
         .find("://")
         .and_then(|scheme| url[scheme + 3..].find('/').map(|slash| scheme + 3 + slash));
@@ -58,10 +68,10 @@ pub fn pull_web_url(url: &str) -> String {
     // Segment 0 is empty (the path's leading slash); owner and repository come before `pulls`.
     let number = |segment: &str| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit());
     match (3..segments.len().saturating_sub(1))
-        .find(|&i| segments[i] == "pulls" && number(segments[i + 1]))
+        .find(|&i| segments[i] == from && number(segments[i + 1]))
     {
         Some(i) => {
-            segments[i] = "pull";
+            segments[i] = to;
             format!("{}{}{}", &url[..start], segments.join("/"), &url[end..])
         }
         None => url.to_owned(),

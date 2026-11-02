@@ -794,4 +794,12 @@ fn pull_web_urls_take_githubs_layout() {
         pull_request(&pr(), &WipPrefixes::default())["html_url"],
         "https://forge.test/o/r/pull/1"
     );
+    assert_eq!(
+        forgejo_pull_web_url("https://forge.test/o/r/pull/12/files#issuecomment-7"),
+        "https://forge.test/o/r/pulls/12/files#issuecomment-7"
+    );
+    assert_eq!(
+        forgejo_pull_web_url("https://forge.test/o/r/compare/main...topic"),
+        "https://forge.test/o/r/compare/main...topic"
+    );
 }
