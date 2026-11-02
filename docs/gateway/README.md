@@ -43,8 +43,11 @@ panic hook, so an embedding launcher installs its own.
 REST and GraphQL strip the first matching prefix, ignoring case, and any following whitespace
 when the PR is a draft. An empty list disables stripping. Set it to the forge's own
 `[repository.pull-request] WORK_IN_PROGRESS_PREFIXES`, which no API exposes. When they differ,
-`gh pr ready` and `gh pr ready --undo` fail and leave the title as it was, rather than report a
-change Forgejo didn't make. Draft mergeability stays `UNKNOWN`
+`gh pr ready` and `gh pr ready --undo` fail rather than report a change Forgejo didn't make.
+`gh pr ready` fails before writing anything. `gh pr ready --undo` has already retitled the PR when
+Forgejo shows it isn't a draft, and the error names the title the PR now has. The gateway doesn't
+put the old title back, because Forgejo's edit has no conditional write and could overwrite someone
+else's edit. Draft mergeability stays `UNKNOWN`
 because Forgejo's boolean cannot prove whether a draft has conflicts.
 The upstream and public URLs must use HTTP or HTTPS and contain no credentials, query or fragment.
 Upstream requests do not follow redirects. Each authenticated request shares a ten-second deadline
