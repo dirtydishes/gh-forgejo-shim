@@ -10,7 +10,7 @@ use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture, run_program_inherit};
 use crate::invocation::Invocation;
 use crate::read_only;
-use crate::repo::{detect_repo, gh_hostname, Checkout, GhHosts, RepoRef};
+use crate::repo::{detect_repo, expand_alias, gh_hostname, Checkout, GhHosts, RepoRef};
 use crate::trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,8 +137,16 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    let invocation = Invocation::parse(argv);
-    decide_invocation_route(&invocation, config, env, cwd)
+    decide_invocation_route(&routing_invocation(argv, env), config, env, cwd)
+}
+
+/// The invocation routing decides on: `argv` with a plain gh alias expanded as gh expands it, so
+/// an alias's own flags and arguments count. gh itself still gets the original `argv`.
+fn routing_invocation(argv: &[String], env: &HashMap<String, String>) -> Invocation {
+    match expand_alias(argv, env) {
+        Some(expanded) => Invocation::parse(&expanded),
+        None => Invocation::parse(argv),
+    }
 }
 
 fn decide_invocation_route(
@@ -261,7 +269,7 @@ fn run_gh(
             return 1;
         }
     };
-    let decision = decide_invocation_route(&invocation, &config, &env, cwd);
+    let decision = decide_invocation_route(&routing_invocation(&argv, &env), &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
 
     let exit_code = match decision.kind {

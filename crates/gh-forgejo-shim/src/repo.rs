@@ -177,8 +177,13 @@ pub fn detect_repo(
     checkout: &Checkout<'_>,
     hosts: &GhHosts,
 ) -> Detection {
-    let aliases = user_gh_aliases(env);
-    let group = command_group(&invocation.command, &aliases);
+    // Routing expands a plain alias before parsing (`expand_alias`), so this is gh's command.
+    let group = invocation
+        .command
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
     // A `pr` or `issue` command takes a PR or issue URL as its selector, and gh uses that URL's
     // repository even with -R. `repo view` takes the repository itself. Any other command's URL
     // argument is data, such as a release tag, and selects nothing.
@@ -280,26 +285,11 @@ const GH_COMMANDS: &[&str] = &[
     "exit-codes",
 ];
 
-/// The gh command `command` runs, after a plain alias. gh registers an alias only when its name
-/// isn't a command and its expansion's first word, split as a shell would, is one
-/// (`gh/pkg/cmd/alias/shared/validations.go`). Anything else is returned as it is.
-fn command_group(command: &str, aliases: &HashMap<String, String>) -> String {
-    let word = command.split_whitespace().next().unwrap_or_default();
-    if GH_COMMANDS.contains(&word) {
-        return word.to_string();
-    }
-    aliases
-        .get(word)
-        .and_then(|expansion| shell_first_word(expansion))
-        .filter(|first| GH_COMMANDS.contains(&first.as_str()))
-        .unwrap_or_else(|| word.to_string())
-}
-
-/// The first word of `text` as google/shlex's `Split` gives it, or `None` when shlex fails on any
-/// part of `text`, which makes gh reject the alias. Quotes are removed. A backslash escapes the next
-/// character outside single quotes. A `#` at the start of a token begins a comment that runs to
-/// the end of the line. Only space, tab, CR and LF separate words.
-fn shell_first_word(text: &str) -> Option<String> {
+/// `text` split as google/shlex's `Split` splits it, or `None` where shlex fails, which makes gh
+/// reject the alias. Quotes are removed. A backslash escapes the next character outside single
+/// quotes. A `#` at the start of a token begins a comment that runs to the end of the line. Only
+/// space, tab, CR and LF separate words.
+fn shell_split(text: &str) -> Option<Vec<String>> {
     const SPACE: &[char] = &[' ', '\t', '\r', '\n'];
     let mut words = Vec::<String>::new();
     let mut chars = text.chars().peekable();
@@ -333,7 +323,65 @@ fn shell_first_word(text: &str) -> Option<String> {
         }
         words.push(word);
     }
-    words.into_iter().next()
+    Some(words)
+}
+
+/// The command word cobra's `Find` reaches in `words` (`stripFlags` in spf13/cobra 1.10). Every
+/// `-x` or `--name` flag without `=` is taken to swallow the next word, except gh's root flags
+/// that take no value (`--help`, `-h`, `--version`).
+fn command_word(words: &[String]) -> Option<&str> {
+    let mut words = words.iter().map(String::as_str);
+    while let Some(word) = words.next() {
+        match word {
+            "--" => return None,
+            "--help" | "-h" | "--version" | "" => {}
+            flag if flag.starts_with('-')
+                && !flag.contains('=')
+                && (flag.starts_with("--") || flag.len() == 2) =>
+            {
+                words.next()?;
+            }
+            flag if flag.starts_with('-') => {}
+            word => return Some(word),
+        }
+    }
+    None
+}
+
+/// `argv` as gh runs it when its first word is a plain alias in the user's gh `config.yml`, or
+/// `None`. gh registers an alias only when its name isn't a gh command and its expansion's
+/// command word is one (`gh/pkg/cmd/alias/shared/validations.go`). It then expands it with
+/// `expandAlias` (`gh/pkg/cmd/root/alias.go`): each argument replaces `$N` while the expansion
+/// still holds a `$`, and otherwise is appended after the split expansion.
+pub fn expand_alias(argv: &[String], env: &HashMap<String, String>) -> Option<Vec<String>> {
+    let name = argv.first()?;
+    if GH_COMMANDS.contains(&name.as_str()) {
+        return None;
+    }
+    let aliases = user_gh_aliases(env);
+    let expansion = aliases.get(name)?;
+    if !command_word(&shell_split(expansion)?).is_some_and(|word| GH_COMMANDS.contains(&word)) {
+        return None;
+    }
+    let mut expanded = expansion.clone();
+    let mut extra = Vec::new();
+    for (i, arg) in argv[1..].iter().enumerate() {
+        if expanded.contains('$') {
+            expanded = expanded.replace(&format!("${}", i + 1), arg);
+        } else {
+            extra.push(arg.clone());
+        }
+    }
+    let lingering = expanded
+        .as_bytes()
+        .windows(2)
+        .any(|pair| pair[0] == b'$' && pair[1].is_ascii_digit());
+    if lingering {
+        return None;
+    }
+    let mut words = shell_split(&expanded)?;
+    words.extend(extra);
+    Some(words)
 }
 
 /// gh reads `gh repo set-default` only in the commands it builds with `SmartBaseRepoFunc`
@@ -575,7 +623,7 @@ impl GitUrl {
         // The query isn't checked; the path, userinfo, host and fragment are.
         let (before_fragment, fragment) = raw.split_once('#').unwrap_or((&raw, ""));
         let before_query = before_fragment.split('?').next().unwrap_or(before_fragment);
-        if raw.bytes().any(|b| b < 0x20 || b == 0x7f)
+        if before_fragment.bytes().any(|b| b < 0x20 || b == 0x7f)
             || !valid_escapes(before_query)
             || !valid_escapes(fragment)
         {
@@ -672,9 +720,18 @@ fn valid_escapes(text: &str) -> bool {
 /// after the last `:`, either nothing or `:` and digits.
 fn valid_optional_port(host: &str) -> bool {
     let port = match host.strip_prefix('[') {
-        Some(rest) => match rest.split_once(']') {
-            Some((_, after)) => after,
-            None => return false,
+        // Go takes the last `]`, and its parser accepts only an IPv6 literal, zone allowed,
+        // inside the brackets.
+        Some(rest) => match rest.rsplit_once(']') {
+            Some((literal, after))
+                if literal
+                    .split('%')
+                    .next()
+                    .is_some_and(|ip| ip.parse::<std::net::Ipv6Addr>().is_ok()) =>
+            {
+                after
+            }
+            _ => return false,
         },
         None => host.rfind(':').map_or("", |i| &host[i..]),
     };
