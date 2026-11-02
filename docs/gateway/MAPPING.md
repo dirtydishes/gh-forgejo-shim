@@ -204,14 +204,25 @@ can be wrong either way.
 Auto-merge flags follow Forgejo's merge check. They are false in an archived repository, need code
 write access as the request's token allows it, and ask the base branch's `user_can_merge`, which
 reflects a merge allowlist; only code writers can join one. If the base branch is deleted, write
-access decides.
+access decides. Two cases the gateway can't see, so a flag can be wrong (Kell, 2026-11-02):
+
+- A user on the allowlist who later lost write access may still cancel, but reads as a token limited
+  to other repositories, which may not. Both report no code write and `user_can_merge: true`; the
+  gateway answers `false` for both.
+- After the base branch is deleted, a protection rule can still match its name. A non-admin can't
+  read the rules, so the gateway answers by write access alone.
 
 A review thread's `originalLine` is the line the reviewer commented on, read from the end of the
 comment's diff hunk. Forgejo's own `position` is the line in the commit that last changed it, which
 differs once later commits move the line. `line` is the same value while the PR's head is still the
 commit the thread's review was made on, and null after a push: Forgejo's API doesn't say whether the
 push moved or deleted the line. GitHub would still give a current line for a thread whose line
-survived the push.
+survived the push. Without a hunk (Forgejo's `CODE_COMMENT_LINES = 0`), both are null.
+
+Forgejo sets a pending review's commit to the head at submit time and doesn't update its comments'
+hunks (`models/issues/review.go`). A review started before a push and submitted after it therefore
+reads as current, and its threads keep their old line; only Forgejo's unexposed `Invalidated` flag
+would tell (Kell, 2026-11-02).
 
 ## 8. Web URLs (v1.1)
 
