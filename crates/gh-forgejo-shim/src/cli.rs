@@ -948,7 +948,8 @@ fn auth_login(
     stdout: &mut dyn Write,
     runtime: &mut dyn Runtime,
 ) -> Result<i32> {
-    let host = prompt_host(host_arg, runtime)?;
+    // Logout shares prompt_host, so it can still remove a token for any host an older version took.
+    let host = forgejo_login_host(&prompt_host(host_arg, runtime)?)?;
     let token = runtime
         .prompt_token(&format!("Forgejo access token for {host}: "))?
         .trim()
@@ -1076,22 +1077,28 @@ fn auth_logout(
 
 /// A host `auth login` may send a token to: never a GitHub host, which would get the Forgejo
 /// token in its Authorization header during validation.
+/// The host `auth login` may send a token to, by the allowlist's own rule: never a GitHub host,
+/// and spelled the way the URL parser reads it back, so the token goes to the host named.
 fn forgejo_login_host(host: &str) -> Result<String> {
-    let host = config::normalize_host(host);
-    if host.is_empty() {
-        return Err(ShimError::new("Forgejo host is required"));
-    }
-    if config::is_known_github_host(Some(&host)) {
+    if config::is_known_github_host(Some(host)) {
         return Err(ShimError::new(format!(
             "{host} is a GitHub host; use `gh auth login` for GitHub"
         )));
     }
-    Ok(host)
+    config::normalized_forgejo_host(host).ok_or_else(|| {
+        ShimError::new(format!(
+            "{host} isn't a host name the shim can use; write it as HOST or HOST:PORT"
+        ))
+    })
 }
 
 fn prompt_host(host_arg: Option<&String>, runtime: &mut dyn Runtime) -> Result<String> {
     if let Some(host) = host_arg {
-        return forgejo_login_host(host);
+        let host = config::normalize_host(host);
+        if host.is_empty() {
+            return Err(ShimError::new("Forgejo host is required"));
+        }
+        return Ok(host);
     }
 
     let config_path = config::config_path(runtime.home());
@@ -1112,7 +1119,11 @@ fn prompt_host(host_arg: Option<&String>, runtime: &mut dyn Runtime) -> Result<S
     } else {
         entered.trim().to_string()
     };
-    forgejo_login_host(&selected)
+    let host = config::normalize_host(&selected);
+    if host.is_empty() {
+        return Err(ShimError::new("Forgejo host is required"));
+    }
+    Ok(host)
 }
 
 fn status_hosts(host_arg: Option<&String>, runtime: &dyn Runtime) -> Result<Vec<String>> {
@@ -1722,6 +1733,42 @@ mod tests {
             );
             fs::remove_dir_all(home).ok();
         }
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_misspelled_host_and_logout_still_clears_github() -> Result<()> {
+        let home = temp_root()?;
+        // `local%68ost` reaches localhost, though the allowlist would drop the spelling.
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("forgejo-token".to_string());
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "local%68ost:3000"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+        assert_eq!(code, 1);
+        assert!(
+            runtime.validated.is_empty(),
+            "the token was sent for validation"
+        );
+
+        // An older version may have stored a token for a GitHub host; logout still removes it.
+        auth::write_stored_token("api.github.com", "old-token", Some(&home), Some("linux"))?;
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "logout", "api.github.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+        assert_eq!(code, 0);
+        assert!(auth::read_stored_token("api.github.com", Some(&home), Some("linux")).is_none());
+        fs::remove_dir_all(home).ok();
         Ok(())
     }
 

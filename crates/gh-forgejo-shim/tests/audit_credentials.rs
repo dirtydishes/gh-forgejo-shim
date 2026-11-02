@@ -205,6 +205,31 @@ fn audit_cred_import_rejects_github_default_port() -> TestResult {
 }
 
 #[test]
+fn audit_cred_import_rejects_a_misspelled_host() -> TestResult {
+    // The token would go to forge.example.com, but the allowlist would drop the spelling.
+    let fixture = Fixture::new()?;
+    let path = fixture.home.join(".config/tea/config.yml");
+    fixture.write(
+        &path,
+        "logins:\n  - url: https://forge.example%2ecom\n    token: audit-import-token\n",
+    )?;
+
+    let result = auth_import::read_import(
+        auth_import::ImportSource::Tea,
+        None,
+        &fixture.home,
+        &config::EnvMap::new(),
+        "linux",
+    );
+
+    assert!(
+        result.is_err(),
+        "a host spelled differently from where it leads was imported"
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(
