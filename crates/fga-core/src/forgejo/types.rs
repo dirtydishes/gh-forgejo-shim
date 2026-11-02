@@ -255,6 +255,10 @@ pub struct Review {
     pub body: String,
     pub state: String,
     pub submitted_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub html_url: String,
     pub commit_id: String,
     #[serde(default)]
     pub dismissed: bool,

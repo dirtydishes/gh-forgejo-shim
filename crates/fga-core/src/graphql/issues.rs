@@ -168,6 +168,7 @@ impl Issue {
             .map(|source| IssueComment {
                 source,
                 owner: self.owner.clone(),
+                repo: self.repo.clone(),
                 viewer: session.viewer.login.clone(),
             })
             .collect();
