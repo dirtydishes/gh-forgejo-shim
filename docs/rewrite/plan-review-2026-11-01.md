@@ -373,7 +373,8 @@ children superseded, naming each ID. Reconcile `9r8` with gateway search filters
   (`crates/fga-core/src/map/pulls.rs:163`) is right and the doc is wrong.
 - **`docs/gateway/README.md`** links `docs/DESIGN.md` relative to its new directory, which breaks. It
   still says mutations are unsupported and that PR URLs use `/pulls/N`.
-- **`docs/gateway/DESIGN.md`** still names a private repo's paths as its sources.
+- **`docs/gateway/DESIGN.md`** names the maintainer's private test machine in its testing and milestone
+  sections (lines 156, 162 and 168 at `b5f0c62`). Its source paths were already cleaned.
 
 **Fix.** Add a doc pass to the move PR, or right after it. Record the move's behavior changes in its PR
 body, since the move changes behavior as well as layout. The changes are the `warning` mapping, partial
