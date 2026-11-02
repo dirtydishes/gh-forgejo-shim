@@ -87,7 +87,11 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let argv = args.into_iter().collect::<Vec<_>>();
-    let env = std::env::vars().collect::<HashMap<_, _>>();
+    // `std::env::vars` panics on a value that isn't UTF-8 (audit R7). Routing reads only named
+    // variables, so one it can't read is left out of the map.
+    let env = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect::<HashMap<_, _>>();
     let cwd = std::env::current_dir().ok();
     run_gh(argv, env, cwd.as_deref(), DelegateMode::Inherit)
 }
