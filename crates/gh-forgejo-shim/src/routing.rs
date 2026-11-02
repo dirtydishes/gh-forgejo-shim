@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::config::{self, normalize_host};
-use crate::external::{find_program, run_program_capture, run_program_inherit};
+use crate::external::{find_program, run_program_capture};
 use crate::invocation::Invocation;
 use crate::read_only;
 use crate::repo::{detect_repo, expand_alias, gh_hostname, Checkout, GhHosts, RepoRef};
@@ -119,17 +119,31 @@ where
     ) {
         return code;
     }
-    // `std::env::vars` panics on a value that isn't UTF-8 (audit R7). Routing reads only named
-    // variables, so one it can't read is left out of the map.
-    let env = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .collect::<HashMap<_, _>>();
     // Guards 2 and 3 (launcher spec §8) come before routing, so a loop stops at once.
-    if let Some(code) = crate::launcher::recursion_guard(&env) {
+    let entry_env = routing_env();
+    if let Some(code) = crate::launcher::recursion_guard(&entry_env) {
         return code;
     }
+    // A nested call gets the user's environment back (§7), and everything this invocation
+    // starts sees one more level of depth (§8). Both edit this process's own environment while
+    // it is single-threaded, so real gh inherits it byte for byte.
+    #[cfg(unix)]
+    {
+        crate::launcher::env::revert();
+        crate::launcher::env::increment_depth(crate::launcher::depth(&entry_env));
+    }
+    let env = routing_env();
     let cwd = std::env::current_dir().ok();
     run_gh(argv, env, cwd.as_deref(), DelegateMode::Inherit)
+}
+
+/// The environment routing reads. `std::env::vars` panics on a value that isn't UTF-8 (audit
+/// R7); routing reads only named variables, so one it can't read is left out of the map. Real gh
+/// never gets this map: it inherits the process environment.
+fn routing_env() -> HashMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
 }
 
 pub fn run_gh_captured(
@@ -290,7 +304,9 @@ fn run_gh(
     let trace_enabled = trace::tracing_enabled(&env);
 
     let exit_code = match decision.kind {
-        RouteKind::Delegate => run_delegate(&original_argv, &env, cwd, &config, &mut mode),
+        RouteKind::Delegate => {
+            run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
+        }
         RouteKind::Forgejo => {
             launch_listed(&routed, &decision, &original_argv, &env, &config, &mode)
                 .unwrap_or_else(|| run_forgejo(&invocation, &env, cwd, &decision, &mut mode))
@@ -311,12 +327,43 @@ fn run_gh(
     exit_code
 }
 
+/// Runs real gh on this process's terminal with this process's environment, untouched: no
+/// `Command` environment call, so entries without `=`, repeated names and their order all pass
+/// through (launcher spec §7). With tracing off the wrapper becomes gh (§2, "Delegate means
+/// exec"); with it on, it waits so it can write the trace record.
+fn delegate_inherit(real_gh: &Path, argv: &[OsString], trace_enabled: bool) -> i32 {
+    let mut command = std::process::Command::new(real_gh);
+    command.args(argv);
+    #[cfg(unix)]
+    if !trace_enabled {
+        use std::os::unix::process::CommandExt;
+        let error = command.exec();
+        return exec_failure(real_gh, &error);
+    }
+    match command.status() {
+        Ok(status) => crate::external::inherited_exit_code(status),
+        Err(error) => exec_failure(real_gh, &error),
+    }
+}
+
+fn exec_failure(real_gh: &Path, error: &io::Error) -> i32 {
+    eprintln!(
+        "gh-forgejo-shim: could not run {}: {error}",
+        real_gh.display()
+    );
+    match error.kind() {
+        io::ErrorKind::PermissionDenied => 126,
+        _ => 127,
+    }
+}
+
 fn run_delegate(
     argv: &[OsString],
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     config: &DispatcherConfig,
     mode: &mut DelegateMode<'_>,
+    trace_enabled: bool,
 ) -> i32 {
     let Some(real_gh) = find_program("gh", config.real_gh.as_deref(), env) else {
         write_error(
@@ -327,16 +374,7 @@ fn run_delegate(
     };
 
     match mode {
-        // The routing map leaves out values that aren't UTF-8; real gh gets the environment whole.
-        DelegateMode::Inherit => {
-            match run_program_inherit(&real_gh, argv, std::env::vars_os(), cwd) {
-                Ok(code) => code,
-                Err(error) => {
-                    eprintln!("{error}");
-                    127
-                }
-            }
-        }
+        DelegateMode::Inherit => delegate_inherit(&real_gh, argv, trace_enabled),
         DelegateMode::Capture { stdout, stderr } => {
             match run_program_capture(&real_gh, argv, env, cwd) {
                 Ok(output) => {
