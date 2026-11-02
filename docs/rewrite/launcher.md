@@ -500,9 +500,13 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 2. **A launched gh has no credential for any host but the served Forgejo hosts** (§3). Kell
    approved this at `cc8b38b`. Review then found the original mechanism leaked: gh fell back to the
    Keychain. The fix lists the user's other hosts in the private `hosts.yml` with a placeholder
-   token, which changes two things the user sees, so this goes back to Kell. A host-less
-   `gh auth status` in a Forgejo checkout now shows the user's other hosts as failing, not absent.
-   The gateway sees those requests, with the placeholder only, and refuses them locally. Git
-   fetches started by gh get no working credential for other hosts.
+   token, which changed two things the user sees, so it went back to Kell:
+   - A host-less `gh auth status` in a Forgejo checkout shows the Forgejo hosts as logged in, and
+     the user's other hosts as failing, not absent. The gateway sees those requests, carrying
+     only the placeholder, and refuses them locally. Git fetches started by gh get no working
+     credential for other hosts.
+   - Installed gh extensions always run through plain gh (§2).
+
+   Kell, 2026-11-02: (a), the behavior above, with extensions through plain gh accepted.
 3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
    commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
