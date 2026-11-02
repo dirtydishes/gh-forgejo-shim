@@ -5,4 +5,6 @@
 pub mod gateway;
 pub mod ghconfig;
 #[cfg(unix)]
+pub mod run;
+#[cfg(unix)]
 pub mod rundir;
