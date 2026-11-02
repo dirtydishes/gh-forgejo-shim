@@ -9,10 +9,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from common import REPO, ROOT, load_cases, normalize
+from capture import official_gh
+from common import REPO, ROOT, launch_list, launched, load_cases, normalize
 
 
 def classify(case, actual):
+    if case.get("kind") == "decoy":
+        # execute() already required the decoy to run; there is no output to compare.
+        return "pass", ""
     expected = case["expected"] if case.get("kind") == "shim-local" else case["oracle"]
     diffs = []
     if actual["exit"] != expected["exit"]:
@@ -30,7 +34,7 @@ def classify(case, actual):
     return "pass", ""
 
 
-def execute(case, binary, seed_home, work_dir):
+def execute(case, binary, seed_home, work_dir, real_gh=None):
     with tempfile.TemporaryDirectory(prefix=case["id"] + "-", dir=work_dir) as temporary:
         directory = Path(temporary)
         home = directory / "home"
@@ -43,8 +47,12 @@ def execute(case, binary, seed_home, work_dir):
         (tools / "git").symlink_to(git)
         decoy = tools / "gh"
         marker = directory / "delegated"
-        decoy.write_text('#!/bin/sh\n: > "$GFJS_DECOY_MARKER"\nprintf "%s\\n" "ERROR: contract delegated to real gh" >&2\nexit 97\n')
-        decoy.chmod(0o755)
+        if real_gh is not None:
+            # A launch-list case: the shim launches real gh through its gateway.
+            decoy.symlink_to(real_gh)
+        else:
+            decoy.write_text('#!/bin/sh\n: > "$GFJS_DECOY_MARKER"\nprintf "%s\\n" "ERROR: contract delegated to real gh" >&2\nexit 97\n')
+            decoy.chmod(0o755)
         entrypoint = directory / "gh"
         entrypoint.write_text(f'#!/bin/sh\nexec {shlex.quote(str(binary))} gh "$@"\n')
         entrypoint.chmod(0o755)
@@ -62,6 +70,10 @@ def execute(case, binary, seed_home, work_dir):
             subprocess.run([git, *args], cwd=checkout, env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result = subprocess.run([str(entrypoint), *case["argv"]], cwd=checkout, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if case.get("kind") == "decoy":
+            if not marker.exists() or result.returncode != 97:
+                raise RuntimeError(f"{case['id']}: an off-list command did not reach the decoy")
+            return {"exit": result.returncode, "stdout": "", "stderr": ""}
         if marker.exists():
             raise RuntimeError(f"{case['id']}: shim invoked the real-gh decoy")
         if result.returncode < 0:
@@ -78,9 +90,16 @@ def main():
     seed_home = Path(os.environ["GFJS_SEED_HOME"])
     work_dir = Path(os.environ["GFJS_WORK_DIR"])
     counts = {"pass": 0, "xfail": 0, "unexpected": 0}
+    commands = launch_list()
+    real_gh = None
+    if any(launched(case, commands) for _, case in cases):
+        # Checksum-pinned official gh, as the oracle captures use; a mismatch raises.
+        gh_dir = Path(tempfile.mkdtemp(prefix="real-gh-", dir=work_dir))
+        real_gh = official_gh(gh_dir)
     for _, case in cases:
         try:
-            actual = execute(case, binary, seed_home, work_dir)
+            actual = execute(case, binary, seed_home, work_dir,
+                             real_gh if launched(case, commands) else None)
             outcome, detail = classify(case, actual)
         except (RuntimeError, OSError, subprocess.SubprocessError) as error:
             # Setup, timeout, crashes, and fallback delegation can never satisfy an xfail.
