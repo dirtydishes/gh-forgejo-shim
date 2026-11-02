@@ -131,6 +131,9 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   a `user` key, so `gh auth status` asks the gateway for the login.
   - A served host (the set *S*, below) gets its real token.
   - Every other host gets the placeholder `gfj-not-served`.
+  - An allowlist entry with a port also gets a second entry under `host:port`, with the same token
+    or placeholder. gh keys tokens by the host text it targets, which keeps the port when the user
+    writes it (§5).
 
 The placeholders matter because of how gh finds a token. With no token in `hosts.yml` for a
 host, gh falls back to the Keychain's unkeyed slot for it (`gh:<host>`, user `""`;
@@ -284,18 +287,26 @@ The launcher serves the fga-server router on the socket with `axum::serve` over 
 `tokio::net::UnixListener` (axum 0.8 implements `Listener` for it). One current-thread runtime on
 the main thread runs the accept loop, the wait for gh and the signal streams.
 
-What the launcher needs from L1 (`cwe.26`, gateway thread). These are requirements, not an
-interface design:
+L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
+`AppState::new(hosts, ghes_version)`, with one `Host` per host in *S*:
 
-- The router serves a set of hosts. Each has its own upstream (base URL, HTTP client with the CA
-  settings from L4) and its own expected token.
-- A request whose `Host` isn't in the set gets an error response without any upstream contact.
-- A request whose credential isn't the expected token for its `Host` gets 401 without any upstream
-  contact. That covers a GitHub token, another forge's token, or no token.
-- The `public_url` for host *h* is `https://<h>`, so PR URLs point at the forge's web UI. Per D2
-  they end in `/pull/N`.
-- The gateway writes nothing to stdout or stderr. gh owns both, and clients parse them.
-  Diagnostics go to the trace file only when tracing is on.
+- `Host::new(public_url, forgejo, wip_prefixes)`. `forgejo` is that host's own upstream: base URL
+  and HTTP client, with the CA and `api_url` settings from L4. `public_url` is `https://<entry>`,
+  the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
+  at the forge's web UI. Per D2, PR links end in `/pull/N`.
+- `.expecting(token)` with the token the launcher wrote into `hosts.yml`. Any other credential for
+  that host gets 401 before any upstream contact: a GitHub token, another forge's token, the
+  placeholder, a `basic` scheme, or none. GraphQL returns 401 too, not 200 with an error body.
+- For an allowlist entry with a port, `.answering_to(<portless hostname>)`. gh drops the port from
+  a remote URL, so a launched gh usually sends `Host: forge.test`. It keeps the port when the user
+  writes it: a full-URL `gh api https://forge.test:3443/…`, `--hostname forge.test:3443`, a
+  three-part `-R`, or `GH_HOST`. The `Host` admits both spellings, `forge.test` (port 443) and
+  `forge.test:3443`, and refuses any other port. It is one `Host`, not two: L1 refuses an empty
+  host list and two hosts that answer to the same name.
+
+A request for any host not in the set gets 421 with no upstream contact. The gateway crates deny
+print macros, so the gateway writes nothing to stdout or stderr, which gh owns and clients parse.
+The peer-uid check in section 4 is the launcher's.
 
 ## 6. Signals and exit codes
 
