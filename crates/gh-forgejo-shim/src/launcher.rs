@@ -129,8 +129,9 @@ mod tests {
 
     #[test]
     fn a_launcher_pid_that_is_not_the_parent_passes() {
-        let env = HashMap::from([("FJ_SHIM_LAUNCHER".to_string(), "1".to_string())]);
-        // The test runner's parent is never pid 1 under cargo.
+        // u32::MAX is never a real pid, so never this test's parent, even when cargo runs as a
+        // container's pid 1.
+        let env = HashMap::from([("FJ_SHIM_LAUNCHER".to_string(), u32::MAX.to_string())]);
         assert_eq!(recursion_guard(&env), None);
     }
 }
