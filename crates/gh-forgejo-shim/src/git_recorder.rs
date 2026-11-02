@@ -510,7 +510,8 @@ fn redact_argv(args: &[String]) -> Vec<String> {
             continue;
         }
         if separator.is_some() && is_sensitive_key(key) {
-            redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
+            // The part before `=` is redacted too: `password` may be in a URL's userinfo there.
+            redacted.push(format!("{}={SECRET_REPLACEMENT}", redact_text(key)));
             continue;
         }
         // The whole argument: the part before `=` can hold a URL's userinfo too.
@@ -579,6 +580,17 @@ mod tests {
                 "[REDACTED]",
                 "https://[REDACTED]@example.com/repo.git",
             ]
+        );
+    }
+
+    #[test]
+    fn argv_redacts_a_url_password_before_an_assignment() {
+        // `password` in the userinfo makes the part before `=` look like a sensitive key.
+        let redacted = redact_argv(&["https://alice:audit-password@host/r?ref=main".to_string()]);
+
+        assert!(
+            !redacted.join(" ").contains("audit-password"),
+            "{redacted:?}"
         );
     }
 

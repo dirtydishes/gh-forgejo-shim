@@ -43,16 +43,17 @@ const AUTH_SCHEMES: &[&str] = &[
     "ntlm",
     "token",
 ];
-/// Token prefixes, each with the shortest suffix that makes a match a token rather than a word.
-const TOKEN_PREFIXES: &[(&str, usize)] = &[
-    ("github_pat_", 20),
-    ("ghp_", 8),
-    ("gho_", 8),
-    ("ghu_", 8),
-    ("ghs_", 8),
-    ("ghr_", 8),
-    ("glpat-", 20),
-    ("gitea_", 8),
+/// Token prefixes. A match runs to the next whitespace: an excerpt can cut a token short, and
+/// whatever follows it in the same word may be the rest of it.
+const TOKEN_PREFIXES: &[&str] = &[
+    "github_pat_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "glpat-",
+    "gitea_",
 ];
 
 pub fn tracing_enabled(env: &HashMap<String, String>) -> bool {
@@ -250,20 +251,19 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
     let (first_offset, first) = value[value_start..].char_indices().next()?;
     value_start += first_offset;
 
-    // JSON inside a JSON string: the value runs to the next escaped quote.
+    // Before quotes: an Authorization value runs to the end of its line however it's quoted, so
+    // `"first"tail` can't keep its tail.
+    if key.to_ascii_lowercase().contains("authorization") {
+        return Some(authorization_credential_range(value, value_start));
+    }
+    // JSON inside a JSON string: the value runs to the escaped quote that closes it.
     if value[value_start..].starts_with("\\\"") {
         let quoted_start = value_start + 2;
-        let quoted_end = value[quoted_start..]
-            .find("\\\"")
-            .map_or(value.len(), |offset| quoted_start + offset);
-        return Some((quoted_start, quoted_end));
+        return Some((quoted_start, closing_escaped_quote(value, quoted_start)));
     }
     if matches!(first, '"' | '\'') {
         let quoted_start = value_start + first.len_utf8();
         return Some((quoted_start, closing_quote(value, quoted_start, first)));
-    }
-    if key.to_ascii_lowercase().contains("authorization") {
-        return Some(authorization_credential_range(value, value_start));
     }
 
     // An unquoted value runs to whitespace, or to the next query parameter after `=`. Ending it
@@ -290,6 +290,29 @@ fn closing_quote(value: &str, start: usize, quote: char) -> usize {
     value.len()
 }
 
+/// The index of the `\"` that closes a JSON string held inside another JSON string, from
+/// `start`. The outer string spells the inner one's `"` as `\"` and its `\` as `\\`, so a quote
+/// escaped inside the inner value is `\\\"`, and only an unescaped one closes it.
+fn closing_escaped_quote(value: &str, start: usize) -> usize {
+    let bytes = value.as_bytes();
+    let mut index = start;
+    let mut inner_escaped = false;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && index + 1 < bytes.len() {
+            match bytes[index + 1] {
+                b'"' if !inner_escaped => return index,
+                b'\\' => inner_escaped = !inner_escaped,
+                _ => inner_escaped = false,
+            }
+            index += 2;
+        } else {
+            inner_escaped = false;
+            index += 1;
+        }
+    }
+    value.len()
+}
+
 fn key_before_delimiter(value: &str, delimiter_index: usize) -> Option<&str> {
     let key_end = value[..delimiter_index].trim_end().len();
     if key_end == 0 {
@@ -300,7 +323,9 @@ fn key_before_delimiter(value: &str, delimiter_index: usize) -> Option<&str> {
     if matches!(last, '"' | '\'') {
         let quote_end = key_end - last.len_utf8();
         let quote_start = value[..quote_end].rfind(last)?;
-        return Some(&value[quote_start + last.len_utf8()..quote_end]);
+        let key = &value[quote_start + last.len_utf8()..quote_end];
+        // An escaped key inside a JSON string, `\"pass\"`, ends in the backslash of its `\"`.
+        return Some(key.strip_suffix('\\').unwrap_or(key));
     }
 
     let mut key_start = key_end;
@@ -328,11 +353,11 @@ fn is_key_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
 }
 
-/// Skips spaces and tabs, not line breaks: a key with nothing after it on its line has no value,
-/// and the next line isn't one.
+/// Skips whitespace other than line breaks (a no-break space too): a key with nothing after it
+/// on its line has no value, and the next line isn't one.
 fn skip_whitespace(value: &str, mut index: usize) -> usize {
     while let Some(character) = value[index..].chars().next() {
-        if !matches!(character, ' ' | '\t') {
+        if !character.is_whitespace() || matches!(character, '\n' | '\r') {
             break;
         }
         index += character.len_utf8();
@@ -364,29 +389,14 @@ fn token_prefix_match_len(value: &str, index: usize) -> Option<usize> {
     if index > 0 && (bytes[index - 1].is_ascii_alphanumeric() || bytes[index - 1] == b'_') {
         return None;
     }
-    TOKEN_PREFIXES.iter().find_map(|(prefix, min_suffix_len)| {
-        bytes[index..]
-            .starts_with(prefix.as_bytes())
-            .then(|| token_len_after_prefix(bytes, index, prefix.len(), *min_suffix_len))?
-    })
-}
-
-fn token_len_after_prefix(
-    bytes: &[u8],
-    index: usize,
-    prefix_len: usize,
-    min_suffix_len: usize,
-) -> Option<usize> {
-    let suffix_start = index + prefix_len;
-    let mut end = suffix_start;
-    while end < bytes.len() && is_token_character(bytes[end]) {
-        end += 1;
-    }
-    (end - suffix_start >= min_suffix_len).then_some(end - index)
-}
-
-fn is_token_character(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+    let prefix = TOKEN_PREFIXES
+        .iter()
+        .find(|prefix| bytes[index..].starts_with(prefix.as_bytes()))?;
+    let suffix_start = index + prefix.len();
+    let end = value[suffix_start..]
+        .find(char::is_whitespace)
+        .map_or(value.len(), |offset| suffix_start + offset);
+    (end > suffix_start).then_some(end - index)
 }
 
 fn replace_ranges(value: &str, ranges: &[(usize, usize)], replacement: &str) -> String {
@@ -668,6 +678,30 @@ mod tests {
         }
         assert_eq!(redact_text("db_pass=hunter2"), "db_pass=<redacted>");
         assert_eq!(redact_text("x-ghp_abcdefghijklmnop"), "x-<redacted>");
+    }
+
+    #[test]
+    fn neither_trace_leaks_what_the_old_git_redactor_hid() {
+        for (text, secret) in [
+            // An Authorization value runs to the end of its line, quoted or not.
+            (r#"Authorization: "first"audit-tail"#, "audit-tail"),
+            // JSON inside a JSON string: an escaped quote inside the value doesn't end it.
+            (r#""{\"token\":\"first\\\"audit-tail\"}""#, "audit-tail"),
+            // An escaped key is read without the backslash of its `\"`.
+            (r#""{\"pass\":\"audit-tail\"}""#, "audit-tail"),
+            (r#""{\"authorization\":\"audit-tail\"}""#, "audit-tail"),
+            // A no-break space before the value.
+            ("--field=password=\u{a0}audit-tail", "audit-tail"),
+            // A short or cut-off token, and whatever follows it in the same word.
+            ("ghp_abcdefg", "abcdefg"),
+            ("glpat-audit-token", "audit-token"),
+            ("ghp_abcdefgh/secret-tail", "secret-tail"),
+        ] {
+            for replacement in [REDACTED, "[REDACTED]"] {
+                let redacted = redact_text_with(text, replacement);
+                assert!(!redacted.contains(secret), "{text} -> {redacted}");
+            }
+        }
     }
 
     #[test]
