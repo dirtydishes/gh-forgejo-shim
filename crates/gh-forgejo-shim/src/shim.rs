@@ -46,7 +46,8 @@ pub fn is_managed_shim(path: &Path) -> bool {
 
 /// `fs::write`, except that a file it creates gets `mode` (which umask can only narrow) instead of
 /// 0666 & ~umask, under which a group member could edit it. An existing file keeps its mode: it's
-/// the user's to choose.
+/// the user's to choose. It writes in place, through a symlink at `path`; use [`replace_file`] for
+/// anything that runs, or that must never be seen half-written.
 pub(crate) fn write_file(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);

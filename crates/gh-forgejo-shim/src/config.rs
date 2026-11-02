@@ -180,8 +180,8 @@ pub fn write_config(config: &Config) -> Result<()> {
             config.path.display()
         ))
     })?;
-    // The auth store shares this directory, and a config others could swap could point api_url
-    // at their own host and collect the token.
+    // The auth store shares this directory, and a config others could swap could allowlist their
+    // own host, which then receives the token, or point `paths.gh` at their own program.
     crate::shim::create_dirs(parent, 0o700).map_err(|error| {
         ShimError::new(format!("could not create {}: {error}", parent.display()))
     })?;
@@ -206,7 +206,8 @@ pub fn write_config(config: &Config) -> Result<()> {
     }
     lines.push(String::new());
 
-    // A config others could edit could point api_url at their own host and collect the token.
+    // A config others could edit could allowlist their own host, which then receives the token,
+    // or point `paths.gh` at their own program.
     crate::shim::write_file(&config.path, lines.join("\n").as_bytes(), 0o600).map_err(|error| {
         ShimError::new(format!(
             "could not write {}: {error}",
