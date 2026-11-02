@@ -263,6 +263,14 @@ const CASES: &[Case] = &[
         ..BASE
     },
     Case {
+        name: "a custom-port forge counts as two hosts, so -R owner/repo defaults to github.com",
+        remotes: &[("origin", "https://forge.test:3443/owner/repo.git", None)],
+        allowlist: "forge.test:3443",
+        args: &["-R", "o/r"],
+        expected: Some((GITHUB, "o", "r")),
+        ..BASE
+    },
+    Case {
         name: "two entries on one hostname leave a portless remote unrouted",
         remotes: &[("origin", "https://forge.test:4443/owner/repo.git", None)],
         allowlist: "forge.test:3443,forge.test:4443",
@@ -784,8 +792,10 @@ impl Fixture {
         if keys == Keys::Shim {
             for entry in case.allowlist.split(',') {
                 let hostname = entry.split(':').next().unwrap_or(entry);
-                if !hosts.contains(&hostname) {
-                    hosts.push(hostname);
+                for key in [hostname, entry] {
+                    if !hosts.contains(&key) {
+                        hosts.push(key);
+                    }
                 }
             }
         }

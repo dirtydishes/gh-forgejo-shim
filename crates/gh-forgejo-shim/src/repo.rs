@@ -118,8 +118,14 @@ impl GhHosts {
     /// URL, never its port, so the entries count without theirs.
     pub fn load(env: &HashMap<String, String>, forgejo_hosts: &[String]) -> Self {
         let mut configured = user_gh_hosts(env);
+        // A launched gh's hosts.yml keys an entry with a port twice: by its hostname, which gh's
+        // API client looks up, and as `host:port`, which gh's git credential helper looks up.
         for host in forgejo_hosts {
             push_unique(&mut configured, gh_hostname(host));
+            let entry = normalize_host(host);
+            if entry != gh_hostname(&entry) {
+                push_unique(&mut configured, entry);
+            }
         }
         let (default, default_source) = match (
             env.get("GH_HOST").filter(|host| !host.is_empty()),
@@ -932,10 +938,18 @@ mod tests {
 
     #[test]
     fn override_takes_gh_repo_forms() {
-        let hosts = hosts(&["git.example.com:3443"]);
+        let hosts = hosts(&["git.example.com"]);
         assert_eq!(
             repo_tuple(override_repo("owner/repo", &hosts)),
             Some(("git.example.com".into(), "owner".into(), "repo".into()))
+        );
+        // An entry with a port is two keys to gh, so the default host is github.com.
+        assert_eq!(
+            repo_tuple(override_repo(
+                "owner/repo",
+                &super::GhHosts::load(&HashMap::new(), &["git.example.com:3443".to_string()])
+            )),
+            Some((GITHUB.into(), "owner".into(), "repo".into()))
         );
         assert_eq!(
             repo_tuple(override_repo(
