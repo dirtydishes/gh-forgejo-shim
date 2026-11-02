@@ -323,14 +323,35 @@ works because the terminal stops and continues the whole group.
 
 | Signal to the launcher | What it does |
 |---|---|
-| SIGINT, SIGQUIT | Nothing. The terminal already sends it to the whole group, so gh has it. Forwarding would deliver it twice. |
+| SIGINT, SIGQUIT | Caught by a handler, then forwarded to gh unless a terminal already sent it to the whole group (below). The launcher keeps serving and waiting. |
 | SIGTERM, SIGHUP | Forward the same signal to gh, keep serving, keep waiting. |
 | SIGTSTP, SIGCONT | Default. The terminal handles the group. |
 | SIGPIPE | Ignored, as Rust's runtime already does. The launcher never writes to stdout after spawning gh. |
 | SIGKILL | Can't be handled. gh's next request fails at once, because nothing listens on the socket. The run directory stays until the next sweep. |
 
-The handlers are installed before the run directory exists. A SIGTERM or SIGHUP that arrives before
-gh is spawned aborts the launch. The launcher cleans up what it made and dies by that signal.
+**Caught, never ignored.** SIGINT and SIGQUIT get real handlers, not `SIG_IGN`. Left at the
+default, Ctrl-C would kill the launcher at once, leaving the token file behind and cutting off gh's
+request in flight, and Ctrl-\ would dump core. Set to `SIG_IGN`, gh would inherit the ignore,
+since exec keeps ignored signals and Rust's `Command` resets only SIGPIPE, and Go keeps an
+inherited ignored SIGINT ignored. Ctrl-C would then stop working on gh. A caught signal reverts
+to the default across exec, so gh starts with its normal handling.
+
+**When SIGINT and SIGQUIT are forwarded.** A terminal sends Ctrl-C and Ctrl-\ to its whole
+foreground process group, gh included, so forwarding those would deliver them twice. Most of this
+shim's callers have no terminal, though. ChatGPT, Claude's agent, `timeout -s INT`, Node's
+`child.kill('SIGINT')` and Python's `send_signal` all signal the wrapper's pid directly, and
+without forwarding, gh would keep running. The rule:
+- don't forward when the launcher has a controlling terminal (`/dev/tty` opens) and its process
+  group is that terminal's foreground group (`tcgetpgrp` equals `getpgrp`; rustix has safe
+  versions, if L3 takes it back as a dependency);
+- forward in every other case.
+
+One case is lost. A process that signals a launcher which is in the foreground of a terminal
+isn't forwarded, and gh keeps running. That is rare, and SIGTERM still works.
+
+The handlers are installed before the run directory exists. Any of these four signals arriving
+before gh is spawned aborts the launch. The launcher cleans up what it made and dies by that
+signal.
 
 gh gets the default SIGPIPE disposition, because Rust's `Command` resets it in the child. That is
 what makes `gh pr list | head -1` behave as it does with plain gh.
