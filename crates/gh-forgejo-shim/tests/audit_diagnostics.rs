@@ -508,7 +508,6 @@ fn audit_diag_uninstall_reverses_default_bootstrap() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R8: fails until gh-forgejo-shim-jko.17 is fixed"]
 fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
     let f = Fixture::new()?;
     let target_dir = f.home.join(".local/bin");
