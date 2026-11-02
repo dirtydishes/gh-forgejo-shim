@@ -365,3 +365,42 @@ async fn the_host_set_is_never_empty_or_ambiguous() {
     ];
     assert!(AppState::new(distinct, "3.19.0".into()).is_ok());
 }
+
+/// For a forge on a custom port, gh's API calls present a random per-call token while git keeps the
+/// real one, so the gateway admits only the random token and sends the real one upstream
+/// (launcher spec §3, §5).
+#[tokio::test]
+async fn a_host_can_admit_one_token_and_send_another_upstream() {
+    let (forge, seen) = forgejo().await;
+    let addr = serve(vec![
+        Host::new(
+            "https://forge.test:3443".parse().unwrap(),
+            forge,
+            WipPrefixes::default(),
+        )
+        .answering_to("forge.test")
+        .unwrap()
+        .expecting("per-call".into())
+        .upstream_token("real".into()),
+    ])
+    .await;
+    for (auth, expected) in [
+        ("token real", 401),
+        ("token other", 401),
+        ("", 401),
+        ("token per-call", 200),
+    ] {
+        let head =
+            format!("GET /api/v3/user HTTP/1.1\r\nHost: forge.test\r\nAuthorization: {auth}");
+        assert_eq!(send(addr, &head).await, expected, "{head:?}");
+    }
+    // Forgejo sees only the real token, once; the per-call token never leaves the gateway.
+    assert_eq!(*seen.lock().unwrap(), ["token real"]);
+}
+
+/// Substituting a token without expecting one would hand the real token to any caller.
+#[tokio::test]
+async fn an_upstream_token_requires_an_expected_token() {
+    let open = host("https://a.test").await.upstream_token("real".into());
+    assert!(AppState::new(vec![open], "3.19.0".into()).is_err());
+}
