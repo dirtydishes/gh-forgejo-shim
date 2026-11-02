@@ -29,7 +29,9 @@ reaching Forgejo. `X-Forwarded-Host` is ignored.
 
 Embedded in a launcher, the router serves several forges at once (`fga_server::Host`), each with its
 own upstream, public URL and, optionally, the one token it accepts: any other credential for that
-host gets 401 without reaching Forgejo. The gateway libraries never write to stdout or stderr.
+host gets 401 without reaching Forgejo. A host can answer to a name other than its public URL
+(`Host::answering_to`): gh drops a remote's port, so a forge on `:3443` is asked for as plain
+`forge.test` while its links keep the port. The gateway libraries never write to stdout or stderr.
 
 `FGA_GHES_VERSION` defaults to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and
 `FGA_TLS_KEY` to PEM file paths.

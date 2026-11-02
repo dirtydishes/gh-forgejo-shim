@@ -284,3 +284,46 @@ async fn each_host_links_to_its_own_web_ui() {
     );
     assert!(!body.contains("a.test"), "{body}");
 }
+
+/// gh drops a remote's port, so a forge on :3443 is asked for as plain `forge.test`; the host
+/// answers to that name while its links keep the port.
+#[tokio::test]
+async fn a_host_can_answer_to_its_portless_name_and_link_with_its_port() {
+    let (forge, seen) = forgejo().await;
+    let addr = serve(vec![
+        Host::new(
+            "https://forge.test:3443".parse().unwrap(),
+            forge,
+            WipPrefixes::default(),
+        )
+        .answering_to("forge.test")
+        .unwrap(),
+    ])
+    .await;
+    for (host, expected) in [
+        ("forge.test", 200),
+        ("FORGE.test:443", 200),
+        ("forge.test:3443", 421),
+        ("forge.test:8443", 421),
+        ("api.github.com", 421),
+    ] {
+        let head = format!("GET /api/v3/user HTTP/1.1\r\nHost: {host}\r\nAuthorization: token t");
+        assert_eq!(send(addr, &head).await, expected, "{head:?}");
+    }
+    // Both admitted requests carry one token; the second reuses its cached identity.
+    assert_eq!(*seen.lock().unwrap(), ["token t"]);
+    let request = "GET /api/v3/ HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let body = tokio::task::spawn_blocking(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    })
+    .await
+    .unwrap();
+    assert!(
+        body.contains("\"current_user_url\":\"https://forge.test:3443/api/v3/user\""),
+        "{body}"
+    );
+}
