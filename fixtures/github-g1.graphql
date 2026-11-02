@@ -204,6 +204,8 @@ scalar GitObjectID
 
 scalar GitSSHRemote
 
+scalar HTML
+
 type Issue implements Node {
   id: ID!
   number: Int!
@@ -238,6 +240,7 @@ type IssueComment implements Node {
   author: Actor
   authorAssociation: CommentAuthorAssociation!
   body: String!
+  bodyHTML: HTML!
   createdAt: DateTime!
   includesCreatedEdit: Boolean!
   isMinimized: Boolean!
@@ -441,6 +444,7 @@ type PullRequest implements Node {
   number: Int!
   title: String!
   body: String!
+  bodyHTML: HTML!
   url: URI!
   state: PullRequestState!
   isDraft: Boolean!
@@ -535,6 +539,7 @@ type PullRequestReviewComment implements Node {
   id: ID!
   author: Actor
   body: String!
+  bodyHTML: HTML!
   createdAt: DateTime!
   diffHunk: String!
   state: PullRequestReviewCommentState!

@@ -66,6 +66,10 @@ impl PullRequest {
     async fn body(&self) -> &str {
         &self.source.body
     }
+    #[graphql(name = "bodyHTML")]
+    async fn body_html(&self) -> Html {
+        Html(map::body_html(&self.source.body))
+    }
     async fn url(&self) -> Uri {
         Uri(self.source.html_url.clone())
     }

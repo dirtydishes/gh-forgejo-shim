@@ -718,3 +718,12 @@ fn deleted_head_branches_keep_their_name() {
         "topic"
     );
 }
+/// Bodies are escaped, never rendered: a client may trust bodyHTML as sanitized, as GitHub's is.
+#[test]
+fn body_html_escapes_markup_and_keeps_paragraphs() {
+    assert_eq!(body_html(""), "");
+    assert_eq!(
+        body_html("a <script>x</script>\r\n\r\nc & \"d\"\ne"),
+        "<p>a &lt;script&gt;x&lt;/script&gt;</p>\n<p>c &amp; &quot;d&quot;<br>\ne</p>"
+    );
+}

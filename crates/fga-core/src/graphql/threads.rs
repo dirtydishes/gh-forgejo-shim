@@ -46,6 +46,10 @@ impl PullRequestReviewComment {
     async fn body(&self) -> &str {
         &self.source.body
     }
+    #[graphql(name = "bodyHTML")]
+    async fn body_html(&self) -> Html {
+        Html(crate::map::body_html(&self.source.body))
+    }
     async fn created_at(&self) -> DateTime {
         DateTime(self.source.created_at.clone())
     }
