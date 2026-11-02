@@ -38,6 +38,8 @@ pub struct Forgejo {
     client: Client,
     base: Url,
     sessions: Arc<Mutex<SessionCache>>,
+    /// [`Session::page_size`] and when it was read; Forgejo changes it only on restart.
+    page_size: Arc<Mutex<Option<(usize, Instant)>>>,
 }
 
 impl From<reqwest::Error> for Error {
@@ -103,6 +105,7 @@ impl Forgejo {
                 .build()?,
             base,
             sessions: Arc::default(),
+            page_size: Arc::default(),
         })
     }
 
@@ -252,6 +255,29 @@ impl Session {
         Ok(self.page(segments, query).await?.0)
     }
 
+    /// How many items Forgejo returns per page when asked for [`PAGE_SIZE`]: it clamps every page to
+    /// its `MAX_RESPONSE_ITEMS` (`services/convert/utils.go:15-20`), which may be lower.
+    /// An upstream without the settings endpoint keeps Forgejo's default of 50.
+    pub(crate) async fn page_size(&self) -> Result<usize, Error> {
+        #[derive(serde::Deserialize)]
+        struct ApiSettings {
+            max_response_items: usize,
+        }
+        let cached = *self.forgejo.page_size.lock().expect("page size lock");
+        if let Some((size, read)) = cached
+            && read.elapsed() < Duration::from_secs(600)
+        {
+            return Ok(size);
+        }
+        let size = match self.get::<ApiSettings>(&["settings", "api"], &[]).await {
+            Ok(settings) => settings.max_response_items.clamp(1, PAGE_SIZE),
+            Err(Error::NotFound) => PAGE_SIZE,
+            Err(e) => return Err(e),
+        };
+        *self.forgejo.page_size.lock().expect("page size lock") = Some((size, Instant::now()));
+        Ok(size)
+    }
+
     /// Every item of a list endpoint whose swagger has `page` and `limit`.
     pub async fn pages<T: DeserializeOwned>(
         &self,
@@ -266,7 +292,11 @@ impl Session {
             let count = batch.len();
             items.extend(batch);
             // Forgejo's links are authoritative; endpoints that send none end on a short page.
-            if !next.unwrap_or(count >= PAGE_SIZE) {
+            let more = match next {
+                Some(next) => next,
+                None => count >= self.page_size().await?,
+            };
+            if !more {
                 return Ok(items);
             }
         }
