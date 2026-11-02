@@ -169,9 +169,12 @@ The cost:
 - A host-less `gh auth status` inside a Forgejo checkout reports the Forgejo hosts as logged in.
   The user's other hosts, github.com included, show as failing, because a launched gh can't reach
   them. Outside a Forgejo checkout, it delegates and shows the user's normal hosts.
-- Inside a launched gh, git fetches that gh starts, such as `gh pr checkout`, get no gh credential
-  for other hosts. A private GitHub submodule fetched by `gh pr checkout` in a Forgejo repo fails
-  to authenticate. Git's own credential helpers still apply.
+- Inside a launched gh, git fetches that gh starts, such as `gh pr checkout`, get only the
+  placeholder for other hosts. gh's fetch also clears the user's own git credential helpers for
+  every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
+  `gh/pkg/cmd/pr/checkout/checkout.go:369-370`). A private GitHub submodule fetched by
+  `gh pr checkout` in a Forgejo repo therefore fails to authenticate. No credential leaks in this
+  case: the placeholder is all git ever sends.
 
 Rejected:
 
