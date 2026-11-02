@@ -138,9 +138,17 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         .clone()
         .unwrap_or_else(|| config::config_path(options.home.as_deref()));
     let mut config = config::load_config_with_env(Some(&config_path), &options.env)?;
-    // The repository the wrapper would route, or, if gh knows none of the remotes' hosts, the
-    // first remote: see `doctor::current_repo`.
-    let repo = doctor::current_repo(options.cwd.as_deref(), &options.env, &config);
+    // The repository the wrapper would route, or, if gh resolves none, the first remote: see
+    // `doctor::current_repo`.
+    let current = doctor::current_repo(options.cwd.as_deref(), &options.env, &config);
+    // A repository gh resolves on a host the allowlist doesn't name is real gh's: github.com, or a
+    // GitHub Enterprise host from the user's own gh hosts. Only an unresolved first remote is a
+    // Forgejo host bootstrap hasn't met yet.
+    let left_to_gh = current.as_ref().is_some_and(|current| {
+        config::is_known_github_host(Some(&current.repo.host))
+            || (current.resolved_by_gh && !doctor::routes_to_forgejo(&config, &current.repo.host))
+    });
+    let repo = current.map(|current| current.repo);
     let setup_model = setup::inspect(SetupInspectOptions {
         env: options.env.clone(),
         home: options.home.clone(),
@@ -152,20 +160,29 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     })?;
     let target_bin_dir = setup_model.target_bin_dir.clone();
     let target_shim = setup_model.target_shim_path.clone();
-    let repo_is_github = repo
-        .as_ref()
-        .is_some_and(|repo| config::is_known_github_host(Some(&repo.host)));
+    let repo_is_github = left_to_gh;
     let mut checks = Vec::new();
 
     if let Some(repo) = repo.as_ref() {
         if repo_is_github {
+            let mut message = format!(
+                "detected GitHub repository {}/{}/{}; leaving {} out of the Forgejo allowlist",
+                repo.host, repo.owner, repo.name, repo.host
+            );
+            // Say so when a Forgejo-looking first remote loses to it, as when a forge origin has a
+            // GitHub upstream, which gh ranks first.
+            if let Some(first) = repo::detect_from_git(options.cwd.as_deref()).filter(|first| {
+                first.host != repo.host && !config::is_known_github_host(Some(&first.host))
+            }) {
+                message.push_str(&format!(
+                    "; {} was left out too, because gh, and so the wrapper, acts on {}/{}/{} here",
+                    first.host, repo.host, repo.owner, repo.name
+                ));
+            }
             checks.push(BootstrapCheck::new(
                 "repository",
                 true,
-                format!(
-                    "detected GitHub repository {}/{}/{}; leaving {} out of the Forgejo allowlist",
-                    repo.host, repo.owner, repo.name, repo.host
-                ),
+                message,
                 Vec::<String>::new(),
             ));
         } else if config::normalized_forgejo_host(&repo.host).is_none() {

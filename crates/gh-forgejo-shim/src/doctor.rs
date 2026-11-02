@@ -145,7 +145,11 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     ));
 
     if should_check_current_repo {
-        if let Some(repo) = current_repo(options.cwd.as_deref(), &options.env, &config) {
+        if let Some(CurrentRepo {
+            repo,
+            resolved_by_gh,
+        }) = current_repo(options.cwd.as_deref(), &options.env, &config)
+        {
             if routes_to_forgejo(&config, &repo.host) {
                 checks.push(Check::new(
                     "current repo host",
@@ -156,7 +160,9 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                     ),
                     Vec::<String>::new(),
                 ));
-            } else if config::is_known_github_host(Some(&repo.host)) {
+            } else if resolved_by_gh || config::is_known_github_host(Some(&repo.host)) {
+                // gh resolves it, through github.com or the user's own gh hosts (GitHub
+                // Enterprise, say), so the wrapper hands it to real gh.
                 checks.push(Check::new(
                     "current repo host",
                     true,
@@ -183,10 +189,23 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     Ok(checks)
 }
 
+/// The repository a `gh` command run in `cwd` acts on, as [`current_repo`] finds it.
+pub(crate) struct CurrentRepo {
+    pub repo: RepoRef,
+    /// gh resolves this repository, so the wrapper routes it: to Forgejo if its host is
+    /// allowlisted, otherwise to real gh. When false, gh resolved nothing and this is the first
+    /// remote, on a host neither gh nor the allowlist knows yet.
+    pub resolved_by_gh: bool,
+}
+
 /// The repository a `gh` command run in `cwd` acts on, found the way the wrapper routes it, so
 /// `doctor` and `bootstrap` name the same one. In a fork whose origin is GitHub and whose
 /// allowlisted upstream is Forgejo, that's the upstream.
-pub(crate) fn current_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoRef> {
+pub(crate) fn current_repo(
+    cwd: Option<&Path>,
+    env: &EnvMap,
+    config: &Config,
+) -> Option<CurrentRepo> {
     let env = env
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -209,16 +228,34 @@ pub(crate) fn current_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) ->
             .filter(|repo| routes_to_forgejo(config, &repo.host))
             .or(launched),
     };
+    if let Some(repo) = found {
+        return Some(CurrentRepo {
+            repo,
+            resolved_by_gh: true,
+        });
+    }
+    // GH_REPO or GH_HOST pins gh to a repository or a host; with nothing found there, gh and the
+    // wrapper act on no remote, so neither does this.
+    if env.get("GH_REPO").is_some_and(|value| !value.is_empty())
+        || env
+            .get("GH_HOST")
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return None;
+    }
     // Fallback for unknown hosts. gh skips a remote whose host it doesn't know, so on a first run
     // in a Forgejo checkout, before its host is allowlisted, it finds nothing. That remote is the
     // one bootstrap should allowlist and doctor should name, so take the first remote, origin
     // first, as before routing followed gh.
-    found.or_else(|| repo::detect_from_git(cwd))
+    repo::detect_from_git(cwd).map(|repo| CurrentRepo {
+        repo,
+        resolved_by_gh: false,
+    })
 }
 
 /// Whether the wrapper routes a repository on `host` to Forgejo. gh drops a remote's port, so
 /// `git.example.com` matches an allowlist entry `git.example.com:3000`.
-fn routes_to_forgejo(config: &Config, host: &str) -> bool {
+pub(crate) fn routes_to_forgejo(config: &Config, host: &str) -> bool {
     DispatcherConfig {
         hosts: config.hosts.clone(),
         real_gh: None,
