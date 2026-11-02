@@ -344,7 +344,8 @@ mod tests {
         );
         for (name, state, bucket) in [
             ("skipped", "SKIPPED", "skipping"),
-            ("neutral", "NEUTRAL", "skipping"),
+            // fga-core maps a warning to a failure: Forgejo never lets one pass its gate.
+            ("neutral", "FAILURE", "fail"),
             ("queued", "QUEUED", "pending"),
             ("running", "IN_PROGRESS", "pending"),
         ] {
@@ -381,16 +382,17 @@ mod tests {
                 .map(String::from)
             )?,
             json!({
-                "name":"external", "state":"SUCCESS", "bucket":"pass", "workflow":"", "event":"",
+                "name":"external", "state":"FAILURE", "bucket":"fail", "workflow":"", "event":"",
                 "startedAt":ZERO_TIME, "completedAt":ZERO_TIME,
                 "description":"external warning", "link":"https://forge.test/checks/1"
             })
         );
         let mut output = Vec::new();
-        assert_eq!(print(rows, &mut output)?, 0);
+        // A warning fails, as Forgejo's gate treats it.
+        assert_eq!(print(rows, &mut output)?, 1);
         assert_eq!(
             String::from_utf8(output)?,
-            "external\tpass\t0\thttps://forge.test/checks/1\texternal warning\n"
+            "external\tfail\t0\thttps://forge.test/checks/1\texternal warning\n"
         );
         Ok(())
     }

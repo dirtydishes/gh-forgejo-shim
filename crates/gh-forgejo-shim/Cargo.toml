@@ -29,7 +29,7 @@ name = "contract"
 path = "../../tests/contract.rs"
 
 [dependencies]
-fga-core = { git = "https://github.com/dirtydishes/forgejo-github-api", rev = "0199b3d", default-features = false }
+fga-core = { path = "../fga-core", default-features = false }
 glob = "0.3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

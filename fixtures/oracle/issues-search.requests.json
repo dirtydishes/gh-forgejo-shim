@@ -1,0 +1,23 @@
+[
+  {
+    "query": "fragment issue on Issue {number,state,title}query IssueSearch($repo: String!, $owner: String!, $type: SearchType!, $limit: Int, $after: String, $query: String!) {\n      repository(name: $repo, owner: $owner) {\n        hasIssuesEnabled\n      }\n      search(type: $type, last: $limit, after: $after, query: $query) {\n        issueCount\n        nodes { ...issue }\n        pageInfo {\n          hasNextPage\n          endCursor\n        }\n      }\n    }",
+    "variables": {
+      "limit": 30,
+      "owner": "dirtydishes",
+      "query": "( scenario in:title ) repo:dirtydishes/gfj-oracle type:issue",
+      "repo": "gfj-oracle",
+      "type": "ISSUE_ADVANCED"
+    }
+  },
+  {
+    "query": "query SearchType_enumValues{SearchType: __type(name: \"SearchType\"){enumValues(includeDeprecated: true){name}}}"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

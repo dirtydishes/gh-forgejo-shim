@@ -1,0 +1,468 @@
+[
+  {
+    "id": "view-1",
+    "args": [
+      "pr",
+      "view",
+      "1"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "view-2",
+    "args": [
+      "pr",
+      "view",
+      "2"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "view-4",
+    "args": [
+      "pr",
+      "view",
+      "4"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "probe-1",
+    "args": [
+      "pr",
+      "view",
+      "1",
+      "--json",
+      "number,title,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup,headRefName,baseRefName,reviewDecision"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "probe-2",
+    "args": [
+      "pr",
+      "view",
+      "2",
+      "--json",
+      "number,title,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup,headRefName,baseRefName,reviewDecision"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "probe-4",
+    "args": [
+      "pr",
+      "view",
+      "4",
+      "--json",
+      "number,title,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup,headRefName,baseRefName,reviewDecision"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "probe-5",
+    "args": [
+      "pr",
+      "view",
+      "5",
+      "--json",
+      "number,title,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup,headRefName,baseRefName,reviewDecision"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "merged-6",
+    "args": [
+      "pr",
+      "view",
+      "6",
+      "--json",
+      "state,mergedAt"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "closed-7",
+    "args": [
+      "pr",
+      "view",
+      "7",
+      "--json",
+      "state,closed"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "checks-1",
+    "args": [
+      "pr",
+      "checks",
+      "1"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "checks-2",
+    "args": [
+      "pr",
+      "checks",
+      "2"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "checks-5",
+    "args": [
+      "pr",
+      "checks",
+      "5"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "status",
+    "args": [
+      "pr",
+      "status"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "wide-1",
+    "args": [
+      "pr",
+      "view",
+      "1",
+      "--json",
+      "additions,author,autoMergeRequest,baseRefName,body,closed,comments,commits,createdAt,deletions,headRefName,headRefOid,isDraft,latestReviews,mergedAt,mergedBy,mergeStateStatus,mergeable,number,reviews,reviewDecision,reviewRequests,state,title,updatedAt,url,statusCheckRollup"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-default",
+    "args": [
+      "pr",
+      "list"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-all",
+    "args": [
+      "pr",
+      "list",
+      "--state",
+      "all",
+      "--limit",
+      "20"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-merged",
+    "args": [
+      "pr",
+      "list",
+      "--state",
+      "merged"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-author",
+    "args": [
+      "pr",
+      "list",
+      "--author",
+      "dirtydishes",
+      "--state",
+      "all"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-me-head",
+    "args": [
+      "pr",
+      "list",
+      "--author",
+      "@me",
+      "--head",
+      "s/pass",
+      "--state",
+      "all",
+      "--json",
+      "number,url,state,headRefName"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-base",
+    "args": [
+      "pr",
+      "list",
+      "--base",
+      "main",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-search",
+    "args": [
+      "pr",
+      "list",
+      "--search",
+      "scenario in:title",
+      "--state",
+      "all",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "diff-1",
+    "args": [
+      "pr",
+      "diff",
+      "1"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "diff-names-1",
+    "args": [
+      "pr",
+      "diff",
+      "1",
+      "--name-only"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "repo-default",
+    "args": [
+      "repo",
+      "view"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "repo-json",
+    "args": [
+      "repo",
+      "view",
+      "--json",
+      "name,owner,defaultBranchRef,url,description,isPrivate"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issues-all",
+    "args": [
+      "issue",
+      "list",
+      "--state",
+      "all"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issue-11",
+    "args": [
+      "issue",
+      "view",
+      "11"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issue-12",
+    "args": [
+      "issue",
+      "view",
+      "12",
+      "--json",
+      "number,state,title"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "runs",
+    "args": [
+      "run",
+      "list",
+      "--limit",
+      "5"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "commit-pulls",
+    "args": [
+      "api",
+      "repos/dirtydishes/gfj-oracle/commits/{pr1_head}/pulls",
+      "--jq",
+      ".[].number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-assignee",
+    "args": [
+      "pr",
+      "list",
+      "--assignee",
+      "dirtydishes",
+      "--state",
+      "all",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-label",
+    "args": [
+      "pr",
+      "list",
+      "--label",
+      "bug",
+      "--state",
+      "all",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issues-author",
+    "args": [
+      "issue",
+      "list",
+      "--author",
+      "@me",
+      "--state",
+      "all",
+      "--json",
+      "number,state,title"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issues-search",
+    "args": [
+      "issue",
+      "list",
+      "--search",
+      "scenario in:title",
+      "--state",
+      "all",
+      "--json",
+      "number,state,title"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issues-label",
+    "args": [
+      "issue",
+      "list",
+      "--label",
+      "bug",
+      "--state",
+      "all",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issues-assignee",
+    "args": [
+      "issue",
+      "list",
+      "--assignee",
+      "@me",
+      "--state",
+      "all",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-closed",
+    "args": [
+      "pr",
+      "list",
+      "--state",
+      "closed",
+      "--json",
+      "number,state"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-head",
+    "args": [
+      "pr",
+      "list",
+      "--head",
+      "s/pass",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-limit",
+    "args": [
+      "pr",
+      "list",
+      "--limit",
+      "1",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "issues-default",
+    "args": [
+      "issue",
+      "list"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-search-sorted",
+    "args": [
+      "pr",
+      "list",
+      "--search",
+      "scenario in:title sort:created-desc",
+      "--state",
+      "all",
+      "--json",
+      "number"
+    ],
+    "exit": 0
+  },
+  {
+    "id": "list-author-closed",
+    "args": [
+      "pr",
+      "list",
+      "--author",
+      "dirtydishes",
+      "--state",
+      "closed",
+      "--json",
+      "number,state"
+    ],
+    "exit": 0
+  }
+]

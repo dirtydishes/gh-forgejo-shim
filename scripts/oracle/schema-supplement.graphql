@@ -1,0 +1,12 @@
+query ReadSchemaSupplement($name: String!) { __type(name: $name) { ...definition } }
+fragment definition on __Type {
+  kind name interfaces { name }
+  fields(includeDeprecated: true) {
+    name type { ...reference }
+    args { name defaultValue type { ...reference } }
+  }
+  enumValues(includeDeprecated: true) { name }
+}
+fragment reference on __Type {
+  kind name ofType { kind name ofType { kind name ofType { kind name } } }
+}

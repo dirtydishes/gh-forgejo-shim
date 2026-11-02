@@ -1,0 +1,21 @@
+[package]
+name = "fga-core"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+async-graphql.workspace = true
+base64.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+sha2.workspace = true
+regex.workspace = true
+tokio.workspace = true
+yaml-rust2 = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+axum.workspace = true

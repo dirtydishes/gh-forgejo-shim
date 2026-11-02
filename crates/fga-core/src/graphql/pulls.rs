@@ -1,0 +1,545 @@
+use super::*;
+use crate::{
+    forgejo::{self, Session},
+    ids::node_id,
+    map,
+};
+use async_graphql::{Context, ID, Object};
+use std::sync::Arc;
+use url::Url;
+
+#[derive(Clone)]
+pub struct PullRequest {
+    pub source: Arc<forgejo::PullRequest>,
+    pub owner: String,
+    pub repo: String,
+}
+impl PullRequest {
+    pub fn new(source: forgejo::PullRequest, owner: &str, repo: &str) -> Self {
+        Self {
+            source: Arc::new(source),
+            owner: owner.into(),
+            repo: repo.into(),
+        }
+    }
+    async fn checks(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<map::Check>> {
+        let statuses = ctx
+            .data_unchecked::<Session>()
+            .statuses(&self.owner, &self.repo, &self.source.head.sha)
+            .await
+            .map_err(error)?;
+        Ok(map::checks(
+            &statuses,
+            &self.owner,
+            &self.repo,
+            ctx.data_unchecked::<Url>(),
+        ))
+    }
+}
+#[Object]
+impl PullRequest {
+    pub(super) async fn id(&self) -> ID {
+        ID(node_id(
+            "PullRequest",
+            &format!("{}/{}", self.owner, self.repo),
+            self.source.number,
+        ))
+    }
+    async fn database_id(&self) -> Option<i32> {
+        i32::try_from(self.source.id).ok()
+    }
+    async fn full_database_id(&self) -> Option<BigInt> {
+        Some(BigInt(self.source.id.to_string()))
+    }
+    async fn number(&self) -> i32 {
+        self.source.number
+    }
+    async fn title(&self, ctx: &Context<'_>) -> &str {
+        map::title(&self.source, ctx.data_unchecked::<map::WipPrefixes>())
+    }
+    async fn body(&self) -> &str {
+        &self.source.body
+    }
+    async fn url(&self) -> Uri {
+        Uri(self.source.html_url.clone())
+    }
+    async fn state(&self) -> map::PullRequestState {
+        map::state(&self.source)
+    }
+    async fn is_draft(&self) -> bool {
+        self.source.draft
+    }
+    async fn closed(&self) -> bool {
+        map::state(&self.source) != map::PullRequestState::Open
+    }
+    async fn merged(&self) -> bool {
+        self.source.merged
+    }
+    async fn merged_at(&self) -> Option<DateTime> {
+        self.source.merged_at.clone().map(DateTime)
+    }
+    async fn closed_at(&self) -> Option<DateTime> {
+        self.source.closed_at.clone().map(DateTime)
+    }
+    async fn created_at(&self) -> DateTime {
+        DateTime(self.source.created_at.clone())
+    }
+    async fn updated_at(&self) -> DateTime {
+        DateTime(self.source.updated_at.clone())
+    }
+    async fn author(&self) -> Option<Actor> {
+        Some(User(self.source.user.clone()).into())
+    }
+    async fn merged_by(&self) -> Option<Actor> {
+        self.source.merged_by.clone().map(|u| User(u).into())
+    }
+    async fn additions(&self) -> i32 {
+        self.source.additions
+    }
+    async fn deletions(&self) -> i32 {
+        self.source.deletions
+    }
+    async fn changed_files(&self) -> i32 {
+        self.source.changed_files
+    }
+    async fn maintainer_can_modify(&self) -> bool {
+        self.source.allow_maintainer_edit
+    }
+    async fn head_ref_name(&self) -> &str {
+        self.source.head.name()
+    }
+    async fn base_ref_name(&self) -> &str {
+        &self.source.base.ref_name
+    }
+    async fn head_ref_oid(&self) -> GitObjectId {
+        GitObjectId(self.source.head.sha.clone())
+    }
+    async fn base_ref_oid(&self) -> GitObjectId {
+        GitObjectId(self.source.base.sha.clone())
+    }
+    async fn is_cross_repository(&self) -> bool {
+        self.source.head.repo.as_ref().is_some_and(|r| {
+            !r.owner.login.eq_ignore_ascii_case(&self.owner)
+                || r.name.as_ref().is_some_and(|name| name != &self.repo)
+        })
+    }
+    async fn head_repository_owner(&self) -> Option<RepositoryOwner> {
+        self.source
+            .head
+            .repo
+            .as_ref()
+            .map(|r| User(r.owner.clone()).into())
+    }
+    async fn head_repository(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Option<Repository>> {
+        // Deleted head repositories are represented by null upstream.
+        let Some(head) = self.source.head.repo.as_ref() else {
+            return Ok(None);
+        };
+        let name = head.name.as_deref().unwrap_or(&self.repo);
+        let source = ctx
+            .data_unchecked::<Session>()
+            .repository(&head.owner.login, name)
+            .await
+            .map_err(error)?;
+        Ok(Some(Repository { source }))
+    }
+    async fn base_ref(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Ref>> {
+        let p = ctx
+            .data_unchecked::<Session>()
+            .protection(&self.owner, &self.repo, &self.source.base.ref_name)
+            .await
+            .map_err(error)?;
+        Ok(Some(Ref {
+            name: self.source.base.ref_name.clone(),
+            branch_protection_rule: p.map(|p| BranchProtectionRule {
+                requires_strict_status_checks: p.block_on_outdated_branch,
+                required_approving_review_count: Some(p.required_approvals),
+            }),
+        }))
+    }
+    async fn mergeable(&self) -> map::MergeableState {
+        map::mergeable(&self.source)
+    }
+    async fn review_decision(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Option<map::PullRequestReviewDecision>> {
+        let session = ctx.data_unchecked::<Session>();
+        let p = session
+            .protection(&self.owner, &self.repo, &self.source.base.ref_name)
+            .await
+            .map_err(error)?;
+        let Some(p) = p.filter(|p| p.gates_reviews()) else {
+            return Ok(None);
+        };
+        let reviews = session
+            .reviews(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?;
+        Ok(map::review_decision(&reviews, Some(&p)))
+    }
+    async fn merge_state_status(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<map::MergeStateStatus> {
+        let session = ctx.data_unchecked::<Session>();
+        let checks = self.checks(ctx).await?;
+        let protection = session
+            .protection(&self.owner, &self.repo, &self.source.base.ref_name)
+            .await
+            .map_err(error)?;
+        let behind = if protection
+            .as_ref()
+            .is_some_and(|p| p.block_on_outdated_branch)
+        {
+            session
+                .behind(
+                    &self.owner,
+                    &self.repo,
+                    &self.source.base.sha,
+                    &self.source.head.sha,
+                )
+                .await
+                .map_err(error)?
+        } else {
+            false
+        };
+        let decision = self.review_decision(ctx).await?;
+        Ok(map::merge_state(
+            &self.source,
+            map::mergeable(&self.source),
+            &checks,
+            protection.as_ref(),
+            decision,
+            behind,
+        ))
+    }
+    async fn auto_merge_request(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Option<AutoMergeRequest>> {
+        if self.source.state != "open" || self.source.merged {
+            return Ok(None);
+        }
+        let session = ctx.data_unchecked::<Session>();
+        let Some(event) = session
+            .auto_merge_event(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?
+        else {
+            return Ok(None);
+        };
+        let repository = session
+            .repository(&self.owner, &self.repo)
+            .await
+            .map_err(error)?;
+        let method = match repository.default_merge_style.as_str() {
+            "squash" => PullRequestMergeMethod::Squash,
+            "rebase" | "rebase-merge" => PullRequestMergeMethod::Rebase,
+            _ => PullRequestMergeMethod::Merge,
+        };
+        Ok(Some(AutoMergeRequest {
+            author_email: None,
+            commit_body: None,
+            commit_headline: None,
+            merge_method: method,
+            enabled_at: Some(DateTime(event.created_at)),
+            enabled_by: Some(Actor::User(User(event.user))),
+        }))
+    }
+    async fn is_merge_queue_enabled(&self) -> bool {
+        false
+    }
+    async fn is_in_merge_queue(&self) -> bool {
+        false
+    }
+    async fn reaction_groups(&self) -> Option<Vec<ReactionGroup>> {
+        no_reactions()
+    }
+    async fn milestone(&self) -> Option<Milestone> {
+        self.source.milestone.clone().map(Into::into)
+    }
+    async fn labels(
+        &self,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<Option<LabelConnection>> {
+        Ok(Some(
+            page(
+                self.source
+                    .labels
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                first,
+                last,
+                after,
+                before,
+            )?
+            .into(),
+        ))
+    }
+    async fn assignees(
+        &self,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<UserConnection> {
+        Ok(page(
+            self.source
+                .assignees
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(User)
+                .collect(),
+            first,
+            last,
+            after,
+            before,
+        )?
+        .into())
+    }
+    async fn review_requests(
+        &self,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<Option<ReviewRequestConnection>> {
+        let reviewers = map::review_requests(&self.source)
+            .into_iter()
+            .map(|reviewer| ReviewRequest {
+                requested_reviewer: Some(match reviewer {
+                    map::Reviewer::User(user) => User(user.clone()).into(),
+                    map::Reviewer::Team(team) => Team {
+                        name: team.name.clone(),
+                        slug: team.name.clone(),
+                        organization: Organization {
+                            id: team.organization.id,
+                            login: team.organization.name.clone(),
+                        },
+                    }
+                    .into(),
+                }),
+            })
+            .collect();
+        Ok(Some(page(reviewers, first, last, after, before)?.into()))
+    }
+    async fn reviews(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<Option<PullRequestReviewConnection>> {
+        let reviews = ctx
+            .data_unchecked::<Session>()
+            .reviews(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?;
+        // Forgejo lists review requests as reviews; GitHub keeps them in reviewRequests.
+        let nodes = reviews
+            .into_iter()
+            .filter(|review| review.state != "REQUEST_REVIEW")
+            .map(|source| PullRequestReview {
+                source,
+                owner: self.owner.clone(),
+                repo: self.repo.clone(),
+            })
+            .collect();
+        Ok(Some(page(nodes, first, last, after, before)?.into()))
+    }
+    async fn latest_reviews(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<Option<PullRequestReviewConnection>> {
+        let reviews = ctx
+            .data_unchecked::<Session>()
+            .reviews(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?;
+        let nodes = map::latest_reviews(&reviews)
+            .into_iter()
+            .map(|source| PullRequestReview {
+                source: source.clone(),
+                owner: self.owner.clone(),
+                repo: self.repo.clone(),
+            })
+            .collect();
+        Ok(Some(page(nodes, first, last, after, before)?.into()))
+    }
+    async fn comments(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<IssueCommentConnection> {
+        let session = ctx.data_unchecked::<Session>();
+        let nodes = session
+            .comments(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?
+            .into_iter()
+            .map(|source| IssueComment {
+                source,
+                owner: self.owner.clone(),
+                viewer: session.viewer.login.clone(),
+            })
+            .collect();
+        Ok(page(nodes, first, last, after, before)?.into())
+    }
+    async fn commits(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<PullRequestCommitConnection> {
+        let commits = ctx
+            .data_unchecked::<Session>()
+            .commits(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?;
+        let nodes = commits
+            .into_iter()
+            .map(|source| PullRequestCommit {
+                commit: Commit {
+                    owner: self.owner.clone(),
+                    repo: self.repo.clone(),
+                    sha: source.sha.clone(),
+                    source: Some(source),
+                },
+            })
+            .collect();
+        Ok(page(nodes, first, last, after, before)?.into())
+    }
+    async fn project_items(
+        &self,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<ProjectV2ItemConnection> {
+        Ok(page(Vec::new(), first, last, after, before)?.into())
+    }
+}
+
+#[derive(async_graphql::SimpleObject)]
+pub struct PullRequestCommit {
+    pub commit: Commit,
+}
+#[derive(Clone)]
+pub struct Commit {
+    pub owner: String,
+    pub repo: String,
+    pub sha: String,
+    pub source: Option<forgejo::PullCommit>,
+}
+impl Commit {
+    pub fn head(owner: &str, repo: &str, sha: &str) -> Self {
+        Self {
+            owner: owner.into(),
+            repo: repo.into(),
+            sha: sha.into(),
+            source: None,
+        }
+    }
+}
+#[Object]
+impl Commit {
+    async fn oid(&self) -> GitObjectId {
+        GitObjectId(self.sha.clone())
+    }
+    async fn status_check_rollup(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Option<StatusCheckRollup>> {
+        let statuses = ctx
+            .data_unchecked::<Session>()
+            .statuses(&self.owner, &self.repo, &self.sha)
+            .await
+            .map_err(error)?;
+        let checks = map::checks(
+            &statuses,
+            &self.owner,
+            &self.repo,
+            ctx.data_unchecked::<Url>(),
+        );
+        Ok((!checks.is_empty()).then(|| StatusCheckRollup {
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            sha: self.sha.clone(),
+            checks,
+        }))
+    }
+    async fn message_headline(&self) -> String {
+        self.source
+            .as_ref()
+            .map(|s| s.commit.message.lines().next().unwrap_or("").into())
+            .unwrap_or_default()
+    }
+    async fn message_body(&self) -> String {
+        self.source
+            .as_ref()
+            .and_then(|s| s.commit.message.split_once('\n'))
+            .map(|(_, b)| b.trim_start_matches('\n').trim_end_matches('\n').into())
+            .unwrap_or_default()
+    }
+    async fn authored_date(&self) -> DateTime {
+        DateTime(
+            self.source
+                .as_ref()
+                .map(|s| s.commit.author.date.clone())
+                .unwrap_or_default(),
+        )
+    }
+    async fn committed_date(&self) -> DateTime {
+        DateTime(
+            self.source
+                .as_ref()
+                .map(|s| s.commit.committer.date.clone())
+                .unwrap_or_default(),
+        )
+    }
+    async fn authors(
+        &self,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<GitActorConnection> {
+        let nodes = self
+            .source
+            .as_ref()
+            .map(|s| GitActor {
+                name: Some(s.commit.author.name.clone()),
+                email: Some(s.commit.author.email.clone()),
+                user: s.author.clone().map(User),
+            })
+            .into_iter()
+            .collect();
+        Ok(page(nodes, first, last, after, before)?.into())
+    }
+}
+#[derive(async_graphql::SimpleObject)]
+pub struct GitActor {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub user: Option<User>,
+}

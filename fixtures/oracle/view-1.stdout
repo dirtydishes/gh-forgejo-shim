@@ -1,0 +1,15 @@
+title:	scenario: checks pass
+state:	OPEN
+author:	dirtydishes (dirtydishes)
+labels:	
+assignees:	
+reviewers:	
+projects:	
+milestone:	
+number:	1
+url:	https://github.com/dirtydishes/gfj-oracle/pull/1
+additions:	1
+deletions:	0
+auto-merge:	disabled
+--
+Oracle scenario `s/pass`. Do not merge by hand.

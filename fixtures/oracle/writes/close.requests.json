@@ -1,0 +1,26 @@
+[
+  {
+    "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {state,number,title,isCrossRepository,headRefName,id}\n    }\n  }",
+    "variables": {
+      "owner": "dirtydishes",
+      "pr_number": 32,
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "query": "mutation PullRequestClose($input:ClosePullRequestInput!){closePullRequest(input: $input){pullRequest{id}}}",
+    "variables": {
+      "input": {
+        "pullRequestId": "PR_kwDOVdZkPs8AAAABMHuvSg"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]
