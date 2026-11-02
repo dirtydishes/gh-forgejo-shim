@@ -74,7 +74,9 @@ def main(admin, reader, protected=False):
             print('\n'.join(diffs))
         else:
             print(f'PASS {case}' + (' (empty for the reader)' if case in VIEWER_CASES else ''))
+    checks = len(CASES)
     if protected:
+        checks += 2
         blocked = [merge_state(root / 'probe-2.stdout') for root in (admin, reader)]
         if blocked != ['BLOCKED', 'BLOCKED']:
             unexpected += 1
@@ -84,11 +86,11 @@ def main(admin, reader, protected=False):
             print('UNEXPECTED no merge state was UNKNOWN for the reader: the branch summary went unread')
         else:
             print(f'PASS {swapped} merge states UNKNOWN for the reader where the admin sees CLEAN or UNSTABLE')
-    print(f'Viewer summary: {len(CASES) - unexpected} expected, {unexpected} unexpected')
+    print(f'Viewer summary: {checks - unexpected} expected, {unexpected} unexpected')
     return int(unexpected != 0)
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
     protected = args[:1] == ['--protected']
-    sys.exit(main(*map(Path, args[protected:]), protected=protected))
+    sys.exit(main(*map(Path, args[1:] if protected else args), protected=protected))
