@@ -535,7 +535,10 @@ session cache. ChatGPT polls about every 60 s per thread, so several launchers r
 nothing but read-only inputs: the user's gh config, the shim's config and the token store. The
 remaining shared writes are:
 
-- the trace file, which needs audit D6 (`jko.11`) fixed before L3;
+- the trace file, which needs audit D6 (`jko.11`) fixed before L3. The fix (survivor PR #53)
+  writes each record with one `O_APPEND` write and takes no file lock: a lock could wait forever
+  on another process and hang every traced call. That holds on local filesystems, not NFS. The
+  launcher writes trace records the same way, and adds no lock;
 - the sweep, which only touches directories whose lock it holds (section 4).
 
 Each launched call pays one extra upstream request, the `/user` lookup that authenticates gh's
