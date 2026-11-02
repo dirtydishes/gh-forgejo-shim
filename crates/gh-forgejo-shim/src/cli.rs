@@ -388,11 +388,16 @@ fn run_uninstall_shim(
 
     let paths = match resolve_optional_path(bin_dir_arg, runtime.home())? {
         Some(bin_dir) => vec![shim::uninstall_shim(Some(&bin_dir), runtime.home())?],
-        None => shim::uninstall_default_shims(
-            runtime.home(),
-            runtime.env().get("PATH").map(String::as_str),
-        )?,
+        None => {
+            shim::uninstall_default_shims(runtime.home(), &setup::current_path_dirs(runtime.env()))?
+        }
     };
+    if paths.is_empty() {
+        writeln!(
+            stdout,
+            "no gh shim found in ~/.local/bin or in PATH directories under HOME"
+        )?;
+    }
     for path in paths {
         writeln!(stdout, "removed gh shim at {}", path.display())?;
     }
@@ -1490,6 +1495,39 @@ mod tests {
         assert!(error.contains("warning: could not apply PATH immediately: launchctl denied"));
         assert!(output.contains("the LaunchAgent will apply PATH at the next login"));
         assert_eq!(runtime.gui_path_applied_values, vec!["/tmp/bin:/usr/bin"]);
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_shim_reads_tilde_path_entries_as_bootstrap_does() -> Result<()> {
+        let home = temp_root()?;
+        let cargo = home.join(".cargo").join("bin");
+        shim::install_shim(Some(&cargo), Some(&home), Path::new("/opt/gfj"), false)?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.env = EnvMap::from([
+            ("HOME".to_string(), home.display().to_string()),
+            ("PATH".to_string(), "~/.cargo/bin:/usr/bin:/bin".to_string()),
+        ]);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["uninstall-shim"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0);
+        assert!(
+            !cargo.join("gh").exists(),
+            "the ~/.cargo/bin wrapper stayed"
+        );
+        let output =
+            String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
+        assert!(output.contains(".cargo/bin/gh"), "{output}");
         fs::remove_dir_all(home).ok();
         Ok(())
     }
