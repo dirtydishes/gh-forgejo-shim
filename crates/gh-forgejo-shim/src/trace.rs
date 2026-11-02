@@ -237,10 +237,11 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
         return Some(authorization_credential_range(value, value_start));
     }
 
+    // An unquoted value runs to whitespace, or to the next query parameter after `=`. Ending it
+    // at `,` or `;` would keep the rest of a password such as `p@ss;w,rd`.
+    let query = value[delimiter_index..].starts_with('=');
     let value_end = value[value_start..]
-        .find(|character: char| {
-            character.is_whitespace() || matches!(character, ',' | '}' | ']' | ';' | '&')
-        })
+        .find(|character: char| character.is_whitespace() || (query && character == '&'))
         .map_or(value.len(), |offset| value_start + offset);
     Some((value_start, value_end))
 }
