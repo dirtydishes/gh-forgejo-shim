@@ -5,6 +5,7 @@
 
 interface Actor {
   login: String!
+  avatarUrl( size: Int ): URI!
 }
 
 input AddCommentInput {
@@ -31,6 +32,7 @@ scalar BigInt
 
 type Bot implements Actor & Node {
   login: String!
+  avatarUrl( size: Int ): URI!
 }
 
 type BranchProtectionRule implements Node {
@@ -120,6 +122,7 @@ enum CommentAuthorAssociation {
 
 type Commit implements Node {
   oid: GitObjectID!
+  url: URI!
   statusCheckRollup: StatusCheckRollup
   messageHeadline: String!
   messageBody: String!
@@ -237,6 +240,8 @@ type IssueComment implements Node {
   reactionGroups: [ReactionGroup!]
   url: URI!
   viewerDidAuthor: Boolean!
+  viewerCanUpdate: Boolean!
+  viewerCanDelete: Boolean!
 }
 
 type IssueCommentConnection {
@@ -458,6 +463,11 @@ type PullRequest implements Node {
   reviewDecision: PullRequestReviewDecision
   mergeStateStatus: MergeStateStatus!
   autoMergeRequest: AutoMergeRequest
+  viewerCanUpdate: Boolean!
+  viewerCanClose: Boolean!
+  viewerCanReopen: Boolean!
+  viewerCanEnableAutoMerge: Boolean!
+  viewerCanDisableAutoMerge: Boolean!
   isMergeQueueEnabled: Boolean!
   isInMergeQueue: Boolean!
   reactionGroups: [ReactionGroup!]
@@ -504,6 +514,10 @@ type PullRequestReview implements Node {
   author: Actor
   authorAssociation: CommentAuthorAssociation!
   submittedAt: DateTime
+  createdAt: DateTime!
+  url: URI!
+  isMinimized: Boolean!
+  viewerCanUpdate: Boolean!
   body: String!
   state: PullRequestReviewState!
   commit: Commit
@@ -732,6 +746,7 @@ type User implements Actor & Node & RepositoryOwner {
   id: ID!
   name: String
   databaseId: Int
+  avatarUrl( size: Int ): URI!
 }
 
 type UserConnection {

@@ -1,6 +1,8 @@
 use super::*;
-use crate::{forgejo, ids::node_id, map};
-use async_graphql::{Enum, ID, Interface, Object, Scalar, ScalarType, SimpleObject, Union, Value};
+use crate::{forgejo, forgejo::Session, ids::node_id, map};
+use async_graphql::{
+    Context, Enum, ID, Interface, Object, Scalar, ScalarType, SimpleObject, Union, Value,
+};
 
 macro_rules! string_scalar {
     ($rust:ident, $name:literal) => {
@@ -27,7 +29,14 @@ string_scalar!(GitObjectId, "GitObjectID");
 string_scalar!(BigInt, "BigInt");
 
 #[derive(Clone, Interface)]
-#[graphql(field(name = "login", ty = "String"))]
+#[graphql(
+    field(name = "login", ty = "String"),
+    field(
+        name = "avatar_url",
+        ty = "Uri",
+        arg(name = "size", ty = "Option<i32>")
+    )
+)]
 pub enum Actor {
     User(User),
     Bot(Bot),
@@ -54,6 +63,10 @@ impl User {
     async fn database_id(&self) -> Option<i32> {
         i32::try_from(self.0.id).ok()
     }
+    /// Forgejo's avatar at its own size; clients render whatever URL they get.
+    async fn avatar_url(&self, _size: Option<i32>) -> Uri {
+        Uri(self.0.avatar_url.clone())
+    }
 }
 #[derive(Clone)]
 pub struct Bot(pub forgejo::User);
@@ -62,6 +75,24 @@ impl Bot {
     async fn login(&self) -> String {
         self.0.login.clone()
     }
+    async fn avatar_url(&self, _size: Option<i32>) -> Uri {
+        Uri(self.0.avatar_url.clone())
+    }
+}
+
+/// Whether the viewer may write to the repository, which is what lets them edit or close others'
+/// pull requests and comments.
+pub(super) async fn viewer_can_write(
+    ctx: &Context<'_>,
+    owner: &str,
+    repo: &str,
+) -> async_graphql::Result<bool> {
+    let repository = ctx
+        .data_unchecked::<Session>()
+        .repository(owner, repo)
+        .await
+        .map_err(error)?;
+    Ok(repository.permissions.is_some_and(|p| p.admin || p.push))
 }
 #[derive(Clone)]
 pub struct Organization {
@@ -221,6 +252,29 @@ impl PullRequestReview {
     async fn submitted_at(&self) -> Option<DateTime> {
         self.source.submitted_at.clone().map(DateTime)
     }
+    /// Forgejo reviews carry no creation time; a pending one has no submission time either.
+    async fn created_at(&self) -> DateTime {
+        DateTime(
+            self.source
+                .submitted_at
+                .clone()
+                .or_else(|| self.source.updated_at.clone())
+                .unwrap_or_default(),
+        )
+    }
+    async fn url(&self) -> Uri {
+        Uri(self.source.html_url.clone())
+    }
+    async fn is_minimized(&self) -> bool {
+        false
+    }
+    async fn viewer_can_update(&self, ctx: &Context<'_>) -> bool {
+        let viewer = &ctx.data_unchecked::<Session>().viewer.login;
+        self.source
+            .user
+            .as_ref()
+            .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer))
+    }
     async fn body(&self) -> &str {
         &self.source.body
     }
@@ -242,7 +296,15 @@ impl PullRequestReview {
 pub struct IssueComment {
     pub source: forgejo::Comment,
     pub owner: String,
+    pub repo: String,
     pub viewer: String,
+}
+impl IssueComment {
+    /// Forgejo lets the poster or a repository writer edit and delete a comment.
+    async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        Ok(self.source.user.login.eq_ignore_ascii_case(&self.viewer)
+            || viewer_can_write(ctx, &self.owner, &self.repo).await?)
+    }
 }
 #[Object]
 impl IssueComment {
@@ -283,6 +345,12 @@ impl IssueComment {
     }
     async fn viewer_did_author(&self) -> bool {
         self.source.user.login.eq_ignore_ascii_case(&self.viewer)
+    }
+    async fn viewer_can_update(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        self.viewer_can_change(ctx).await
+    }
+    async fn viewer_can_delete(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        self.viewer_can_change(ctx).await
     }
 }
 #[derive(SimpleObject)]
