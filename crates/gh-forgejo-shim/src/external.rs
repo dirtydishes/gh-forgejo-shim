@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -250,18 +251,42 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
     is_managed_shim(path) || is_current_executable(path)
 }
 
+/// Whether `path` runs this binary: the same file under any name, or a byte-for-byte copy.
 fn is_current_executable(path: &Path) -> bool {
     let Ok(current) = std::env::current_exe() else {
         return false;
     };
-    same_file(path, &current)
+    same_file(path, &current) || same_contents(path, &current)
 }
 
+/// Whether both paths reach one file, through symlinks or as hardlinks.
+#[cfg(unix)]
+fn same_file(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let (Ok(left), Ok(right)) = (left.metadata(), right.metadata()) else {
+        return false;
+    };
+    (left.dev(), left.ino()) == (right.dev(), right.ino())
+}
+
+#[cfg(not(unix))]
 fn same_file(left: &Path, right: &Path) -> bool {
     let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) else {
         return false;
     };
     left == right
+}
+
+/// Compares lengths first, so a candidate of another size costs two `stat`s and no reads.
+fn same_contents(left: &Path, right: &Path) -> bool {
+    let (Ok(left_meta), Ok(right_meta)) = (left.metadata(), right.metadata()) else {
+        return false;
+    };
+    if left_meta.len() != right_meta.len() {
+        return false;
+    }
+    matches!((fs::read(left), fs::read(right)), (Ok(left), Ok(right)) if left == right)
 }
 
 fn is_executable_file(path: &Path) -> bool {
