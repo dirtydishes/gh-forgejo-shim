@@ -343,7 +343,8 @@ fn audit_route_signal_passthrough_restores_default_actions() -> TestResult {
     // signal-hook's table. SIGSEGV and SIGRTMIN run on Linux only: macOS shows a crash
     // dialog for every process that dies of SIGSEGV.
     let signals: &[i32] = if cfg!(target_os = "linux") {
-        &[13, 11, 34]
+        // 29 is SIGIO, which signal-hook lists as ignored but terminates on Linux.
+        &[13, 11, 29, 34]
     } else {
         &[13]
     };

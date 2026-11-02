@@ -140,19 +140,19 @@ pub fn inherited_exit_code(status: ExitStatus) -> i32 {
 /// signal on this thread. Then this process dies of that signal too, so its parent sees the death
 /// that the child's parent saw. Call it last, once traces are written.
 ///
-/// The signal's default action is put back and the signal unblocked first: Rust ignores SIGPIPE
+/// signal-hook puts the signal's default action back and unblocks it first: Rust ignores SIGPIPE
 /// and handles SIGSEGV and SIGBUS itself, and a parent may have left the signal ignored or
-/// blocked. signal-hook's table has no real-time signals, so those are raised as they are: one
-/// this process inherited ignored stays ignored, but then gh inherited it ignored too and could
-/// not have died of it. If the process survives, `code` is returned.
+/// blocked. It returns without raising for a signal missing from its table (Linux real-time
+/// ones) or listed there as ignored (SIGIO, which terminates on Linux), so those are raised as
+/// they are. An init process (pid 1, also inside a PID namespace such as a container) never gets
+/// a signal it sends itself under the default action, and signal-hook would then abort, so it
+/// returns `code` instead. So does any process that survives.
 pub fn exit_like_child(code: i32) -> i32 {
     #[cfg(unix)]
     {
         let signal = CHILD_SIGNAL.get();
-        if signal != 0
-            && code == 128 + signal
-            && signal_hook::low_level::emulate_default_handler(signal).is_err()
-        {
+        if signal != 0 && code == 128 + signal && std::process::id() != 1 {
+            let _ = signal_hook::low_level::emulate_default_handler(signal);
             let _ = signal_hook::low_level::raise(signal);
         }
     }
