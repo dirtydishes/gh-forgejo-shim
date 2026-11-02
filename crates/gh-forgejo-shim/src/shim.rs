@@ -193,8 +193,17 @@ pub fn uninstall_default_shims(home: Option<&Path>, path_dirs: &[PathBuf]) -> Re
         }
         removed.push(candidate);
     }
-    if removed.is_empty() && fs::symlink_metadata(&default).is_ok() {
-        removed.push(uninstall_shim(None, home)?);
+    if removed.is_empty() {
+        match fs::symlink_metadata(&default) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(ShimError::new(format!(
+                    "{} is a symlink, not a wrapper this shim installed; remove it yourself, or pass --bin-dir",
+                    default.display()
+                )));
+            }
+            Ok(_) => removed.push(uninstall_shim(None, home)?),
+            Err(_) => {}
+        }
     }
     Ok(removed)
 }
@@ -388,6 +397,34 @@ mod tests {
             .message()
             .contains("exists and is not managed by gh-forgejo-shim"));
         fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_uninstall_refuses_a_symlink_in_the_default_dir() -> Result<()> {
+        let home = unique_path("gh-forgejo-shim-uninstall-default-link");
+        let outside = unique_path("gh-forgejo-shim-uninstall-link-target");
+        let local_bin = home.join(".local/bin");
+        fs::create_dir_all(&local_bin)?;
+        fs::create_dir_all(&outside)?;
+        install_shim(Some(&outside), Some(&home), Path::new("/opt/gfj"), false)?;
+        std::os::unix::fs::symlink(outside.join("gh"), local_bin.join("gh"))?;
+
+        let error = uninstall_default_shims(Some(&home), &[]).expect_err("a symlink is the user's");
+
+        assert!(
+            error.message().contains("is a symlink"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            fs::symlink_metadata(local_bin.join("gh")).is_ok(),
+            "the symlink stays"
+        );
+        assert!(outside.join("gh").exists());
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(outside).ok();
         Ok(())
     }
 
