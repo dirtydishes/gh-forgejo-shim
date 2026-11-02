@@ -141,11 +141,12 @@ fn audit_diag_install_drops_other_write_permissions() -> TestResult {
     fs::create_dir_all(&target_dir)?;
     let target = target_dir.join("gh");
     fs::write(&target, shim::shim_script(Path::new("/old/gfj")))?;
+    // The old wrapper's mode must not carry over to the new one.
     fs::set_permissions(&target, fs::Permissions::from_mode(0o666))?;
-    // Under umask 002 the new wrapper starts group-writable, so this fails on any runner
-    // unless install sets the mode outright.
+    // Under umask 000 the new wrapper starts group- and world-writable, so this fails on any
+    // runner unless install sets the mode outright.
     let install = Command::new("/bin/sh")
-        .args(["-c", "umask 002 && exec \"$0\" install-shim"])
+        .args(["-c", "umask 000 && exec \"$0\" install-shim"])
         .arg(env!("CARGO_BIN_EXE_gfj"))
         .env_clear()
         .envs(f.env())
