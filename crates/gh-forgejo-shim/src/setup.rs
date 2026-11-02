@@ -420,7 +420,7 @@ fn is_current_executable(path: &Path) -> bool {
     same_file(path, &current)
 }
 
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
     };

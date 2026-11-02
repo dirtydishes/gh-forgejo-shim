@@ -440,7 +440,6 @@ fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D13: fails until gh-forgejo-shim-jko.12 is fixed"]
 fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
     let f = Fixture::new()?;
     let managed_dir = f.home.join(".local/bin");

@@ -30,18 +30,41 @@ pub fn shim_script(executable: &Path) -> String {
 }
 
 pub fn is_managed_shim(path: &Path) -> bool {
-    let Ok(file) = File::open(path) else {
+    let Some(text) = read_head(path) else {
         return false;
     };
-    let mut bytes = Vec::new();
-    if file.take(MAX_MARKER_BYTES).read_to_end(&mut bytes).is_err() {
-        return false;
-    }
-    let text = String::from_utf8_lossy(&bytes);
     text.contains(MARKER)
         && (text.contains("gh-forgejo-shim gh")
             || text.contains("-m gh_forgejo_shim gh")
             || (text.contains(RUST_WRAPPER_MARKER) && text.contains(" gh \"$@\"")))
+}
+
+/// The binary a wrapper from [`shim_script`] runs, read back from its `exec` line. `None` for
+/// any other file, including a wrapper from the old Python release.
+pub fn wrapper_target(path: &Path) -> Option<PathBuf> {
+    let text = read_head(path)?;
+    if !text.contains(MARKER) || !text.contains(RUST_WRAPPER_MARKER) {
+        return None;
+    }
+    let quoted = text
+        .lines()
+        .find_map(|line| line.strip_prefix("exec ")?.strip_suffix(" gh \"$@\""))?;
+    // The inverse of `shell_quote`: a safe path is bare, any other is single-quoted.
+    let target = match quoted.strip_prefix('\'') {
+        Some(rest) => rest.strip_suffix('\'')?.replace("'\\''", "'"),
+        None => quoted.to_string(),
+    };
+    Some(PathBuf::from(target))
+}
+
+fn read_head(path: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(MAX_MARKER_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub fn install_shim(
@@ -257,6 +280,22 @@ mod tests {
         let path = unique_path("gh-forgejo-shim-rust-managed");
         fs::write(&path, script)?;
         assert!(is_managed_shim(&path));
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn wrapper_target_reads_back_the_exec_path() -> io::Result<()> {
+        let path = unique_path("gh-forgejo-shim-wrapper-target");
+        for target in ["/opt/gfj", "/tmp/it's here/gfj"] {
+            fs::write(&path, shim_script(Path::new(target)))?;
+            assert_eq!(wrapper_target(&path), Some(PathBuf::from(target)));
+        }
+        fs::write(
+            &path,
+            "#!/bin/sh\n# managed by gh-forgejo-shim\nexec python -m gh_forgejo_shim gh \"$@\"\n",
+        )?;
+        assert_eq!(wrapper_target(&path), None);
         fs::remove_file(path)?;
         Ok(())
     }
