@@ -98,21 +98,22 @@ pub fn remove_git_recorder(path: &Path) -> Result<PathBuf> {
         return Ok(directory);
     }
 
+    // Remove only what the recorder wrote, and only when both files are ones it writes. The
+    // directory may be one the user already had, such as ~/bin, so it goes only if the recorder
+    // made it and nothing else is left in it.
     let wrapper = directory.join("git");
-    if !is_recorder_wrapper(&wrapper) {
+    let marker = directory.join(MARKER_FILE);
+    if !written_by_recorder(&wrapper, &wrapper_header())
+        || !written_by_recorder(&marker, &marker_header())
+    {
         return Err(ShimError::new(format!(
             "{} is not a gh-forgejo-shim git recorder directory",
             directory.display()
         )));
     }
-    // Remove only what the recorder wrote. The directory may be one the user already had, such
-    // as ~/bin, so it goes only if the recorder made it and nothing else is left in it.
-    let marker = directory.join(MARKER_FILE);
     let created = created_directory(&marker);
     fs::remove_file(&wrapper)?;
-    if is_recorder_wrapper(&marker) {
-        fs::remove_file(&marker)?;
-    }
+    fs::remove_file(&marker)?;
     if created {
         match fs::remove_dir(&directory) {
             Err(error) if error.kind() != io::ErrorKind::DirectoryNotEmpty => {
@@ -122,6 +123,20 @@ pub fn remove_git_recorder(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(directory)
+}
+
+fn wrapper_header() -> String {
+    format!("#!/bin/sh\n# {MARKER}\nexec ")
+}
+
+fn marker_header() -> String {
+    format!("{MARKER}\n")
+}
+
+/// Whether `path` is a regular file, not a symlink, that starts the way the recorder writes it.
+fn written_by_recorder(path: &Path, header: &str) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
+        && fs::read(path).is_ok_and(|bytes| bytes.starts_with(header.as_bytes()))
 }
 
 fn created_directory(marker: &Path) -> bool {
@@ -777,6 +792,27 @@ mod tests {
         remove_git_recorder(&directory)?;
 
         assert!(!directory.exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn remove_refuses_files_the_recorder_did_not_write() -> Result<()> {
+        let root = recorder_root("spoofed")?;
+        let directory = root.join("bin");
+        fs::create_dir(&directory)?;
+        let script = directory.join("git");
+        fs::write(&script, format!("#!/bin/sh\n# mentions {MARKER}\n"))?;
+        assert!(remove_git_recorder(&directory).is_err());
+        assert!(script.exists());
+
+        let recorder = create(&root, Some(&root), None)?;
+        fs::remove_file(&script)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&recorder.wrapper_path, &script)?;
+        fs::write(directory.join(MARKER_FILE), marker_header())?;
+        assert!(remove_git_recorder(&directory).is_err());
+        assert!(recorder.wrapper_path.exists());
         fs::remove_dir_all(root)?;
         Ok(())
     }
