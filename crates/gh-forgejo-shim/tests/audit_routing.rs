@@ -415,7 +415,6 @@ fn audit_route_force_install_symlink() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R7: fails until gh-forgejo-shim-jko.7 is fixed"]
 fn audit_route_non_utf8_environment_passthrough() -> TestResult {
     let fixture = Fixture::new()?;
     let mut command = fixture.gh(&["--version"]);
