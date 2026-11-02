@@ -14,6 +14,6 @@ printf 'PASS REST draft titles on single and list routes\n'
 E2E_TOKEN="$token" python3 /test/read-contract.py
 cd /tmp/g2-seed
 python3 /test/oracle-scripts/run.py forge.test /artifacts/oracle
-python3 /test/oracle-scripts/compare.py /test/oracle /artifacts/oracle
+python3 /test/oracle-scripts/compare.py /test/oracle /artifacts/oracle /artifacts/forgejo-pulls.json
 python3 /test/write-seed.py
 python3 /test/oracle-scripts/compare-writes.py /test/oracle/writes /artifacts/writes
