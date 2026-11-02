@@ -544,7 +544,6 @@ fn audit_diag_install_drops_other_write_permissions() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D18: fails until gh-forgejo-shim-jko.4 is fixed"]
 fn audit_diag_recorder_recreate_prevents_self_recursion() -> TestResult {
     let f = Fixture::new()?;
     let directory = f.root.join("recorder");
