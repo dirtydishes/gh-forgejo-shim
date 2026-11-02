@@ -38,8 +38,8 @@ pub fn apply(edits: &[(&str, Edit)]) {
         let original = env::var_os(name);
         match edit {
             Edit::Set(value) => {
-                env::set_var(name, value);
-                env::set_var(format!("{SET}{name}"), value);
+                set_once(name, value);
+                set_once(&format!("{SET}{name}"), value);
             }
             Edit::Remove => {
                 env::remove_var(name);
@@ -48,7 +48,7 @@ pub fn apply(edits: &[(&str, Edit)]) {
         }
         if first {
             match original {
-                Some(value) => env::set_var(format!("{ORIG}{name}"), value),
+                Some(value) => set_once(&format!("{ORIG}{name}"), &value),
                 None => env::remove_var(format!("{ORIG}{name}")),
             }
             saved.push(name);
@@ -80,7 +80,7 @@ pub fn revert() {
         if current == set {
             // Unchanged since the launcher: the user's value, or none.
             match &original {
-                Some(value) => env::set_var(name, value),
+                Some(value) => set_once(name, value),
                 None => env::remove_var(name),
             }
         } else if name == GIT_CONFIG_PARAMETERS {
@@ -94,7 +94,7 @@ pub fn revert() {
                     if value.is_empty() {
                         env::remove_var(name);
                     } else {
-                        env::set_var(name, value);
+                        set_once(name, &value);
                     }
                 }
             }
@@ -125,5 +125,14 @@ fn join_space(first: &OsStr, second: &OsStr) -> OsString {
 
 /// `FJ_SHIM_DEPTH` plus one, for everything this invocation starts (§8, guard 3).
 pub fn increment_depth(depth: u32) {
-    env::set_var(DEPTH, (depth + 1).to_string());
+    set_once(DEPTH, OsStr::new(&(depth + 1).to_string()));
+}
+
+/// Sets `name` to `value` as the only entry with that name. `set_var` changes only the first of
+/// repeated entries, while a reader may take the last, so a stale duplicate could hide the new
+/// value: `FJ_SHIM_DEPTH` twice would never reach guard 3's cap. `remove_var` removes every
+/// entry with the name first.
+fn set_once(name: &str, value: &OsStr) {
+    env::remove_var(name);
+    env::set_var(name, value);
 }
