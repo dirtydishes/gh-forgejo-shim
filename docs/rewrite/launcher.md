@@ -255,8 +255,11 @@ launcher answers every git in the call itself:
   - `get` answers only for `protocol=https` with a `host` exactly matching a served host as git
     reaches it: the hostname for a default-port entry, `host:port` for a ported one. The answer
     is `protocol`, `host`, `username=x-access-token` and `password=<real token>`. Any other
-    host, a `gist.` one included, gets no answer. git then tries its next source, which may be
-    a terminal prompt, so tests set `GIT_TERMINAL_PROMPT=0`.
+    host, a `gist.` one included, gets no answer. git then asks its next source: an askpass
+    program (`GIT_ASKPASS`, `core.askPass` or `SSH_ASKPASS`; VS Code's terminal sets one), else a
+    terminal prompt. Either asks about the URL's own host only, so neither can carry a login to
+    another site. `GIT_TERMINAL_PROMPT=0` stops the prompt but not askpass, so tests also unset
+    all three askpass settings.
   - `store` and `erase` do nothing, as gh's helper does. Any other operation fails, as gh's does.
 
 Any other `auth git-credential` call, from a git outside a launched call, delegates to plain gh
@@ -332,7 +335,8 @@ The cost:
 - A git that a child of a launched gh starts, such as an alias shell or an editor, also gets a
   credential only for a served forge, and none for any other host over HTTPS: GitHub, GitHub
   Enterprise, GitLab, or a host the user's Keychain helper would answer. A shell alias that
-  pushes to one of them fails, unless that git names a helper on its own command line (§3). SSH
+  pushes to one of them fails, unless that git names a helper on its own command line (§3) or an
+  askpass program answers for it, as VS Code's terminal does. SSH
   remotes are unaffected. Git outside a launched call is unaffected. For GitHub with the usual
   gh setup, the push would fail without the launcher's helper too: `gh auth setup-git` names
   real gh, which reads the call's `hosts.yml` and finds GitHub's placeholder ahead of the
@@ -785,7 +789,8 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     a REST request (`gh api repos/{owner}/{repo}`) with 504, and a GraphQL request (`gh pr view`)
     with 200 and an `errors` body. A slow `/user` (9 s) followed by a stalled call answers within
     20.5 s. gh exits 1 in every case, and the launcher doesn't kill it.
-14. **Git's credentials (§3).** With `GIT_TERMINAL_PROMPT=0`: in a launched `gh pr checkout`, git
+14. **Git's credentials (§3).** With `GIT_TERMINAL_PROMPT=0`, and `GIT_ASKPASS`, `SSH_ASKPASS`
+    and `core.askPass` unset: in a launched `gh pr checkout`, git
     fetching from the served forge, with or without a custom port, gets the real token. A push
     to `https://gist.forge.test/…` gets no credential, and neither does a fetch from a GitHub
     remote, even with a GitHub token in the Keychain. Then a shell alias runs `git push`, with
@@ -868,7 +873,8 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
    retry could then give a forge login to a `gist.` host. The launcher now forces its own helper
    on every git in the call through `GIT_CONFIG_PARAMETERS` (§3, §7). That adds a cost the user
    sees, so it went back to Kell. Inside a launched call, git that an alias shell or an editor
-   starts gets credentials only for the served forge, and none for any other host over HTTPS.
+   starts gets credentials only for the served forge, and none for any other host over HTTPS
+   beyond what an askpass program or a terminal prompt supplies for that host.
    Git that gh itself starts is unchanged by this, and git outside a launched call is
    unaffected. A nested git that names a helper with `-c` on its own command line still asks
    that helper after the launcher's declines (§3). The alternative was to keep the user's own
