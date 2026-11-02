@@ -5,8 +5,8 @@ own hostname. The forge then answers the GitHub Enterprise API at `https://<forg
 `https://<forge>/api/graphql`. Anything that speaks to GitHub Enterprise can use it directly, with no
 wrapper on the client machine.
 
-**Use server mode if you use Claude.** Claude Code and Claude desktop show a pull request's status and
-checks by calling `https://<forge>/api/v3` themselves, outside of any `gh` process. Only a gateway on
+**Use server mode if you use Claude.** Claude Code and Claude desktop look up a branch's pull request
+by calling `https://<forge>/api/v3` themselves, outside of any `gh` process. Only a gateway on
 the forge's hostname can answer them. The client-only wrapper still serves Claude's agent when it runs
 `gh` in a shell.
 
@@ -15,15 +15,21 @@ Codeberg, can't use server mode.
 
 ## 1. Run the gateway
 
-Build the image from this repository's root, then run it beside Forgejo:
+Build the image from this repository's root, then run it where it can reach Forgejo. The examples
+below assume Forgejo listens on the host at `127.0.0.1:3000` and the proxy runs on the host:
 
 ```sh
 docker build -f packaging/gateway/Dockerfile -t fga-server .
-docker run -d --name fga-server -p 127.0.0.1:8080:8080 \
-    -e FGA_FORGEJO_URL=http://forgejo:3000 \
+docker run -d --name fga-server --network host \
+    -e FGA_LISTEN=127.0.0.1:8080 \
+    -e FGA_FORGEJO_URL=http://127.0.0.1:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
     fga-server
 ```
+
+If Forgejo runs in a container instead, put the gateway on Forgejo's Docker network
+(`--network <forgejo's network>`), set `FGA_FORGEJO_URL=http://<forgejo container>:3000`, and publish
+the gateway with `-p 127.0.0.1:8080:8080` for a proxy on the host.
 
 - `FGA_FORGEJO_URL` is how the gateway reaches Forgejo, usually its internal address.
 - `FGA_PUBLIC_URL` is the forge's own address, as users type it. The gateway builds links from it and
@@ -63,8 +69,9 @@ server {
 
 The snippet uses `$http_host`, because `$host` drops a non-default port.
 
-**Caddy.** Copy the [site block](../../packaging/gateway/caddy/Caddyfile) and change its hostname and
-upstreams. Caddy passes `Host` through by default.
+**Caddy.** Copy the [site block](../../packaging/gateway/caddy/Caddyfile) and set its hostname and two
+upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. Caddy passes `Host`
+through by default, and its site block answers only the forge's hostname.
 
 **Nginx Proxy Manager.** Open the forge's proxy host, choose **Advanced**, and paste the contents of
 the nginx locations snippet, replacing `http://fga` with the gateway's address, for example
@@ -72,12 +79,14 @@ the nginx locations snippet, replacing `http://fga` with the gateway's address, 
 
 ## 3. Check it
 
+Every API route needs a Forgejo token:
+
 ```sh
-curl -fsS https://forge.example.com/api/v3/meta
+curl -fsS -H "Authorization: token <your Forgejo token>" https://forge.example.com/api/v3/meta
 ```
 
-The reply is `{"installed_version":"3.19.0"}`. A `/pull/1` link on any repository should open
-Forgejo's PR page.
+The reply is `{"installed_version":"3.19.0"}`. Without a token the gateway answers `401`, which also
+shows the route reaches it. A `/pull/1` link on any repository should open Forgejo's PR page.
 
 ## 4. Use it
 
@@ -85,7 +94,7 @@ Forgejo's PR page.
   the forge's repositories, with no wrapper. Grant the token `read:user`, `write:repository`,
   `write:issue` and `read:organization`.
 - **Claude Code and Claude desktop:** log `gh` in as above. Both get their token from `gh`, then look up
-  the branch's pull request and its checks on the forge directly.
+  the branch's pull request on the forge directly.
 - **ChatGPT desktop:** it drives `gh`, so the same login serves it.
 
 ## Limits
