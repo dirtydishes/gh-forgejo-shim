@@ -54,7 +54,8 @@ pub fn install_shim(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    if target.exists() && !is_managed_shim(&target) && !force {
+    // `symlink_metadata` so a dangling `gh` symlink counts as an existing, unmanaged target.
+    if fs::symlink_metadata(&target).is_ok() && !is_managed_shim(&target) && !force {
         return Err(ShimError::new(format!(
             "{} exists and is not managed by gh-forgejo-shim; pass --force to overwrite",
             target.display()
@@ -291,6 +292,24 @@ mod tests {
             2,
             "a temporary file was left behind"
         );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_refuses_a_dangling_symlink_without_force() -> Result<()> {
+        let root = unique_path("gh-forgejo-shim-install-dangling");
+        fs::create_dir(&root)?;
+        let target = root.join("gh");
+        std::os::unix::fs::symlink(root.join("missing"), &target)?;
+
+        let error = install_shim(Some(&root), None, Path::new("/tmp/gh-forgejo-shim"), false)
+            .expect_err("a dangling symlink is an unmanaged target");
+
+        assert!(error.message().contains("not managed by gh-forgejo-shim"));
+        assert!(fs::symlink_metadata(&target)?.file_type().is_symlink());
+        assert!(!root.join("missing").exists());
         fs::remove_dir_all(root).ok();
         Ok(())
     }
