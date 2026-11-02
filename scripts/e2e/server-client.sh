@@ -53,6 +53,12 @@ check '[ "$(curl -fsS https://forge.test/api/v1/version | jq -r "has(\"version\"
 status=$(curl -sS -o /dev/null -w '%{http_code}' --connect-to forge.test:8443:forge.test:443 \
     -H "Authorization: token $token" https://forge.test:8443/api/v3/user)
 check '[ "$status" = 421 ]' 'the proxy keeps the port: forge.test:8443 gets 421'
+# A request line naming forge.test:8443 would reach the gateway as plain forge.test: nginx refuses it.
+for path in /api/v3/user /api/graphql /e2e/oracle/pull/1; do
+    status=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: token $token" \
+        --request-target "https://forge.test:8443$path" "https://forge.test$path")
+    check '[ "$status" = 400 ]' "nginx refuses a request line naming forge.test:8443 for $path"
+done
 # A path a browser would resolve to another origin never redirects (raw path, as sent).
 evil='//evil.com/pull/1/x%2F..%2F..%2F..%2F..%2Fa%2Fb%2Fpull%2F1'
 # The gateway's own 404, so the check proves the path reached it rather than something else.
@@ -69,6 +75,10 @@ link=$(caddy -o /dev/null -w '%{http_code} %{redirect_url}' http://forge.test/e2
 check '[ "$link" = "301 http://forge.test/e2e/oracle/pulls/1" ]' 'Caddy: /pull/1 redirects to /pulls/1'
 hostile=$(caddy --path-as-is -o /tmp/hostile.json -w '%{http_code} %{redirect_url}' "http://forge.test$evil")
 check '[ "$hostile" = "404 " ] && grep -q "\"message\":\"Not Found\"" /tmp/hostile.json' "the gateway refuses $evil through Caddy ($hostile)"
+# Go keeps a request line's host and port, so through Caddy the gateway sees forge.test:8443.
+status=$(caddy -o /dev/null -w '%{http_code}' -H "Authorization: token $token" \
+    --request-target http://forge.test:8443/api/v3/user http://forge.test/api/v3/user)
+check '[ "$status" = 421 ]' 'Caddy: a request line naming forge.test:8443 gets 421'
 # Caddy's site block answers only its own hostname, so another host's token never gets an answer.
 other=$(curl -sS -o /tmp/other.json -w '%{http_code}' --connect-to other.test:80:caddy:80 \
     -H "Authorization: token $token" http://other.test/api/v3/user)
