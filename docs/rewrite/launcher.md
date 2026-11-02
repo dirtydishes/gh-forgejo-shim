@@ -417,7 +417,9 @@ runtime serves them concurrently.
 ## 11. Acceptance tests
 
 L3 builds these, as process tests against real gh v2.103.3 and a Forgejo stub or the e2e Forgejo.
-Each names the section it proves.
+Each names the section it proves. On macOS the tests send only SIGTERM, SIGKILL, SIGINT and SIGHUP,
+because crash-type signals (SIGSEGV, SIGQUIT, SIGABRT, SIGBUS, SIGILL) open a crash dialog on the
+user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 
 1. **Config immutability (§3).** Hash every file in the user's gh config directory. Run a launched
    `gh pr view`, a launched call killed with SIGKILL, and `uninstall`. The hashes are unchanged
