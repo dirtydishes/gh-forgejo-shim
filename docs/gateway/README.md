@@ -29,7 +29,10 @@ reaching Forgejo. `X-Forwarded-Host` is ignored.
 
 Embedded in a launcher, the router serves several forges at once (`fga_server::Host`), each with its
 own upstream, public URL and, optionally, the one token it accepts: any other credential for that
-host gets 401 without reaching Forgejo. A host can also answer to a second name
+host gets 401 without reaching Forgejo. With `.upstream_token(token)`, a host
+sends that token to Forgejo in place of the admitted one: a launcher gives gh a random per-call token
+for a forge on a custom port and keeps the real one for git. A host can't substitute a token without
+expecting one. A host can also answer to a second name
 (`Host::answering_to`): gh drops a remote's port, so a forge on `:3443` is asked for as plain
 `forge.test`, or with the port when the user writes it, while its links keep the port. The gateway libraries never print to stdout or stderr; a panic still reaches stderr through the
 panic hook, so an embedding launcher installs its own.

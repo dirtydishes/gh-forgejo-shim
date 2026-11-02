@@ -39,6 +39,8 @@ pub struct Host {
     /// When set, the only credential accepted for this host. A launcher hands each host's token
     /// over; server mode leaves it unset and lets Forgejo judge every user's token.
     expected_token: Option<[u8; 32]>,
+    /// When set, the token sent to Forgejo in place of the admitted one.
+    upstream_token: Option<String>,
 }
 
 impl Host {
@@ -49,6 +51,7 @@ impl Host {
             forgejo,
             wip_prefixes,
             expected_token: None,
+            upstream_token: None,
         }
     }
 
@@ -66,6 +69,17 @@ impl Host {
     pub fn expecting(self, token: String) -> Self {
         Self {
             expected_token: Some(Sha256::digest(token).into()),
+            ..self
+        }
+    }
+
+    /// Send `token` to Forgejo in place of the admitted one. For a forge on a custom port, gh's API
+    /// calls present a random per-call token, while git keeps the real one under the host:port key
+    /// (launcher spec §3); only that per-call token is admitted, and the real one goes upstream.
+    /// `AppState::new` refuses it without an expected token, which would admit any caller.
+    pub fn upstream_token(self, token: String) -> Self {
+        Self {
+            upstream_token: Some(token),
             ..self
         }
     }
@@ -113,6 +127,12 @@ impl AppState {
         let overlap = |a: &Host, b: &Host| keys(a).iter().any(|key| keys(b).contains(key));
         if hosts.is_empty() {
             return Err("the gateway needs at least one host");
+        }
+        if hosts
+            .iter()
+            .any(|host| host.upstream_token.is_some() && host.expected_token.is_none())
+        {
+            return Err("a host that sends its own token upstream must expect one from clients");
         }
         if hosts
             .iter()
@@ -191,7 +211,10 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let result = if host.admits(auth) {
-        host.forgejo.authenticate(auth).await
+        match &host.upstream_token {
+            Some(token) => host.forgejo.authenticate(&format!("token {token}")).await,
+            None => host.forgejo.authenticate(auth).await,
+        }
     } else {
         Err(Error::Unauthorized)
     };
