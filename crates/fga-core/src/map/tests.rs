@@ -815,3 +815,58 @@ fn pull_web_urls_take_githubs_layout() {
         "https://forge.test/o/r/compare/main...topic"
     );
 }
+
+/// REST's combined status holds the plain statuses and GitHub's state over them; Actions jobs are
+/// check runs, with the states `statusCheckRollup` gives them.
+#[test]
+fn commit_status_and_check_runs_split_like_github() {
+    let mut external = status("lint", S::Failure, "lint failed");
+    external.id = 2;
+    external.target_url = "https://ci.example/build/7".into();
+    let rows = [
+        status("ci / check (push)", S::Success, "Successful in 3s"),
+        status("ci / slow (push)", S::Pending, "Waiting to run"),
+        external,
+    ];
+    let checks = mapped(&rows);
+    let combined = combined_status(&checks, "abc");
+    assert_eq!(combined["state"], "failure");
+    assert_eq!(combined["total_count"], 1);
+    assert_eq!(
+        combined["statuses"],
+        json!([{"id":2,"context":"lint","state":"failure","description":"lint failed",
+            "target_url":"https://ci.example/build/7",
+            "created_at":"2026-10-30T19:00:00Z","updated_at":"2026-10-30T19:00:02Z"}])
+    );
+    let runs = check_runs(&checks, "abc");
+    assert_eq!(runs["total_count"], 2);
+    let summary: Vec<_> = runs["check_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            json!([
+                r["name"],
+                r["status"],
+                r["conclusion"],
+                r["head_sha"],
+                r["completed_at"].is_null()
+            ])
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            json!(["check", "completed", "success", "abc", false]),
+            json!(["slow", "queued", null, "abc", true])
+        ]
+    );
+    assert_eq!(
+        runs["check_runs"][0]["details_url"],
+        "https://forge.test/o/r/actions/runs/5/jobs/1"
+    );
+    // GitHub's combined state: no statuses is pending, all passing is success.
+    assert_eq!(combined_status(&[], "abc")["state"], "pending");
+    let passing = mapped(&[status("lint", S::Success, "ok")]);
+    assert_eq!(combined_status(&passing, "abc")["state"], "success");
+}

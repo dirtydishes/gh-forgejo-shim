@@ -51,6 +51,10 @@ for *checking*, *conflict*, *error* and *WIP* alike, so the API can't prove a co
 Return that rejection as a GitHub-shaped error (G3).
 ## 3. Check contexts (`statusCheckRollup.contexts`)
 
+REST reuses this mapping: `GET commits/{ref}/check-runs` lists the Actions statuses as check runs,
+with the same status and conclusion, and `GET commits/{ref}/status` combines the other statuses as
+GitHub does (`failure` if any failed or errored, `pending` if any is pending or there are none).
+
 Forgejo has commit statuses only. Reads return the state in the field **`status`**, while POSTs send
 `state`. (`GET repos/{o}/{r}/commits/{sha}/statuses`; states `pending`,
 `success`, `error`, `failure`, `warning`). Forgejo Actions jobs report through them, with context

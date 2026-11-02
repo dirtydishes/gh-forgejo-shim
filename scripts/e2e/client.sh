@@ -88,6 +88,9 @@ jq -e '.number == 3' /tmp/pr3.json >/dev/null
 api -d '{"context":"ci","state":"failure"}' "$forgejo/repos/e2e/oracle/statuses/$(git rev-parse s/two~1)" >/dev/null
 api -d '{"context":"ci","state":"success"}' "$forgejo/repos/e2e/oracle/statuses/$(git rev-parse s/two)" >/dev/null
 gh pr view 3 -R e2e/oracle --json commits,statusCheckRollup >/artifacts/pr3.json
+# Claude desktop reads a PR head's CI state over REST once it has found the PR.
+api "https://forge.test/api/v3/repos/e2e/oracle/commits/$(git rev-parse s/two)/status?per_page=100" >/artifacts/status3.json
+api "https://forge.test/api/v3/repos/e2e/oracle/commits/$(git rev-parse s/two)/check-runs?per_page=100" >/artifacts/check-runs3.json
 status=0
 gh pr checks 3 -R e2e/oracle >/artifacts/checks3.txt || status=$?
 printf '%s' "$status" >/artifacts/checks3.exit
