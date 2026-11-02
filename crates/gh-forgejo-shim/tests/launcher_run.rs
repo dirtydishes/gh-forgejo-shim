@@ -208,15 +208,26 @@ fn a_missing_gh_exits_127() {
 fn a_configured_gh_that_is_not_executable_exits_126() {
     let _serial = serial();
     let fixture = Fixture::new("http://127.0.0.1:9");
-    let gh = fixture.dir.join("not-executable-gh");
-    fs::write(&gh, "#!/bin/sh\nexit 0\n").expect("gh");
-    fs::set_permissions(&gh, fs::Permissions::from_mode(0o644)).expect("chmod");
-    let output = fixture.launch(&gh);
-    assert_eq!(output.status.code(), Some(126), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("is not executable"),
-        "{output:?}"
-    );
+    let file = fixture.home.join("not-executable-gh");
+    fs::write(&file, "#!/bin/sh\nexit 0\n").expect("gh");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).expect("chmod");
+    // A plain path, the same file through `~/`, and a directory (Sol r2#1 on #82).
+    for configured in [
+        file.clone(),
+        PathBuf::from("~/not-executable-gh"),
+        fixture.dir.clone(),
+    ] {
+        let output = fixture.launch(&configured);
+        assert_eq!(
+            output.status.code(),
+            Some(126),
+            "{configured:?}: {output:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("is not executable"),
+            "{output:?}"
+        );
+    }
 }
 
 /// Sends `signal` to a launched wrapper in its own process group, so no terminal owns it; the

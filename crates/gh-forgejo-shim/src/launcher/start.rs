@@ -54,12 +54,15 @@ pub fn launch(
     let forgejo_url = upstream_url(host, &config, env)?;
 
     let Some(gh) = find_program("gh", real_gh, env) else {
-        // Discovery skips a file it can't run; a configured one that exists is 126, not 127 (§6).
-        if let Some(path) = real_gh.filter(|path| path.is_file() && !is_executable(path)) {
-            return Some(fail(
-                126,
-                &format!("the real gh at {} is not executable", path.display()),
-            ));
+        // Discovery skips what it can't run; a configured path that exists anyway, a directory
+        // or a file without execute bits, is 126, not 127 (§6). `~` expands as discovery does.
+        if let Some(path) = real_gh.map(|path| expand_home(path, env)) {
+            if path.exists() && !is_executable_file(&path) {
+                return Some(fail(
+                    126,
+                    &format!("the real gh at {} is not executable", path.display()),
+                ));
+            }
         }
         return Some(fail(
             127,
@@ -168,9 +171,20 @@ pub fn launch(
     }))
 }
 
-fn is_executable(path: &Path) -> bool {
+fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+/// `~` and `~/…` against `HOME`, as `external::find_program` reads a configured path.
+fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
+    let value = path.to_string_lossy();
+    match (value.strip_prefix('~'), env.get("HOME")) {
+        (Some(""), Some(home)) => PathBuf::from(home),
+        (Some(rest), Some(home)) if rest.starts_with('/') => Path::new(home).join(&rest[1..]),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// The forge's own base URL, or `None` while the gateway can't honour this host's settings.
