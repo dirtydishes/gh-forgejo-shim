@@ -22,6 +22,9 @@ spec.loader.exec_module(compare_writes)
 spec = importlib.util.spec_from_file_location('compare_viewers', Path(__file__).with_name('compare-viewers.py'))
 compare_viewers = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compare_viewers)
+spec = importlib.util.spec_from_file_location('twin_seed', Path(__file__).with_name('twin-seed.py'))
+twin_seed = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(twin_seed)
 
 
 class OracleTests(unittest.TestCase):
@@ -247,6 +250,33 @@ class OracleTests(unittest.TestCase):
             (reader / 'probe-2.stdout').write_text('{"number": 1, "mergeStateStatus": "BLOCKED"}\n')
             (reader / 'probe-1.stdout').write_text('{"number": 2, "mergeStateStatus": "UNKNOWN"}\n')
             self.assertEqual(check(), 1, 'only the merge state may differ')
+    def test_twin_seed_refuses_writes_outside_its_fence_before_the_network(self):
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', 'disposable')
+        repo = 'repos/' + twin_seed.REPO
+        with patch.object(twin_seed.urllib.request, 'urlopen') as urlopen:
+            for method, route, body, sudo in [
+                ('POST', 'repos/dirtydishes/other/pulls', {}, None),
+                ('DELETE', repo + '/issues/1', None, None),
+                ('PATCH', repo + '/pulls/1', {'state': 'open'}, None),
+                ('PATCH', repo + '/pulls/1', {'title': 'x'}, None),
+                ('POST', repo + '/pulls/14/reviews', {}, 'dirtydishes'),
+                ('POST', 'admin/users', {'username': 'someone-else'}, None),
+                ('GET', 'users/someone-else', None, None),
+            ]:
+                with self.assertRaises(SystemExit, msg=f'{method} {route}'):
+                    twin.api(method, route, body, sudo=sudo)
+            urlopen.assert_not_called()
+
+    def test_twin_seed_resumes_only_onto_its_own_plan(self):
+        planned = {item['number']: item['title'] for item in twin_seed.PLAN}
+        self.assertEqual(sorted(planned), list(range(1, 16)))
+        self.assertEqual(planned[4], 'WIP: scenario: draft')
+        twin_seed.check_resumable({})
+        twin_seed.check_resumable({n: planned[n] for n in (1, 2, 3)})
+        with self.assertRaises(SystemExit): twin_seed.check_resumable({1: 'someone else'})
+        with self.assertRaises(SystemExit): twin_seed.check_resumable({16: 'beyond the plan'})
+        with self.assertRaises(SystemExit): twin_seed.check_resumable({1: planned[1], 3: planned[3]})
+        with self.assertRaises(SystemExit): twin_seed.main(['--rehearse', 'https://git.dirtydishes.dev'])
 
 
 if __name__ == '__main__':
