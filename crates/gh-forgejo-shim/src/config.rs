@@ -181,14 +181,13 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
     })
 }
 
-/// Names the line but never quotes the source, which can hold a URL password. Serde quotes a
-/// mistyped string value inside the message itself, so that is cut out too.
+/// Names the line but never quotes the source, which can hold a URL password. The message itself
+/// can quote it too: serde puts a mistyped value in double quotes, and the parser puts a
+/// duplicate key or a table path in backticks. Both are cut.
 fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
     let mut message = error.message().to_string();
-    if let (Some(start), Some(end)) = (message.find('"'), message.rfind('"')) {
-        if start < end {
-            message.replace_range(start + 1..end, "...");
-        }
+    for quote in ['"', '`'] {
+        cut_quoted(&mut message, quote);
     }
     match error.span().and_then(|span| text.get(..span.start)) {
         Some(before) => ShimError::new(format!(
@@ -197,6 +196,24 @@ fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
             before.matches('\n').count() + 1
         )),
         None => ShimError::new(format!("could not parse {}: {message}", path.display())),
+    }
+}
+
+/// Replaces everything between the first and last `quote` with `...`, unless every quoted span is
+/// one punctuation character, such as the parser's `` expected `]` ``.
+fn cut_quoted(message: &mut String, quote: char) {
+    let only_punctuation = message
+        .split(quote)
+        .skip(1)
+        .step_by(2)
+        .all(|span| span.chars().count() <= 1 && !span.chars().any(char::is_alphanumeric));
+    if only_punctuation {
+        return;
+    }
+    if let (Some(start), Some(end)) = (message.find(quote), message.rfind(quote)) {
+        if start < end {
+            message.replace_range(start + quote.len_utf8()..end, "...");
+        }
     }
 }
 
@@ -536,6 +553,11 @@ future_setting = "keep" # why
                 2,
             ),
             ("hosts = []\n[paths]\ngh = \"/bin/secret\n", 3),
+            // The parser puts duplicate keys in backticks.
+            (
+                "[host]\n'https://u:secret@x.com' = {}\n'https://u:secret@x.com' = {}\n",
+                3,
+            ),
         ] {
             fs::write(&path, text)?;
             let error = load_config_with_env(Some(&path), &EnvMap::new())
