@@ -442,6 +442,7 @@ async fn pull_links_redirect_to_forgejo_without_a_token() {
         ("/o/r/pull/12", "/o/r/pulls/12"),
         ("/o/r/pull/12/files?w=1", "/o/r/pulls/12/files?w=1"),
         ("/Some-Org/repo.x_y/pull/3", "/Some-Org/repo.x_y/pulls/3"),
+        ("/o/r/pull/12/", "/o/r/pulls/12/"),
     ] {
         let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
         assert!(
@@ -472,6 +473,12 @@ async fn pull_links_redirect_to_forgejo_without_a_token() {
         "/./r/pull/1",
         "/../r/pull/1",
         "/api/v3/pull/1",
+        // After the number too: no dot, empty, encoded or backslashed segment (Opus interim o2#4).
+        "/o/r/pull/12/files/../../../../../admin",
+        "/o/r/pull/12/%2e%2e/%2e%2e/user/logout",
+        "/o/r/pull/12/./files",
+        "/o/r/pull/12//files",
+        "/o/r/pull/12/a\\b",
     ] {
         let response = fetch(addr, &format!("GET {target} HTTP/1.1\r\nHost: forge.test")).await;
         assert!(
