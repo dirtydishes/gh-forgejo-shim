@@ -460,12 +460,27 @@ fn is_canonical_host(normalized: &str) -> bool {
             .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
             .map_or(normalized, |(host, _)| host),
     };
+    // An IPv6 literal has many spellings ([0:0:0:0:0:0:0:1] is [::1]); compare the addresses.
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'));
+    let same_host = match (literal, url.host_str()) {
+        (Some(literal), Some(parsed)) => {
+            let parsed = parsed.trim_start_matches('[').trim_end_matches(']');
+            matches!(
+                (literal.parse::<std::net::Ipv6Addr>(), parsed.parse::<std::net::Ipv6Addr>()),
+                (Ok(left), Ok(right)) if left == right
+            )
+        }
+        (None, parsed) => parsed == Some(host),
+        _ => false,
+    };
     url.username().is_empty()
         && url.password().is_none()
         && url.path() == "/"
         && url.query().is_none()
         && url.fragment().is_none()
-        && url.host_str() == Some(host)
+        && same_host
 }
 
 pub fn split_hosts(value: &str) -> Vec<String> {
@@ -477,7 +492,9 @@ pub fn split_hosts(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn normalized_forgejo_host(host: &str) -> Option<String> {
+/// `host` normalized, if it may be a Forgejo host: not GitHub's, and spelled the way the URL parser
+/// reads it back.
+pub(crate) fn normalized_forgejo_host(host: &str) -> Option<String> {
     let normalized = normalize_host(host);
     if normalized.is_empty()
         || is_known_github_host(Some(&normalized))
@@ -851,14 +868,20 @@ future_setting = "keep" # why
         let path = root.join("config.toml");
         fs::write(
             &path,
-            "hosts = [\"git.example.com\", \"forge.example%2ecom\", \"user@git.example.org\", \"git.example.net?x\", \"git.example.com:3000\", \"[::1]:3000\"]\n",
+            "hosts = [\"git.example.com\", \"forge.example%2ecom\", \"user@git.example.org\", \"git.example.net?x\", \"git.example.com:3000\", \"[::1]:3000\", \"[0:0:0:0:0:0:0:1]:3001\", \"[::ffff:127.0.0.1]:3002\"]\n",
         )?;
 
         let hosts = load_config_with_env(Some(&path), &EnvMap::new())?.hosts;
 
         assert_eq!(
             hosts,
-            ["git.example.com", "git.example.com:3000", "[::1]:3000"]
+            [
+                "git.example.com",
+                "git.example.com:3000",
+                "[::1]:3000",
+                "[0:0:0:0:0:0:0:1]:3001",
+                "[::ffff:127.0.0.1]:3002"
+            ]
         );
         fs::write(
             &path,
