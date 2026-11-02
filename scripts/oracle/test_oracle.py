@@ -222,6 +222,34 @@ class OracleTests(unittest.TestCase):
             (reader / 'wide-1.stdout').write_text('[]\n')
             self.assertEqual(check(), 1, 'any other case must match exactly')
 
+    def test_protected_viewer_comparison_allows_only_unknown_for_clean_or_unstable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            admin, reader = Path(temp) / 'admin', Path(temp) / 'reader'
+            admin.mkdir(); reader.mkdir()
+            states = {'probe-1': 'CLEAN', 'probe-2': 'BLOCKED'}
+            for case in run.CASES:
+                for ext, value in (('exit', '0\n'), ('stderr', ''), ('stdout', '{"number":1}\n')):
+                    if ext == 'stdout' and case['id'] in states:
+                        value = json.dumps({'number': 1, 'mergeStateStatus': states[case['id']]}) + '\n'
+                    if ext == 'stdout' and case['id'] in compare_viewers.VIEWER_CASES:
+                        value = '[]\n' if case['id'] != 'status' else 'Created by you\n  You have no open pull requests\n\nRequesting\n'
+                    (admin / f"{case['id']}.{ext}").write_text(value)
+                    (reader / f"{case['id']}.{ext}").write_text(value)
+            for case in ('list-me-head', 'issues-author'):
+                (admin / f'{case}.stdout').write_text('[{"number":1}]\n')
+            (admin / 'status.stdout').write_text('Created by you\n  #1  mine\n\nRequesting\n')
+            def check():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    return compare_viewers.main(admin, reader, protected=True)
+            self.assertEqual(check(), 1, 'the branch summary must show: no UNKNOWN means it went unread')
+            (reader / 'probe-1.stdout').write_text('{"number": 1, "mergeStateStatus": "UNKNOWN"}\n')
+            self.assertEqual(check(), 0)
+            (reader / 'probe-2.stdout').write_text('{"number": 1, "mergeStateStatus": "UNKNOWN"}\n')
+            self.assertEqual(check(), 1, 'a failing required check must block the reader too')
+            (reader / 'probe-2.stdout').write_text('{"number": 1, "mergeStateStatus": "BLOCKED"}\n')
+            (reader / 'probe-1.stdout').write_text('{"number": 2, "mergeStateStatus": "UNKNOWN"}\n')
+            self.assertEqual(check(), 1, 'only the merge state may differ')
+
 
 if __name__ == '__main__':
     unittest.main()
