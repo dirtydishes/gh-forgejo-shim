@@ -209,6 +209,42 @@ fn audit_route_copied_dispatcher_on_path() -> TestResult {
 }
 
 #[test]
+fn audit_route_copied_sibling_entry_point_on_path() -> TestResult {
+    // gfj and gh-forgejo-shim are both dispatchers but differ in bytes.
+    let fixture = Fixture::new()?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = fixture.gh(&["--version"]);
+    command.env_remove("FJ_SHIM_REAL_GH").env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not be selected as real gh"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_unreadable_dispatcher_copy_on_path() -> TestResult {
+    // A copy that can be executed but not read can't be shown to differ, so it's skipped.
+    let fixture = Fixture::new()?;
+    let copy = fixture.bin.join("gh");
+    fs::copy(env!("CARGO_BIN_EXE_gh-forgejo-shim"), &copy)?;
+    fs::set_permissions(&copy, fs::Permissions::from_mode(0o111))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = fixture.gh(&["--version"]);
+    command.env_remove("FJ_SHIM_REAL_GH").env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "an unreadable dispatcher copy must not be selected as real gh"
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_route_hardlinked_real_gh_override() -> TestResult {
     let fixture = Fixture::new()?;
     // Keep both hardlink names on the temp filesystem, including in Docker.

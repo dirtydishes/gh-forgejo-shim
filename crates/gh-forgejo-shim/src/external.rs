@@ -304,12 +304,45 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
     is_managed_shim(path) || is_current_executable(path)
 }
 
-/// Whether `path` runs this binary: the same file under any name, or a byte-for-byte copy.
+/// Whether `path` may run this dispatcher: the running binary or its sibling entry point (`gfj`
+/// beside `gh-forgejo-shim`, which differs in bytes), under any name or as a copy.
 fn is_current_executable(path: &Path) -> bool {
     let Ok(current) = std::env::current_exe() else {
         return false;
     };
-    same_file(path, &current) || same_contents(path, &current)
+    // On Linux the running binary stays readable here even after its file is deleted.
+    let running = if cfg!(target_os = "linux") {
+        PathBuf::from("/proc/self/exe")
+    } else {
+        current.clone()
+    };
+    [
+        running,
+        current.with_file_name("gh-forgejo-shim"),
+        current.with_file_name("gfj"),
+    ]
+    .iter()
+    .any(|reference| may_be_same_binary(path, reference))
+}
+
+/// Whether `candidate` is `reference` or may be a copy of it. Lengths are compared first, so a
+/// candidate of another size costs two `stat`s and no reads. A same-length candidate that can't be
+/// read counts as a copy: it may still be executable, and it can't be shown to differ.
+fn may_be_same_binary(candidate: &Path, reference: &Path) -> bool {
+    let (Ok(candidate_meta), Ok(reference_meta)) = (candidate.metadata(), reference.metadata())
+    else {
+        return false;
+    };
+    if same_file(candidate, reference) {
+        return true;
+    }
+    if candidate_meta.len() != reference_meta.len() {
+        return false;
+    }
+    match (fs::read(candidate), fs::read(reference)) {
+        (Ok(candidate), Ok(reference)) => candidate == reference,
+        _ => true,
+    }
 }
 
 /// Whether both paths reach one file, through symlinks or as hardlinks.
@@ -329,17 +362,6 @@ fn same_file(left: &Path, right: &Path) -> bool {
         return false;
     };
     left == right
-}
-
-/// Compares lengths first, so a candidate of another size costs two `stat`s and no reads.
-fn same_contents(left: &Path, right: &Path) -> bool {
-    let (Ok(left_meta), Ok(right_meta)) = (left.metadata(), right.metadata()) else {
-        return false;
-    };
-    if left_meta.len() != right_meta.len() {
-        return false;
-    }
-    matches!((fs::read(left), fs::read(right)), (Ok(left), Ok(right)) if left == right)
 }
 
 fn is_executable_file(path: &Path) -> bool {
