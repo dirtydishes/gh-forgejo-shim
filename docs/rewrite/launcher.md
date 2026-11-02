@@ -101,8 +101,12 @@ The delegate list holds commands that call no API, or that write gh's own state,
 gh would write to a throwaway copy (section 3):
 
 - `--version`, `version`, `completion`;
-- help for any command: `help …`, and any argv containing `--help` or `-h` before a `--`. Help
-  needs no token, so `gh pr view --help` prints help even where the forge has no stored token;
+- help for any command: `help …`, or a help flag as gh parses it. That means `--help`, or `-h`
+  in a command that doesn't define its own `-h`, as a flag and not as another flag's value, before
+  a `--`. Several `auth` commands define `-h` as `--hostname`, so `gh auth token -h forge.test`
+  isn't help. The wrapper decides this with the invocation parser's flag grammar, not by
+  scanning argv. Help needs no token, so `gh pr view --help` prints help even where the forge
+  has no stored token;
 - `config …`, `alias …`;
 - `auth login`, `auth logout`, `auth switch`, `auth refresh`, `auth setup-git`;
 - `extension …`, because install, upgrade, browse and search call github.com.
