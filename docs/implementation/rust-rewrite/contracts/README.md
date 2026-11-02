@@ -2,7 +2,7 @@
 
 This directory freezes the Python behavior that the Rust rewrite must either preserve or intentionally migrate.
 
-`compatibility-contract.v1.json` is the source of truth for phase 01. It contains:
+`compatibility-contract.v1.json` was the source of truth for phase 01, and stays frozen. It contains:
 
 - the supported and delegated command matrix
 - Codex-critical golden probes
