@@ -67,6 +67,9 @@ pub fn config_yml(user_config: Option<&str>, socket: &Path) -> Result<String, St
     let socket = socket
         .to_str()
         .ok_or_else(|| "the socket path isn't UTF-8".to_string())?;
+    // go-gh reads `hosts.yml` as a second `hosts` entry and takes the first match, so a legacy
+    // `hosts:` key left in `config.yml` would hide the launcher's whole `hosts.yml`.
+    config.remove("hosts");
     config.insert("http_unix_socket".into(), socket.into());
     if !config.contains_key("version") {
         config.insert("version".into(), "1".into());
@@ -74,22 +77,29 @@ pub fn config_yml(user_config: Option<&str>, socket: &Path) -> Result<String, St
     serde_yaml::to_string(&Value::Mapping(config)).map_err(|error| error.to_string())
 }
 
+/// The user's `hosts.yml`, parsed. An error for a file gh couldn't read either: every host in it
+/// needs a placeholder, so a launch can't go ahead without knowing them (§3, §6).
+pub fn user_hosts(text: Option<&str>) -> Result<Mapping, String> {
+    match text {
+        None => Ok(Mapping::new()),
+        Some(text) if text.trim().is_empty() => Ok(Mapping::new()),
+        Some(text) => match serde_yaml::from_str::<Value>(text) {
+            Ok(Value::Mapping(mapping)) => Ok(mapping),
+            Ok(Value::Null) => Ok(Mapping::new()),
+            Ok(_) => Err("it isn't a YAML mapping".to_string()),
+            Err(error) => Err(error.to_string()),
+        },
+    }
+}
+
 /// `hosts.yml` for the launched gh. Keys: the user's own, as written, then each allowlist
 /// entry's keys not already there. Served keys get `token`, every other key the placeholder.
 pub fn hosts_yml(
-    user_hosts: Option<&str>,
+    user: &Mapping,
     allowlist: &[String],
     served: &[ServedHost],
     token: ServedToken<'_>,
 ) -> String {
-    let user = user_hosts
-        .and_then(|text| serde_yaml::from_str::<Value>(text).ok())
-        .and_then(|value| match value {
-            Value::Mapping(mapping) => Some(mapping),
-            _ => None,
-        })
-        .unwrap_or_default();
-
     let mut keys: Vec<String> = user
         .keys()
         .filter_map(Value::as_str)
@@ -206,6 +216,22 @@ mod tests {
     }
 
     #[test]
+    fn config_drops_a_legacy_hosts_key() {
+        let user = "hosts:\n    other.test:\n        oauth_token: legacy\neditor: vim\n";
+        let config = parse(&config_yml(Some(user), Path::new("/s")).expect("config"));
+        assert!(!config.contains_key("hosts"), "{config:?}");
+        assert_eq!(config["editor"].as_str(), Some("vim"));
+    }
+
+    #[test]
+    fn user_hosts_that_do_not_parse_are_an_error() {
+        assert!(user_hosts(Some("github.com: [unclosed\n")).is_err());
+        assert!(user_hosts(Some("- a list\n")).is_err());
+        assert_eq!(user_hosts(None).expect("none").len(), 0);
+        assert_eq!(user_hosts(Some("")).expect("empty").len(), 0);
+    }
+
+    #[test]
     fn config_that_does_not_parse_is_an_error() {
         assert!(config_yml(Some("aliases: [unclosed\n"), Path::new("/s")).is_err());
         assert!(config_yml(Some("- a list\n"), Path::new("/s")).is_err());
@@ -220,7 +246,7 @@ mod tests {
             served("port.test:3443", "port-real"),
         ];
         let hosts = parse(&hosts_yml(
-            Some(user),
+            &user_hosts(Some(user)).expect("hosts"),
             &allowlist,
             &s,
             ServedToken::PerCall("pc"),
@@ -247,9 +273,13 @@ mod tests {
         for key in ["forge.test", "port.test", "port.test:3443"] {
             assert_eq!(token_of(&hosts, key), "pc", "{key}");
         }
-        assert!(
-            !hosts_yml(Some(user), &allowlist, &s, ServedToken::PerCall("pc")).contains("real")
-        );
+        assert!(!hosts_yml(
+            &user_hosts(Some(user)).expect("hosts"),
+            &allowlist,
+            &s,
+            ServedToken::PerCall("pc")
+        )
+        .contains("real"));
     }
 
     #[test]
@@ -259,7 +289,12 @@ mod tests {
             served("forge.test", "forge-real"),
             served("port.test:3443", "port-real"),
         ];
-        let hosts = parse(&hosts_yml(None, &allowlist, &s, ServedToken::Real));
+        let hosts = parse(&hosts_yml(
+            &Mapping::new(),
+            &allowlist,
+            &s,
+            ServedToken::Real,
+        ));
         assert_eq!(token_of(&hosts, "forge.test"), "forge-real");
         assert_eq!(token_of(&hosts, "port.test"), "port-real");
         assert_eq!(token_of(&hosts, "port.test:3443"), "port-real");
@@ -270,7 +305,7 @@ mod tests {
         // Two entries sharing a hostname are never in S (§3), but their keys still exist.
         let allowlist = vec!["forge.test:3443".to_string(), "forge.test:8443".to_string()];
         let hosts = parse(&hosts_yml(
-            None,
+            &Mapping::new(),
             &allowlist,
             &[],
             ServedToken::PerCall("pc"),
@@ -287,7 +322,7 @@ mod tests {
         let mut host = served("forge.test", "real");
         host.login = Some("kell".to_string());
         let hosts = parse(&hosts_yml(
-            None,
+            &Mapping::new(),
             &["forge.test".to_string()],
             &[host],
             ServedToken::PerCall("pc"),

@@ -91,11 +91,24 @@ pub fn launch(
     // A file gh couldn't read either stops the launch, naming it (§3, §6).
     if let Err(error) = ghconfig::config_yml(user_config.as_deref(), Path::new("/s")) {
         let path = user_dir
+            .as_ref()
             .map(|dir| dir.join("config.yml"))
             .unwrap_or_default();
         return Some(fail(1, &format!("{}: {error}", path.display())));
     }
-    let user_hosts = read("hosts.yml").ok().flatten();
+    // An unreadable or unparseable hosts.yml stops the launch too: its hosts need placeholders.
+    let user_hosts = match read("hosts.yml").and_then(|text| {
+        ghconfig::user_hosts(text.as_deref()).map_err(|error| {
+            let path = user_dir
+                .as_ref()
+                .map(|dir| dir.join("hosts.yml"))
+                .unwrap_or_default();
+            format!("{}: {error}", path.display())
+        })
+    }) {
+        Ok(hosts) => hosts,
+        Err(message) => return Some(fail(1, &message)),
+    };
 
     let per_call = match rundir::random_hex(32) {
         Ok(token) => token,
@@ -106,7 +119,6 @@ pub fn launch(
         real_token: token.token.clone(),
         login: None,
     }];
-    let shim = std::env::current_exe().unwrap_or_default();
     let allowlist = config.hosts.clone();
     let base_env = env_os();
     let launcher_pid = std::process::id().to_string();
@@ -131,13 +143,15 @@ pub fn launch(
             let socket = run_dir.join("s");
             Files {
                 hosts_yml: ghconfig::hosts_yml(
-                    user_hosts.as_deref(),
+                    &user_hosts,
                     &allowlist,
                     &served,
                     ServedToken::PerCall(&per_call),
                 ),
-                credentials: ghconfig::credentials(&served),
-                gh_script: ghconfig::gh_script(run_dir, &shim),
+                // Git's credentials come with the launcher's helper (L3's second change). Until
+                // then nothing reads these, so the real token isn't written at all.
+                credentials: String::new(),
+                gh_script: String::new(),
                 // Checked above, so this only fails on a non-UTF-8 socket path, which §4's
                 // path check rules out.
                 config_yml: ghconfig::config_yml(user_config.as_deref(), &socket)
