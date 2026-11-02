@@ -294,9 +294,13 @@ fn real_gh_check(model: &setup::SetupModel, platform: &str) -> Check {
 fn managed_gh_check(model: &setup::SetupModel) -> Check {
     if model.first_current_gh_is_managed {
         let first_gh = model.first_current_gh.as_ref().expect("managed gh path");
-        // A wrapper whose binary was moved or deleted fails every call, real gh or not.
-        if let Some(target) = crate::shim::wrapper_target(first_gh)
-            .filter(|target| !setup::is_executable_file(target))
+        // A wrapper whose binary was moved or deleted, or that this user can't run, fails every
+        // call, real gh or not. So does one whose target can't be read back.
+        let target = crate::shim::wrapper_target(first_gh);
+        let unreadable = target.is_none() && crate::shim::is_rust_wrapper(first_gh);
+        if let Some(target) = target
+            .filter(|target| !runnable_by_this_user(target))
+            .or_else(|| unreadable.then(|| PathBuf::from("an unreadable path")))
         {
             let bin_dir = first_gh.parent().unwrap_or(&model.target_bin_dir);
             return Check::new(
@@ -452,6 +456,22 @@ fn fj_check(real_fj: Option<setup::ToolPath>) -> Check {
         "fj",
         "not found; auth import --from fj or --from tea reads its source file directly",
     )
+}
+
+/// A regular file this user may execute. The execute bits alone don't say that: `0655` has
+/// them, but not for its owner. `access(X_OK)` asks the kernel, which applies the user's ids.
+fn runnable_by_this_user(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        setup::is_executable_file(path)
+    }
 }
 
 fn path_repair_commands(target_bin_dir: &Path) -> Vec<String> {
