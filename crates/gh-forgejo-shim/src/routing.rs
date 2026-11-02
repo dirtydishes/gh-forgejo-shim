@@ -30,12 +30,10 @@ impl DispatcherConfig {
     /// host ambiguous, and it serves neither.
     pub fn forgejo_host(&self, host: &str) -> Option<String> {
         let host = normalize_host(host);
-        if self.is_forgejo_host(Some(&host)) {
-            return Some(host);
-        }
         if gh_hostname(&host) != host {
-            return None;
+            return self.is_forgejo_host(Some(&host)).then_some(host);
         }
+        // A portless host matches every entry on its hostname, a portless entry included.
         let mut entries = self
             .hosts
             .iter()
