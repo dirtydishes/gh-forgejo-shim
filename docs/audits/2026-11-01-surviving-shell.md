@@ -14,9 +14,9 @@ Base commit: `e17a07e`. Tracking epic: `gh-forgejo-shim-jko`.
 Three reviewers each took one slice: credentials and config, routing and the
 `gh` wrapper, and diagnostics, tracing and install. They could add failing
 tests only. Every finding below has a test that fails on `e17a07e` on macOS
-and on Linux (`rust:1.97.1`); D15 runs on Linux only. Each test was read and
-run against the unmodified code before being kept. One rebuttal round settled
-the disputed severities and rejections.
+and on Linux (`rust:1.97.1`); D14 and D15 run on Linux only. Each test was read
+and run against the unmodified code before being kept. One rebuttal round
+settled the disputed severities and rejections.
 
 The tests live in `crates/gh-forgejo-shim/tests/audit_{credentials,routing,diagnostics}.rs`.
 Each is `#[ignore]`d with the bead that tracks its fix, so CI stays green. To
@@ -51,7 +51,7 @@ A fix is done when its test passes and the `#[ignore]` is removed.
 | D4 | jko.10 | `git_recorder.rs:487` | Only the first `Authorization` header in an excerpt is redacted. | `audit_diag_git_trace_multiple_authorization_headers` |
 | D6 | jko.11 | `trace.rs:399` | Concurrent writers interleave inside JSONL records (30 of 240 survived on Linux). | `audit_diag_trace_concurrent_jsonl` |
 | D13 | jko.12 | `doctor.rs:297` | `doctor` passes when the wrapper's target binary is missing. | `audit_diag_doctor_checks_wrapper_target` |
-| D14 | jko.13 | `cli.rs:390` | `uninstall-shim` ignores the directory `bootstrap` chose (for example `~/.cargo/bin`) and leaves the active wrapper behind. | `audit_diag_uninstall_reverses_default_bootstrap` |
+| D14 | jko.13 | `cli.rs:390` | `uninstall-shim` ignores the directory `bootstrap` chose (for example `~/.cargo/bin`) and leaves the active wrapper behind. | `audit_diag_uninstall_reverses_default_bootstrap` (Linux only) |
 | D15 | jko.14 | `docs/installation.md:59` | The documented `tar -xzf … gh-forgejo-shim gfj` fails on GNU tar because archive entries are `./`-prefixed. | `audit_diag_release_documented_extract` (Linux only) |
 
 ## Low
