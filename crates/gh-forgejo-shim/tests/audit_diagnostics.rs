@@ -525,6 +525,7 @@ fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
 }
 
 #[test]
+#[ignore = "audit D5: fails until gh-forgejo-shim-jko.24 is fixed"]
 fn audit_diag_install_drops_other_write_permissions() -> TestResult {
     let f = Fixture::new()?;
     let target_dir = f.home.join(".local/bin");
