@@ -4,3 +4,5 @@
 pr view
 pr checks
 pr list
+api
+auth token
