@@ -1375,9 +1375,10 @@ fn run_issue_view(
     let normalized = normalize_issue(&client.get_issue(&target_repo, number)?);
 
     if parsed.web {
+        // An issue number can name a pull request; --web gives Forgejo's own page for it.
         let url = normalized.get("url").and_then(Value::as_str).map_or_else(
             || format!("{}/issues/{number}", target_repo.web_base_url()),
-            str::to_string,
+            fga_core::map::forgejo_pull_web_url,
         );
         writeln!(stdout, "{url}")?;
         return Ok(0);
@@ -3194,6 +3195,10 @@ mod tests {
             (
                 &["pr", "diff", "8", "--web"][..],
                 "https://git.example.com/owner/repo/pulls/8/files\n",
+            ),
+            (
+                &["issue", "view", "8", "--web"][..],
+                "https://git.example.com/owner/repo/pulls/8\n",
             ),
         ] {
             let (code, stdout, stderr) = run_fake(argv, &client, Some("token"), None);
