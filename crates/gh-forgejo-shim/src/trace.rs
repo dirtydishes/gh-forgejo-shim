@@ -231,10 +231,7 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
 
     if matches!(first, '"' | '\'') {
         let quoted_start = value_start + first.len_utf8();
-        let quoted_end = value[quoted_start..]
-            .find(first)
-            .map_or(value.len(), |offset| quoted_start + offset);
-        return Some((quoted_start, quoted_end));
+        return Some((quoted_start, closing_quote(value, quoted_start, first)));
     }
     if key.to_ascii_lowercase().contains("authorization") {
         return Some(authorization_credential_range(value, value_start));
@@ -246,6 +243,21 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
         })
         .map_or(value.len(), |offset| value_start + offset);
     Some((value_start, value_end))
+}
+
+/// The index of the quote that ends a string starting at `start`, past any backslash-escaped
+/// quote, or the end of `value`.
+fn closing_quote(value: &str, start: usize, quote: char) -> usize {
+    let mut escaped = false;
+    for (offset, character) in value[start..].char_indices() {
+        match character {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            _ if character == quote => return start + offset,
+            _ => {}
+        }
+    }
+    value.len()
 }
 
 fn key_before_delimiter(value: &str, delimiter_index: usize) -> Option<&str> {
