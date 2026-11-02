@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -28,13 +28,14 @@ impl Fixture {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             let candidate = std::env::temp_dir()
                 .join(format!("gfj-audit-diagnostics-{}-{id}", std::process::id()));
-            match fs::create_dir(&candidate) {
+            // Private from the start: under umask 000 a plain create_dir is briefly writable
+            // by anyone, who could plant a symlink before a later chmod.
+            match fs::DirBuilder::new().mode(0o700).create(&candidate) {
                 Ok(()) => break candidate,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
         };
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         let fixture = Self {
             home: root.join("home"),
             bin: root.join("tools"),
@@ -440,47 +441,69 @@ fn audit_diag_recorder_preserves_signal_exit() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D13: fails until gh-forgejo-shim-jko.12 is fixed"]
 fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
-    let f = Fixture::new()?;
-    let managed_dir = f.home.join(".local/bin");
-    shim::install_shim(
-        Some(&managed_dir),
-        Some(&f.home),
-        &f.root.join("deleted-release/gfj"),
-        false,
-    )?;
-    let mut env = BTreeMap::from_iter(f.env());
-    env.insert(
-        "PATH".into(),
-        std::env::join_paths([&managed_dir, &f.bin])?
-            .to_string_lossy()
-            .into_owned(),
-    );
-    env.insert("FJ_SHIM_TOKEN".into(), "audit-dummy-token".into());
-    let mut options = doctor::CheckOptions::new(env.clone());
-    options.home = Some(f.home.clone());
-    options.config = Some(config::load_config_with_env(
-        Some(&f.home.join(".config/gh-forgejo-shim/config.toml")),
-        &env,
-    )?);
-    options.cwd = Some(f.root.clone());
-    options.fallback_dirs = Some(Vec::new());
-    options.check_current_repo = Some(false);
-    options.check_gui_path = Some(false);
-    options.platform = "linux".into();
-    let checks = doctor::run_checks(options)?;
-    let broken = Command::new(managed_dir.join("gh"))
-        .env_clear()
-        .envs(f.env())
-        .current_dir(&f.root)
-        .arg("--version")
-        .output()?;
-    assert!(!broken.status.success());
-    assert!(
-        doctor::has_failures(&checks),
-        "doctor reported a broken wrapper as healthy"
-    );
+    // The wrapper's binary is missing (a moved release); exists but isn't executable; is
+    // executable by others but not by its owner, this user (0655); or sits at a path with a
+    // newline, which the wrapper's exec line must still be read back from. As root, 0655 is
+    // runnable, so that case only means something otherwise.
+    // A directory this process just made is owned by this user.
+    let probe_fixture = Fixture::new()?;
+    let root = fs::metadata(&probe_fixture.root)?.uid() == 0;
+    let mut cases = vec![
+        ("release/gfj", None),
+        ("release/gfj", Some(0o644)),
+        ("new\nline/gfj", None),
+    ];
+    if !root {
+        cases.push(("release/gfj", Some(0o655)));
+    }
+    for (name, mode) in cases {
+        let f = Fixture::new()?;
+        let target = f.root.join(name);
+        if let Some(mode) = mode {
+            fs::create_dir_all(target.parent().ok_or("no parent")?)?;
+            fs::write(&target, "#!/bin/sh\nexit 0\n")?;
+            fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
+        }
+        let managed_dir = f.home.join(".local/bin");
+        shim::install_shim(Some(&managed_dir), Some(&f.home), &target, false)?;
+        let mut env = BTreeMap::from_iter(f.env());
+        env.insert(
+            "PATH".into(),
+            std::env::join_paths([&managed_dir, &f.bin])?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        env.insert("FJ_SHIM_TOKEN".into(), "audit-dummy-token".into());
+        let mut options = doctor::CheckOptions::new(env.clone());
+        options.home = Some(f.home.clone());
+        options.config = Some(config::load_config_with_env(
+            Some(&f.home.join(".config/gh-forgejo-shim/config.toml")),
+            &env,
+        )?);
+        options.cwd = Some(f.root.clone());
+        options.fallback_dirs = Some(Vec::new());
+        options.check_current_repo = Some(false);
+        options.check_gui_path = Some(false);
+        options.platform = "linux".into();
+        let checks = doctor::run_checks(options)?;
+        let broken = Command::new(managed_dir.join("gh"))
+            .env_clear()
+            .envs(f.env())
+            .current_dir(&f.root)
+            .arg("--version")
+            .output()?;
+        assert!(!broken.status.success());
+        let managed = checks
+            .iter()
+            .find(|check| check.name == "managed gh")
+            .ok_or("no managed gh check")?;
+        assert!(
+            !managed.ok,
+            "doctor reported a broken wrapper as healthy ({name:?}, {mode:?}): {}",
+            managed.detail
+        );
+    }
     Ok(())
 }
 
@@ -488,7 +511,6 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
 // Linux only: on macOS the CLI reads the real launchd PATH through /bin/launchctl, even with
 // --no-gui-path, and the library call inherits the runner's own environment.
 #[cfg(target_os = "linux")]
-#[ignore = "audit D14: fails until gh-forgejo-shim-jko.13 is fixed"]
 fn audit_diag_uninstall_reverses_default_bootstrap() -> TestResult {
     let f = Fixture::new()?;
     let selected = f.home.join(".cargo/bin");
@@ -531,15 +553,25 @@ fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D5: fails until gh-forgejo-shim-jko.24 is fixed"]
 fn audit_diag_install_drops_other_write_permissions() -> TestResult {
     let f = Fixture::new()?;
     let target_dir = f.home.join(".local/bin");
     fs::create_dir_all(&target_dir)?;
     let target = target_dir.join("gh");
     fs::write(&target, shim::shim_script(Path::new("/old/gfj")))?;
+    // The old wrapper's mode must not carry over to the new one.
     fs::set_permissions(&target, fs::Permissions::from_mode(0o666))?;
-    assert!(f.command().arg("install-shim").output()?.status.success());
+    // Under umask 000 the new wrapper starts group- and world-writable, so this fails on any
+    // runner unless install sets the mode outright.
+    let install = Command::new("/bin/sh")
+        .args(["-c", "umask 000 && exec \"$0\" install-shim"])
+        .arg(env!("CARGO_BIN_EXE_gfj"))
+        .env_clear()
+        .envs(f.env())
+        .current_dir(&f.root)
+        .stdin(Stdio::null())
+        .output()?;
+    assert!(install.status.success(), "install failed: {install:?}");
     let writable_by_others = fs::metadata(target)?.permissions().mode() & 0o022;
     assert_eq!(
         writable_by_others, 0,
@@ -579,7 +611,6 @@ fn audit_diag_recorder_recreate_prevents_self_recursion() -> TestResult {
 
 #[test]
 #[cfg(target_os = "linux")]
-#[ignore = "audit D15: fails until gh-forgejo-shim-jko.14 is fixed"]
 fn audit_diag_release_documented_extract() -> TestResult {
     let f = Fixture::new()?;
     for name in ["awk", "mktemp", "install", "tar", "gzip", "rm"] {

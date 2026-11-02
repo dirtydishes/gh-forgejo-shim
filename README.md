@@ -92,6 +92,14 @@ gfj doctor
 
 For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
+## Server Mode For Claude
+
+Claude Code and Claude desktop look up a branch's pull request by calling your forge's GitHub API themselves,
+outside of any `gh` process, so the client-side wrapper can't answer them. If you use Claude, run the
+gateway in server mode: it mounts the GitHub Enterprise API on your forge's own hostname, and a plain
+`gh auth login --hostname <forge>` is then all a client needs. It requires access to the forge's
+reverse proxy. See [docs/gateway/server-mode.md](docs/gateway/server-mode.md).
+
 ## Manual Setup
 
 If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
@@ -100,8 +108,9 @@ If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
 gh-forgejo-shim config add-host git.example.com
 ```
 
-Known GitHub hosts such as `github.com` are ignored even if they appear in the
-allowlist. This keeps normal GitHub repositories delegated to the real GitHub
+Known GitHub hosts are ignored even if they appear in the allowlist: `github.com`,
+`ghe.com`, and every name under them, such as `api.github.com` or `acme.ghe.com`.
+This keeps normal GitHub repositories delegated to the real GitHub
 CLI if `bootstrap` is accidentally run from a GitHub checkout or an old config
 contains `github.com`.
 

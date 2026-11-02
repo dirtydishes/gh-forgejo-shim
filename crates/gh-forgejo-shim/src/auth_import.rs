@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::config::{is_known_github_host, normalize_host, EnvMap};
+use crate::config::{normalize_host, normalized_forgejo_host, EnvMap};
 use crate::{Result, ShimError};
 
 #[derive(Clone, Copy)]
@@ -123,12 +123,11 @@ pub fn read_import(
         return Err(ShimError::new("Forgejo host is required"));
     }
     let mut matches = entries.into_iter().filter_map(|(host, token)| {
-        let host = normalize_host(&host);
-        if host.is_empty()
-            || is_known_github_host(Some(&host))
-            || requested
-                .as_ref()
-                .is_some_and(|requested| requested != &host)
+        // The allowlist's own rule: never a GitHub host, and spelled as the URL parser reads it.
+        let host = normalized_forgejo_host(&host)?;
+        if requested
+            .as_ref()
+            .is_some_and(|requested| requested != &host)
         {
             return None;
         }

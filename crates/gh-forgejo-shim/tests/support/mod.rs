@@ -102,7 +102,7 @@ impl CliFixture {
         })
     }
 
-    fn git<I, S>(&self, args: I) -> io::Result<()>
+    pub fn git<I, S>(&self, args: I) -> io::Result<()>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,

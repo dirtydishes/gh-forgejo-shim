@@ -700,6 +700,7 @@ dependencies = [
  "glob",
  "reqwest",
  "rpassword",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
@@ -707,6 +708,7 @@ dependencies = [
  "signal-hook",
  "time",
  "toml",
+ "toml_edit 0.22.27",
  "ureq",
 ]
 

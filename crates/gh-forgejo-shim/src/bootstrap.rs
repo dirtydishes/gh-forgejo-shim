@@ -165,6 +165,16 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                 ),
                 Vec::<String>::new(),
             ));
+        } else if config::normalized_forgejo_host(&repo.host).is_none() {
+            checks.push(BootstrapCheck::new(
+                "repository",
+                false,
+                format!(
+                    "{} isn't a host name the shim can use; leaving it out of the Forgejo allowlist",
+                    repo.host
+                ),
+                Vec::<String>::new(),
+            ));
         } else if options.dry_run {
             checks.push(BootstrapCheck::plan(
                 "repository",

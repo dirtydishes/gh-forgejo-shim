@@ -30,18 +30,52 @@ pub fn shim_script(executable: &Path) -> String {
 }
 
 pub fn is_managed_shim(path: &Path) -> bool {
-    let Ok(file) = File::open(path) else {
+    let Some(text) = read_head(path) else {
         return false;
     };
-    let mut bytes = Vec::new();
-    if file.take(MAX_MARKER_BYTES).read_to_end(&mut bytes).is_err() {
-        return false;
-    }
-    let text = String::from_utf8_lossy(&bytes);
     text.contains(MARKER)
         && (text.contains("gh-forgejo-shim gh")
             || text.contains("-m gh_forgejo_shim gh")
             || (text.contains(RUST_WRAPPER_MARKER) && text.contains(" gh \"$@\"")))
+}
+
+/// The binary a wrapper from [`shim_script`] runs, read back from its `exec` line. `None` for
+/// any other file, including a wrapper from the old Python release.
+pub fn wrapper_target(path: &Path) -> Option<PathBuf> {
+    let text = read_head(path)?;
+    if !is_rust_wrapper_text(&text) {
+        return None;
+    }
+    // A single-quoted path can hold a newline, so the exec line may span lines.
+    let exec = text
+        .strip_prefix("exec ")
+        .or_else(|| text.split_once("\nexec ").map(|(_, rest)| rest))?;
+    let quoted = exec.rsplit_once(" gh \"$@\"")?.0;
+    // The inverse of `shell_quote`: a safe path is bare, any other is single-quoted.
+    let target = match quoted.strip_prefix('\'') {
+        Some(rest) => rest.strip_suffix('\'')?.replace("'\\''", "'"),
+        None => quoted.to_string(),
+    };
+    Some(PathBuf::from(target))
+}
+
+/// Whether `path` is a wrapper written by [`shim_script`], whose target can be read back.
+pub fn is_rust_wrapper(path: &Path) -> bool {
+    read_head(path).is_some_and(|text| is_rust_wrapper_text(&text))
+}
+
+fn is_rust_wrapper_text(text: &str) -> bool {
+    text.contains(MARKER) && text.contains(RUST_WRAPPER_MARKER)
+}
+
+fn read_head(path: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(MAX_MARKER_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub fn install_shim(
@@ -69,7 +103,10 @@ pub fn install_shim(
 /// replaces a symlink at `target` itself, where writing to the path would follow it and overwrite
 /// whatever it points to, such as the real gh.
 pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> Result<()> {
-    let (mut file, temp) = create_temp_file(target)?;
+    // An executable starts owner-only: a handle another account opened while it was still
+    // 0666 & ~umask would keep write access through make_executable and the rename. Other
+    // files keep the default mode they've always had.
+    let (mut file, temp) = create_temp_file(target, if executable { 0o600 } else { 0o666 })?;
     let result = (|| -> Result<()> {
         file.write_all(contents)?;
         if executable {
@@ -93,7 +130,8 @@ pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> 
     result
 }
 
-fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
+/// Creates a new file beside `target` with `mode`, which umask can only narrow.
+fn create_temp_file(target: &Path, mode: u32) -> Result<(File, PathBuf)> {
     let parent = target.parent().unwrap_or(Path::new("."));
     let name = target
         .file_name()
@@ -103,11 +141,16 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
             ".{name}.gh-forgejo-shim-{}-{attempt}",
             std::process::id()
         ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        match options.open(&temp) {
             Ok(file) => return Ok((file, temp)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -122,6 +165,65 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
         "unable to create a temporary file in {}",
         parent.display()
     )))
+}
+
+/// Removes the managed wrapper from `~/.local/bin` and from every directory in `path_dirs` under
+/// `home`, since `bootstrap` installs into the first writable one of those. Pass the PATH as
+/// bootstrap reads it (`setup::current_path_dirs`). Only a regular file is removed: the shim never
+/// installs a symlink, so a `gh` symlink is the user's even when it points at a wrapper. Returns
+/// the paths removed. With none to remove, an existing `~/.local/bin/gh` gets [`uninstall_shim`]'s
+/// handling, and an absent one gives an empty list.
+pub fn uninstall_default_shims(home: Option<&Path>, path_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let default = shim_path(None, home)?;
+    let mut candidates = vec![default.clone()];
+    if let Some(home) = home {
+        candidates.extend(
+            path_dirs
+                .iter()
+                .filter(|dir| crate::setup::is_under_home(dir, home))
+                .map(|dir| dir.join("gh")),
+        );
+    }
+    let mut removed = Vec::<PathBuf>::new();
+    for candidate in candidates {
+        // A directory listed twice finds the wrapper already gone the second time.
+        let regular = fs::symlink_metadata(&candidate).is_ok_and(|metadata| metadata.is_file());
+        if !regular || !is_managed_shim(&candidate) {
+            continue;
+        }
+        if let Err(error) = fs::remove_file(&candidate) {
+            let mut message = format!("could not remove {}: {error}", candidate.display());
+            if !removed.is_empty() {
+                let done = removed.iter().map(|path| path.display().to_string());
+                message.push_str(&format!(
+                    "; already removed {}",
+                    done.collect::<Vec<_>>().join(", ")
+                ));
+            }
+            return Err(ShimError::new(message));
+        }
+        removed.push(candidate);
+    }
+    if removed.is_empty() {
+        match fs::symlink_metadata(&default) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(ShimError::new(format!(
+                    "{} is a symlink, not a wrapper this shim installed; remove it yourself, or pass --bin-dir",
+                    default.display()
+                )));
+            }
+            // Never opened: reading a FIFO would block, and the shim only writes regular files.
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(ShimError::new(format!(
+                    "{} is not a regular file, so not a wrapper this shim installed; remove it yourself",
+                    default.display()
+                )));
+            }
+            Ok(_) => removed.push(uninstall_shim(None, home)?),
+            Err(_) => {}
+        }
+    }
+    Ok(removed)
 }
 
 pub fn uninstall_shim(bin_dir: Option<&Path>, home: Option<&Path>) -> Result<PathBuf> {
@@ -169,9 +271,8 @@ fn shell_quote(value: &str) -> String {
 fn make_executable(file: &File) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = file.metadata()?.permissions();
-    permissions.set_mode(permissions.mode() | 0o755);
-    file.set_permissions(permissions)?;
+    // Set, not added: the new file starts at 0666 & ~umask, which can include group write.
+    file.set_permissions(fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
@@ -233,6 +334,125 @@ mod tests {
         fs::write(&path, script)?;
         assert!(is_managed_shim(&path));
         fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn wrapper_target_reads_back_the_exec_path() -> io::Result<()> {
+        let path = unique_path("gh-forgejo-shim-wrapper-target");
+        for target in ["/opt/gfj", "/tmp/it's here/gfj", "/tmp/new\nline/gfj"] {
+            fs::write(&path, shim_script(Path::new(target)))?;
+            assert_eq!(wrapper_target(&path), Some(PathBuf::from(target)));
+        }
+        fs::write(
+            &path,
+            "#!/bin/sh\n# managed by gh-forgejo-shim\nexec python -m gh_forgejo_shim gh \"$@\"\n",
+        )?;
+        assert_eq!(wrapper_target(&path), None);
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_uninstall_removes_managed_wrappers_on_path_under_home() -> Result<()> {
+        let home = unique_path("gh-forgejo-shim-uninstall-default");
+        let (cargo, other, linked) = (
+            home.join(".cargo/bin"),
+            home.join("bin"),
+            home.join("linked"),
+        );
+        let outside = unique_path("gh-forgejo-shim-uninstall-outside");
+        for dir in [&cargo, &other, &linked, &outside] {
+            fs::create_dir_all(dir)?;
+        }
+        install_shim(Some(&cargo), Some(&home), Path::new("/opt/gfj"), false)?;
+        install_shim(Some(&outside), Some(&home), Path::new("/opt/gfj"), false)?;
+        fs::write(other.join("gh"), "#!/bin/sh\n")?;
+        // A user's symlink to a wrapper, and a `..` path that leaves HOME, are both left alone.
+        std::os::unix::fs::symlink(outside.join("gh"), linked.join("gh"))?;
+        let escape = home.join("..").join(
+            outside
+                .file_name()
+                .ok_or_else(|| ShimError::new("outside has no name"))?,
+        );
+        let path_dirs = [
+            other.clone(),
+            cargo.clone(),
+            linked.clone(),
+            escape,
+            outside.clone(),
+        ];
+
+        let removed = uninstall_default_shims(Some(&home), &path_dirs)?;
+
+        assert_eq!(removed, [cargo.join("gh")]);
+        assert!(other.join("gh").exists(), "an unmanaged gh stays");
+        assert!(
+            fs::symlink_metadata(linked.join("gh")).is_ok(),
+            "a user's symlink stays"
+        );
+        assert!(
+            outside.join("gh").exists(),
+            "a wrapper outside HOME needs --bin-dir"
+        );
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(outside).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_uninstall_refuses_a_symlink_in_the_default_dir() -> Result<()> {
+        let home = unique_path("gh-forgejo-shim-uninstall-default-link");
+        let outside = unique_path("gh-forgejo-shim-uninstall-link-target");
+        let local_bin = home.join(".local/bin");
+        fs::create_dir_all(&local_bin)?;
+        fs::create_dir_all(&outside)?;
+        install_shim(Some(&outside), Some(&home), Path::new("/opt/gfj"), false)?;
+        std::os::unix::fs::symlink(outside.join("gh"), local_bin.join("gh"))?;
+
+        let error = uninstall_default_shims(Some(&home), &[]).expect_err("a symlink is the user's");
+
+        assert!(
+            error.message().contains("is a symlink"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            fs::symlink_metadata(local_bin.join("gh")).is_ok(),
+            "the symlink stays"
+        );
+        assert!(outside.join("gh").exists());
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(outside).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_uninstall_refuses_a_fifo_without_opening_it() -> Result<()> {
+        let home = unique_path("gh-forgejo-shim-uninstall-fifo");
+        let local_bin = home.join(".local/bin");
+        fs::create_dir_all(&local_bin)?;
+        let made = std::process::Command::new("/usr/bin/mkfifo")
+            .arg(local_bin.join("gh"))
+            .status()?;
+        assert!(made.success(), "mkfifo failed");
+
+        // Opening the FIFO would block this test forever; refusing it returns at once.
+        let error = uninstall_default_shims(Some(&home), &[]).expect_err("a FIFO is the user's");
+
+        assert!(
+            error.message().contains("not a regular file"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            fs::symlink_metadata(local_bin.join("gh")).is_ok(),
+            "the FIFO stays"
+        );
+        fs::remove_dir_all(home).ok();
         Ok(())
     }
 
@@ -328,6 +548,28 @@ mod tests {
             .message()
             .contains("is not managed by gh-forgejo-shim; refusing to remove"));
         assert!(root.join("gh").exists());
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_is_owner_only_from_creation_and_other_files_keep_the_default() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_path("gh-forgejo-shim-temp-mode");
+        fs::create_dir(&root)?;
+
+        let (file, temp) = create_temp_file(&root.join("gh"), 0o600)?;
+        assert_eq!(file.metadata()?.permissions().mode() & 0o077, 0);
+        fs::remove_file(temp)?;
+
+        // A plain file gets what fs::write gives under the same umask, as before.
+        replace_file(&root.join("marker"), b"marker\n", false)?;
+        fs::write(root.join("reference"), b"reference\n")?;
+        let mode =
+            |name: &str| fs::metadata(root.join(name)).map(|m| m.permissions().mode() & 0o777);
+        assert_eq!(mode("marker")?, mode("reference")?);
         fs::remove_dir_all(root).ok();
         Ok(())
     }

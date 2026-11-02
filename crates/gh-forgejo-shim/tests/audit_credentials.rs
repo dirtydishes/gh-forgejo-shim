@@ -106,7 +106,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-#[ignore = "audit C3: fails until gh-forgejo-shim-jko.8 is fixed"]
 fn audit_cred_malformed_hosts_does_not_reset_store() -> TestResult {
     let fixture = Fixture::new()?;
     let path = auth::auth_file_path(Some(&fixture.home));
@@ -133,7 +132,6 @@ fn audit_cred_malformed_hosts_does_not_reset_store() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C1: fails until gh-forgejo-shim-jko.18 is fixed"]
 fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(&fixture.config_path(), "hosts = [\"github.com:443\"]\n")?;
@@ -159,7 +157,39 @@ fn audit_cred_github_default_port_does_not_receive_forgejo_token() -> TestResult
 }
 
 #[test]
-#[ignore = "audit C1: fails until gh-forgejo-shim-jko.18 is fixed"]
+fn audit_cred_github_subdomains_never_receive_the_forgejo_token() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.write(
+        &fixture.config_path(),
+        "hosts = [\"api.github.com\", \"gist.github.com\"]\n",
+    )?;
+    let env = config::EnvMap::from([("FJ_SHIM_TOKEN".into(), "audit-forgejo-token".into())]);
+    let loaded = config::load_config_with_env(Some(&fixture.config_path()), &env)?;
+    // A token stored for a GitHub host, say by an older version, stays where it is.
+    for host in ["gist.github.com", "api.github.com:443"] {
+        auth::write_stored_token(
+            host,
+            "audit-stored-token",
+            Some(&fixture.home),
+            Some("linux"),
+        )?;
+    }
+
+    assert!(
+        loaded.hosts.is_empty(),
+        "GitHub subdomains allowlisted: {:?}",
+        loaded.hosts
+    );
+    for host in ["api.github.com", "gist.github.com", "api.github.com:443"] {
+        assert!(
+            auth::resolve_token(host, &loaded, &env, Some(&fixture.home), Some("linux")).is_none(),
+            "Forgejo token resolved for {host}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_cred_import_rejects_github_default_port() -> TestResult {
     let fixture = Fixture::new()?;
     let path = fixture.home.join(".config/tea/config.yml");
@@ -184,7 +214,31 @@ fn audit_cred_import_rejects_github_default_port() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C2: fails until gh-forgejo-shim-jko.19 is fixed"]
+fn audit_cred_import_rejects_a_misspelled_host() -> TestResult {
+    // The token would go to forge.example.com, but the allowlist would drop the spelling.
+    let fixture = Fixture::new()?;
+    let path = fixture.home.join(".config/tea/config.yml");
+    fixture.write(
+        &path,
+        "logins:\n  - url: https://forge.example%2ecom\n    token: audit-import-token\n",
+    )?;
+
+    let result = auth_import::read_import(
+        auth_import::ImportSource::Tea,
+        None,
+        &fixture.home,
+        &config::EnvMap::new(),
+        "linux",
+    );
+
+    assert!(
+        result.is_err(),
+        "a host spelled differently from where it leads was imported"
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(
@@ -204,7 +258,6 @@ fn audit_cred_config_parse_error_redacts_url_password() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C4: fails until gh-forgejo-shim-jko.20 is fixed"]
 fn audit_cred_failed_import_preserves_previous_token() -> TestResult {
     let fixture = Fixture::new()?;
     auth::write_stored_token(
@@ -240,7 +293,6 @@ fn audit_cred_failed_import_preserves_previous_token() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C6: fails until gh-forgejo-shim-jko.22 is fixed"]
 fn audit_cred_config_update_preserves_unknown_settings() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(
@@ -259,7 +311,6 @@ fn audit_cred_config_update_preserves_unknown_settings() -> TestResult {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "audit C5: fails until gh-forgejo-shim-jko.21 is fixed"]
 fn audit_cred_failed_config_write_preserves_original_file() -> TestResult {
     let fixture = Fixture::new()?;
     let before = "hosts = [\"git.example.com\"]\n";

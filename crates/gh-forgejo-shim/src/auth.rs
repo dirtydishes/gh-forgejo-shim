@@ -85,6 +85,10 @@ pub fn resolve_token(
     platform: Option<&str>,
 ) -> Option<TokenDiscovery> {
     let host = normalize_host(host);
+    // Checked before the store, so a token stored for a GitHub host is never handed out either.
+    if config::is_known_github_host(Some(&host)) {
+        return None;
+    }
     if let Some(stored) = read_stored_token(&host, home, platform) {
         return Some(TokenDiscovery {
             token: stored.token,
@@ -239,17 +243,19 @@ fn read_file_token(host: &str, home: Option<&Path>) -> Option<String> {
 fn write_file_token(host: &str, token: &str, home: Option<&Path>) -> Result<()> {
     let mut data = read_auth_file(home)?;
     let object = ensure_object(&mut data);
+    // Like a malformed root in `read_auth_file`, a malformed `hosts` is an error: replacing it
+    // would lose the tokens it holds.
     let hosts = object
         .entry("hosts".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !hosts.is_object() {
-        *hosts = Value::Object(Map::new());
-    }
-    let host_object = json!({ "token": token });
-    hosts
+        .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .ok_or_else(|| ShimError::new("auth hosts must be an object"))?
-        .insert(host.to_string(), host_object);
+        .ok_or_else(|| {
+            ShimError::new(format!(
+                "{} is unreadable (hosts is not a JSON object); fix or remove it",
+                auth_file_path(home).display()
+            ))
+        })?;
+    hosts.insert(host.to_string(), json!({ "token": token }));
     write_auth_file(&data, home)
 }
 
