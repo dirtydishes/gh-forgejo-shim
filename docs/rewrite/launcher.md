@@ -82,9 +82,18 @@ for today's delegation.
 
 **Launch is chosen per invocation.** The wrapper launches when routing (L2) resolves a Forgejo host
 in client mode and the command isn't on the delegate list below. Everything else delegates.
-Unknown commands launch, because gh aliases and extensions arrive as unknown commands and expand
-only inside gh. An alias such as `gh co 12` in a Forgejo checkout has to reach a gh that can talk to
-the forge.
+Unknown commands launch, because gh aliases arrive as unknown commands and expand only inside gh.
+An alias such as `gh co 12` in a Forgejo checkout has to reach a gh that can talk to the forge.
+
+**Installed extensions delegate.** A first argument *name* with an installed extension, a
+directory `<data dir>/extensions/gh-<name>`, runs through plain gh. The data directory is
+`$XDG_DATA_HOME/gh`, else `~/.local/share/gh` (`go-gh/pkg/config/config.go` `DataDir`; gh's
+`pkg/cmd/extension/manager.go:594-595`). Inside a launched gh, every host but *S* has only the
+placeholder token (§3). An extension that talks to github.com would therefore fail there, where it
+works through plain gh. Plain gh can't reach the forge, so an extension that works on the Forgejo
+repo doesn't work in either mode. A gh alias with the same name as an extension wins inside gh,
+but the wrapper can't tell the two apart without parsing the alias list. It treats the name as an
+extension. Kell accepted this (§13, decision 2).
 
 The delegate list holds commands that call no API, or that write gh's own state, which a launched
 gh would write to a throwaway copy (section 3):
