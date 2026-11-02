@@ -83,7 +83,8 @@ pub(super) async fn review_comments(
     ctx: &Context<'_>,
     review: &PullRequestReview,
 ) -> async_graphql::Result<Vec<PullRequestReviewComment>> {
-    // Reviews without code comments, such as plain approvals, need no read.
+    // Reviews without code comments, such as plain approvals, need no read. Forgejo also reports 0
+    // when its count query fails, which would hide that review's comments; an upstream fault.
     if review.source.comments_count == Some(0) {
         return Ok(Vec::new());
     }
@@ -112,7 +113,8 @@ pub struct PullRequestReviewThread {
 }
 impl PullRequestReviewThread {
     /// Forgejo lets the PR's author or a repository writer resolve a conversation
-    /// (`CanMarkConversation`, `models/issues/review.go:900-928`), as GitHub does.
+    /// (`CanMarkConversation`, Forgejo v15.0.0 `models/issues/review.go:900-928`), as GitHub does.
+    /// Forgejo also lets an official reviewer without write access; the gateway can't tell.
     async fn viewer_can_mark(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let review = &self.first().review;
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;

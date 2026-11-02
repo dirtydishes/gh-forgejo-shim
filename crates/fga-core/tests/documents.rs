@@ -46,7 +46,7 @@ fn forge_with(push: bool, pull: Value, scheduled: bool) -> Router {
                      "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70","comments_count":2},
                     {"id":8,"user":user("e2e"),"body":"draft","state":"PENDING","commit_id":"abc",
                      "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z",
-                     "html_url":"","comments_count":1},
+                     "html_url":"","pull_request_url":"https://forge.test/e2e/oracle/pulls/1","comments_count":1},
                     // Someone else's pending review: Forgejo shows it to site admins, GitHub to no one.
                     {"id":9,"user":user("other"),"body":"secret","state":"PENDING","commit_id":"abc",
                      "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z","html_url":"","comments_count":1},
