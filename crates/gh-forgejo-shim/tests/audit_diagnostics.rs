@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 
-use gh_forgejo_shim::{config, doctor, git_recorder, shim, trace, trace_summary};
+use gh_forgejo_shim::{auth, config, doctor, git_recorder, shim, trace, trace_summary};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -662,6 +662,35 @@ fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
             path.display()
         );
     }
+    Ok(())
+}
+
+#[test]
+fn audit_diag_auth_and_recorder_directories_are_owner_only() -> TestResult {
+    // In this process's own umask (022 on any normal runner) a plain create_dir_all makes
+    // missing parents 0755, so these fail unless each path gives the directories it creates
+    // their own mode. The auth store narrows only its own directory afterwards, not ~/.config.
+    let f = Fixture::new()?;
+    fs::remove_dir_all(f.home.join(".config"))?;
+    auth::write_stored_token(
+        "git.example.test",
+        "audit-token",
+        Some(&f.home),
+        Some("linux"),
+    )?;
+    let trace = f.root.join("fresh-trace/nested/git.jsonl");
+    git_recorder::run_git_recorder(&f.bin.join("git"), &trace, &["status".to_string()]);
+    let mode = |path: &Path| fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
+    for path in [
+        f.home.join(".config"),
+        f.home.join(".config/gh-forgejo-shim"),
+        f.root.join("fresh-trace"),
+        f.root.join("fresh-trace/nested"),
+    ] {
+        let mode = mode(&path)?;
+        assert_eq!(mode & 0o077, 0, "{} was created {mode:o}", path.display());
+    }
+    assert!(trace.exists(), "the recorder wrote no trace");
     Ok(())
 }
 
