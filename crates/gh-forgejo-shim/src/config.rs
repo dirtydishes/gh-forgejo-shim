@@ -2,9 +2,11 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use toml_edit::{DocumentMut, Item};
 
 use crate::{shim, Result, ShimError};
 
@@ -20,13 +22,10 @@ pub struct PathsConfig {
 
 /// Per-host tables use `host`, singular, so they can coexist with the legacy
 /// `hosts = [...]` array. A table also adds its key to the host allowlist.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct HostConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_env: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_file: Option<PathBuf>,
 }
 
@@ -202,86 +201,72 @@ fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
 }
 
 pub fn add_host(host: &str, path: Option<&Path>) -> Result<Config> {
-    let config = load_config_with_env(path, &EnvMap::new())?;
-    let mut hosts = config.hosts;
+    let mut config = load_config_with_env(path, &EnvMap::new())?;
     if let Some(normalized) = normalized_forgejo_host(host) {
-        if !hosts.iter().any(|configured| configured == &normalized) {
-            hosts.push(normalized);
+        if !config.hosts.contains(&normalized) {
+            config.hosts.push(normalized);
         }
     }
-    hosts.sort();
-
-    let updated = Config {
-        hosts,
-        host: config.host,
-        paths: config.paths,
-        path: config.path,
-    };
-    write_config(&updated)?;
-    Ok(updated)
+    config.hosts.sort();
+    write_hosts(&config, None)?;
+    Ok(config)
 }
 
 pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
     let mut config = load_config_with_env(path, &EnvMap::new())?;
     let normalized = normalize_host(host);
     config.host.remove(&normalized);
-    let hosts = config
+    config
         .hosts
-        .into_iter()
-        .filter(|configured| normalize_host(configured) != normalized)
-        .collect();
-    let updated = Config {
-        hosts,
-        host: config.host,
-        paths: config.paths,
-        path: config.path,
-    };
-    write_config(&updated)?;
-    Ok(updated)
+        .retain(|configured| normalize_host(configured) != normalized);
+    write_hosts(&config, Some(&normalized))?;
+    Ok(config)
 }
 
-pub fn write_config(config: &Config) -> Result<()> {
-    let parent = config.path.parent().ok_or_else(|| {
+/// Rewrites the `hosts` allowlist in the file at `config.path`, and drops the `[host.…]` table
+/// for `removed`. Everything else stays as the user wrote it: comments, `[paths]`, and keys and
+/// tables this version doesn't know.
+fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
+    let path = &config.path;
+    let parent = path.parent().ok_or_else(|| {
         ShimError::new(format!(
             "could not determine parent directory for {}",
-            config.path.display()
+            path.display()
         ))
     })?;
     fs::create_dir_all(parent).map_err(|error| {
         ShimError::new(format!("could not create {}: {error}", parent.display()))
     })?;
 
-    let mut lines = Vec::new();
-    let hosts = config
-        .hosts
-        .iter()
-        .map(|host| toml_string(host))
-        .collect::<Vec<_>>()
-        .join(", ");
-    lines.push(format!("hosts = [{hosts}]"));
-    for (host, settings) in &config.host {
-        lines.push(String::new());
-        lines.push(format!("[host.{}]", toml_string(host)));
-        lines.push(
-            toml::to_string(settings)
-                .map_err(|error| ShimError::new(error.to_string()))?
-                .trim_end()
-                .to_string(),
-        );
-    }
-    if config.paths.gh.is_some() || config.paths.fj.is_some() {
-        lines.push(String::new());
-        lines.push("[paths]".to_string());
-        if let Some(gh) = &config.paths.gh {
-            lines.push(format!("gh = {}", toml_string(gh)));
+    let mut document = match fs::read_to_string(path) {
+        // The caller has already loaded this file, so its parse errors were reported there.
+        Ok(text) => text
+            .parse::<DocumentMut>()
+            .map_err(|_| ShimError::new(format!("could not parse {}", path.display())))?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(error) => {
+            return Err(ShimError::new(format!(
+                "could not read {}: {error}",
+                path.display()
+            )))
         }
-        if let Some(fj) = &config.paths.fj {
-            lines.push(format!("fj = {}", toml_string(fj)));
+    };
+    document["hosts"] = toml_edit::value(config.hosts.iter().collect::<toml_edit::Array>());
+    if let (Some(removed), Some(tables)) = (
+        removed,
+        document.get_mut("host").and_then(Item::as_table_like_mut),
+    ) {
+        let keys = tables
+            .iter()
+            .map(|(key, _)| key.to_string())
+            .filter(|key| normalize_host(key) == removed)
+            .collect::<Vec<_>>();
+        for key in keys {
+            tables.remove(&key);
         }
     }
-    lines.push(String::new());
 
-    replace_config_file(&config.path, lines.join("\n").as_bytes())
+    replace_config_file(path, document.to_string().as_bytes())
 }
 
 /// Writes a new file and renames it into place, so a failed write leaves the old config whole.
@@ -369,22 +354,6 @@ fn dedupe(values: Vec<String>) -> Vec<String> {
 fn optional_string(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
     (!value.is_empty()).then(|| value.to_string())
-}
-
-fn toml_string(value: &str) -> String {
-    let mut escaped = String::from("\"");
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            other => escaped.push(other),
-        }
-    }
-    escaped.push('"');
-    escaped
 }
 
 fn home_dir(home: Option<&Path>) -> PathBuf {
@@ -482,6 +451,41 @@ gh = "/bin/gh#real"
         assert!(!removed.host.contains_key("git.example.com"));
         assert!(!load_config_with_env(Some(&path), &EnvMap::new())?
             .is_forgejo_host(Some("git.example.com")));
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn host_edits_keep_comments_and_unknown_settings() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            r#"# my forges
+hosts = ["git.example.com"]
+future = "keep"
+
+[host."Old.Example.com"]
+future_setting = "goes with its host"
+
+[host."git.example.com"]
+future_setting = "keep" # why
+"#,
+        )?;
+
+        add_host("new.example.com", Some(&path))?;
+        remove_host("old.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            r#"# my forges
+hosts = ["git.example.com", "new.example.com"]
+future = "keep"
+
+[host."git.example.com"]
+future_setting = "keep" # why
+"#
+        );
         fs::remove_dir_all(root).ok();
         Ok(())
     }

@@ -235,7 +235,6 @@ fn audit_cred_failed_import_preserves_previous_token() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit C6: fails until gh-forgejo-shim-jko.22 is fixed"]
 fn audit_cred_config_update_preserves_unknown_settings() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.write(
