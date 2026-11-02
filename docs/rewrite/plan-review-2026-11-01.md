@@ -642,7 +642,8 @@ moving `rewrite` into `main`.
   - it only tightens permissions on things the shim creates, and never changes existing files or how
     tokens are stored;
   - it's small: a few lines plus a test that fails without it;
-  - it passes the usual review rounds, with CI green on macOS and Linux.
+  - it passes the usual review rounds, with CI green on Linux, plus a logged macOS run of the tests
+    (CI or local). CI runs on Linux only, so a local macOS run counts (Kell, 2026-11-02).
 
   Kell is told after it merges. Everything else that would reach `main` still needs Kell's decision first:
   user-visible behavior changes, token storage, any tag or release, or anything larger. Like D6, this
