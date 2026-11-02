@@ -35,6 +35,7 @@ const TOKEN_VARIABLES: [&str; 4] = [
 pub fn launch(
     host: &str,
     routed: &Invocation,
+    reason: &str,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
@@ -75,20 +76,6 @@ pub fn launch(
             "could not find the real gh executable; set FJ_SHIM_REAL_GH",
         ));
     };
-    let Some(token) =
-        auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()))
-    else {
-        return Some(fail(
-            4,
-            &format!("no token for {host}; run: gfj auth login {host}"),
-        ));
-    };
-
-    let (parent, source) = rundir::parent(env);
-    if let Err(message) = rundir::check_parent(&parent, source) {
-        return Some(fail(1, &message));
-    }
-
     // The user's gh files, read once and never written (§3).
     let user_dir = repo::user_gh_config_dir(env);
     let read = |name: &str| -> Result<Option<String>, String> {
@@ -127,6 +114,49 @@ pub fn launch(
         Ok(hosts) => hosts,
         Err(message) => return Some(fail(1, &message)),
     };
+
+    // A forge the user's own gh is logged in to serves gh itself (server mode): plain gh (§2).
+    if logged_in(&user_hosts, host) {
+        return Some(step_aside(
+            &gh,
+            args,
+            extra_edits,
+            crate::trace::tracing_enabled(env),
+        ));
+    }
+    // Plain gh's default host is this forge, but its entry holds no login gh can use (§3).
+    if reason.ends_with("user's gh hosts") {
+        let key = user_hosts
+            .keys()
+            .filter_map(serde_yaml::Value::as_str)
+            .next()
+            .unwrap_or(host);
+        let file = user_dir
+            .as_ref()
+            .map(|dir| dir.join("hosts.yml"))
+            .unwrap_or_default();
+        return Some(fail(
+            1,
+            &format!(
+                "{} makes {key} gh's default host, but gh has no login it can use there; delete the {key} entry from that file to use gh-forgejo-shim there",
+                file.display()
+            ),
+        ));
+    }
+
+    let Some(token) =
+        auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()))
+    else {
+        return Some(fail(
+            4,
+            &format!("no token for {host}; run: gfj auth login {host}"),
+        ));
+    };
+
+    let (parent, source) = rundir::parent(env);
+    if let Err(message) = rundir::check_parent(&parent, source) {
+        return Some(fail(1, &message));
+    }
 
     let per_call = match rundir::random_hex(32) {
         Ok(token) => token,
@@ -221,6 +251,52 @@ fn upstream_url(host: &str, config: &Config, env: &HashMap<String, String>) -> O
     let url = Url::parse(&format!("{}/", base.trim_end_matches('/'))).ok()?;
     // fga-core joins absolute `/api/v1/...` paths, which would drop a path prefix.
     (url.path() == "/").then_some(url)
+}
+
+/// Whether the user's own gh is logged in to `host`: an `oauth_token` or a `user` under the key
+/// gh's API client looks up, the hostname without its port, spelled exactly (§2). A login stored
+/// only under `host:port` doesn't count, since plain gh's requests would never find it.
+fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
+    let has = |entry: &serde_yaml::Value, field: &str| {
+        entry
+            .get(field)
+            .and_then(serde_yaml::Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    };
+    user_hosts
+        .get(gh_hostname(host).as_str())
+        .is_some_and(|entry| has(entry, "oauth_token") || has(entry, "user"))
+}
+
+/// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but for a
+/// host-less `api` or `auth token` the forge as `GH_HOST`, without the GitHub Enterprise token
+/// variables, which would otherwise beat the user's login there. Recorded for nested calls
+/// (§7), with no `FJ_SHIM_LAUNCHER`. As on the delegate path, gh replaces this process, unless
+/// tracing is on, when the wrapper waits so it can write the trace record.
+fn step_aside(gh: &Path, args: &[OsString], mut edits: Edits, trace_enabled: bool) -> i32 {
+    if edits.iter().any(|(name, _)| *name == "GH_HOST") {
+        edits.push(("GH_ENTERPRISE_TOKEN", Edit::Remove));
+        edits.push(("GITHUB_ENTERPRISE_TOKEN", Edit::Remove));
+    }
+    // Still single-threaded: nothing in the wrapper has started a thread yet.
+    crate::launcher::env::apply(&edits);
+    let mut command = std::process::Command::new(gh);
+    command.args(args);
+    let error = if trace_enabled {
+        match command.status() {
+            Ok(status) => return crate::external::inherited_exit_code(status),
+            Err(error) => error,
+        }
+    } else {
+        use std::os::unix::process::CommandExt;
+        command.exec()
+    };
+    let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
+        126
+    } else {
+        127
+    };
+    fail(code, &format!("could not run {}: {error}", gh.display()))
 }
 
 /// What one invocation needs beyond every launch's settings.

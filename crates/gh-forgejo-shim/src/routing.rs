@@ -409,7 +409,14 @@ fn launch_listed(
     #[cfg(unix)]
     if matches!(mode, DelegateMode::Inherit) && crate::launcher::launches(routed) {
         let host = decision.trace_host()?;
-        return crate::launcher::start::launch(host, routed, argv, env, config.real_gh.as_deref());
+        return crate::launcher::start::launch(
+            host,
+            routed,
+            &decision.reason,
+            argv,
+            env,
+            config.real_gh.as_deref(),
+        );
     }
     let _ = (routed, decision, argv, env, config, mode);
     None

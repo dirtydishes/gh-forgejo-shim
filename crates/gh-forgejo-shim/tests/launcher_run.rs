@@ -511,3 +511,208 @@ fn a_host_less_auth_token_gets_the_real_token_and_the_forge_as_gh_host() {
     assert!(report.starts_with("GH_HOST=forge.test\n"), "{report}");
     assert!(report.contains("oauth_token: host-secret"), "{report}");
 }
+
+impl Fixture {
+    /// The shim's allowlist, each entry with the token from `HOST_TOKEN`.
+    fn allowlist(&self, entries: &[&str]) {
+        let mut text = format!(
+            "hosts = [{}]\n",
+            entries
+                .iter()
+                .map(|entry| format!("\"{entry}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for entry in entries {
+            text.push_str(&format!(
+                "[host.\"{entry}\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"http://127.0.0.1:9\"\n"
+            ));
+        }
+        fs::write(self.home.join(".config/gh-forgejo-shim/config.toml"), text).expect("config");
+    }
+
+    /// The user's own gh `hosts.yml`.
+    fn user_hosts(&self, text: &str) {
+        let dir = self.home.join(".config/gh");
+        fs::create_dir_all(&dir).expect("gh config dir");
+        fs::write(dir.join("hosts.yml"), text).expect("hosts.yml");
+    }
+}
+
+/// A fake gh that reports what a step-aside or a launch changed.
+fn reporting_gh(fixture: &Fixture) -> PathBuf {
+    fixture.fake_gh(
+        r#"for name in GH_CONFIG_DIR GH_HOST GH_ENTERPRISE_TOKEN FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN FJ_SHIM_LAUNCHER FJ_SHIM_SAVED; do
+  eval "printf '%s=%s\n' $name \"\${$name-unset}\""
+done > "$REPORT""#,
+    )
+}
+
+fn reported(report: &str, name: &str) -> String {
+    report
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{name}=")))
+        .unwrap_or("missing")
+        .to_string()
+}
+
+#[test]
+fn a_forge_the_users_gh_is_logged_in_to_steps_aside() {
+    let _serial = serial();
+    for login in [
+        "forge.test:\n    oauth_token: user-login\n",
+        "forge.test:\n    user: kell\n",
+    ] {
+        let fixture = Fixture::new("http://127.0.0.1:9");
+        fixture.user_hosts(login);
+        let gh = reporting_gh(&fixture);
+        let output = fixture.launch(&gh);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = fixture.report();
+        assert_eq!(
+            reported(&report, "GH_CONFIG_DIR"),
+            "unset",
+            "{login}: {report}"
+        );
+        assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset", "{login}");
+        assert_eq!(
+            reported(&report, "FJ_SHIM_SAVED"),
+            "unset",
+            "nothing changed"
+        );
+        assert!(fixture.parent_is_empty(), "no run directory");
+    }
+}
+
+#[test]
+fn stepping_aside_keeps_decision_4_and_drops_enterprise_tokens() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.allowlist(&["forge.test:3443"]);
+    fixture.user_hosts(
+        "forge.test:\n    oauth_token: user-login\ngithub.com:\n    oauth_token: gh-login\n",
+    );
+    let gh = reporting_gh(&fixture);
+    let output = fixture
+        .command(&gh, &["api", "user"])
+        .env("GH_REPO", "forge.test:3443/o/r")
+        .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert_eq!(reported(&report, "GH_CONFIG_DIR"), "unset", "{report}");
+    assert_eq!(
+        reported(&report, "GH_HOST"),
+        "forge.test",
+        "portless: {report}"
+    );
+    assert_eq!(
+        reported(&report, "GH_ENTERPRISE_TOKEN"),
+        "unset",
+        "{report}"
+    );
+    assert_eq!(
+        reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
+        "ghe_corp"
+    );
+    assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset");
+    assert!(reported(&report, "FJ_SHIM_SAVED").contains("GH_HOST"));
+
+    // The user's own GH_HOST naming the forge stays, and so do their enterprise tokens.
+    let output = fixture
+        .command(&gh, &["api", "user"])
+        .env("GH_HOST", "forge.test")
+        .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert_eq!(reported(&report, "GH_HOST"), "forge.test");
+    assert_eq!(
+        reported(&report, "GH_ENTERPRISE_TOKEN"),
+        "ghe_corp",
+        "{report}"
+    );
+}
+
+#[test]
+fn only_a_login_under_the_portless_key_steps_aside() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.allowlist(&["forge.test:3443"]);
+    let gh = reporting_gh(&fixture);
+    let pr_view = ["pr", "view", "1", "-R", "forge.test:3443/o/r"];
+
+    fixture.user_hosts("forge.test:\n    oauth_token: user-login\n");
+    let output = fixture
+        .command(&gh, &pr_view)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        reported(&fixture.report(), "GH_CONFIG_DIR"),
+        "unset",
+        "stepped aside"
+    );
+
+    fixture.user_hosts(
+        "forge.test:3443:\n    oauth_token: user-login\nother.test:\n    git_protocol: ssh\n",
+    );
+    let output = fixture
+        .command(&gh, &pr_view)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        reported(&fixture.report(), "GH_CONFIG_DIR").contains("/gfj-"),
+        "launched: {}",
+        fixture.report()
+    );
+}
+
+#[test]
+fn a_users_gh_hosts_route_with_no_usable_login_is_refused() {
+    let _serial = serial();
+    for (allowlist, hosts, key) in [
+        (
+            &["forge.test", "other.test"][..],
+            "forge.test:\n    git_protocol: ssh\n",
+            "forge.test",
+        ),
+        (
+            &["forge.test", "other.test"][..],
+            "Forge.Test:\n    git_protocol: ssh\n",
+            "Forge.Test",
+        ),
+        (
+            &["forge.test:3443", "other.test"][..],
+            "forge.test:3443:\n    oauth_token: user-login\n",
+            "forge.test:3443",
+        ),
+    ] {
+        let fixture = Fixture::new("http://127.0.0.1:9");
+        fixture.allowlist(allowlist);
+        fixture.user_hosts(hosts);
+        let before = fs::read(fixture.home.join(".config/gh/hosts.yml")).expect("hosts.yml");
+        let gh = reporting_gh(&fixture);
+        let output = fixture
+            .command(&gh, &["pr", "view", "1", "-R", "other/target"])
+            .output()
+            .expect("run wrapper");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{key}: {output:?}");
+        assert!(
+            stderr.contains(&format!("makes {key} gh's default host"))
+                && stderr.contains(&format!("delete the {key} entry"))
+                && stderr.contains(".config/gh/hosts.yml"),
+            "{key}: {stderr}"
+        );
+        assert_eq!(fixture.report(), "", "gh never ran");
+        assert_eq!(
+            fs::read(fixture.home.join(".config/gh/hosts.yml")).expect("hosts.yml"),
+            before,
+            "the user's config is left alone"
+        );
+    }
+}
