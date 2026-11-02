@@ -132,9 +132,12 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   a `user` key, so `gh auth status` asks the gateway for the login.
   - A served host (the set *S*, below) gets its real token.
   - Every other host gets the placeholder `gfj-not-served`.
-  - An allowlist entry with a port also gets a second entry under `host:port`, with the same token
-    or placeholder. gh keys tokens by the host text it targets, which keeps the port when the user
-    writes it (§5).
+  - gh keys tokens by the host text it targets, and keeps a port the user writes (§5). When the
+    routed target names a served host with its port, through a full URL, `--hostname`, a
+    three-part `-R` or `GH_HOST`, `hosts.yml` gets a second entry under `host:port` with the same
+    token. Only then: an extra key changes gh's default host whenever `hosts.yml` would otherwise
+    hold one host. A call with an explicit target doesn't depend on the default host. `GH_HOST`
+    is the default host itself.
 
 The placeholders matter because of how gh finds a token. With no token in `hosts.yml` for a
 host, gh falls back to the Keychain's unkeyed slot for it (`gh:<host>`, user `""`;
@@ -214,7 +217,7 @@ directory under the user's temporary directory. The launcher deletes it on every
 (section 4). I think this is acceptable: the shim's own `auth.json` fallback is the same kind of
 file. The shim also creates its Keychain item through `/usr/bin/security` without `-T`
 (`auth.rs:445`), so any process running as the user can already read it silently by running that
-same tool. **This is the decision Kell most needs to approve.**
+same tool. Kell approved this (§13, decision 1).
 
 ## 4. Run directory and socket lifecycle
 
