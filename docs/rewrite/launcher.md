@@ -207,6 +207,9 @@ The cost:
 - A host-less `gh auth status` inside a Forgejo checkout reports the Forgejo hosts as logged in.
   The user's other hosts, github.com included, show as failing, because a launched gh can't reach
   them. Outside a Forgejo checkout, it delegates and shows the user's normal hosts.
+- For a forge on a custom port, `gh auth token --hostname forge.test` prints the random per-call
+  token, which works only through the gateway. `gh auth token --hostname forge.test:3443` prints
+  the real one. A client that hands the token to its own HTTP calls has to spell the port.
 - Inside a launched gh, git fetches that gh starts, such as `gh pr checkout`, get only the
   placeholder for other hosts. gh's fetch also clears the user's own git credential helpers for
   every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
