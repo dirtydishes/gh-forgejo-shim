@@ -278,12 +278,14 @@ the shim serves as its only host, plain gh defaults to that host, while a launch
 allowlist hosts added, may not. Before delegating, routing checks plain gh's own choice
 (`GhHosts::user`). When that choice is a served Forgejo host, routing marks the route "user's gh
 hosts" (L2). If the user's gh is logged in to that host, the wrapper steps aside (§2).
-Otherwise plain gh would hit the forge's missing `/api/v3`, and every launch with a key set
-that keeps plain gh's default host has broken token lookup or the default host itself. So the
-launcher doesn't run gh. It exits 1 with:
-`gh-forgejo-shim: your gh config lists <host>, which gh-forgejo-shim serves; remove it with: gh auth logout --hostname <host>`.
-The user's config is left alone (§3). That state arises only from a `gh auth login` to a forge in
-client mode, which the shim's own login replaces.
+Otherwise the entry holds only settings, such as the `git_protocol` that
+`gh config set -h <host> git_protocol ssh` writes. Plain gh would hit the forge's missing
+`/api/v3`, and every launch with a key set that keeps plain gh's default host has broken token
+lookup or the default host itself. So the launcher doesn't run gh. It exits 1 with:
+`gh-forgejo-shim: <config dir>/hosts.yml has settings for <host> but no login, which makes <host> gh's default host; delete the <host> entry from that file to use gh-forgejo-shim there`,
+where `<config dir>` is the user's effective gh config directory. `gh auth logout` can't help,
+because it removes only logins and fails on a host without one
+(`gh/pkg/cmd/auth/logout/logout.go:111-127`). The user's config is left alone (§3).
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
 token, doesn't share its hostname with another entry, and isn't one the user's gh is logged in to
@@ -790,9 +792,10 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     environment equals the wrapper's apart from `FJ_SHIM_DEPTH`. The same holds when that forge
     is the user's only host. A host-less `gh auth status` in another forge's checkout leaves the
     logged-in forge out of *S*.
-16. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, and
-    two hosts on the allowlist, a call that routes "user's gh hosts" exits 1 with the logout
-    message and leaves the user's config unchanged.
+16. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, with
+    a `git_protocol` and no login, and two hosts on the allowlist, a call that routes "user's gh
+    hosts" exits 1 with the settings message naming the user's config directory, and leaves the
+    user's config unchanged.
 
 ## 12. Ownership
 
