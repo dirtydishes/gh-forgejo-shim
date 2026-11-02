@@ -16,7 +16,28 @@ pub const TRACE_ENV: &str = "FJ_SHIM_TRACE";
 const FALSE_VALUES: &[&str] = &["", "0", "false", "no", "off"];
 const REDACTED: &str = "<redacted>";
 const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", "--token"];
-const SENSITIVE_KEY_PARTS: &[&str] = &["credential", "password", "secret", "token"];
+/// Shared with the git recorder, so either trace redacts what the other does.
+const SENSITIVE_KEY_PARTS: &[&str] = &[
+    "api-key",
+    "api_key",
+    "credential",
+    "pass",
+    "private-key",
+    "private_key",
+    "secret",
+    "token",
+];
+/// Token prefixes, each with the shortest suffix that makes a match a token rather than a word.
+const TOKEN_PREFIXES: &[(&str, usize)] = &[
+    ("github_pat_", 20),
+    ("ghp_", 8),
+    ("gho_", 8),
+    ("ghu_", 8),
+    ("ghs_", 8),
+    ("ghr_", 8),
+    ("glpat-", 20),
+    ("gitea_", 8),
+];
 
 pub fn tracing_enabled(env: &HashMap<String, String>) -> bool {
     env.get(TRACE_ENV)
@@ -134,13 +155,20 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
 }
 
 fn redact_text(value: &str) -> String {
-    let mut result = redact_url_credentials(value);
-    result = redact_sensitive_key_values(&result);
-    result = redact_token_prefixes(&result);
-    redact_authorization_header(&result)
+    redact_text_with(value, REDACTED)
 }
 
-fn redact_url_credentials(value: &str) -> String {
+/// Replaces each credential in free text with `replacement`: URL userinfo, the value of a
+/// sensitive `key=value`, `key: value` or `"key": "value"`, known token prefixes and
+/// Authorization headers. The gh and git traces use different replacements.
+pub(crate) fn redact_text_with(value: &str, replacement: &str) -> String {
+    let mut result = redact_url_credentials(value, replacement);
+    result = redact_sensitive_key_values(&result, replacement);
+    result = redact_token_prefixes(&result, replacement);
+    redact_authorization_header(&result, replacement)
+}
+
+fn redact_url_credentials(value: &str, replacement: &str) -> String {
     let mut ranges = Vec::new();
     let mut index = 0;
 
@@ -163,10 +191,10 @@ fn redact_url_credentials(value: &str) -> String {
         index = authority_end;
     }
 
-    replace_ranges(value, &ranges)
+    replace_ranges(value, &ranges, replacement)
 }
 
-fn redact_sensitive_key_values(value: &str) -> String {
+fn redact_sensitive_key_values(value: &str, replacement: &str) -> String {
     let mut ranges = Vec::new();
     let mut index = 0;
 
@@ -179,7 +207,7 @@ fn redact_sensitive_key_values(value: &str) -> String {
         }
     }
 
-    replace_ranges(value, &ranges)
+    replace_ranges(value, &ranges, replacement)
 }
 
 fn find_assignment_delimiter(value: &str, start: usize) -> Option<(usize, char)> {
@@ -240,7 +268,7 @@ fn key_before_delimiter(value: &str, delimiter_index: usize) -> Option<&str> {
     (key_start < key_end).then_some(&value[key_start..key_end])
 }
 
-fn is_sensitive_key(key: &str) -> bool {
+pub(crate) fn is_sensitive_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase();
     SENSITIVE_KEY_PARTS
         .iter()
@@ -261,7 +289,7 @@ fn skip_whitespace(value: &str, mut index: usize) -> usize {
     index
 }
 
-fn redact_token_prefixes(value: &str) -> String {
+fn redact_token_prefixes(value: &str, replacement: &str) -> String {
     let mut ranges = Vec::new();
     let mut index = 0;
 
@@ -276,7 +304,7 @@ fn redact_token_prefixes(value: &str) -> String {
         }
     }
 
-    replace_ranges(value, &ranges)
+    replace_ranges(value, &ranges, replacement)
 }
 
 fn token_prefix_match_len(value: &str, index: usize) -> Option<usize> {
@@ -284,21 +312,11 @@ fn token_prefix_match_len(value: &str, index: usize) -> Option<usize> {
     if index > 0 && is_token_character(bytes[index - 1]) {
         return None;
     }
-
-    if bytes[index..].starts_with(b"github_pat_") {
-        return token_len_after_prefix(bytes, index, b"github_pat_".len(), 20);
-    }
-
-    if bytes[index..].len() >= 4
-        && bytes[index] == b'g'
-        && bytes[index + 1] == b'h'
-        && matches!(bytes[index + 2], b'p' | b'o' | b'u' | b's' | b'r')
-        && bytes[index + 3] == b'_'
-    {
-        return token_len_after_prefix(bytes, index, 4, 8);
-    }
-
-    None
+    TOKEN_PREFIXES.iter().find_map(|(prefix, min_suffix_len)| {
+        bytes[index..]
+            .starts_with(prefix.as_bytes())
+            .then(|| token_len_after_prefix(bytes, index, prefix.len(), *min_suffix_len))?
+    })
 }
 
 fn token_len_after_prefix(
@@ -316,10 +334,10 @@ fn token_len_after_prefix(
 }
 
 fn is_token_character(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
 }
 
-fn replace_ranges(value: &str, ranges: &[(usize, usize)]) -> String {
+fn replace_ranges(value: &str, ranges: &[(usize, usize)], replacement: &str) -> String {
     if ranges.is_empty() {
         return value.to_string();
     }
@@ -331,14 +349,14 @@ fn replace_ranges(value: &str, ranges: &[(usize, usize)]) -> String {
             continue;
         }
         redacted.push_str(&value[copied_until..start]);
-        redacted.push_str(REDACTED);
+        redacted.push_str(replacement);
         copied_until = end;
     }
     redacted.push_str(&value[copied_until..]);
     redacted
 }
 
-fn redact_authorization_header(value: &str) -> String {
+fn redact_authorization_header(value: &str, replacement: &str) -> String {
     let lower = value.to_ascii_lowercase();
     let Some(index) = lower.find("authorization:") else {
         return value.to_string();
@@ -357,7 +375,7 @@ fn redact_authorization_header(value: &str) -> String {
         .find(|character: char| character.is_whitespace() || matches!(character, ',' | ';'))
         .map_or(value.len(), |offset| credential_start + offset);
     let mut redacted = value.to_string();
-    redacted.replace_range(credential_start..credential_end, REDACTED);
+    redacted.replace_range(credential_start..credential_end, replacement);
     redacted
 }
 
@@ -474,6 +492,16 @@ mod tests {
         assert!(!redacted.contains("hunter2"), "{redacted}");
         assert!(!redacted.contains("plain-secret"), "{redacted}");
         assert!(redacted.contains(REDACTED), "{redacted}");
+    }
+
+    #[test]
+    fn git_replacement_keeps_lines_and_covers_its_token_prefixes() {
+        let text = "push glpat-abcdefghij_klmnopqrst\napi_key: k1\n";
+
+        assert_eq!(
+            redact_text_with(text, "[REDACTED]"),
+            "push [REDACTED]\napi_key: [REDACTED]\n"
+        );
     }
 
     #[test]
