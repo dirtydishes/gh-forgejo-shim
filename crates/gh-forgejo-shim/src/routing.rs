@@ -315,13 +315,16 @@ fn run_delegate(
     };
 
     match mode {
-        DelegateMode::Inherit => match run_program_inherit(&real_gh, argv, env, cwd) {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("{error}");
-                127
+        // The routing map leaves out values that aren't UTF-8; real gh gets the environment whole.
+        DelegateMode::Inherit => {
+            match run_program_inherit(&real_gh, argv, std::env::vars_os(), cwd) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("{error}");
+                    127
+                }
             }
-        },
+        }
         DelegateMode::Capture { stdout, stderr } => {
             match run_program_capture(&real_gh, argv, env, cwd) {
                 Ok(output) => {

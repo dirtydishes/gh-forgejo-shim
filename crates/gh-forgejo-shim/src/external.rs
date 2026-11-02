@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -82,12 +82,17 @@ pub fn find_program_with_fallbacks(
     None
 }
 
-pub fn run_program_capture(
+/// Runs `path` with exactly `env`, which may hold values that aren't UTF-8.
+pub fn run_program_capture<K, V>(
     path: &Path,
     argv: &[OsString],
-    env: &HashMap<String, String>,
+    env: impl IntoIterator<Item = (K, V)>,
     cwd: Option<&Path>,
-) -> io::Result<ProgramOutput> {
+) -> io::Result<ProgramOutput>
+where
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
     let output = command_with_env(path, argv, env, cwd).output()?;
     Ok(ProgramOutput {
         code: exit_code(output.status),
@@ -96,12 +101,18 @@ pub fn run_program_capture(
     })
 }
 
-pub fn run_program_inherit(
+/// Runs `path` on this process's terminal with exactly `env`, which may hold values that aren't
+/// UTF-8: pass `std::env::vars_os()` to hand on the environment byte for byte.
+pub fn run_program_inherit<K, V>(
     path: &Path,
     argv: &[OsString],
-    env: &HashMap<String, String>,
+    env: impl IntoIterator<Item = (K, V)>,
     cwd: Option<&Path>,
-) -> io::Result<i32> {
+) -> io::Result<i32>
+where
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
     let status = command_with_env(path, argv, env, cwd).status()?;
     Ok(inherited_exit_code(status))
 }
@@ -249,12 +260,16 @@ fn opened_web_urls() -> &'static Mutex<Vec<String>> {
     OPENED_WEB_URLS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn command_with_env(
+fn command_with_env<K, V>(
     path: &Path,
     argv: &[OsString],
-    env: &HashMap<String, String>,
+    env: impl IntoIterator<Item = (K, V)>,
     cwd: Option<&Path>,
-) -> Command {
+) -> Command
+where
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
     let mut command = Command::new(path);
     command.args(argv).env_clear().envs(env);
     if let Some(cwd) = cwd {
