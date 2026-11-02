@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 
-use gh_forgejo_shim::{bootstrap, config, doctor, git_recorder, setup, shim, trace, trace_summary};
+use gh_forgejo_shim::{config, doctor, git_recorder, shim, trace, trace_summary};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -125,6 +125,7 @@ impl Fixture {
     }
 
     /// Runs `command` and fails the test if it takes longer than ten seconds.
+    #[cfg(target_os = "linux")]
     fn run_bounded(&self, command: &mut Command) -> io::Result<Output> {
         let mut child = command
             .stdout(Stdio::piped())
@@ -479,40 +480,24 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
 }
 
 #[test]
+// Linux only: on macOS the CLI reads the real launchd PATH through /bin/launchctl, even with
+// --no-gui-path, and the library call inherits the runner's own environment.
+#[cfg(target_os = "linux")]
 #[ignore = "audit D14: fails until gh-forgejo-shim-jko.13 is fixed"]
 fn audit_diag_uninstall_reverses_default_bootstrap() -> TestResult {
     let f = Fixture::new()?;
     let selected = f.home.join(".cargo/bin");
     fs::create_dir_all(&selected)?;
     let path = std::env::join_paths([&selected, &f.bin])?;
-    let mut env = f.env().into_iter().collect::<BTreeMap<_, _>>();
-    env.insert("PATH".into(), path.to_string_lossy().into_owned());
-    // The library call, not the CLI: on macOS the CLI reads the real launchd PATH through
-    // /bin/launchctl even with --no-gui-path.
-    let bootstrap = bootstrap::run_bootstrap(bootstrap::BootstrapOptions {
-        cwd: Some(f.root.clone()),
-        env,
-        bin_dir: None,
-        config_path: Some(config::config_path(Some(&f.home))),
-        force: false,
-        home: Some(f.home.clone()),
-        executable: PathBuf::from(env!("CARGO_BIN_EXE_gh-forgejo-shim")),
-        target: setup::TargetMode::Current,
-        dry_run: false,
-        no_gui_path: true,
-        launchd_path: None,
-        platform: if cfg!(target_os = "macos") {
-            "darwin"
-        } else {
-            "linux"
-        }
-        .into(),
-        fallback_dirs: None,
-    })?;
+    let bootstrap = f.run_bounded(
+        f.command()
+            .env("PATH", &path)
+            .args(["bootstrap", "--no-gui-path"]),
+    )?;
     assert!(
         shim::is_managed_shim(&selected.join("gh")),
         "bootstrap did not create fixture wrapper: {}",
-        bootstrap::format_bootstrap(&bootstrap)
+        String::from_utf8_lossy(&bootstrap.stdout)
     );
     let uninstall = f.run_bounded(f.command().env("PATH", path).arg("uninstall-shim"))?;
     assert!(uninstall.status.success());
