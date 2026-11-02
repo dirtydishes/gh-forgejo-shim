@@ -179,9 +179,16 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
     hex, made for this call. The gateway accepts it for that host and authenticates upstream
     with the real token (§5). Outside the gateway it opens nothing, so no gh credential helper,
     gh's own or one a nested git reaches, can hand a usable login to anyone.
-  - In a `gh auth token` call, and only there, a served host's keys get its real token, which
-    that command prints for clients that call the forge themselves. That call makes no API
-    request, runs no git, and starts nothing.
+  - In a `gh auth token` call, a served host's keys get its real token, which that command
+    prints for clients that call the forge themselves. That call makes no API request, runs no
+    git, and starts nothing.
+  - In a `gh auth status` call with `-t` or `--show-token`, a served host's keys also get its
+    real token, because gh prints the token from `hosts.yml`
+    (`gh/pkg/cmd/auth/status/status.go:258,363`). A per-call token there would print a value
+    that dies with the call. That command does call the API, so for that call the gateway
+    expects the real token in place of a per-call one (§5). It runs no git and starts nothing
+    (`status.go` imports nothing that spawns a process). No other call puts the real token in
+    `hosts.yml`.
   - Every other host gets the placeholder `gfj-not-served`.
   - An allowlist entry with a port, such as `forge.test:3443`, always gets two entries, its
     hostname and `host:port`, with the same token. gh's API client drops the port before the
@@ -360,8 +367,9 @@ Rejected:
 The launcher resolves each host's token with the shim's existing resolver (`auth::resolve_token`,
 Keychain or `auth.json`, then the configured env names). The real token goes to the gateway, as
 the upstream token, and into `credentials`, for git that gh starts (above). `hosts.yml` gets it
-only in a `gh auth token` call, which prints it for clients that talk to the forge directly, as
-today's shim does. Every other call's `hosts.yml` holds the per-call token.
+only in a `gh auth token` call, or a `gh auth status --show-token` call, which print it for
+clients that talk to the forge directly, as today's shim does. Every other call's `hosts.yml`
+holds the per-call token.
 
 The launcher removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
 `GITHUB_ENTERPRISE_TOKEN` from gh's environment. Otherwise they would win over `hosts.yml`
@@ -373,7 +381,7 @@ code for missing authentication.
 
 **The token is on disk for the length of the call.** On macOS the stored token normally lives in
 the Keychain. While a launched call runs, a copy also sits in `credentials`, and in a
-`gh auth token` call in `hosts.yml`, mode 0600, in a 0700
+`gh auth token` or `gh auth status --show-token` call in `hosts.yml`, mode 0600, in a 0700
 directory under the user's temporary directory. The launcher deletes it on every exit it controls
 (section 6). A SIGKILL, crash or power loss leaves it behind until the next launch sweeps it
 (section 4). I think this is acceptable: the shim's own `auth.json` fallback is the same kind of
@@ -472,7 +480,9 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
   at the forge's web UI. Per D2, PR links end in `/pull/N`.
 - `.expecting(per_call).upstream_token(real)` (gateway PR #66), for every served host. gh
-  presents §3's per-call token; Forgejo receives only the real one. Any other credential for
+  presents §3's per-call token; Forgejo receives only the real one. In a
+  `gh auth status --show-token` call, where §3 puts the real token in `hosts.yml`, it is
+  `.expecting(real).upstream_token(real)` instead, and the per-call token is never made. Any other credential for
   that host gets 401 before any upstream contact: the real token itself, a GitHub token, another
   forge's token, the placeholder, a `basic` scheme, or none. GraphQL returns 401 too, not 200
   with an error body. `gh auth status --hostname forge.test:3443` sets the Authorization header
@@ -580,6 +590,7 @@ The exec path in section 2 needs none of this: after exec, gh's death is the wra
 | no real gh found, every candidate is the shim, or guard 2 or 3 tripped (section 8) | 127 |
 | real gh found but not executable | 126 |
 | routed host has no token | 4 |
+| a "user's gh hosts" route to a forge the user's gh has no usable login for (section 3) | 1 |
 | run directory, path characters or length, bind, unreadable or unparseable user config | 1 |
 
 After gh starts, the launcher writes nothing to the terminal. A cleanup failure is recorded in the
@@ -785,8 +796,10 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 10. **Browser (§9).** `gh pr view --web` invokes the user's browser with `/pulls/N`, for a forge on
     the default port and for one on a custom port. A non-PR URL and a URL on another host pass
     through unchanged.
-11. **Tokens (§3).** `gh auth token --hostname <forge>` prints the stored token. With no stored
-    token, a launched `gh pr view` exits 4 with the login hint.
+11. **Tokens (§3).** `gh auth token --hostname <forge>` prints the stored token, and so does
+    `gh auth status --show-token --hostname <forge>`, which also reports the forge as logged
+    in. A plain `gh auth status` prints no token, and gh's request carries the per-call one.
+    With no stored token, a launched `gh pr view` exits 4 with the login hint.
 12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
     `gh config set` in a Forgejo checkout changes the user's real `config.yml`.
 13. **Timeout (§10).** Once the session is cached, a stalled upstream answers within 10.5 s:
@@ -819,8 +832,11 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     call launches. A host-less `gh auth status` in another forge's checkout leaves the logged-in
     forge out of *S*.
 16. **Own-hosts refusal (§3).** With the user's own `hosts.yml` listing only a served forge, and
-    two hosts on the allowlist, a call that routes "user's gh hosts" exits 1 with the message
-    naming the user's config directory and the key, and leaves the user's config unchanged. It
+    the allowlist `forge.test,other.test`, a call that routes "user's gh hosts" exits 1 with the
+    message naming the user's config directory and the key, and leaves the user's config
+    unchanged. The route comes from L2's parity rows: `gh pr view 1` in a checkout with `origin`
+    on `forge.test` and `upstream` on github.com, and `gh pr view 1 -R other/target` (or
+    `-R o/r`) in a checkout with only `origin` on `forge.test`. It
     runs with an entry holding only a `git_protocol`, one keyed `Forge.Test` (the message names
     `Forge.Test`), and one holding a login under `forge.test:3443`.
 
@@ -836,7 +852,11 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
 ## 13. Decisions for Kell
 
 1. **The token sits in a private `hosts.yml` for the length of a launched call** (§3). The
-   alternative, the environment, leaks across hosts through gh's git credential helper.
+   alternative, the environment, leaks across hosts through gh's git credential helper. Since
+   Sol's round 4, the real token sits in the run directory's `credentials` file, and `hosts.yml`
+   holds it only in a `gh auth token` or `gh auth status --show-token` call; every other call's
+   `hosts.yml` holds a per-call token. The token is still on disk only in the private run
+   directory, for the length of the call.
 2. **A launched gh has no credential for any host but the served Forgejo hosts** (§3). Kell
    approved this at `cc8b38b`. Review then found the original mechanism leaked: gh fell back to the
    Keychain. The fix lists the user's other hosts in the private `hosts.yml` with a placeholder
