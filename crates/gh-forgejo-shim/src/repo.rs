@@ -182,16 +182,17 @@ pub fn detect_repo(
     // A `pr` or `issue` command takes a PR or issue URL as its selector, and gh uses that URL's
     // repository even with -R. `repo view` takes the repository itself. Any other command's URL
     // argument is data, such as a release tag, and selects nothing.
-    if let Some(selector) = invocation
+    // Only the first argument is the selector: `gh issue transfer 123 <URL>` names a destination.
+    let selector = invocation
         .positionals
-        .iter()
+        .first()
         .map(String::as_str)
-        .find(|arg| {
+        .filter(|arg| {
             (matches!(group.as_str(), "pr" | "issue")
                 && matches!(url_scheme(arg), Some("http" | "https")))
                 || invocation.command == "repo view"
-        })
-    {
+        });
+    if let Some(selector) = selector {
         if let Some(repo) = parse_repo_spec(selector, Some(&hosts.default)) {
             return Detection::found(repo, "command URL");
         }
@@ -294,22 +295,45 @@ fn command_group(command: &str, aliases: &HashMap<String, String>) -> String {
         .unwrap_or_else(|| word.to_string())
 }
 
-/// The first word of `text` as shlex splits it: quotes removed, a backslash escaping the next
-/// character.
+/// The first word of `text` as google/shlex's `Split` gives it, or `None` when shlex fails on any
+/// part of `text`, which makes gh reject the alias. Quotes are removed. A backslash escapes the next
+/// character outside single quotes. A `#` at the start of a token begins a comment that runs to
+/// the end of the line. Only space, tab, CR and LF separate words.
 fn shell_first_word(text: &str) -> Option<String> {
-    let mut word = String::new();
-    let mut chars = text.trim_start().chars();
-    let mut quote = None;
-    while let Some(c) = chars.next() {
-        match (quote, c) {
-            (None, c) if c.is_whitespace() => break,
-            (None, '\\') | (Some('"'), '\\') => word.push(chars.next()?),
-            (None, '\'' | '"') => quote = Some(c),
-            (Some(open), c) if c == open => quote = None,
-            (_, c) => word.push(c),
+    const SPACE: &[char] = &[' ', '\t', '\r', '\n'];
+    let mut words = Vec::<String>::new();
+    let mut chars = text.chars().peekable();
+    loop {
+        while chars.next_if(|c| SPACE.contains(c)).is_some() {}
+        match chars.peek() {
+            None => break,
+            Some('#') => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            Some(_) => {}
         }
+        let mut word = String::new();
+        let mut quote = None;
+        while let Some(c) = chars.next() {
+            match (quote, c) {
+                (None, c) if SPACE.contains(&c) => break,
+                (None, '\\') | (Some('"'), '\\') => word.push(chars.next()?),
+                (None, '\'' | '"') => quote = Some(c),
+                (Some(open), c) if c == open => quote = None,
+                (_, c) => word.push(c),
+            }
+        }
+        if quote.is_some() {
+            return None;
+        }
+        words.push(word);
     }
-    (quote.is_none() && !word.is_empty()).then_some(word)
+    words.into_iter().next()
 }
 
 /// gh reads `gh repo set-default` only in the commands it builds with `SmartBaseRepoFunc`
@@ -548,8 +572,13 @@ impl GitUrl {
         // Go's url.Parse refuses control characters, a `%` not followed by two hex digits, and
         // userinfo outside its allowed characters (`net/url` `validUserinfo`); gh then drops the
         // remote.
-        let before_query = raw.split('?').next().unwrap_or(&raw);
-        if raw.bytes().any(|b| b < 0x20 || b == 0x7f) || !valid_escapes(before_query) {
+        // The query isn't checked; the path, userinfo, host and fragment are.
+        let (before_fragment, fragment) = raw.split_once('#').unwrap_or((&raw, ""));
+        let before_query = before_fragment.split('?').next().unwrap_or(before_fragment);
+        if raw.bytes().any(|b| b < 0x20 || b == 0x7f)
+            || !valid_escapes(before_query)
+            || !valid_escapes(fragment)
+        {
             return None;
         }
         let (scheme, rest) = raw.split_once("://")?;
@@ -566,6 +595,13 @@ impl GitUrl {
             if !userinfo.chars().all(valid_userinfo_char) {
                 return None;
             }
+        }
+        if !valid_optional_port(
+            authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host),
+        ) {
+            return None;
         }
         let host = url_hostname(
             authority
@@ -629,6 +665,21 @@ fn valid_escapes(text: &str) -> bool {
         *byte != b'%'
             || (bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
                 && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit))
+    })
+}
+
+/// Go's `validOptionalPort`, applied as `parseHost` does: after `]` for a bracketed host, else
+/// after the last `:`, either nothing or `:` and digits.
+fn valid_optional_port(host: &str) -> bool {
+    let port = match host.strip_prefix('[') {
+        Some(rest) => match rest.split_once(']') {
+            Some((_, after)) => after,
+            None => return false,
+        },
+        None => host.rfind(':').map_or("", |i| &host[i..]),
+    };
+    port.strip_prefix(':').map_or(port.is_empty(), |digits| {
+        digits.bytes().all(|b| b.is_ascii_digit())
     })
 }
 
