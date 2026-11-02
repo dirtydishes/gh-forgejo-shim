@@ -1,0 +1,461 @@
+# Launcher spec (L0)
+
+Status: draft for Kell's approval. Bead `cwe.25`. Findings F1 and F23 in the
+[plan review](plan-review-2026-11-01.md), decisions D1 and D2, and audit bugs R1 (`jko.15`),
+R6 (`jko.16`) and R7 (`jko.7`).
+
+The launcher is the part of the managed `gh` wrapper that runs real gh against a Forgejo host. It
+starts the gateway in-process on a unix socket, runs real gh as a child pointed at that socket, and
+exits with gh's status. This spec fixes how it does that before any launcher code is written. L3
+(`cwe.28`) builds it, and its acceptance tests are listed in [section 11](#11-acceptance-tests).
+
+Upstream citations are gh v2.103.3 (`gh/…`) and go-gh v2.17.0 (`go-gh/…`). Repo paths cite
+`rewrite` at `68d0f24`.
+
+## 1. Constraints from gh
+
+These facts decide most of the design. Each one was checked in the source.
+
+1. **The socket covers every host.** gh's own HTTP client passes no socket option to go-gh
+   (`gh/api/http_client.go:66-71`), so go-gh reads `http_unix_socket` as a global config key
+   (`go-gh/pkg/api/client_options.go:131-132`). gh core has a host-scoped lookup,
+   `HTTPUnixSocket(hostname)` (`gh/internal/config/config.go:168-170`), but its only caller is
+   telemetry, which passes an empty host. With the key set, the unix dialer replaces both the plain
+   and the TLS dialer (`go-gh/pkg/api/http_client.go:238-249`). Every request that gh process makes
+   goes down the socket as plaintext HTTP, with the original `Host` header, whatever its host. Keep-alives
+   are off, so each request opens a new connection.
+2. **The key can only come from a config file.** There is no environment variable for it. go-gh keeps
+   `config.yml` and `hosts.yml` together in one directory, chosen by `GH_CONFIG_DIR`, then
+   `XDG_CONFIG_HOME`, then `~/.config/gh` (`go-gh/pkg/config/config.go:251-256,273-285`).
+   Extensions live in the data directory and update state in the state directory, so moving
+   `GH_CONFIG_DIR` touches neither.
+3. **Env tokens beat the config, and the enterprise one covers every non-GitHub host.**
+   `GH_TOKEN` and `GITHUB_TOKEN` apply to github.com, `*.ghe.com` and localhost.
+   `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` apply to every other host. Both win over
+   `hosts.<host>.oauth_token` in `hosts.yml` (`go-gh/pkg/auth/auth.go:63-100`). A host-level
+   `oauth_token` resolves without a `user` key (`gh/internal/config/config.go:295-304`).
+4. **gh hands its token to git.** For fetches and clones gh injects
+   `credential.<host>.helper=!"<gh path>" auth git-credential` (`gh/git/client.go:148`). The gh path
+   is `GH_PATH` if set, else `argv[0]` if it contains a slash, else a PATH lookup
+   (`gh/internal/ghcmd/cmd.go:413-425`). Git then sends that token to the real forge over HTTPS,
+   not through the socket. Extensions also get `GH_PATH` (`gh/pkg/cmd/extension/manager.go:134`).
+5. **gh migrates a config with no `version` key**, and the migration looks up each host's user
+   over the API (`gh/internal/config/config.go:207-226`,
+   `gh/internal/config/migration/multi_account.go:85-135`). A `config.yml` with `version: "1"`
+   skips it.
+6. **The browser comes from `GH_BROWSER`, then the config `browser` key, then `BROWSER`**
+   (`go-gh/pkg/browser/browser.go:82-93`). gh splits the value with shlex and appends the URL
+   (`browser.go:64`).
+7. **Telemetry turns itself off for enterprise users.** If any host in `hosts.yml` is not GitHub,
+   or an enterprise token is set, gh disables telemetry (`gh/internal/ghcmd/cmd.go:481-494`).
+   Update checks call api.github.com unless `GH_NO_UPDATE_NOTIFIER` and
+   `GH_NO_EXTENSION_UPDATE_NOTIFIER` are set (`gh/internal/update/update.go:42,83`).
+8. **gh's exit codes:** 0 ok, 1 error, 2 cancelled, 4 authentication required, 8 pending checks
+   (`gh/internal/ghcmd/cmd.go:44-48`).
+
+## 2. Process model
+
+One wrapper invocation is one process. There is no daemon and nothing shared between invocations.
+
+```text
+client ── exec ──> ~/.local/bin/gh  (sh wrapper, shim.rs)
+                     └─ exec ──> gh-forgejo-shim gh ARGS        pid P
+                                   revert launcher env (§7)
+                                   route(argv, env, cwd)        routing.rs, L2
+                                   ├─ delegate ──> exec real gh ARGS          P becomes gh
+                                   └─ launch
+                                        create run dir, write config (§3), bind socket (§4)
+                                        spawn real gh ARGS as child C, same process group
+                                        current-thread tokio runtime on P's main thread:
+                                          serve the gateway on the socket
+                                          wait for C
+                                          forward SIGTERM and SIGHUP to C (§6)
+                                        C exits: stop serving, remove run dir, write trace
+                                        exit with C's status, or die by C's signal (§6)
+```
+
+**Delegate means exec.** When the route is delegate and tracing is off, the wrapper replaces itself
+with real gh (`CommandExt::exec`). gh then owns the pid, the signals and the exit status, and the
+launcher has nothing to translate. When tracing is on, the wrapper spawns and waits so that it can
+write the trace record afterwards. That spawn path passes status through per section 6, as R6 does
+for today's delegation.
+
+**Launch is chosen per invocation.** The wrapper launches when routing (L2) resolves a Forgejo host
+in client mode and the command isn't on the delegate list below. Everything else delegates.
+Unknown commands launch, because gh aliases and extensions arrive as unknown commands and expand
+only inside gh. An alias such as `gh co 12` in a Forgejo checkout has to reach a gh that can talk to
+the forge.
+
+The delegate list holds commands that call no API, or that write gh's own state, which a launched
+gh would write to a throwaway copy (section 3):
+
+- `--version`, `version`, `help`, `--help` with no command, `completion`;
+- `config …`, `alias …`;
+- `auth login`, `auth logout`, `auth switch`, `auth refresh`, `auth setup-git`;
+- `extension …`, because install, upgrade, browse and search call github.com.
+
+`auth status`, `auth token` and `auth git-credential` keep their current routing. L3 owns the exact
+table and proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
+
+**Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
+`/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
+for server mode routes as delegate. The config key belongs to `cwe.42` and the config bridge (L4).
+
+## 3. Where gh's config lives
+
+**Decision: a private config directory per invocation, built from the user's config, which the
+launcher reads and never writes.**
+
+The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
+
+- **`config.yml`:** the user's `config.yml` from their effective config directory (the same
+  precedence go-gh uses, computed from the reverted environment of section 7), parsed as YAML,
+  with `http_unix_socket` set to the socket path and `version` set to `"1"` if absent. Aliases,
+  `git_protocol`, `editor`, `pager`, `prompt` and `browser` carry over. With no user
+  `config.yml`, it holds only those two keys. If the user's file doesn't parse, the launcher stops
+  with an error naming it (section 6); plain gh would fail on it too.
+- **`hosts.yml`:** one entry per served host (the set *S*, below), each with `oauth_token` and the
+  `git_protocol` from the user's `hosts.yml` entry for that host, if any. It has no `user` key,
+  so `gh auth status` asks the gateway for the login. It has no github.com entry and no other
+  host.
+
+*S* is the routed host. For a host-less `gh auth status` it is every configured Forgejo host that
+has a token, so the status lists all of them.
+
+What this guarantees:
+
+- **The user's gh config is byte-identical after a run, a crash and an uninstall**, because the
+  launcher only ever opens it to read. There is nothing to restore after a crash.
+  `docs/rollback.md` stays true: removing the wrapper restores plain gh.
+- **Concurrent invocations can't collide**, because each one has its own directory and socket.
+- **Aliases and settings work inside a Forgejo checkout.** Extensions work too, since the data
+  directory is untouched.
+- **The launched gh holds credentials only for the hosts in *S*.** github.com and every other host
+  have none, so a request to them carries no token, and the gateway rejects it (L1).
+
+The cost:
+
+- A write that gh makes inside a launched process lands in the copy and is lost when the run ends.
+  The delegate list in section 2 keeps the commands that write config out of the launcher. An
+  alias that expands to `config set` inside a Forgejo checkout loses its write. This is rare, and
+  L3's docs name it.
+- A host-less `gh auth status` inside a Forgejo checkout shows only Forgejo hosts. Outside one, it
+  delegates and shows the user's normal hosts.
+- Inside a launched gh, git fetches that gh starts, such as `gh pr checkout`, get no gh credential
+  for other hosts. A private GitHub submodule fetched by `gh pr checkout` in a Forgejo repo fails
+  to authenticate. Git's own credential helpers still apply.
+
+Rejected:
+
+- **The user's real config directory.** F1: a crash or uninstall leaves plain gh dialing a dead
+  socket, and concurrent calls overwrite each other's socket path.
+- **An empty private directory.** F1: aliases and settings vanish inside Forgejo checkouts.
+- **Tokens in the environment instead of `hosts.yml`.** `GH_ENTERPRISE_TOKEN` applies to every
+  non-GitHub host (fact 3). gh hands it to git for any such host (fact 4), and every child inherits
+  it: git, pager, editor, extensions and alias shells. A `gh pr checkout` whose submodule lives on
+  a second enterprise host would send the Forgejo token there over HTTPS. `hosts.yml` scopes each
+  token to its own host.
+
+### Token handoff
+
+The launcher resolves each host's token with the shim's existing resolver (`auth::resolve_token`,
+Keychain or `auth.json`, then the configured env names). It writes the token into `hosts.yml`
+and hands the same token to the gateway for that host. The launched gh therefore holds the real
+Forgejo token, as today's shim does. It needs the real one, because gh hands it to git for HTTPS
+fetches and prints it for `gh auth token`, and both of those talk to the forge directly.
+
+The launcher removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
+`GITHUB_ENTERPRISE_TOKEN` from gh's environment. Otherwise they would win over `hosts.yml`
+(fact 3), and a user's GitHub Enterprise token would be sent for the Forgejo host.
+
+If the routed host has no token, the launcher doesn't start gh. It prints
+`gh-forgejo-shim: no token for <host>; run: gfj auth login <host>` and exits 4, which is gh's own
+code for missing authentication.
+
+**The token is on disk for the length of the call.** On macOS the stored token normally lives in
+the Keychain. While a launched call runs, a copy also sits in `hosts.yml`, mode 0600, in a 0700
+directory under the user's temporary directory. The launcher deletes it on every exit it controls
+(section 6). A SIGKILL, crash or power loss leaves it behind until the next launch sweeps it
+(section 4). I think this is acceptable: the shim's own `auth.json` fallback is the same kind of
+file. The shim also creates its Keychain item through `/usr/bin/security` without `-T`
+(`auth.rs:445`), so any process running as the user can already read it silently by running that
+same tool. **This is the decision Kell most needs to approve.**
+
+## 4. Run directory and socket lifecycle
+
+**Location.** The parent is `$XDG_RUNTIME_DIR` if set (Linux), else `$TMPDIR`, else `/tmp`. The
+run directory is `gfj-<16 hex chars from the OS RNG>`, created with `mkdir` mode 0700. `mkdir` fails
+if the name exists, so another user can't pre-create it; on that failure the launcher picks a new
+name. It holds:
+
+| Name | What |
+|---|---|
+| `lock` | created first, and held with an exclusive `File::try_lock` (std, Rust 1.89+) for the launcher's lifetime |
+| `config.yml`, `hosts.yml` | section 3, created with `create_new` and mode 0600 |
+| `s` | the socket |
+
+The order is fixed: directory, lock, `hosts.yml`, `config.yml`, socket. The token is never on disk
+without a held lock beside it.
+
+**Path length.** `sun_path` holds 104 bytes on macOS and 108 on Linux, including the terminating
+NUL. A typical macOS `$TMPDIR` (`/var/folders/xx/…/T/`, about 49 bytes) plus `gfj-<16>/s` comes to
+about 70. If the full socket path doesn't fit, the launcher stops before creating anything and
+says so, naming `TMPDIR`. It doesn't silently fall back to another directory.
+
+**Readiness needs no wait.** The launcher calls `bind` and `listen` before it spawns gh. A
+connection that arrives before the accept loop runs waits in the listen backlog. There is no
+readiness poll and no startup timeout.
+
+**Permissions.** The 0700 directory is the access control: connecting requires search permission
+on it. As a cheap second check, the gateway drops a connection whose peer uid (`peer_cred`) isn't
+the launcher's own. This isn't a boundary against processes running as the same user, since those
+can read the token store anyway.
+
+**Shutdown.** When gh exits, the launcher stops accepting, drops in-flight connections without a
+grace period (their client is gone), removes `s`, `config.yml`, `hosts.yml` and `lock` by name, and
+removes the directory. It removes only names it created. It never removes a directory recursively,
+the mistake behind audit D1.
+
+**Stale directories.** At each launch, before creating its own directory, the launcher sweeps the
+parent for `gfj-*` entries:
+
+- skip anything that isn't a real directory owned by the current uid (`symlink_metadata`, no
+  following links);
+- skip a directory with no `lock` file;
+- open `lock` and try the exclusive lock. If it's held, a launcher is still running there: skip.
+  If the lock is taken, its owner is dead, since the kernel releases the lock when a process dies,
+  SIGKILL included;
+- remove the known names, then `rmdir`. If anything unknown remains, `rmdir` fails and the
+  directory stays.
+
+The lock answers "is the owner alive" without pids, so pid reuse can't fool it. Two launchers
+sweeping at once can't both remove the same directory, and the one that loses the lock skips it.
+Errors such as ENOENT during a sweep are ignored. The sweep never delays or fails the launch.
+
+## 5. The gateway in the launcher
+
+The launcher serves the fga-server router on the socket with `axum::serve` over a
+`tokio::net::UnixListener` (axum 0.8 implements `Listener` for it). One current-thread runtime on
+the main thread runs the accept loop, the wait for gh and the signal streams.
+
+What the launcher needs from L1 (`cwe.26`, gateway thread). These are requirements, not an
+interface design:
+
+- The router serves a set of hosts. Each has its own upstream (base URL, HTTP client with the CA
+  settings from L4) and its own expected token.
+- A request whose `Host` isn't in the set gets an error response without any upstream contact.
+- A request whose credential isn't the expected token for its `Host` gets 401 without any upstream
+  contact. That covers a GitHub token, another forge's token, or no token.
+- The `public_url` for host *h* is `https://<h>`, so PR URLs point at the forge's web UI. Per D2
+  they end in `/pull/N`.
+- The gateway writes nothing to stdout or stderr. gh owns both, and clients parse them.
+  Diagnostics go to the trace file only when tracing is on.
+
+## 6. Signals and exit codes
+
+gh shares the launcher's process group and inherits stdin, stdout and stderr directly, not through
+pipes. gh's TTY detection, colour, prompts and pager then behave as in a plain run. Job control
+works because the terminal stops and continues the whole group.
+
+| Signal to the launcher | What it does |
+|---|---|
+| SIGINT, SIGQUIT | Nothing. The terminal already sends it to the whole group, so gh has it. Forwarding would deliver it twice. |
+| SIGTERM, SIGHUP | Forward the same signal to gh, keep serving, keep waiting. |
+| SIGTSTP, SIGCONT | Default. The terminal handles the group. |
+| SIGPIPE | Ignored, as Rust's runtime already does. The launcher never writes to stdout after spawning gh. |
+| SIGKILL | Can't be handled. gh's next request fails at once, because nothing listens on the socket. The run directory stays until the next sweep. |
+
+The handlers are installed before the run directory exists. A SIGTERM or SIGHUP that arrives before
+gh is spawned aborts the launch. The launcher cleans up what it made and dies by that signal.
+
+gh gets the default SIGPIPE disposition, because Rust's `Command` resets it in the child. That is
+what makes `gh pr list | head -1` behave as it does with plain gh.
+
+**Exit status.** After cleanup and the trace record:
+
+- gh exited with code *n*: the launcher exits *n*.
+- gh died by signal *s*: the launcher restores the default action for *s* and raises it on itself,
+  so its parent sees the same signal. If the raise returns, it exits 128 + *s*. A pipeline under
+  `set -o pipefail` then reports the same status for the wrapper as for plain gh. That means 141
+  for SIGPIPE and 143 for SIGTERM. The audit test `audit_route_signal_passthrough` asserts the
+  signal itself, not 143.
+
+The survivor-fixes thread fixes R6 (`jko.16`) in `external.rs` and `git_recorder.rs`. L3 copies
+the mechanism R6 merges, including its choice of signal crate (the workspace forbids
+`unsafe_code`). It doesn't invent a second one. The same goes for the exec path in section 2.
+
+**Launcher failures** happen before gh starts and print one line to stderr, prefixed
+`gh-forgejo-shim:`.
+
+| Failure | Exit |
+|---|---|
+| no real gh found, or every candidate is the shim (section 8) | 127 |
+| real gh found but not executable | 126 |
+| routed host has no token | 4 |
+| run directory, socket path length, bind, unreadable or unparseable user config | 1 |
+
+After gh starts, the launcher writes nothing to the terminal. A cleanup failure is recorded in the
+trace when tracing is on, and is otherwise silent. Its leftovers fall to the next sweep.
+
+## 7. Environment
+
+The launcher builds gh's environment from `std::env::vars_os()` and changes only the variables
+named here. A non-UTF-8 value elsewhere passes through untouched. That is R7 (`jko.7`):
+`routing.rs:90` collects `std::env::vars()`, which panics on one. L2 fixes it in `routing.rs`, and
+the launcher never converts the environment to `String`.
+
+| Variable | In launched gh |
+|---|---|
+| `GH_CONFIG_DIR` | the run directory |
+| `GH_PATH` | real gh's absolute path, so gh's git credential helper and extensions run real gh, not the wrapper (fact 4) |
+| `GH_BROWSER` | the URL helper (section 9) |
+| `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
+| `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
+| `FJ_SHIM_LAUNCHER` | the launcher's pid |
+| `FJ_SHIM_LAUNCH_DEPTH` | the inherited depth plus 1 |
+| `FJ_SHIM_SAVED` | the names of the variables above that the launcher changed |
+| `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
+
+The launcher spawns gh by absolute path, so `argv[0]` is that path too.
+
+**Nested calls get the user's environment back.** gh's children inherit the launched environment:
+alias shells, extensions, git, pager, editor and credential helpers. When one of them runs `gh`
+again, it reaches the wrapper. Before routing, the wrapper reverts the launcher's changes. For each
+name in `FJ_SHIM_SAVED`, it restores the variable from `FJ_SHIM_ORIG_<NAME>`, or unsets it if
+there's no saved value. It skips any variable whose current value no longer matches what the
+launcher set, because something in between changed it on purpose. It then removes the
+bookkeeping variables, except `FJ_SHIM_LAUNCH_DEPTH`. A shell alias that runs
+`gh api https://api.github.com/user` therefore runs plain gh with the user's own config and token.
+
+## 8. Recursion
+
+R1 (`jko.15`): `external.rs:260` compares canonical paths, so a copy or hardlink of the shim passes
+the "real gh" check. Under option B the launcher spawns that copy as gh. The copy sees a Forgejo
+invocation and launches again, and so on. Three guards stop it:
+
+1. **Identity.** Real-gh discovery rejects a candidate that is the running shim by file identity
+   (device and inode, which catches hardlinks), or that is a copy of it. The survivor thread's R1
+   fix defines how a copy is detected. The launcher calls the same discovery and adds nothing.
+2. **Direct child.** If `FJ_SHIM_LAUNCHER` equals the wrapper's parent pid
+   (`std::os::unix::process::parent_id`), the launcher spawned this process as real gh, so
+   discovery picked the shim. The wrapper exits 127 with
+   `gh-forgejo-shim: the real gh at <path> is gh-forgejo-shim; set FJ_SHIM_REAL_GH`. Legitimate
+   nested calls are grandchildren, through gh or a shell, and never trip this. gh never replaces
+   itself with exec: v2.103.3 has no `syscall.Exec` call, and runs aliases and extensions as
+   children.
+3. **Depth cap.** If `FJ_SHIM_LAUNCH_DEPTH` is 4 or more, the wrapper delegates and never launches.
+   That catches a loop that runs through an intermediate process, for example a wrapper script
+   that doesn't exec. Plain gh can't loop back into the launcher.
+
+Guard 2 runs before the environment revert in section 7, which keeps `FJ_SHIM_LAUNCH_DEPTH` for
+guard 3.
+
+## 9. PR URLs and the browser (D2)
+
+PR URLs from the gateway end in `/pull/N` in every mode (D2, bead `65s`). Forgejo serves
+`/pulls/N`. In client mode no proxy exists to redirect, so the launcher sets `GH_BROWSER` to a
+helper. Every gh `--web` open and every `gh browse` goes through it.
+
+- `GH_BROWSER` is the shim's absolute path, shell-quoted for shlex, plus a hidden subcommand. gh
+  appends the URL (fact 6).
+- The helper rewrites the URL only when its host is in *S* and its path is
+  `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a fragment. It changes
+  `/pull/` to `/pulls/` and leaves everything else as it was. Other URLs pass through unchanged.
+- It then opens the URL with the browser the user would have got, in gh's order: the user's
+  original `GH_BROWSER` (from `FJ_SHIM_ORIG_GH_BROWSER`), the `browser` key in their
+  `config.yml`, `BROWSER`, then the platform default (`open` on macOS, `xdg-open` elsewhere). It
+  exits with that program's status.
+- The subcommand is registered in `cli.rs`, which belongs to the survivor thread. L3 asks for it
+  through the coordinator.
+
+ChatGPT's own "Open pull request in browser" link doesn't go through gh. In client mode it still
+404s without the redirect recipe, as D2 says.
+
+## 10. Timeouts (F23) and concurrency
+
+**Timeouts.** Per F23, the deadline belongs to each gateway request, not to the command:
+
+- Each gateway request has one 10 s deadline, shared by every upstream call it makes, body reads
+  included (`crates/fga-core/src/forgejo.rs:143,194-200`). The `/user` lookup that authenticates
+  it is bounded by the client's own 10 s timeout. A slow upstream gets gh a 504 within about 10 s
+  per request.
+- The launcher has no process-wide deadline and never kills gh on its own. `gh run watch` and
+  `gh pr checks --watch` poll for as long as gh likes. An interactive `gh pr create` sits in the
+  editor for as long as the user likes. Plain gh against GitHub behaves the same way.
+- Setup has no timeout, because nothing waits (section 4). Shutdown has no grace period.
+- A client that wants a bound on the whole command kills the wrapper. SIGTERM reaches gh
+  (section 6). SIGKILL leaves gh to fail on its next request.
+
+R4's old gate, "a slow server finishes within the deadline plus 0.5 s", becomes a gateway test: a
+stalled upstream gets a 504 within 10.5 s, and the launcher keeps running until gh exits.
+
+**Concurrency.** Each invocation has its own run directory, socket, config copy, gateway and
+session cache. ChatGPT polls about every 60 s per thread, so several launchers run at once and share
+nothing but read-only inputs: the user's gh config, the shim's config and the token store. The
+remaining shared writes are:
+
+- the trace file, which needs audit D6 (`jko.11`) fixed before L3;
+- the sweep, which only touches directories whose lock it holds (section 4).
+
+Each launched call pays one extra upstream request, the `/user` lookup that authenticates gh's
+first request. The session cache lives in the process and doesn't outlast it. Within one call, gh
+sends requests in parallel (for example `gh pr status`, or `gh auth status` across hosts), and the
+runtime serves them concurrently.
+
+## 11. Acceptance tests
+
+L3 builds these, as process tests against real gh v2.103.3 and a Forgejo stub or the e2e Forgejo.
+Each names the section it proves.
+
+1. **Config immutability (§3).** Hash every file in the user's gh config directory. Run a launched
+   `gh pr view`, a launched call killed with SIGKILL, and `uninstall`. The hashes are unchanged
+   after each.
+2. **Aliases (§2, §3).** In a Forgejo checkout, an alias `co` = `pr view` runs through the
+   launcher and prints the PR. A shell alias `!gh api https://api.github.com/user` runs plain gh
+   with the user's original environment (§7).
+3. **No foreign credential reaches the gateway (§3, §5).** With `GH_TOKEN` set and a github.com
+   entry in the user's `hosts.yml`, a host-less `gh auth status` in a Forgejo checkout lists the
+   Forgejo hosts. The gateway logs no request with a github.com `Host` and no request carrying the
+   GitHub token. With `GH_ENTERPRISE_TOKEN` set, the Forgejo host still gets its own token.
+4. **Signals (§6).** SIGTERM to the launcher: gh gets SIGTERM, the launcher dies by SIGTERM, and
+   the run directory is gone. SIGINT to the process group: gh's status passes through and the
+   directory is gone. `gh pr list | head -1` reports the same status as plain gh. A gh that kills
+   itself with SIGTERM: the launcher dies by SIGTERM (R6's test, on the launch path).
+5. **Stale directories (§4).** After a SIGKILL'd launch, the next launch removes the leftover
+   directory. A live launcher's directory survives another launcher's sweep. A directory with an
+   unknown file in it stays.
+6. **Concurrency (§10).** Eight parallel launched `gh pr view` calls all succeed, each with its own
+   directory, and none is left afterwards.
+7. **Recursion (§8).** `FJ_SHIM_REAL_GH` pointing at a copy of the shim, and a copy on PATH: exit
+   127 with the message, and only one gateway ever ran. R1's two audit tests pass.
+8. **Environment (§7).** A non-UTF-8 variable reaches gh byte for byte (R7's test, on the launch
+   path). gh's environment has none of the four token variables.
+9. **Socket path (§4).** A `TMPDIR` long enough to overflow `sun_path`: exit 1, a message naming
+   `TMPDIR`, and nothing created.
+10. **Browser (§9).** `gh pr view --web` invokes the user's browser with `/pulls/N`. A non-PR URL
+    and a URL on another host pass through unchanged.
+11. **Tokens (§3).** `gh auth token --hostname <forge>` prints the stored token. With no stored
+    token, a launched `gh pr view` exits 4 with the login hint.
+12. **Delegation (§2).** `gh --version` in a Forgejo checkout delegates (R4, `jko.5`).
+    `gh config set` in a Forgejo checkout changes the user's real `config.yml`.
+13. **Timeout (§10).** A stalled upstream gets gh a 504 within 10.5 s, and the launcher doesn't kill
+    gh.
+
+## 12. Ownership
+
+| Piece | Owner |
+|---|---|
+| launcher module, `routing.rs`, `repo.rs`, wrapper entry point | launcher thread (L2, L3, L4) |
+| host isolation and multi-host router (§5) | gateway thread, L1 `cwe.26` |
+| R1 identity check, R6 signal and exec pattern, browser subcommand registration in `cli.rs` | survivor-fixes thread, through the coordinator |
+| per-host CA, `api_url` and server-mode key | L4 `cwe.29` and S `cwe.42` |
+
+## 13. Decisions for Kell
+
+1. **The token sits in a private `hosts.yml` for the length of a launched call** (§3). The
+   alternative, the environment, leaks across hosts through gh's git credential helper.
+2. **A launched gh has no credential for any host but the served Forgejo hosts** (§3). A host-less
+   `gh auth status` in a Forgejo checkout shows only Forgejo hosts. Git fetches started by gh get
+   no gh credential for other hosts.
+3. **gh writes inside a launched call are discarded** (§3). The delegate list keeps the config-writing
+   commands out, but an alias that expands to one inside a Forgejo checkout loses its write.
