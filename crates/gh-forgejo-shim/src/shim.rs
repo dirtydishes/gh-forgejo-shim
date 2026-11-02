@@ -44,6 +44,22 @@ pub fn is_managed_shim(path: &Path) -> bool {
             || (text.contains(RUST_WRAPPER_MARKER) && text.contains(" gh \"$@\"")))
 }
 
+/// `fs::write`, except that a file it creates gets `mode` (which umask can only narrow) instead of
+/// 0666 & ~umask, under which a group member could edit it. An existing file keeps its mode: it's
+/// the user's to choose.
+pub(crate) fn write_file(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    options.open(path)?.write_all(contents)
+}
+
 /// `fs::create_dir_all`, except that each directory it creates gets `mode` (which umask can only
 /// narrow) instead of 0777 & ~umask. Under umask 002 a group-writable directory would let another
 /// account in the group rename its own file over one the shim wrote, such as the `gh` wrapper.
