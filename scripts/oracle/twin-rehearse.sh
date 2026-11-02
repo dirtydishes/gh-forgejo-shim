@@ -23,13 +23,22 @@ docker exec --user git "$run" forgejo --config /data/gitea/conf/app.ini admin us
     --must-change-password=false >/dev/null
 token=$(curl -fsS -u dirtydishes:rehearse-disposable-password -H 'Content-Type: application/json' \
     -d '{"name":"rehearse","scopes":["all"]}' "http://127.0.0.1:$port/api/v1/users/dirtydishes/tokens" | jq -er .sha1)
-curl -fsS -H "Authorization: token $token" -H 'Content-Type: application/json' \
+# The token stays out of argv: curl reads its header from a private file.
+(umask 077; printf 'Authorization: token %s\n' "$token" > "$work/auth")
+# git runs as twin-seed.py runs it: no user or system config (no insteadOf to SSH, no credential
+# helpers), nothing inherited from GIT_*, the header from the environment, and no redirects.
+safegit() {
+    env -i PATH="$PATH" HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+        GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="${GIT_HEADER:-}" \
+        GIT_CONFIG_KEY_1=http.followRedirects GIT_CONFIG_VALUE_1=false git "$@"
+}
+curl -fsS -H @"$work/auth" -H 'Content-Type: application/json' \
     -d '{"name":"gfj-oracle","private":false}' "http://127.0.0.1:$port/api/v1/user/repos" >/dev/null
 # A read-only copy of the live twin's main as it was before the seed, whose merges added notes the
 # plan writes again, so branches start from the same tree.
 base=a3972cc9bd36f1380cf266f1e9dfed892ad0485e
-git clone -q --branch main --single-branch https://git.dirtydishes.dev/dirtydishes/gfj-oracle.git "$work/main"
-git -C "$work/main" -c "http.extraHeader=Authorization: token $token" \
+safegit clone -q --branch main --single-branch https://git.dirtydishes.dev/dirtydishes/gfj-oracle.git "$work/main"
+GIT_HEADER="Authorization: token $token" safegit -C "$work/main" \
     push -q "http://127.0.0.1:$port/dirtydishes/gfj-oracle.git" "$base:refs/heads/main"
 # Forgejo processes the push asynchronously; the repository lists PRs only once it isn't empty.
 for attempt in $(seq 1 30); do
@@ -37,13 +46,13 @@ for attempt in $(seq 1 30); do
     [ "$attempt" -eq 30 ] && { echo 'the copied main did not settle' >&2; exit 1; }
     sleep 1
 done
-api() { curl -fsS -H "Authorization: token $token" "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/$1"; }
+api() { curl -fsS -H @"$work/auth" "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/$1"; }
 # Stand in for the runner: fail #13's first commit once it exists, as the twin's CI would.
 (
     for attempt in $(seq 1 300); do
         sha=$(api 'pulls/13' 2>/dev/null | jq -r '.head.sha // empty') || true
         if [ -n "$sha" ]; then
-            curl -fsS -H "Authorization: token $token" -H 'Content-Type: application/json' \
+            curl -fsS -H @"$work/auth" -H 'Content-Type: application/json' \
                 -d '{"context":"ci / check (pull_request)","state":"failure"}' \
                 "http://127.0.0.1:$port/api/v1/repos/dirtydishes/gfj-oracle/statuses/$sha" >/dev/null
             exit 0
@@ -77,5 +86,5 @@ expect 'pulls/3/commits' 'length == 2'
 expect 'pulls/3/files' '[.[].filename] | sort == ["ci/slow","notes/pending.txt"]'
 expect 'pulls/14/reviews' '[.[] | [.user.login, .state, .comments_count]] == [["gfj-e2e","APPROVED",1]]'
 expect 'pulls/15/reviews' '[.[] | [.user.login, .state]] == [["gfj-e2e","REQUEST_CHANGES"]]'
-curl -fsS -H "Authorization: token $token" "http://127.0.0.1:$port/api/v1/users/gfj-e2e" | jq -e '.is_admin == false' >/dev/null
+curl -fsS -H @"$work/auth" "http://127.0.0.1:$port/api/v1/users/gfj-e2e" | jq -e '.is_admin == false' >/dev/null
 echo 'PASS twin-seed rehearsal: every planned state, and a resumed run wrote nothing'
