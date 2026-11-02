@@ -974,11 +974,7 @@ fn run_comment(
         .ok_or_else(|| ShimError::new("could not determine pull request number"))?;
 
     if parsed.web {
-        let normalized = normalize_pull(&pull);
-        let url = normalized.get("url").and_then(Value::as_str).map_or_else(
-            || format!("{}/pull/{number}", target_repo.web_base_url()),
-            str::to_string,
-        );
+        let url = pull_page_url(&pull, &target_repo, number);
         open_web_url(&format!("{url}#new-comment"));
         writeln!(stdout, "{url}#new-comment")?;
         return Ok(0);
@@ -1020,11 +1016,7 @@ fn run_diff(
     };
 
     if parsed.web {
-        let normalized = normalize_pull(&pull);
-        let url = normalized.get("url").and_then(Value::as_str).map_or_else(
-            || format!("{}/pull/{number}", target_repo.web_base_url()),
-            str::to_string,
-        );
+        let url = pull_page_url(&pull, &target_repo, number);
         writeln!(stdout, "{url}/files")?;
         return Ok(0);
     }
@@ -1092,7 +1084,7 @@ fn run_view(
     if parsed.web {
         if let Some(url) = normalized.get("url").and_then(Value::as_str) {
             if !url.is_empty() {
-                writeln!(stdout, "{url}")?;
+                writeln!(stdout, "{}", fga_core::map::forgejo_pull_web_url(url))?;
             }
         }
         return Ok(0);
@@ -2559,6 +2551,18 @@ fn to_forgejo_repo(repo: &DetectedRepoRef) -> ForgejoRepoRef {
     ForgejoRepoRef::new(repo.host.clone(), repo.owner.clone(), repo.name.clone())
 }
 
+/// The page a `--web` command gives the user: Forgejo's own `/pulls/{n}`, which opens without a
+/// redirect in a client-only install. Printed PR URLs elsewhere use GitHub's `/pull/{n}`.
+fn pull_page_url(pull: &Value, target_repo: &crate::forgejo::RepoRef, number: u64) -> String {
+    normalize_pull(pull)
+        .get("url")
+        .and_then(Value::as_str)
+        .map_or_else(
+            || format!("{}/pulls/{number}", target_repo.web_base_url()),
+            fga_core::map::forgejo_pull_web_url,
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3135,6 +3139,83 @@ mod tests {
     }
 
     #[test]
+    fn pr_create_web_keeps_a_branch_named_like_a_pull_request() {
+        let client = FakeApi::default();
+        crate::external::take_opened_web_urls();
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr",
+                "create",
+                "--title",
+                "Ship it",
+                "--base",
+                "main",
+                "--head",
+                "feat/pull/3",
+                "--web",
+            ],
+            &client,
+            Some("token"),
+            None,
+        );
+
+        let url = "https://git.example.com/owner/repo/compare/main...feat/pull/3";
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, format!("{url}\n"));
+        assert_eq!(crate::external::take_opened_web_urls(), [url]);
+    }
+
+    #[test]
+    fn pr_web_commands_give_forgejos_page_and_other_output_githubs_url() {
+        let pull = json!({
+            "number": 8,
+            "title": "Make Codex happy",
+            "state": "open",
+            "html_url": "https://git.example.com/owner/repo/pulls/8",
+            "head": {"ref": "feature", "sha": "abc123"},
+            "base": {"ref": "main"},
+            "user": {"login": "alice"}
+        });
+        let client = FakeApi {
+            pulls: vec![pull.clone()],
+            issues: vec![
+                json!({"number": 8, "title": "Make Codex happy", "state": "open",
+                "html_url": "https://git.example.com/owner/repo/pulls/8", "user": {"login": "alice"},
+                "pull_request": {"merged": false}}),
+            ],
+            ..FakeApi::default()
+        };
+        for (argv, expected) in [
+            (
+                &["pr", "view", "8", "--web"][..],
+                "https://git.example.com/owner/repo/pulls/8\n",
+            ),
+            (
+                &["pr", "diff", "8", "--web"][..],
+                "https://git.example.com/owner/repo/pulls/8/files\n",
+            ),
+        ] {
+            let (code, stdout, stderr) = run_fake(argv, &client, Some("token"), None);
+            assert_eq!(code, 0, "{argv:?}: {stderr}");
+            assert_eq!(stdout, expected, "{argv:?}");
+        }
+        // Forgejo's issue route answers for a pull request; its URL takes GitHub's layout, as the
+        // gateway gives it.
+        let (code, stdout, stderr) = run_fake(
+            &["issue", "view", "8", "--json", "url"],
+            &client,
+            Some("token"),
+            None,
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).ok(),
+            Some(json!({"url": "https://git.example.com/owner/repo/pull/8"}))
+        );
+    }
+
+    #[test]
     fn pr_list_outputs_codex_board_fields_with_status_rollup() {
         let client = FakeApi {
             pulls: vec![json!({
@@ -3657,11 +3738,11 @@ mod tests {
             None,
         );
 
-        // It prints GitHub's /pull/8 and opens Forgejo's own /pulls/8, which needs no redirect.
+        // A --web command gives Forgejo's own /pulls/8, which opens without a redirect.
         assert_eq!(code, 0, "{stderr}");
         assert_eq!(
             stdout,
-            "https://git.example.com/owner/repo/pull/8#new-comment\n"
+            "https://git.example.com/owner/repo/pulls/8#new-comment\n"
         );
         assert!(
             crate::external::take_opened_web_urls()

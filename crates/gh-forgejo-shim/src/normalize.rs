@@ -346,7 +346,7 @@ pub fn normalize_issue(issue: &Value) -> Value {
         "stateReason": null,
         "title": cloned_or_null(issue.get("title")),
         "updatedAt": cloned_or_null(issue.get("updated_at")),
-        "url": value_or(issue.get("html_url"), issue.get("url")),
+        "url": pull_web_url(value_or(issue.get("html_url"), issue.get("url"))),
     })
 }
 
