@@ -206,7 +206,8 @@ pub fn write_config(config: &Config) -> Result<()> {
     }
     lines.push(String::new());
 
-    fs::write(&config.path, lines.join("\n")).map_err(|error| {
+    // A config others could edit could point api_url at their own host and collect the token.
+    crate::shim::write_file(&config.path, lines.join("\n").as_bytes(), 0o600).map_err(|error| {
         ShimError::new(format!(
             "could not write {}: {error}",
             config.path.display()
