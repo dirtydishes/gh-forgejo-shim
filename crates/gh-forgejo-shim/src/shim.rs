@@ -1,7 +1,7 @@
 //! Managed shim lifecycle and detection used by real-`gh` discovery.
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{Result, ShimError};
@@ -60,9 +60,43 @@ pub fn install_shim(
             target.display()
         )));
     }
-    fs::write(&target, shim_script(executable))?;
-    make_executable(&target)?;
-    Ok(target)
+    // Write beside the target and rename over it: the rename replaces a `gh` symlink itself, where
+    // writing to the path would follow it and overwrite the real gh it points to.
+    let (mut file, temp) = create_temp_file(&target)?;
+    let result = (|| -> Result<()> {
+        file.write_all(shim_script(executable).as_bytes())?;
+        drop(file);
+        make_executable(&temp)?;
+        fs::rename(&temp, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result.map(|()| target)
+}
+
+fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
+    let parent = target.parent().unwrap_or(Path::new("."));
+    for attempt in 0..1000 {
+        let temp = parent.join(format!(
+            ".gh.gh-forgejo-shim-{}-{attempt}",
+            std::process::id()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((file, temp)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(ShimError::new(format!(
+        "unable to create a temporary file beside {}",
+        target.display()
+    )))
 }
 
 pub fn uninstall_shim(bin_dir: Option<&Path>, home: Option<&Path>) -> Result<PathBuf> {

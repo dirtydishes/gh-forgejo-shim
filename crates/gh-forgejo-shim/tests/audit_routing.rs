@@ -305,7 +305,6 @@ fn audit_route_signal_passthrough() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit R3: fails until gh-forgejo-shim-jko.1 is fixed"]
 fn audit_route_force_install_symlink() -> TestResult {
     let fixture = Fixture::new()?;
     let original = fs::read(&fixture.real_gh)?;
