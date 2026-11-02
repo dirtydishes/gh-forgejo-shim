@@ -8,9 +8,9 @@ cleanup() {
     result=$?
     trap - EXIT
     if [ "$result" -ne 0 ]; then
-        for c in gateway nginx; do docker logs --tail 40 "$run-$c" 2>&1 || true; done
+        for c in gateway nginx caddy; do docker logs --tail 40 "$run-$c" 2>&1 || true; done
     fi
-    for c in client nginx gateway forgejo cert; do docker rm -fv "$run-$c" >/dev/null 2>&1 || true; done
+    for c in client caddy nginx gateway forgejo cert; do docker rm -fv "$run-$c" >/dev/null 2>&1 || true; done
     docker network rm "$run" >/dev/null 2>&1 || true
     docker volume rm "$run-tls" >/dev/null 2>&1 || true
     exit "$result"
@@ -45,6 +45,10 @@ docker run -d --name "$run-gateway" --network "$run" --network-alias gateway \
 docker run -d --name "$run-nginx" --network "$run" --network-alias forge.test -v "$run-tls:/tls:ro" \
     -v "$PWD/packaging/gateway/nginx/fga-locations.conf:/etc/nginx/fga-locations.conf:ro" \
     -v "$PWD/scripts/e2e/server-nginx.conf:/etc/nginx/conf.d/default.conf:ro" nginx:1.29 >/dev/null
+# The shipped Caddyfile too, over plain HTTP: the same routes, through Caddy's own matchers.
+docker run -d --name "$run-caddy" --network "$run" --network-alias caddy \
+    -e FORGE_SITE=http://forge.test -e FGA_UPSTREAM=gateway:8080 -e FORGEJO_UPSTREAM=forgejo:3000 \
+    -v "$PWD/packaging/gateway/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 >/dev/null
 docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" \
     -v "$PWD/scripts/e2e/server-client.sh:/test/server-client.sh:ro" fga-g2a-e2e:local bash /test/server-client.sh
 printf 'PASS server-mode e2e: the shipped image and nginx snippet serve gh and Claude for Forgejo 15\n'
