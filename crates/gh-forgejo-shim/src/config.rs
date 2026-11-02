@@ -199,15 +199,21 @@ fn parse_error(path: &Path, text: &str, error: &toml::de::Error) -> ShimError {
     }
 }
 
-/// Replaces everything between the first and last `quote` with `...`, unless that text has no
-/// letter or digit, as in the parser's `` expected `]` ``. Pairing quotes up would let a value
-/// with quotes of its own slip through.
+/// Replaces everything between the first and last `quote` with `...`. Pairing quotes up would let
+/// a value with quotes of its own slip through. Double quotes always hold a value, so they're
+/// always cut. Backticks also hold the parser's expected tokens (`` expected `]` ``), kept when the
+/// text is nothing but TOML syntax characters.
 fn cut_quoted(message: &mut String, quote: char) {
-    if let (Some(start), Some(end)) = (message.find(quote), message.rfind(quote)) {
-        let inner = start + quote.len_utf8()..end;
-        if start < end && message[inner.clone()].chars().any(char::is_alphanumeric) {
-            message.replace_range(inner, "...");
-        }
+    let (Some(start), Some(end)) = (message.find(quote), message.rfind(quote)) else {
+        return;
+    };
+    let inner = start + quote.len_utf8()..end;
+    let syntax_only = quote == '`'
+        && message[inner.clone()]
+            .chars()
+            .all(|character| "[]{}=,.`'\" ".contains(character));
+    if start < end && !syntax_only {
+        message.replace_range(inner, "...");
     }
 }
 
@@ -289,16 +295,17 @@ fn set_hosts(document: &mut DocumentMut, hosts: &[String]) {
         return;
     };
     let mut kept = Vec::<String>::new();
-    array.retain(|value| {
-        let host = value.as_str().and_then(normalized_forgejo_host);
-        match host {
-            Some(host) if hosts.contains(&host) && !kept.contains(&host) => {
-                kept.push(host);
-                true
-            }
-            _ => false,
+    let mut dropped = Vec::new();
+    for (index, value) in array.iter().enumerate() {
+        match value.as_str().and_then(normalized_forgejo_host) {
+            Some(host) if hosts.contains(&host) && !kept.contains(&host) => kept.push(host),
+            _ => dropped.push(index),
         }
-    });
+    }
+    // Last first, so a run of removals hands each line's comment along in turn.
+    for index in dropped.into_iter().rev() {
+        remove_keeping_line_comments(array, index);
+    }
     for host in hosts.iter().filter(|host| !kept.contains(host)) {
         let trailing = array.trailing().as_str().unwrap_or_default().to_string();
         if !trailing.contains('\n') {
@@ -321,6 +328,39 @@ fn set_hosts(document: &mut DocumentMut, hosts: &[String]) {
         ));
         array.push_formatted(value);
         array.set_trailing("\n");
+    }
+}
+
+/// Removes element `index`, keeping the line-end comment of the element before it. In a
+/// multi-line array, the text up to the first line break of an element's prefix ends the line
+/// above: it holds that element's `# comment`. Removing the element would lose it, and leave the
+/// removed element's own comment, held by whatever follows, on the line above instead.
+fn remove_keeping_line_comments(array: &mut Array, index: usize) {
+    let removed = array.remove(index);
+    let prefix = removed
+        .decor()
+        .prefix()
+        .and_then(|prefix| prefix.as_str())
+        .unwrap_or_default();
+    let Some(line_end) = prefix.find('\n') else {
+        return;
+    };
+    let carried = &prefix[..=line_end];
+    let replace_head = |text: &str| match text.find('\n') {
+        Some(end) => format!("{carried}{}", &text[end + 1..]),
+        None => text.to_string(),
+    };
+    if let Some(next) = array.get_mut(index) {
+        let text = next
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or_default()
+            .to_string();
+        next.decor_mut().set_prefix(replace_head(&text));
+    } else {
+        let text = array.trailing().as_str().unwrap_or_default().to_string();
+        array.set_trailing(replace_head(&text));
     }
 }
 
@@ -591,6 +631,26 @@ future_setting = "keep" # why
     }
 
     #[test]
+    fn removing_a_host_keeps_the_comments_of_the_hosts_that_stay() -> Result<()> {
+        let root = temp_root()?;
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            "hosts = [ # forges\n  \"a.example.com\", # a reason\n  # about b\n  \"b.example.com\", # b reason\n  \"c.example.com\", # c reason\n  \"d.example.com\", # d reason\n]\n",
+        )?;
+
+        remove_host("b.example.com", Some(&path))?;
+        remove_host("d.example.com", Some(&path))?;
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "hosts = [ # forges\n  \"a.example.com\", # a reason\n  \"c.example.com\", # c reason\n]\n"
+        );
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[test]
     fn rejects_invalid_base_urls_and_duplicate_normalized_tables() -> Result<()> {
         let root = temp_root()?;
         let path = root.join("config.toml");
@@ -636,6 +696,8 @@ future_setting = "keep" # why
                 2,
             ),
             ("hosts = []\n[paths]\ngh = \"/bin/secret\n", 3),
+            // A mistyped value made only of punctuation is still a value.
+            ("hosts = []\nhost = \"!@#$%^&*\"\n", 2),
             // The parser puts duplicate keys in backticks, and a key can hold backticks too.
             (
                 "'`https://u:secret@x.com`' = 1\n'`https://u:secret@x.com`' = 1\n",
