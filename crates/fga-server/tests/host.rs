@@ -2,7 +2,7 @@
 //! token (plan review F2). Only requests addressed to the public host may reach Forgejo.
 use axum::{Json, Router, http::HeaderMap, routing::get};
 use fga_core::{forgejo::Forgejo, map::WipPrefixes};
-use fga_server::{AppState, app};
+use fga_server::{AppState, Host, app};
 use serde_json::json;
 use std::{
     io::{Read, Write},
@@ -13,6 +13,21 @@ use std::{
 /// Start a fake Forgejo that records every Authorization it receives, and a gateway whose public
 /// URL is `public` in front of it.
 async fn gateway(public: &str) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+    let (upstream, seen) = forgejo().await;
+    let host = Host::new(public.parse().unwrap(), upstream, WipPrefixes::default());
+    (serve(vec![host]).await, seen)
+}
+
+async fn serve(hosts: Vec<Host>) -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = AppState::new(hosts, "3.19.0".into());
+    tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
+    addr
+}
+
+/// A fake Forgejo that records every Authorization it receives.
+async fn forgejo() -> (Forgejo, Arc<Mutex<Vec<String>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = seen.clone();
     let upstream = Router::new()
@@ -35,16 +50,7 @@ async fn gateway(public: &str) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
-    let state = AppState::new(
-        Forgejo::new(upstream_url.parse().unwrap()).unwrap(),
-        public.parse().unwrap(),
-        "3.19.0".into(),
-        WipPrefixes::default(),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
-    (addr, seen)
+    (Forgejo::new(upstream_url.parse().unwrap()).unwrap(), seen)
 }
 
 /// Send one raw HTTP/1.1 request, so the test controls the request target and Host lines exactly.
@@ -171,4 +177,78 @@ async fn ports_and_addresses_compare_as_values() {
         let reached = seen.lock().unwrap().len();
         assert_eq!(reached, usize::from(expected == 200), "{public} {head:?}");
     }
+}
+
+/// A launcher serves every host of one gh call, each with its own upstream and the one token it
+/// handed over; anything else is refused before any upstream sees it.
+#[tokio::test]
+async fn each_host_admits_only_its_own_token_and_reaches_only_its_forge() {
+    let (a_forge, a_seen) = forgejo().await;
+    let (b_forge, b_seen) = forgejo().await;
+    let addr = serve(vec![
+        Host::new(
+            "https://a.test".parse().unwrap(),
+            a_forge,
+            WipPrefixes::default(),
+        )
+        .expecting("a-token".into()),
+        Host::new(
+            "https://b.test".parse().unwrap(),
+            b_forge,
+            WipPrefixes::default(),
+        )
+        .expecting("b-token".into()),
+    ])
+    .await;
+    for (host, auth, expected) in [
+        ("a.test", "token a-token", 200),
+        ("b.test", "Bearer b-token", 200),
+        ("a.test", "token b-token", 401),
+        ("b.test", "token a-token", 401),
+        ("a.test", "token github-token", 401),
+        ("a.test", "token a-token-and-more", 401),
+        ("a.test", "basic a-token", 401),
+        ("b.test", "", 401),
+        ("api.github.com", "token a-token", 421),
+    ] {
+        let head = format!("GET /api/v3/user HTTP/1.1\r\nHost: {host}\r\nAuthorization: {auth}");
+        assert_eq!(send(addr, &head).await, expected, "{head:?}");
+    }
+    assert_eq!(*a_seen.lock().unwrap(), ["token a-token"]);
+    assert_eq!(*b_seen.lock().unwrap(), ["Bearer b-token"]);
+}
+
+/// Each host's links use its own public URL, `https://<host>`.
+#[tokio::test]
+async fn each_host_links_to_its_own_web_ui() {
+    let (a_forge, _) = forgejo().await;
+    let (b_forge, _) = forgejo().await;
+    let addr = serve(vec![
+        Host::new(
+            "https://a.test".parse().unwrap(),
+            a_forge,
+            WipPrefixes::default(),
+        ),
+        Host::new(
+            "https://b.test".parse().unwrap(),
+            b_forge,
+            WipPrefixes::default(),
+        ),
+    ])
+    .await;
+    let request = "GET /api/v3/ HTTP/1.1\r\nHost: b.test\r\nAuthorization: token t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let body = tokio::task::spawn_blocking(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    })
+    .await
+    .unwrap();
+    assert!(
+        body.contains("\"current_user_url\":\"https://b.test/api/v3/user\""),
+        "{body}"
+    );
+    assert!(!body.contains("a.test"), "{body}");
 }
