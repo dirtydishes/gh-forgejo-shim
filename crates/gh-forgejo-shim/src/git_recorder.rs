@@ -71,7 +71,8 @@ pub fn create_git_recorder(
     } else {
         marker_header()
     };
-    shim::replace_file(&marker, marker_text.as_bytes(), false)?;
+    // `remove` trusts this file to say whether it made the directory, so only its owner may edit it.
+    shim::replace_private_file(&marker, marker_text.as_bytes())?;
 
     let path = prepend_path(&directory, env.get("PATH").map_or("", String::as_str));
     let mut launch_env = env.clone();
@@ -413,18 +414,18 @@ fn make_wrapper_dir(
     if let Some(path) = wrapper_dir {
         let directory = absolute_path(path)?;
         let existed = directory.exists();
-        fs::create_dir_all(&directory)?;
+        shim::create_dirs(&directory, 0o755)?;
         return Ok((directory, !existed));
     }
 
     let root = root_dir.map_or_else(env::temp_dir, expand_home);
-    fs::create_dir_all(&root)?;
+    shim::create_dirs(&root, 0o755)?;
     for attempt in 0..1000 {
         let directory = root.join(format!(
             "gh-forgejo-shim-git-{}-{attempt}",
             std::process::id()
         ));
-        match fs::create_dir(&directory) {
+        match shim::create_dir(&directory, 0o755) {
             Ok(()) => return Ok((absolute_path(&directory)?, true)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),

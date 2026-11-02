@@ -78,6 +78,49 @@ fn read_head(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// `fs::write`, except that a file it creates gets `mode` (which umask can only narrow) instead of
+/// 0666 & ~umask, under which a group member could edit it. An existing file keeps its mode: it's
+/// the user's to choose. It writes in place, through a symlink at `path`; use [`replace_file`] for
+/// anything that runs, or that must never be seen half-written.
+pub(crate) fn write_file(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    options.open(path)?.write_all(contents)
+}
+
+/// `fs::create_dir_all`, except that each directory it creates gets `mode` (which umask can only
+/// narrow) instead of 0777 & ~umask. Under umask 002 a group-writable directory would let another
+/// account in the group rename its own file over one the shim wrote, such as the `gh` wrapper.
+/// Directories that already exist keep their mode: they're the user's to choose.
+pub(crate) fn create_dirs(path: &Path, mode: u32) -> std::io::Result<()> {
+    dir_builder(mode).recursive(true).create(path)
+}
+
+/// `fs::create_dir` with `mode`, as [`create_dirs`]. It fails if `path` exists, so a caller
+/// picking a fresh name can't reuse a directory someone else planted.
+pub(crate) fn create_dir(path: &Path, mode: u32) -> std::io::Result<()> {
+    dir_builder(mode).create(path)
+}
+
+fn dir_builder(mode: u32) -> fs::DirBuilder {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    builder
+}
+
 pub fn install_shim(
     bin_dir: Option<&Path>,
     home: Option<&Path>,
@@ -86,7 +129,7 @@ pub fn install_shim(
 ) -> Result<PathBuf> {
     let target = shim_path(bin_dir, home)?;
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
+        create_dirs(parent, 0o755)?;
     }
     // `symlink_metadata` so a dangling `gh` symlink counts as an existing, unmanaged target.
     if fs::symlink_metadata(&target).is_ok() && !is_managed_shim(&target) && !force {
@@ -106,7 +149,22 @@ pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> 
     // An executable starts owner-only: a handle another account opened while it was still
     // 0666 & ~umask would keep write access through make_executable and the rename. Other
     // files keep the default mode they've always had.
-    let (mut file, temp) = create_temp_file(target, if executable { 0o600 } else { 0o666 })?;
+    write_and_rename(
+        target,
+        contents,
+        if executable { 0o600 } else { 0o666 },
+        executable,
+    )
+}
+
+/// [`replace_file`] for a file only its owner should edit, such as `config.toml`: it starts 0600,
+/// which umask can only narrow, so no other account ever holds a handle that can write it.
+pub(crate) fn replace_private_file(target: &Path, contents: &[u8]) -> Result<()> {
+    write_and_rename(target, contents, 0o600, false)
+}
+
+fn write_and_rename(target: &Path, contents: &[u8], mode: u32, executable: bool) -> Result<()> {
+    let (mut file, temp) = create_temp_file(target, mode)?;
     let result = (|| -> Result<()> {
         file.write_all(contents)?;
         if executable {

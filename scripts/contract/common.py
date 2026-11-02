@@ -29,6 +29,10 @@ ERROR_PROBES = [
     ["pr", "view", "1", "-Z"],
     ["pr", "view", "1", "--comments=no"],
 ]
+# Off-list commands that must delegate, so the runner can prove they still reach the decoy.
+DECOY_PROBES = [
+    ["pr", "list", "-R", f"github.com/{REPO}"],
+]
 LOCAL_PROBES = [
     ["pr", "merge", "1"],
     ["pr", "edit", "1", "--title", "x"],
@@ -54,6 +58,12 @@ def validate_case(case):
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) for a in argv):
         raise ValueError("argv must be a nonempty string array")
     kind = case.get("kind", "oracle")
+    if kind == "decoy":
+        if argv not in DECOY_PROBES:
+            raise ValueError("decoy command is outside the exact decoy allowlist")
+        if "oracle" in case or "expected" in case:
+            raise ValueError("decoy cases expect only the decoy")
+        return
     if kind == "shim-local":
         if argv not in LOCAL_PROBES:
             raise ValueError("shim-local command is outside the exact local allowlist")
@@ -108,6 +118,17 @@ def validate_case(case):
         index += 1
 
 
+def launch_list():
+    """The launcher's launch list, mirrored in contract/launch-list.txt."""
+    lines = (ROOT / "contract/launch-list.txt").read_text().splitlines()
+    return [line.strip() for line in lines if line.strip() and not line.startswith("#")]
+
+
+def launched(case, commands):
+    """Whether real gh, not the decoy, sits on this case's PATH: oracle cases on the list."""
+    return case.get("kind", "oracle") == "oracle" and " ".join(case["argv"][:2]) in commands
+
+
 def load_cases(directory):
     cases = []
     for path in sorted(Path(directory).glob("*.json")):
@@ -122,7 +143,7 @@ def load_cases(directory):
 
 
 def oracle_argv(case):
-    if case.get("kind") == "shim-local":
+    if case.get("kind") in ("shim-local", "decoy"):
         raise ValueError("shim-local cases must never reach real gh")
     return [arg.replace(f"forge.test/{REPO}", f"github.com/{REPO}") for arg in case["argv"]]
 

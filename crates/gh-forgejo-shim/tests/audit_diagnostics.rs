@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 
-use gh_forgejo_shim::{config, doctor, git_recorder, shim, trace, trace_summary};
+use gh_forgejo_shim::{auth, config, doctor, git_recorder, shim, trace, trace_summary};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -575,6 +575,170 @@ fn audit_diag_install_drops_other_write_permissions() -> TestResult {
         writable_by_others, 0,
         "install made the wrapper executable while preserving group/other write permission"
     );
+    Ok(())
+}
+
+#[test]
+fn audit_diag_created_directories_are_owner_writable_only() -> TestResult {
+    let f = Fixture::new()?;
+    // The fixture made the config directory; the shim must create it here.
+    fs::remove_dir_all(f.home.join(".config"))?;
+    let fresh_tmp = f.root.join("fresh/tmp");
+    // Under umask 000 a plain create_dir_all makes 0777 directories, so this fails on any
+    // runner unless each directory the shim creates gets its own mode.
+    let run = |args: &[&str]| -> io::Result<std::process::Output> {
+        Command::new("/bin/sh")
+            .args(["-c", "umask 000 && exec \"$0\" \"$@\""])
+            .arg(env!("CARGO_BIN_EXE_gfj"))
+            .args(args)
+            .env_clear()
+            .envs(f.env())
+            .env("TMPDIR", &fresh_tmp)
+            .env("FJ_SHIM_TRACE", f.root.join("fresh-trace/gh.jsonl"))
+            .current_dir(&f.root)
+            .stdin(Stdio::null())
+            .output()
+    };
+    let real_git = f.bin.join("git");
+    let trace = f.root.join("git.jsonl");
+    let mut commands = vec![
+        vec!["install-shim"],
+        vec!["gh", "--version"],
+        vec!["config", "add-host", "git.example.test"],
+        vec![
+            "trace",
+            "git-recorder",
+            "create",
+            trace.to_str().ok_or("trace path")?,
+            "--real-git",
+            real_git.to_str().ok_or("git path")?,
+        ],
+    ];
+    if cfg!(target_os = "macos") {
+        commands.push(vec![
+            "install-gui-path",
+            "--path",
+            "/usr/bin:/bin",
+            "--no-apply",
+        ]);
+    }
+    for args in commands {
+        let output = run(&args)?;
+        assert!(output.status.success(), "{args:?} failed: {output:?}");
+    }
+    let recorder = fs::read_dir(&fresh_tmp)?
+        .next()
+        .ok_or("no recorder directory")??
+        .path();
+    let mode = |path: &Path| fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
+    // `trace git-recorder remove` trusts the marker to say whether it made the directory.
+    let marker = recorder.join(".gh-forgejo-shim-git-recorder");
+    assert_eq!(
+        mode(&marker)?,
+        0o600,
+        "the recorder marker was written group-editable"
+    );
+    let mut created = vec![
+        (f.root.join("fresh-trace"), 0o700),
+        (f.home.join(".local"), 0o755),
+        (f.home.join(".local/bin"), 0o755),
+        (f.home.join(".config"), 0o700),
+        (f.home.join(".config/gh-forgejo-shim"), 0o700),
+        (f.root.join("fresh"), 0o755),
+        (fresh_tmp.clone(), 0o755),
+        (recorder, 0o755),
+    ];
+    if cfg!(target_os = "macos") {
+        created.push((f.home.join("Library/LaunchAgents"), 0o755));
+    }
+    for (path, allowed) in created {
+        let mode = mode(&path)?;
+        assert_eq!(
+            mode & !allowed,
+            0,
+            "{} was created {mode:o}, more open than {allowed:o}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn audit_diag_auth_and_recorder_directories_are_owner_only() -> TestResult {
+    // In this process's own umask (022 on any normal runner) a plain create_dir_all makes
+    // missing parents 0755, so these fail unless each path gives the directories it creates
+    // their own mode. The auth store narrows only its own directory afterwards, not ~/.config.
+    let f = Fixture::new()?;
+    fs::remove_dir_all(f.home.join(".config"))?;
+    auth::write_stored_token(
+        "git.example.test",
+        "audit-token",
+        Some(&f.home),
+        Some("linux"),
+    )?;
+    let trace = f.root.join("fresh-trace/nested/git.jsonl");
+    git_recorder::run_git_recorder(&f.bin.join("git"), &trace, &["status".to_string()]);
+    let mode = |path: &Path| fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
+    for path in [
+        f.home.join(".config"),
+        f.home.join(".config/gh-forgejo-shim"),
+        f.root.join("fresh-trace"),
+        f.root.join("fresh-trace/nested"),
+    ] {
+        let mode = mode(&path)?;
+        assert_eq!(mode & 0o077, 0, "{} was created {mode:o}", path.display());
+    }
+    assert!(trace.exists(), "the recorder wrote no trace");
+    Ok(())
+}
+
+#[test]
+fn audit_diag_written_config_and_launch_agent_are_owner_writable_only() -> TestResult {
+    let f = Fixture::new()?;
+    // Under umask 000 a plain fs::write makes 0666 files, so this fails on any runner unless the
+    // shim gives each file it creates its own mode.
+    let run = |args: &[&str]| -> io::Result<std::process::Output> {
+        Command::new("/bin/sh")
+            .args(["-c", "umask 000 && exec \"$0\" \"$@\""])
+            .arg(env!("CARGO_BIN_EXE_gfj"))
+            .args(args)
+            .env_clear()
+            .envs(f.env())
+            .current_dir(&f.root)
+            .stdin(Stdio::null())
+            .output()
+    };
+    let mut commands = vec![vec!["config", "add-host", "git.example.test"]];
+    let mut written = vec![(f.home.join(".config/gh-forgejo-shim/config.toml"), 0o600)];
+    if cfg!(target_os = "macos") {
+        commands.push(vec![
+            "install-gui-path",
+            "--path",
+            "/usr/bin:/bin",
+            "--no-apply",
+        ]);
+        written.push((
+            f.home
+                .join("Library/LaunchAgents")
+                .join(gh_forgejo_shim::gui_path::PLIST_NAME),
+            0o644,
+        ));
+    }
+    for args in &commands {
+        let output = run(args)?;
+        assert!(output.status.success(), "{args:?} failed: {output:?}");
+    }
+    for (path, expected) in &written {
+        let mode = fs::metadata(path)?.permissions().mode() & 0o777;
+        assert_eq!(mode, *expected, "{} was written {mode:o}", path.display());
+    }
+
+    // An existing file is the user's, and keeps its mode.
+    let config = &written[0].0;
+    fs::set_permissions(config, fs::Permissions::from_mode(0o640))?;
+    let output = run(&["config", "add-host", "other.example.test"])?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::metadata(config)?.permissions().mode() & 0o777, 0o640);
     Ok(())
 }
 

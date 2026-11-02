@@ -56,7 +56,7 @@ def main():
     if set(args.case) - {case["id"] for _, case in cases}:
         raise ValueError("unknown case ID")
     cases = [(path, case) for path, case in cases
-             if case.get("kind") != "shim-local" and (not args.case or case["id"] in args.case)]
+             if case.get("kind", "oracle") == "oracle" and (not args.case or case["id"] in args.case)]
     if not cases:
         return
     cache = ROOT / "target/contract"
