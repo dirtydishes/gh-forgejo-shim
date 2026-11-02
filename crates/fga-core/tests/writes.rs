@@ -1,5 +1,5 @@
 use async_graphql::Request;
-use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
+use axum::{Json, Router, extract::Query, http::StatusCode, response::IntoResponse, routing::get};
 use fga_core::{forgejo::Forgejo, graphql, ids::node_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -471,6 +471,126 @@ async fn ready_removes_one_prefix_and_refuses_an_unrepresentable_title() {
     assert_eq!(
         response.errors[0].message,
         "The title still starts with a WIP prefix, so Forgejo would keep this a draft"
+    );
+}
+
+/// A forge whose WIP prefix the gateway doesn't know (Forgejo derives draft from server-configured
+/// title prefixes, `models/issues/pull.go:798`, which no API exposes). Records every PATCHed title.
+/// `concurrent`: another editor retitles the PR before Forgejo re-reads it for the PATCH's reply.
+fn draft_prefix_forge(
+    title: &str,
+    concurrent: Option<&'static str>,
+) -> (Router, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let current = std::sync::Arc::new(std::sync::Mutex::new(title.to_owned()));
+    let patched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let state = |title: &str| {
+        let mut pull = pull();
+        pull["title"] = json!(title);
+        pull["draft"] = json!(title.starts_with("DRAFT:"));
+        Json(pull)
+    };
+    let (read, write, log) = (current.clone(), current, patched.clone());
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            get(move || async move { state(&read.lock().unwrap()) }).patch(
+                move |Json(body): Json<Value>| async move {
+                    let written = body["title"].as_str().unwrap().to_owned();
+                    log.lock().unwrap().push(written.clone());
+                    let title = concurrent.map_or(written, str::to_owned);
+                    *write.lock().unwrap() = title.clone();
+                    (StatusCode::CREATED, state(&title))
+                },
+            ),
+        );
+    (app, patched)
+}
+
+/// gh prints success for any payload, so a draft change Forgejo didn't make must fail. Forgejo's
+/// edit has no conditional write, so the gateway never rolls the title back over what may by then
+/// be someone else's edit; it reports the title Forgejo now shows (parallax r1#1, r2#1, r2#2).
+#[tokio::test]
+async fn draft_changes_fail_and_report_the_title_when_the_forge_uses_another_prefix() {
+    let mutation = |name: &str| {
+        format!(
+            r#"mutation {{{name}(input:{{pullRequestId:"{}"}}){{pullRequest{{isDraft}}}}}}"#,
+            node_id("PullRequest", "o/r", 1)
+        )
+    };
+    let message = "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's";
+
+    let (app, patched) = draft_prefix_forge("T", None);
+    let response = execute(app, mutation("convertPullRequestToDraft")).await;
+    assert_eq!(
+        response.errors[0].message,
+        format!("{message}; the title is now \"WIP: T\"")
+    );
+    assert_eq!(*patched.lock().unwrap(), ["WIP: T"]);
+
+    let (app, patched) = draft_prefix_forge("T", Some("someone else's title"));
+    let response = execute(app, mutation("convertPullRequestToDraft")).await;
+    assert_eq!(
+        response.errors[0].message,
+        format!("{message}; the title is now \"someone else's title\"")
+    );
+    assert_eq!(*patched.lock().unwrap(), ["WIP: T"]);
+
+    let (app, patched) = draft_prefix_forge("DRAFT: T", None);
+    let response = execute(app, mutation("markPullRequestReadyForReview")).await;
+    assert_eq!(response.errors[0].message, message);
+    assert_eq!(*patched.lock().unwrap(), Vec::<String>::new());
+}
+
+/// Forgejo's edit changes the title and state before it checks a new base exists
+/// (`routers/api/v1/repo/pull.go:649-759`), so a missing base must fail before any write.
+#[tokio::test]
+async fn an_edit_to_a_missing_base_changes_nothing() {
+    let patched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = patched.clone();
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            get(|| async { Json(pull()) }).patch(move |Json(body): Json<Value>| async move {
+                log.lock().unwrap().push(body);
+                (StatusCode::CREATED, Json(pull()))
+            }),
+        )
+        // URL building drops `.` and `..` segments, so `.` reaches the branch list (parallax r1#1).
+        .route(
+            "/api/v1/repos/o/r/branches",
+            get(|| async { Json(json!([{"name": "release/next"}])) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/branches/{*branch}",
+            get(
+                |axum::extract::Path(branch): axum::extract::Path<String>| async move {
+                    if branch == "release/next" {
+                        Json(json!({"name": branch})).into_response()
+                    } else {
+                        (StatusCode::NOT_FOUND, Json(api_error("branch not found"))).into_response()
+                    }
+                },
+            ),
+        );
+    let edit = |base: &str| {
+        format!(
+            r#"mutation {{updatePullRequest(input:{{pullRequestId:"{}",title:"X",state:CLOSED,baseRefName:"{base}"}}){{pullRequest{{number}}}}}}"#,
+            node_id("PullRequest", "o/r", 1)
+        )
+    };
+    for missing in ["missing", ".", "release/../next", "release/./next"] {
+        let response = execute(app.clone(), edit(missing)).await;
+        assert_eq!(response.errors[0].message, "Not Found", "{missing}");
+        assert_eq!(*patched.lock().unwrap(), Vec::<Value>::new(), "{missing}");
+    }
+
+    let response = execute(app, edit("release/next")).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        *patched.lock().unwrap(),
+        [json!({"title":"X","state":"closed","base":"release/next"})]
     );
 }
 

@@ -181,6 +181,9 @@ pub struct Protection {
     pub ignore_stale_approvals: bool,
     pub block_on_official_review_requests: bool,
     pub block_on_outdated_branch: bool,
+    /// `;`-separated globs; only the admin rule carries them, not the branch summary.
+    #[serde(default)]
+    pub protected_file_patterns: String,
     /// Set when only the branch summary was readable: the review and outdated-branch flags above
     /// are unknown, not off.
     #[serde(skip)]
@@ -188,6 +191,15 @@ pub struct Protection {
 }
 
 impl Protection {
+    /// Whether a merge changing a matching file is refused (`models/git/protected_branch.go:214-227`
+    /// splits on `;` and skips blank entries). The gateway can't tell which files a PR changes
+    /// that match, so callers treat such a rule as unknown.
+    pub fn protects_files(&self) -> bool {
+        self.protected_file_patterns
+            .split(';')
+            .any(|pattern| !pattern.trim().is_empty())
+    }
+
     fn is_plain_name(&self) -> bool {
         !self.rule_name.contains(glob::SYNTAX)
     }

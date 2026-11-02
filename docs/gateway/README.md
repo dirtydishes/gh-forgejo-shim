@@ -18,11 +18,36 @@ cargo run --locked -p fga-server
 ```
 
 Mount `/api/v3/*` and `/api/graphql` on the Forgejo hostname through your reverse proxy. The gateway
-listens on `127.0.0.1:8080` by default. Set `FGA_LISTEN` to change it. `FGA_GHES_VERSION` defaults
-to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and `FGA_TLS_KEY` to PEM file paths.
+listens on `127.0.0.1:8080` by default. Set `FGA_LISTEN` to change it.
+
+The gateway answers only requests addressed to `FGA_PUBLIC_URL`'s host and port, so the proxy must pass
+the client's `Host` through. Caddy and Traefik do by default; nginx needs
+`proxy_set_header Host $http_host`, because `$host` drops the port. Any other host, or a request without
+one, gets `421 Misdirected Request` before its token is used. gh can send every host's requests to one
+gateway, each with that host's token, and this check keeps a GitHub or second forge's token from
+reaching Forgejo. `X-Forwarded-Host` is ignored.
+
+Embedded in a launcher, the router serves several forges at once (`fga_server::Host`), each with its
+own upstream, public URL and, optionally, the one token it accepts: any other credential for that
+host gets 401 without reaching Forgejo. With `.upstream_token(token)`, a host
+sends that token to Forgejo in place of the admitted one: a launcher gives gh a random per-call token
+for a forge on a custom port and keeps the real one for git. A host can't substitute a token without
+expecting one. A host can also answer to a second name
+(`Host::answering_to`): gh drops a remote's port, so a forge on `:3443` is asked for as plain
+`forge.test`, or with the port when the user writes it, while its links keep the port. The gateway libraries never print to stdout or stderr; a panic still reaches stderr through the
+panic hook, so an embedding launcher installs its own.
+
+`FGA_GHES_VERSION` defaults to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and
+`FGA_TLS_KEY` to PEM file paths.
 `FGA_WIP_PREFIXES` sets the comma-separated draft title prefixes, default `WIP:,[WIP]`.
 REST and GraphQL strip the first matching prefix, ignoring case, and any following whitespace
-when the PR is a draft. An empty list disables stripping. Draft mergeability stays `UNKNOWN`
+when the PR is a draft. An empty list disables stripping. Set it to the forge's own
+`[repository.pull-request] WORK_IN_PROGRESS_PREFIXES`, which no API exposes. When they differ,
+`gh pr ready` and `gh pr ready --undo` fail rather than report a change Forgejo didn't make.
+`gh pr ready` fails before writing anything. `gh pr ready --undo` has already retitled the PR when
+Forgejo shows it isn't a draft, and the error names the title the PR now has. The gateway doesn't
+put the old title back, because Forgejo's edit has no conditional write and could overwrite someone
+else's edit. Draft mergeability stays `UNKNOWN`
 because Forgejo's boolean cannot prove whether a draft has conflicts.
 The upstream and public URLs must use HTTP or HTTPS and contain no credentials, query or fragment.
 Upstream requests do not follow redirects. Each authenticated request shares a ten-second deadline

@@ -635,6 +635,19 @@ moving `rewrite` into `main`.
   both OK. Both are build work for their beads (`cwe.32`, `cwe.31`), not part of this review. (F15)
 - **D6: patch `main` first.** Audit bugs R3, D1 and D18 get a small fix PR to `main`, then a cherry-pick
   into `rewrite`. This doesn't break the release freeze. (Section 4)
+- **D7 (Kell, 2026-11-02): permission fixes may go to `main` without a separate decision.** A fix may
+  merge into `main` without asking Kell first only if all of these hold:
+  - it fixes something another account on the same machine could tamper with: a file or directory the
+    shim writes that ends up group- or world-writable;
+  - it only tightens permissions on things the shim creates, and never changes existing files or how
+    tokens are stored;
+  - it's small: a few lines plus a test that fails without it;
+  - it passes the usual review rounds, with CI green on Linux, plus a logged macOS run of the tests
+    (CI or local). CI runs on Linux only, so a local macOS run counts (Kell, 2026-11-02).
+
+  Kell is told after it merges. Everything else that would reach `main` still needs Kell's decision first:
+  user-visible behavior changes, token storage, any tag or release, or anything larger. Like D6, this
+  doesn't break the release freeze, which only covers moving `rewrite` into `main`.
 
 ## 4. Where the shell audit's bugs land
 

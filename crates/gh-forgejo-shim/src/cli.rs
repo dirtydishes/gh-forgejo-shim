@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, EnvMap};
 use crate::routing;
 use crate::{
-    auth, bootstrap, codex_smoke, doctor, git_recorder, gui_path, setup, shim, trace_summary,
-    Result, ShimError, VERSION,
+    auth, bootstrap, codex_smoke, doctor, external, git_recorder, gui_path, setup, shim,
+    trace_summary, Result, ShimError, VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub fn run_from_env(binary: BinaryName) -> i32 {
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.first().is_some_and(|arg| arg == OsStr::new("gh")) {
         args.remove(0);
-        return routing::run_gh_from_env(args);
+        return external::exit_like_child(routing::run_gh_from_env(args));
     }
     let string_args = args
         .iter()
@@ -42,7 +42,7 @@ pub fn run_from_env(binary: BinaryName) -> i32 {
         Some(prefix) if prefix == ["trace", "git-recorder", "run"]
     ) {
         return match run_trace_git_recorder_run(&string_args[3..]) {
-            Ok(code) => code,
+            Ok(code) => external::exit_like_child(code),
             Err(error) => {
                 eprintln!("gh-forgejo-shim: {error}");
                 1

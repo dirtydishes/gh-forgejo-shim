@@ -31,10 +31,19 @@ merged = read('merged-rest.json')
 check(len(merged) == 1 and merged[0]['state'] == 'closed' and merged[0]['merged_at'], 'REST merged PR: closed with merged_at')
 for name, status, message in [('missing-token', '401', 'Bad credentials'), ('bad-token', '401', 'Bad credentials'), ('unknown-repo', '404', 'Not Found'), ('unknown-route', '404', 'Not Found')]:
     check((root / f'{name}.status').read_text() == status and read(f'{name}.json')['message'] == message, f'{name}: {status} {message}')
-for name, kind in [('validation', 'GRAPHQL_VALIDATION_FAILED'), ('not-found-graphql', 'NOT_FOUND'), ('missing-graphql', 'UNAUTHORIZED'), ('invalid-graphql', 'UNAUTHORIZED')]:
+check((root / 'other-host.status').read_text() == '421' and read('other-host.json')['message'] == 'This gateway serves only forge.test', 'another host: 421 before authentication')
+# GitHub answers bad credentials on GraphQL with 401 and its REST error body.
+for name in ('missing-graphql', 'invalid-graphql'):
+    check((root / f'{name}.status').read_text() == '401' and read(f'{name}.json')['message'] == 'Bad credentials', f'GraphQL {name}: 401 Bad credentials')
+for name, kind in [('validation', 'GRAPHQL_VALIDATION_FAILED'), ('not-found-graphql', 'NOT_FOUND')]:
     error = read(f'{name}.json')['errors'][0]
     check((root / f'{name}.status').read_text() == '200' and error['type'] == kind and isinstance(error['path'], list) and 'message' in error, f'GraphQL {name}: HTTP 200 and GitHub error shape')
 check(read('page1.json')[0]['number'] == 2 and read('page2.json')[0]['number'] == 1 and 'rel="next"' in (root / 'page1.headers').read_text(), 'REST pagination and next Link')
+first, head = (root / 'two-shas.txt').read_text().split()
+pr3 = read('pr3.json')
+check([c['oid'] for c in pr3['commits']] == [first, head], 'PR 3 commits: oldest first, head last')
+check([(c['context'], c['state']) for c in pr3['statusCheckRollup']] == [('ci', 'SUCCESS')], 'PR 3 statusCheckRollup: the head commit passes, not the failed first commit')
+check((root / 'checks3.exit').read_text() == '0' and (root / 'checks3.txt').read_text().split('\t')[:2] == ['ci', 'pass'], 'gh pr checks 3: pass from the head commit')
 check(all(os.environ['E2E_TOKEN'] not in p.read_text() for p in root.glob('*.debug')), 'gh debug logs redact the disposable token')
 requests = []
 queries = []

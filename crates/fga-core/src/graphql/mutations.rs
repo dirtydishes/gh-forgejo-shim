@@ -145,11 +145,31 @@ impl Mutation {
         input: UpdatePullRequestInput,
     ) -> async_graphql::Result<Option<UpdatePullRequestPayload>> {
         let id = id(&input.pull_request_id, "PullRequest")?;
-        let source = ctx
-            .data_unchecked::<Session>()
+        let session = ctx.data_unchecked::<Session>();
+        let source = session
             .pull_request(&id.owner, &id.repository, id.number)
             .await
             .map_err(error)?;
+        // Forgejo applies title, body and state before it checks that a new base exists, and skips
+        // the check for merged PRs (`routers/api/v1/repo/pull.go:649-759`), so check first. The
+        // route's `*` takes the branch's slashes literally.
+        if let Some(base) = input
+            .base_ref_name
+            .as_deref()
+            .filter(|base| !source.merged && *base != source.base.ref_name)
+        {
+            let mut segments = vec!["repos", &id.owner, &id.repository, "branches"];
+            segments.extend(base.split('/'));
+            // URL building drops `.` and `..` segments, so only a branch that names itself as
+            // `base` proves it exists.
+            let branch = session
+                .get::<serde_json::Value>(&segments, &[])
+                .await
+                .map_err(error)?;
+            if branch["name"] != base {
+                return Err(error(forgejo::Error::NotFound));
+            }
+        }
         let title = input
             .title
             .map(|title| {
@@ -327,15 +347,37 @@ async fn set_draft(
         }
         title.to_owned()
     };
-    edit(
-        ctx,
-        value,
-        forgejo::EditPull {
-            title: Some(title),
-            ..Default::default()
-        },
-    )
-    .await
+    // Forgejo decides draft by its own configured prefixes, which no API exposes
+    // (`models/issues/pull.go:798`). A title the gateway's prefixes leave alone can't change it,
+    // and a changed draft state is checked.
+    let unchanged = |outcome: &str| {
+        async_graphql::Error::new(format!(
+            "Forgejo didn't change the draft state: the forge's WIP title prefixes differ from the gateway's{outcome}"
+        ))
+        .extend_with(|_, e| e.set("type", "UNPROCESSABLE"))
+    };
+    if title == source.title {
+        return Err(unchanged(""));
+    }
+    let edited = ctx
+        .data_unchecked::<Session>()
+        .edit_pull(
+            &id.owner,
+            &id.repository,
+            id.number,
+            forgejo::EditPull {
+                title: Some(title),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(write_error)?;
+    if edited.draft != draft {
+        // Forgejo's edit has no conditional write, so putting the title back could overwrite
+        // someone else's edit made meanwhile. Say what the title is now instead.
+        return Err(unchanged(&format!("; the title is now {:?}", edited.title)));
+    }
+    Ok(PullRequest::new(edited, &id.owner, &id.repository))
 }
 
 async fn merge(
