@@ -54,10 +54,18 @@ pub fn forgejo_pull_web_url(url: &str) -> String {
     rename_pull_segment(url, "pull", "pulls")
 }
 
+/// Renames `{from}/{n}` to `{to}/{n}` where it is a pull request's page: after an owner and a
+/// repository, and followed by nothing or one of the PR's own tabs. That leaves an owner or
+/// repository named `pulls` alone, even on a forge served under a subpath.
 fn rename_pull_segment(url: &str, from: &str, to: &str) -> String {
-    let path_start = url
-        .find("://")
-        .and_then(|scheme| url[scheme + 3..].find('/').map(|slash| scheme + 3 + slash));
+    // The authority ends at the first `/`, `?` or `#`; only a `/` starts a path.
+    let path_start = url.find("://").and_then(|scheme| {
+        let authority = scheme + 3;
+        url[authority..]
+            .find(['/', '?', '#'])
+            .map(|end| authority + end)
+            .filter(|&end| url[end..].starts_with('/'))
+    });
     let Some(start) = path_start else {
         return url.to_owned();
     };
@@ -67,8 +75,14 @@ fn rename_pull_segment(url: &str, from: &str, to: &str) -> String {
     let mut segments: Vec<&str> = url[start..end].split('/').collect();
     // Segment 0 is empty (the path's leading slash); owner and repository come before `pulls`.
     let number = |segment: &str| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit());
+    let pr_tab = |segment: Option<&&str>| {
+        matches!(
+            segment,
+            None | Some(&"" | &"files" | &"commits" | &"checks")
+        )
+    };
     match (3..segments.len().saturating_sub(1))
-        .find(|&i| segments[i] == from && number(segments[i + 1]))
+        .find(|&i| segments[i] == from && number(segments[i + 1]) && pr_tab(segments.get(i + 2)))
     {
         Some(i) => {
             segments[i] = to;
