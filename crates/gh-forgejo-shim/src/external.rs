@@ -306,11 +306,16 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
 }
 
 /// Whether `path` may run this dispatcher: the running binary or its sibling entry point (`gfj`
-/// beside `gh-forgejo-shim`, which differs in bytes), under any name or as a copy.
+/// beside `gh-forgejo-shim`, which differs in bytes), under any name or as a copy. Only copies of
+/// this build are caught; a copy left by an older install differs and passes. The launcher's own
+/// recursion guards cover that case.
 fn is_current_executable(path: &Path) -> bool {
     let Ok(current) = std::env::current_exe() else {
         return false;
     };
+    // macOS returns the path as exec'd, so a symlinked install would look for its sibling in the
+    // wrong directory.
+    let current = fs::canonicalize(&current).unwrap_or(current);
     // On Linux the running binary stays readable here even after its file is deleted.
     let running = if cfg!(target_os = "linux") {
         PathBuf::from("/proc/self/exe")
@@ -326,15 +331,15 @@ fn is_current_executable(path: &Path) -> bool {
     .any(|reference| may_be_same_binary(path, reference))
 }
 
-/// Whether `candidate` is `reference` or may be a copy of it. Lengths are compared first, so a
-/// candidate of another size costs two `stat`s and no reads. A same-length candidate that can't be
-/// read counts as a copy: it may still be executable, and it can't be shown to differ.
+/// Whether `candidate` is `reference` or may be a copy of it. A candidate of another size costs a
+/// `stat` of each and no reads. A same-length candidate that can't be read counts as a copy: it
+/// may still be executable, and it can't be shown to differ.
 fn may_be_same_binary(candidate: &Path, reference: &Path) -> bool {
     let (Ok(candidate_meta), Ok(reference_meta)) = (candidate.metadata(), reference.metadata())
     else {
         return false;
     };
-    if same_file(candidate, reference) {
+    if same_file(candidate, &candidate_meta, reference, &reference_meta) {
         return true;
     }
     if candidate_meta.len() != reference_meta.len() {
@@ -348,17 +353,14 @@ fn may_be_same_binary(candidate: &Path, reference: &Path) -> bool {
 
 /// Whether both paths reach one file, through symlinks or as hardlinks.
 #[cfg(unix)]
-fn same_file(left: &Path, right: &Path) -> bool {
+fn same_file(_: &Path, left: &fs::Metadata, _: &Path, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
 
-    let (Ok(left), Ok(right)) = (left.metadata(), right.metadata()) else {
-        return false;
-    };
     (left.dev(), left.ino()) == (right.dev(), right.ino())
 }
 
 #[cfg(not(unix))]
-fn same_file(left: &Path, right: &Path) -> bool {
+fn same_file(left: &Path, _: &fs::Metadata, right: &Path, _: &fs::Metadata) -> bool {
     let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) else {
         return false;
     };

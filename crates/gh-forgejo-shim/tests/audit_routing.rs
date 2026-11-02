@@ -226,6 +226,33 @@ fn audit_route_copied_sibling_entry_point_on_path() -> TestResult {
 }
 
 #[test]
+fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
+    // Run through a symlink in a directory with no gfj beside it, as a symlinked install does.
+    let fixture = Fixture::new()?;
+    let linked = fixture.root.join("linked");
+    fs::create_dir(&linked)?;
+    symlink(
+        env!("CARGO_BIN_EXE_gh-forgejo-shim"),
+        linked.join("gh-forgejo-shim"),
+    )?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = Command::new(linked.join("gh-forgejo-shim"));
+    fixture.isolate(&mut command);
+    command
+        .args(["gh", "--version"])
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not pass as real gh when the dispatcher runs through a symlink"
+    );
+    Ok(())
+}
+
+#[test]
 fn audit_route_unreadable_dispatcher_copy_on_path() -> TestResult {
     // A copy that can be executed but not read can't be shown to differ, so it's skipped.
     let fixture = Fixture::new()?;
