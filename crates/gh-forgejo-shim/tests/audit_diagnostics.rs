@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,6 +113,23 @@ fn audit_diag_recorder_remove_preserves_unrelated_files() -> TestResult {
     assert!(
         unrelated.exists(),
         "removing one git recorder recursively deleted the unrelated user-tool"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_diag_install_refuses_dangling_symlink() -> TestResult {
+    let f = Fixture::new()?;
+    let target_dir = f.home.join(".local/bin");
+    fs::create_dir_all(&target_dir)?;
+    let victim = f.home.join("unrelated-file");
+    symlink(&victim, target_dir.join("gh"))?;
+    let output = f.command().arg("install-shim").output()?;
+    assert!(
+        !output.status.success() && !victim.exists(),
+        "install without --force followed an unmanaged dangling symlink and created its target: exit={:?}, victim_exists={}",
+        output.status.code(),
+        victim.exists()
     );
     Ok(())
 }
