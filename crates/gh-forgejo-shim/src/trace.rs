@@ -384,7 +384,10 @@ fn expand_home(value: &str, env: &HashMap<String, String>) -> PathBuf {
     PathBuf::from(value)
 }
 
-fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
+/// Appends `record` as one line. Concurrent writers (parallel `gh` calls, the git recorder) stay
+/// whole records: the line goes out in one append-mode write, under an exclusive lock in case
+/// the write comes up short. A filesystem without locks still gets the single write.
+pub(crate) fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
     create_parent_dirs(path)?;
 
     let mut options = OpenOptions::new();
@@ -395,10 +398,11 @@ fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
         options.mode(0o600);
     }
 
+    let mut line = serde_json::to_vec(record)?;
+    line.push(b'\n');
     let mut file = options.open(path)?;
-    serde_json::to_writer(&mut file, record)?;
-    file.write_all(b"\n")?;
-    Ok(())
+    let _ = file.lock();
+    file.write_all(&line)
 }
 
 fn create_parent_dirs(path: &Path) -> io::Result<()> {
