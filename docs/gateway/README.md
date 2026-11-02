@@ -18,13 +18,16 @@ cargo run --locked -p fga-server
 ```
 
 Mount `/api/v3/*` and `/api/graphql` on the Forgejo hostname through your reverse proxy. The gateway
-listens on `127.0.0.1:8080` by default.
-It answers only requests addressed to `FGA_PUBLIC_URL`'s host and port, so the proxy must pass the
-client's `Host` through (Caddy and Traefik do by default; nginx needs `proxy_set_header Host $http_host`, since `$host` drops the port).
-Any other host, or a request without one, gets `421 Misdirected Request` before its token is used.
-gh can send every host's requests to one gateway, each with that host's token, and this check
-keeps a GitHub or second forge's token from reaching Forgejo. `X-Forwarded-Host` is ignored. Set `FGA_LISTEN` to change it. `FGA_GHES_VERSION` defaults
-to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and `FGA_TLS_KEY` to PEM file paths.
+listens on `127.0.0.1:8080` by default. Set `FGA_LISTEN` to change it.
+
+The gateway answers only requests addressed to `FGA_PUBLIC_URL`'s host and port, so the proxy must pass
+the client's `Host` through. Caddy and Traefik do by default; nginx needs
+`proxy_set_header Host $http_host`, because `$host` drops the port. Any other host, or a request without
+one, gets `421 Misdirected Request` before its token is used. gh can send every host's requests to one
+gateway, each with that host's token, and this check keeps a GitHub or second forge's token from
+reaching Forgejo. `X-Forwarded-Host` is ignored.
+
+`FGA_GHES_VERSION` defaults to `3.19.0`. For direct HTTPS, set both `FGA_TLS_CERT` and `FGA_TLS_KEY` to PEM file paths.
 `FGA_WIP_PREFIXES` sets the comma-separated draft title prefixes, default `WIP:,[WIP]`.
 REST and GraphQL strip the first matching prefix, ignoring case, and any following whitespace
 when the PR is a draft. An empty list disables stripping. Draft mergeability stays `UNKNOWN`
