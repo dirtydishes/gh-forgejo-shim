@@ -206,15 +206,16 @@ write access as the request's token allows it, and ask the base branch's `user_c
 reflects a merge allowlist; only code writers can join one. If the base branch is deleted, write
 access decides. Two cases the gateway can't see, so a flag can be wrong (Kell, 2026-11-02):
 
-- A user on the allowlist who later lost write access may still cancel, but reads as a token limited
-  to other repositories, which may not. Both report no code write and `user_can_merge: true`; the
+- A user on the allowlist who later lost write access may still merge, schedule a merge or cancel
+  one, but reads as a token limited to other repositories, which may not. Both report no code write and `user_can_merge: true`; the
   gateway answers `false` for both.
-- After the base branch is deleted, a protection rule can still match its name. A non-admin can't
-  read the rules, so the gateway answers by write access alone.
+- After the base branch is deleted, a protection rule can still match its name. The gateway reads
+  no rules here, for any viewer, so it answers by write access alone.
 
 A review thread's `originalLine` is the line the reviewer commented on, read from the end of the
-comment's diff hunk. Forgejo's own `position` is the line in the commit that last changed it, which
-differs once later commits move the line. `line` is the same value while the PR's head is still the
+comment's diff hunk. For a new-side comment, Forgejo's own `position` is the line in the commit that
+last changed it, which differs once later commits move the line; an old-side position is the line
+the reviewer chose. `line` is the same value while the PR's head is still the
 commit the thread's review was made on, and null after a push: Forgejo's API doesn't say whether the
 push moved or deleted the line. GitHub would still give a current line for a thread whose line
 survived the push. Without a hunk (Forgejo's `CODE_COMMENT_LINES = 0`), both are null.
