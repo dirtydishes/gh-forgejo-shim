@@ -26,11 +26,14 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use url::Url;
 
-/// One forge the gateway serves: requests addressed to `public_url` go to `forgejo`.
+/// One forge the gateway serves: requests addressed to `name` go to `forgejo`, and links use
+/// `public_url`.
 pub struct Host {
     pub public_url: Url,
     pub forgejo: Forgejo,
     pub wip_prefixes: WipPrefixes,
+    /// The scheme and authority requests are matched against; `public_url` unless overridden.
+    name: Url,
     /// When set, the only credential accepted for this host. A launcher hands each host's token
     /// over; server mode leaves it unset and lets Forgejo judge every user's token.
     expected_token: Option<String>,
@@ -39,11 +42,22 @@ pub struct Host {
 impl Host {
     pub fn new(public_url: Url, forgejo: Forgejo, wip_prefixes: WipPrefixes) -> Self {
         Self {
+            name: public_url.clone(),
             public_url,
             forgejo,
             wip_prefixes,
             expected_token: None,
         }
+    }
+
+    /// Answer to `authority` instead of the public URL's, keeping `public_url` for links. gh drops
+    /// a remote's port, so a forge on `:3443` is asked for as plain `forge.test`.
+    pub fn answering_to(self, authority: &str) -> Result<Self, url::ParseError> {
+        let name = Url::parse(&format!("{}://{authority}", self.public_url.scheme()))?;
+        if name.host().is_none() || name.path() != "/" || !name.username().is_empty() {
+            return Err(url::ParseError::InvalidDomainCharacter);
+        }
+        Ok(Self { name, ..self })
     }
 
     pub fn expecting(self, token: String) -> Self {
@@ -132,13 +146,13 @@ async fn authenticate(State(state): State<AppState>, mut req: HttpRequest, next:
     let Some(host) = state
         .hosts
         .iter()
-        .find(|host| addressed_to(&host.public_url, &req))
+        .find(|host| addressed_to(&host.name, &req))
         .cloned()
     else {
         let served: Vec<_> = state
             .hosts
             .iter()
-            .filter_map(|host| host.public_url.host_str())
+            .filter_map(|host| host.name.host_str())
             .collect();
         return (
             StatusCode::MISDIRECTED_REQUEST,
