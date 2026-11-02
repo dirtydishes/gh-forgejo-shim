@@ -87,6 +87,17 @@ in client mode and the command isn't on the delegate list below. Everything else
 Unknown commands launch, because gh aliases arrive as unknown commands and expand only inside gh.
 An alias such as `gh co 12` in a Forgejo checkout has to reach a gh that can talk to the forge.
 
+**Transition: the launch list.** Until the gateway serves every command, the rule above applies
+only to the commands on one list in code, `launcher::LAUNCH_LIST`, matched on the command after
+alias expansion (L2). Every other Forgejo route keeps the shim's built-in path, as before the
+launcher. So do usage errors, help, and a listed command's forms the built-in path refuses as
+unsupported, such as `pr checks --watch`: their answers need no token, and they stay as they are
+until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, adds `pr checkout` with git's
+credentials, then `pr list`, `api`, `auth status` and `auth token` with the rest of section 11's
+tests. Each later gateway command adds its name to the list, with a test, in the change that
+makes the gateway serve it. Once the list covers everything, C5 (`cwe.19`) deletes the built-in
+path and the list with it, and this rule becomes the one above.
+
 **Installed extensions delegate.** A first argument *name* with an installed extension, a
 directory `<data dir>/extensions/gh-<name>`, runs through plain gh. The data directory is
 `$XDG_DATA_HOME/gh`, else `~/.local/share/gh` (`go-gh/pkg/config/config.go` `DataDir`; gh's
