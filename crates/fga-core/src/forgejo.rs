@@ -4,7 +4,10 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::OnceCell;
@@ -31,6 +34,10 @@ pub enum Error {
     Timeout,
     #[error("Forgejo returned an invalid response")]
     Upstream,
+    #[error(
+        "Forgejo's reply is too large: the gateway reads at most 16 MiB per response and 64 MiB per request"
+    )]
+    TooLarge,
 }
 
 #[derive(Clone)]
@@ -78,12 +85,18 @@ pub struct Session {
     pub viewer: User,
     memo: Memo,
     deadline: tokio::time::Instant,
+    /// Bytes this request may still read from Forgejo, shared by its memoized and concurrent reads.
+    budget: Arc<AtomicUsize>,
 }
 
 /// Paged reads ask Forgejo for this many items per page.
 pub(crate) const PAGE_SIZE: usize = 50;
 /// A list longer than this many pages is treated as an upstream fault, not read forever.
 pub(crate) const MAX_PAGES: usize = 200;
+/// Diffs, comments and timelines are read unpaged, so every body is capped, and so is the total one
+/// incoming request reads; the messages in [`Error::TooLarge`] name both.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 
 /// Map Forgejo's error statuses onto the gateway's errors; success passes through.
 fn ok(reply: Reply) -> Result<Reply, Error> {
@@ -126,8 +139,9 @@ impl Forgejo {
         let viewer = match cached {
             Some(viewer) => viewer,
             None => {
+                let budget = AtomicUsize::new(MAX_RESPONSE_BYTES);
                 let viewer: User = ok(self
-                    .send::<()>(Method::GET, &["user"], &[], None, authorization)
+                    .send::<()>(Method::GET, &["user"], &[], None, authorization, &budget)
                     .await?)?
                 .json()?;
                 self.sessions.lock().expect("session cache lock").insert(
@@ -144,10 +158,12 @@ impl Forgejo {
             viewer,
             memo: Arc::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
         })
     }
 
-    /// The one upstream request path: URL, credentials, transport errors and the whole body.
+    /// The one upstream request path: URL, credentials, transport errors and the whole body, read
+    /// within [`MAX_RESPONSE_BYTES`] and charged to `budget`.
     /// Callers map statuses with [`ok`], or first claim the statuses whose bodies they interpret.
     async fn send<B: serde::Serialize + ?Sized>(
         &self,
@@ -156,6 +172,7 @@ impl Forgejo {
         query: &[(&str, String)],
         body: Option<&B>,
         authorization: &str,
+        budget: &AtomicUsize,
     ) -> Result<Reply, Error> {
         let mut url = self.base.clone();
         url.path_segments_mut()
@@ -171,17 +188,27 @@ impl Forgejo {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().await?;
+        let mut response = request.send().await?;
         // Kept as a flag only: following an upstream-provided URL could send the token elsewhere.
         let next = response.headers().get(reqwest::header::LINK).map(|h| {
             h.to_str()
                 .is_ok_and(|h| h.split(',').any(|link| link.contains("rel=\"next\"")))
         });
-        Ok(Reply {
-            status: response.status(),
-            next,
-            body: response.bytes().await?.to_vec(),
-        })
+        let status = response.status();
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > MAX_RESPONSE_BYTES
+                || budget
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                        left.checked_sub(chunk.len())
+                    })
+                    .is_err()
+            {
+                return Err(Error::TooLarge);
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(Reply { status, next, body })
     }
 }
 
@@ -196,8 +223,14 @@ impl Session {
     ) -> Result<Reply, Error> {
         tokio::time::timeout_at(
             self.deadline,
-            self.forgejo
-                .send(method, segments, query, body, &self.authorization),
+            self.forgejo.send(
+                method,
+                segments,
+                query,
+                body,
+                &self.authorization,
+                &self.budget,
+            ),
         )
         .await
         .map_err(|_| Error::Timeout)?
@@ -543,9 +576,35 @@ mod tests {
                 .unwrap(),
             memo: Memo::default(),
             deadline: tokio::time::Instant::now() + Duration::from_millis(50),
+            budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
         };
         let result = session.get::<serde_json::Value>(&["slow"], &[]).await;
         assert!(matches!(result, Err(Error::Timeout)), "{result:?}");
         upstream.join().unwrap();
+    }
+
+    /// Every upstream read in one incoming request, memoized or concurrent, draws on one budget.
+    #[tokio::test]
+    async fn one_request_reads_at_most_its_byte_budget() {
+        let upstream = axum::Router::new().route(
+            "/api/v1/{name}",
+            axum::routing::get(|| async { "12345678" }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let session = Session {
+            forgejo: Forgejo::new(base.parse().unwrap()).unwrap(),
+            authorization: "token disposable".into(),
+            viewer: serde_json::from_value(serde_json::json!({"id":1,"login":"t","avatar_url":""}))
+                .unwrap(),
+            memo: Memo::default(),
+            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            budget: Arc::new(AtomicUsize::new(12)),
+        };
+        assert_eq!(session.text(&["one"], &[]).await.unwrap(), "12345678");
+        let result = session.clone().text(&["two"], &[]).await;
+        assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
+        server.abort();
     }
 }
