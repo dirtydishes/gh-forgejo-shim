@@ -60,27 +60,45 @@ pub fn install_shim(
             target.display()
         )));
     }
-    // Write beside the target and rename over it: the rename replaces a `gh` symlink itself, where
-    // writing to the path would follow it and overwrite the real gh it points to.
-    let (mut file, temp) = create_temp_file(&target)?;
+    replace_file(&target, shim_script(executable).as_bytes(), true)?;
+    Ok(target)
+}
+
+/// Writes `contents` to a new file beside `target`, then renames it over `target`. The rename
+/// replaces a symlink at `target` itself, where writing to the path would follow it and overwrite
+/// whatever it points to, such as the real gh.
+pub(crate) fn replace_file(target: &Path, contents: &[u8], executable: bool) -> Result<()> {
+    let (mut file, temp) = create_temp_file(target)?;
     let result = (|| -> Result<()> {
-        file.write_all(shim_script(executable).as_bytes())?;
-        drop(file);
-        make_executable(&temp)?;
-        fs::rename(&temp, &target)?;
+        file.write_all(contents)?;
+        if executable {
+            make_executable(&file)?;
+        }
+        file.sync_all()?;
+        // Another writer in the directory could have swapped the temporary name for a link.
+        if !is_same_file(&file, &temp) {
+            return Err(ShimError::new(format!(
+                "{} changed while it was being written",
+                temp.display()
+            )));
+        }
+        fs::rename(&temp, target)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    result.map(|()| target)
+    result
 }
 
 fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
     let parent = target.parent().unwrap_or(Path::new("."));
+    let name = target
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     for attempt in 0..1000 {
         let temp = parent.join(format!(
-            ".gh.gh-forgejo-shim-{}-{attempt}",
+            ".{name}.gh-forgejo-shim-{}-{attempt}",
             std::process::id()
         ));
         match fs::OpenOptions::new()
@@ -90,12 +108,17 @@ fn create_temp_file(target: &Path) -> Result<(File, PathBuf)> {
         {
             Ok(file) => return Ok((file, temp)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(ShimError::new(format!(
+                    "could not create a temporary file in {}: {error}",
+                    parent.display()
+                )))
+            }
         }
     }
     Err(ShimError::new(format!(
-        "unable to create a temporary file beside {}",
-        target.display()
+        "unable to create a temporary file in {}",
+        parent.display()
     )))
 }
 
@@ -141,19 +164,33 @@ fn shell_quote(value: &str) -> String {
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
+fn make_executable(file: &File) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let metadata = fs::metadata(path)?;
-    let mut permissions = metadata.permissions();
+    let mut permissions = file.metadata()?.permissions();
     permissions.set_mode(permissions.mode() | 0o755);
-    fs::set_permissions(path, permissions)?;
+    file.set_permissions(permissions)?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
+fn make_executable(_file: &File) -> Result<()> {
     Ok(())
+}
+
+#[cfg(unix)]
+fn is_same_file(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    match (file.metadata(), fs::symlink_metadata(path)) {
+        (Ok(open), Ok(named)) => open.dev() == named.dev() && open.ino() == named.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_same_file(_file: &File, _path: &Path) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -230,6 +267,30 @@ mod tests {
         let removed = uninstall_shim(Some(&root), None)?;
         assert_eq!(removed, target);
         assert!(!target.exists());
+        fs::remove_dir_all(root).ok();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_force_replaces_a_symlink_without_writing_through_it() -> Result<()> {
+        let root = unique_path("gh-forgejo-shim-install-symlink");
+        fs::create_dir(&root)?;
+        let real = root.join("real-gh");
+        fs::write(&real, "real gh\n")?;
+        let target = root.join("gh");
+        std::os::unix::fs::symlink(&real, &target)?;
+
+        install_shim(Some(&root), None, Path::new("/tmp/gh-forgejo-shim"), true)?;
+
+        assert_eq!(fs::read_to_string(&real)?, "real gh\n");
+        assert!(fs::symlink_metadata(&target)?.is_file());
+        assert!(is_managed_shim(&target));
+        assert_eq!(
+            fs::read_dir(&root)?.count(),
+            2,
+            "a temporary file was left behind"
+        );
         fs::remove_dir_all(root).ok();
         Ok(())
     }
