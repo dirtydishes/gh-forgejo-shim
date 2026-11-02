@@ -115,11 +115,13 @@ class ContractTests(unittest.TestCase):
 
     def test_only_oracle_cases_on_the_launch_list_get_real_gh(self):
         commands = launch_list()
-        self.assertEqual(commands, ["pr view", "pr checks"])
+        self.assertEqual(commands[:2], ["pr view", "pr checks"])
+        self.assertTrue(launched(self.case(["api", "user"]), ["api"]), "a one-word entry")
+        self.assertFalse(launched(self.case(["api", "user"]), ["pr view"]))
         self.assertTrue(launched(self.case(["pr", "view", "1"]), commands))
         self.assertTrue(launched(self.case(["pr", "checks", "1"]), commands))
-        self.assertFalse(launched(self.case(["pr", "list"]), commands))
-        self.assertFalse(launched(self.case(["api", "user"]), commands))
+        self.assertFalse(launched(self.case(["issue", "list"]), commands))
+        self.assertFalse(launched(self.case(["repo", "view"]), commands))
         local = self.case(["pr", "view", "1"]) | {"kind": "shim-local"}
         self.assertFalse(launched(local, commands))
         decoy = {"id": "probe", "kind": "decoy", "repo": REPO, "argv": DECOY_PROBES[0], "normalize": []}
