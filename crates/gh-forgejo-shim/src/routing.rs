@@ -11,7 +11,8 @@ use crate::external::{find_program, run_program_capture};
 use crate::invocation::Invocation;
 use crate::read_only;
 use crate::repo::{
-    command_word, detect_repo, expand_alias, gh_hostname, Checkout, GhHosts, RepoRef,
+    command_word, detect_repo, expand_alias, gh_command_word, gh_hostname, Checkout, GhHosts,
+    RepoRef,
 };
 use crate::trace;
 
@@ -480,9 +481,11 @@ fn run_gh(
     };
     let (words, routed, leads) = routing_invocation(&argv, &env);
     // Inside a launched call, git's credentials come only from the launcher's helper (§3). A
-    // form its exact match didn't take (`auth git-credential -- get`, an alias) is refused, never
-    // handed to plain gh, which would answer from the user's own logins.
-    if helper_call && routed.command == "auth git-credential" {
+    // call its exact match didn't take runs only when cobra's command word is one of gh's own
+    // other than `auth`: an `auth` form (`auth git-credential -- get`), an alias or an extension
+    // could reach gh's own helper, which answers from the user's logins. The shim can't read
+    // every alias gh accepts (an unquoted `true:` key, a repeated name), so it doesn't try.
+    if helper_call && gh_command_word(&argv).is_none_or(|word| word == "auth") {
         write_error(
             &mut mode,
             "gh-forgejo-shim: inside a launched gh, git's credentials come only from the launcher's helper",

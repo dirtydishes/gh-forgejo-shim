@@ -124,9 +124,12 @@ gh would write to a throwaway copy (section 3):
   `agent-tasks`, `agent` and `agents`), which serve only github.com and,
   for `codespace ssh --config`, write `GH_PATH` into a lasting file;
 - `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials"). Inside a
-  launched call (`FJ_SHIM_CREDENTIALS` set, even empty), any form the helper's exact match doesn't take, such
-  as `auth git-credential -- get` or an alias, is refused rather than delegated: plain gh would
-  answer from the user's own logins.
+  launched call (`FJ_SHIM_CREDENTIALS` set, even empty), a call the helper's exact match doesn't
+  take runs only when cobra's command word is one of gh's own commands other than `auth`. Any
+  other `auth` form (`auth git-credential -- get`), an alias or an extension is refused rather
+  than delegated: plain gh would answer from the user's own logins. The wrapper doesn't try to
+  read the user's aliases here, since gh accepts some its YAML reader can't (an unquoted `true:`
+  name, a repeated one).
 
 The list applies to the command gh will run: routing expands a plain alias first (L2), so
 `gh sg` with alias `sg: auth setup-git` delegates too. The list applies only when the command word comes
@@ -794,7 +797,7 @@ stop it:
 
 The run directory's `gh` script, which `GH_PATH` names, runs the wrapper too. It sets `FJ_SHIM_CREDENTIALS`, and the wrapper answers `auth git-credential` from that
 before any guard or the §7 revert, never launching (§3), so the helper can't start a chain.
-Anything else reaching that script is a nested call like any other.
+Anything else reaching that script runs as a nested call only when its command word is one of gh's own other than `auth`; the rest is refused (§2, the delegate list).
 
 Guard 2 runs before the environment revert in section 7, which keeps `FJ_SHIM_DEPTH` for guard 3.
 
