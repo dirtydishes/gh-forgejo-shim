@@ -204,8 +204,8 @@ async fn project_cards_are_an_empty_connection() {
 /// `refs/pull/N/head` from the base when there's none. The gateway reports a head repository only
 /// while the head branch exists and its tip is the PR's head, so gh never checks out a branch that
 /// isn't there, was recreated, or has moved since (a closed PR; a PR reopened through the API). The
-/// owner and `isCrossRepository` stay as GitHub reports them. Only an AGit PR, which has no branch, is
-/// renamed (`pull/N/head`), so no two branches are reported alike.
+/// owner and `isCrossRepository` stay as GitHub reports them. `headRefName` is always Forgejo's own
+/// name, so no made-up name can equal a real branch's.
 #[tokio::test]
 async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let repo = |owner: &str| json!({"name":"r","owner":{"id":1,"login":owner,"avatar_url":""}});
@@ -219,7 +219,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         bool,
         Option<&'static str>,
     );
-    let cases: [Case; 13] = [
+    let cases: [Case; 15] = [
         ("feature", "feature", "o", "aaa", "open", false, Some("aaa")),
         (
             "feature",
@@ -292,7 +292,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         ),
         // The PR's ref can't be read: unknown counts as moved.
         ("feature", "feature", "o", "aaa", "open", false, None),
-        // A real branch named like a ref keeps its name, so it can't be taken for `topic`.
+        // A real branch named like a ref keeps its name, so it can't be taken for `topic`, but
+        // counts as gone: gh fetches the PR's own ref.
         (
             "refs/topic",
             "refs/topic",
@@ -303,6 +304,28 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             Some("aaa"),
         ),
         ("topic", "topic", "o", "aaa", "open", false, Some("aaa")),
+        // r5#3: a real branch named like an AGit PR's ref without `refs/`. No name is made up, so
+        // it can't be taken for AGit PR 3.
+        (
+            "pull/3/head",
+            "pull/3/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        // r5#2, the GitHub-equivalent residue: a closed PR from `refs/topic` keeps that name and
+        // gets no head repository, as on GitHub once its fork is deleted.
+        (
+            "refs/topic",
+            "refs/topic",
+            "o",
+            "aaa",
+            "closed",
+            false,
+            Some("aaa"),
+        ),
     ];
     let pulls: Vec<Value> = cases
         .iter()
@@ -354,7 +377,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let query = (1..=cases.len())
         .map(|n| format!("p{n}:pullRequest(number:{n}){{{fields}}}"))
         .chain([
-            "agit:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into(),
+            "agit:pullRequests(headRefName:\"refs/pull/3/head\",first:5){nodes{number}}".into(),
+            "pull3:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into(),
             "topic:pullRequests(headRefName:\"topic\",first:5){nodes{number}}".into(),
         ])
         .collect::<Vec<_>>()
@@ -376,7 +400,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         json!({
             "p1":head("feature", false, r.clone(), "o"),
             "p2":head("feature", false, Value::Null, "o"),
-            "p3":head("pull/3/head", false, Value::Null, "o"),
+            // An AGit PR reports Forgejo's own ref name.
+            "p3":head("refs/pull/3/head", false, Value::Null, "o"),
             "p4":head("feature", true, r.clone(), "f"),
             "p5":head("feature", true, Value::Null, "f"),
             // A known limit: a gone branch named `refs/…` keeps its name.
@@ -384,12 +409,15 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "p7":head("feature", false, Value::Null, "o"),
             "p8":head("feature", false, Value::Null, "o"),
             "p9":head("feature", false, Value::Null, "o"),
-            "p10":head("refs/refs/topic", false, r.clone(), "o"),
+            "p10":head("refs/refs/topic", false, Value::Null, "o"),
             "p11":head("feature", false, Value::Null, "o"),
             // gh pr list --head takes the name gh was shown.
-            "p12":head("refs/topic", false, r.clone(), "o"),
-            "p13":head("topic", false, r, "o"),
+            "p12":head("refs/topic", false, Value::Null, "o"),
+            "p13":head("topic", false, r.clone(), "o"),
+            "p14":head("pull/3/head", false, r, "o"),
+            "p15":head("refs/topic", false, Value::Null, "o"),
             "agit":{"nodes":[{"number":3}]},
+            "pull3":{"nodes":[{"number":14}]},
             "topic":{"nodes":[{"number":13}]},
         })
     );
