@@ -37,7 +37,8 @@ DECOY_PROBES = [
     ["version"],
 ]
 LOCAL_PROBES = [
-    ["pr", "merge", "1"],
+    # --delete-branch: the gateway can't delete a branch yet, and gh would report success.
+    ["pr", "merge", "1", "--merge", "--delete-branch"],
     # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
     ["pr", "edit", "1", "--title", "x", "--add-reviewer", "alice"],
     ["api", f"repos/{REPO}/pulls"],

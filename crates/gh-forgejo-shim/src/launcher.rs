@@ -35,10 +35,15 @@ pub const LAUNCH_LIST: &[&str] = &[
     "pr create",
     "pr comment",
     "pr edit",
+    "pr merge",
+    "pr ready",
+    "pr close",
+    "pr reopen",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
-/// `cwe.15.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path, which serves or
+/// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. `--delete-branch` stays off: the gateway
+/// can't delete a branch yet, and gh would report success with the branch still there. Any other flag keeps the built-in path, which serves or
 /// refuses that form before anything is written: gh would write part of a `pr edit` and then
 /// fail on a reviewer the gateway can't set. For these commands the list replaces
 /// `is_native()`, which can't see the built-in path's per-flag refusals.
@@ -49,6 +54,20 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     ),
     ("pr comment", &["body", "repo"]),
     ("pr edit", &["title", "body", "repo"]),
+    (
+        "pr merge",
+        &[
+            "merge",
+            "squash",
+            "rebase",
+            "auto",
+            "match-head-commit",
+            "repo",
+        ],
+    ),
+    ("pr ready", &["undo", "repo"]),
+    ("pr close", &["repo"]),
+    ("pr reopen", &["repo"]),
 ];
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
@@ -134,6 +153,16 @@ mod tests {
         assert!(launches(&invocation(&[
             "pr", "comment", "12", "--body", "b"
         ])));
+        for args in [
+            &["pr", "merge", "12", "--merge"][..],
+            &["pr", "merge", "12", "-s", "--auto"][..],
+            &["pr", "merge", "12", "-r", "--match-head-commit", "abc"][..],
+            &["pr", "ready", "12", "--undo"][..],
+            &["pr", "close", "12"][..],
+            &["pr", "reopen", "12"][..],
+        ] {
+            assert!(launches(&invocation(args)), "{args:?}");
+        }
         assert!(launches(&invocation(&[
             "pr", "edit", "12", "-t", "t", "-b", "b"
         ])));
@@ -168,6 +197,11 @@ mod tests {
             ][..],
             &["pr", "comment", "12", "--edit-last", "--body", "b"][..],
             &["pr", "comment", "12", "--delete-last", "--yes"][..],
+            // The gateway can't delete a branch yet; gh would report success anyway.
+            &["pr", "merge", "12", "--squash", "--delete-branch"][..],
+            &["pr", "close", "12", "--delete-branch"][..],
+            &["pr", "merge", "12", "--merge", "--subject", "s"][..],
+            &["pr", "close", "12", "--comment", "c"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }

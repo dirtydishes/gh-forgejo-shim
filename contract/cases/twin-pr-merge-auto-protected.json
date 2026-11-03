@@ -1,0 +1,45 @@
+{
+  "id": "twin-pr-merge-auto-protected",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-merge-auto-held",
+    "pr": true,
+    "base": true,
+    "protect": [
+      "twin / check"
+    ],
+    "status": {
+      "context": "twin / check",
+      "state": "failure"
+    }
+  },
+  "argv": [
+    "pr",
+    "merge",
+    "{pr}",
+    "--auto",
+    "--merge"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "open",
+        "merged": false
+      }
+    },
+    {
+      "path": "issues/{pr}/timeline",
+      "any": {
+        "type": "pull_scheduled_merge"
+      }
+    }
+  ],
+  "normalize": []
+}

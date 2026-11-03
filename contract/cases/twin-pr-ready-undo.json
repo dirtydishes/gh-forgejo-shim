@@ -1,0 +1,34 @@
+{
+  "id": "twin-pr-ready-undo",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-ready-undo",
+    "pr": true
+  },
+  "argv": [
+    "pr",
+    "ready",
+    "{pr}",
+    "--undo"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": "✓ Pull request dirtydishes/gfj\\-oracle#{pr} is converted to \"draft\"\\n"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "draft": true
+      }
+    }
+  ],
+  "normalize": [],
+  "shim_config": {
+    "wip_prefixes": [
+      "scenario: draft"
+    ]
+  }
+}

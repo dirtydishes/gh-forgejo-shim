@@ -1,0 +1,29 @@
+{
+  "id": "twin-pr-reopen",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-reopen",
+    "pr": true,
+    "closed": true
+  },
+  "argv": [
+    "pr",
+    "reopen",
+    "{pr}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": "✓ Reopened pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-reopen\\)\\n"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "open"
+      }
+    }
+  ],
+  "normalize": []
+}
