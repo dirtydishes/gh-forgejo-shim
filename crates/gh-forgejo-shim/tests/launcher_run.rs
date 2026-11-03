@@ -543,6 +543,33 @@ fn a_host_less_auth_token_gets_the_real_token_and_the_forge_as_gh_host() {
     assert!(report.contains("oauth_token: host-secret"), "{report}");
 }
 
+#[test]
+fn auth_token_for_a_named_user_finds_the_real_token_under_that_login() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("host-secret", "login-a")]);
+    let fixture = Fixture::new(&api);
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\n"),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "token", "--user", "login-a"])
+        .env("GH_REPO", "forge.test/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Value = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    // gh's `auth token --user` reads only `users.<login>.oauth_token` (§3).
+    assert_eq!(
+        hosts["forge.test"]["users"]["login-a"]["oauth_token"].as_str(),
+        Some("host-secret"),
+        "{hosts:?}"
+    );
+    assert_eq!(hosts["forge.test"]["user"].as_str(), Some("login-a"));
+}
+
 impl Fixture {
     /// The shim's allowlist, each entry with the token from `HOST_TOKEN`.
     fn allowlist(&self, entries: &[&str]) {
