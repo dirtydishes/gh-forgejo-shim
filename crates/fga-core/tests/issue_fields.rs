@@ -3,7 +3,7 @@
 //! (`issueClosedByPullRequestsReferences` in `api/query_builder.go`).
 use async_graphql::Request;
 use axum::{Json, Router, routing::get};
-use fga_core::{forgejo::Forgejo, graphql};
+use fga_core::{forgejo::Forgejo, graphql, ids::node_id};
 use serde_json::{Value, json};
 
 const GH_CLOSED_BY: &str = "closedByPullRequestsReferences(first: 100){nodes{id,number,url,repository{id,name,owner{id,login}}}pageInfo{hasNextPage,endCursor}}";
@@ -17,8 +17,8 @@ fn issue(number: i32, pin_order: i32) -> Value {
         "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","labels":[],
         "pin_order":pin_order})
 }
-fn pull(owner: &str, number: i32) -> Value {
-    json!({"number":number,"title":"fix","state":"open","merged":false,"draft":false,
+fn pull(owner: &str, number: i32, state: &str, merged: bool) -> Value {
+    json!({"number":number,"title":"fix","state":state,"merged":merged,"draft":false,
         "html_url":format!("https://forge.test/{owner}/r/pulls/{number}"),
         "head":{"label":"topic","ref":"topic","sha":"abc","repo":null},
         "base":{"label":"main","ref":"main","sha":"def","repo":null},"user":user(),"merged_at":null})
@@ -29,7 +29,8 @@ fn repository(owner: &str) -> Value {
         "default_branch":"main","fork":false,"archived":false,
         "permissions":{"admin":false,"push":true,"pull":true}})
 }
-/// A cross-reference on the timeline, made from PR (or issue) `number` in `owner/r`.
+/// A cross-reference on the timeline, made from PR (or issue, when `pull` is `None`) `number` in
+/// `owner/r`, which is `state` and, for a PR, merged or not.
 fn reference(
     id: i64,
     kind: &str,
@@ -37,36 +38,42 @@ fn reference(
     owner: &str,
     number: i32,
     state: &str,
-    pull: bool,
+    pull: Option<bool>,
 ) -> Value {
     json!({"id":id,"type":kind,"created_at":"2026-01-02T00:00:00Z","user":user(),"ref_action":action,
         "ref_issue":{"number":number,"state":state,
-            "pull_request":if pull { json!({"merged":false}) } else { Value::Null },
+            "pull_request":pull.map_or(Value::Null, |merged| json!({"merged":merged})),
             "repository":{"name":"r","owner":owner}}})
 }
 
 #[tokio::test]
 async fn issue_pins_and_closing_pull_requests_come_from_forgejo() {
+    let open = Some(false);
     let timeline = json!([
         {"id":1,"type":"comment","created_at":"2026-01-01T00:00:00Z","user":user()},
-        // An open PR that says `closes #4`.
-        reference(2, "pull_ref", "closes", "o", 10, "open", true),
-        // A closed PR: GitHub's default leaves closed PRs out.
-        reference(3, "pull_ref", "closes", "o", 11, "closed", true),
+        // An open PR whose description says `closes #4`.
+        reference(2, "pull_ref", "closes", "o", 10, "open", open),
+        // A closed, unmerged PR: GitHub's default leaves it out.
+        reference(3, "pull_ref", "closes", "o", 11, "closed", open),
         // The keyword was edited away.
-        reference(4, "pull_ref", "neutered", "o", 12, "open", true),
+        reference(4, "pull_ref", "neutered", "o", 12, "open", open),
         // A mention, not a closing reference.
-        reference(5, "pull_ref", "none", "o", 13, "open", true),
-        // A closing keyword in a PR's comment, which GitHub doesn't link.
-        reference(6, "comment_ref", "closes", "o", 14, "open", true),
-        // The same PR again (from a commit): listed once.
-        reference(7, "pull_ref", "closes", "o", 10, "open", true),
+        reference(5, "pull_ref", "none", "o", 13, "open", open),
+        // `closes #4` in a comment on an open PR: Forgejo closes #4 when it merges.
+        reference(6, "comment_ref", "closes", "o", 14, "open", open),
+        // `closes` in the description, then `reopens` in a later comment: the newest decides.
+        reference(7, "pull_ref", "closes", "o", 17, "open", open),
+        reference(8, "comment_ref", "reopens", "o", 17, "open", open),
         // An open PR in another repository.
-        reference(8, "pull_ref", "closes", "f", 20, "open", true),
+        reference(9, "pull_ref", "closes", "f", 20, "open", open),
         // A PR the token can't read: left out, not an error.
-        reference(9, "pull_ref", "closes", "o", 15, "open", true),
+        reference(10, "pull_ref", "closes", "o", 15, "open", open),
         // An issue, not a PR.
-        reference(10, "issue_ref", "closes", "o", 16, "open", false),
+        reference(11, "issue_ref", "closes", "o", 16, "open", None),
+        // A merged PR: GitHub lists it by default.
+        reference(12, "pull_ref", "closes", "o", 18, "closed", Some(true)),
+        // PR 10 again, from a comment: listed once, where it first appeared.
+        reference(13, "comment_ref", "closes", "o", 10, "open", open),
     ]);
     let upstream = Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
@@ -90,11 +97,23 @@ async fn issue_pins_and_closing_pull_requests_come_from_forgejo() {
         )
         .route(
             "/api/v1/repos/o/r/pulls/10",
-            get(|| async { Json(pull("o", 10)) }),
+            get(|| async { Json(pull("o", 10, "open", false)) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/14",
+            get(|| async { Json(pull("o", 14, "open", false)) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/17",
+            get(|| async { Json(pull("o", 17, "open", false)) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/18",
+            get(|| async { Json(pull("o", 18, "closed", true)) }),
         )
         .route(
             "/api/v1/repos/f/r/pulls/20",
-            get(|| async { Json(pull("f", 20)) }),
+            get(|| async { Json(pull("f", 20, "open", false)) }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap())
@@ -114,32 +133,22 @@ async fn issue_pins_and_closing_pull_requests_come_from_forgejo() {
         .await;
     task.abort();
     assert!(response.errors.is_empty(), "{:?}", response.errors);
+    // Whole nodes, as gh selects them: the PR, and its base repository and that repository's owner.
     let node = |owner: &str, number: i32| {
-        json!({"id":fga_core::ids::node_id("PullRequest", &format!("{owner}/r"), number),
+        json!({"id":node_id("PullRequest", &format!("{owner}/r"), number),
             "number":number,"url":format!("https://forge.test/{owner}/r/pull/{number}"),
-            "repository":{"id":fga_core::ids::node_id("Repository", &format!("{owner}/r"), 1),
-                "name":"r","owner":{"login":owner}}})
+            "repository":{"id":node_id("Repository", &format!("{owner}/r"), 1),
+                "name":"r","owner":{"id":node_id("User", "", 1),"login":owner}}})
     };
     let data = response.data.into_json().unwrap();
     let pinned = &data["repository"]["pinned"];
     assert_eq!(pinned["isPinned"], json!(true));
-    let nodes = &pinned["closedByPullRequestsReferences"]["nodes"];
+    let closed_by = &pinned["closedByPullRequestsReferences"];
     assert_eq!(
-        nodes
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|n| n["number"].clone())
-            .collect::<Vec<_>>(),
-        [json!(10), json!(20)],
-        "{nodes}"
+        closed_by["nodes"],
+        json!([node("o", 10), node("o", 14), node("f", 20), node("o", 18)])
     );
-    assert_eq!(nodes[0]["url"], node("o", 10)["url"]);
-    assert_eq!(nodes[1]["repository"]["owner"]["login"], json!("f"));
-    assert_eq!(
-        pinned["closedByPullRequestsReferences"]["pageInfo"]["hasNextPage"],
-        json!(false)
-    );
+    assert_eq!(closed_by["pageInfo"]["hasNextPage"], json!(false));
     let plain = &data["repository"]["plain"];
     assert_eq!(plain["isPinned"], json!(false));
     assert_eq!(plain["closedByPullRequestsReferences"]["nodes"], json!([]));

@@ -29,39 +29,59 @@ impl Session {
         Ok(events.into_iter().flatten().flatten().collect())
     }
 
-    /// The open PRs that would close an issue when merged: GitHub's `closedByPullRequestsReferences`
-    /// with its default `includeClosedPrs: false`. Forgejo records a PR whose description or commits
-    /// say `closes #N` as a `pull_ref` event on issue N whose action is `closes`, and turns it to
-    /// `neutered` if the keyword is edited away (`models/issues/issue_xref.go`). Each PR once, in
-    /// timeline order, as `(owner, repository, number)`.
+    /// The PRs that close, or would close, an issue when merged: GitHub's
+    /// `closedByPullRequestsReferences` with its default `includeClosedPrs: false`, which lists open
+    /// and merged PRs but not closed unmerged ones. A closing keyword in a PR's title or description
+    /// (`pull_ref`) or in a comment on it (`comment_ref`) is a cross-reference from that PR whose
+    /// action is `closes` or `reopens`, `neutered` once the keyword is edited away. On merge Forgejo
+    /// applies each PR's newest `closes` or `reopens` reference to the issue
+    /// (`PullRequest::ResolveCrossReferences`, `models/issues/issue_xref.go:337`), so that one decides.
+    /// Each PR once, in the order it first refers to the issue, as `(owner, repository, number)`.
     pub async fn closing_pulls(
         &self,
         owner: &str,
         repo: &str,
         number: i32,
     ) -> Result<Vec<(String, String, i32)>, Error> {
-        let mut pulls: Vec<(String, String, i32)> = Vec::new();
+        // Per source PR, its newest deciding reference.
+        struct Decision {
+            id: i64,
+            closes: bool,
+            open_or_merged: bool,
+        }
+        let mut pulls: Vec<((String, String, i32), Decision)> = Vec::new();
         for event in self.timeline(owner, repo, number).await? {
             let Some(source) = event.ref_issue else {
                 continue;
             };
-            if event.kind != "pull_ref"
-                || event.ref_action != "closes"
-                || source.pull_request.is_none()
-                || source.state != "open"
-            {
+            let Some(pull) = source.pull_request.as_ref() else {
+                continue;
+            };
+            if !matches!(event.ref_action.as_str(), "closes" | "reopens") {
                 continue;
             }
+            let merged = pull["merged"].as_bool().unwrap_or(false);
+            let decision = Decision {
+                id: event.id,
+                closes: event.ref_action == "closes",
+                open_or_merged: source.state == "open" || merged,
+            };
             let (pull_owner, pull_repo) = match source.repository {
                 Some(repository) => (repository.owner, repository.name),
                 None => (owner.to_owned(), repo.to_owned()),
             };
-            let pull = (pull_owner, pull_repo, source.number);
-            if !pulls.contains(&pull) {
-                pulls.push(pull);
+            let key = (pull_owner, pull_repo, source.number);
+            match pulls.iter_mut().find(|(seen, _)| *seen == key) {
+                Some((_, newest)) if decision.id > newest.id => *newest = decision,
+                Some(_) => {}
+                None => pulls.push((key, decision)),
             }
         }
-        Ok(pulls)
+        Ok(pulls
+            .into_iter()
+            .filter(|(_, decision)| decision.closes && decision.open_or_merged)
+            .map(|(key, _)| key)
+            .collect())
     }
 
     pub async fn auto_merge_event(

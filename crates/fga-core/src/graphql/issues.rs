@@ -188,7 +188,7 @@ impl Issue {
     async fn is_pinned(&self) -> Option<bool> {
         Some(self.source.pin_order > 0)
     }
-    /// The open PRs that would close this issue when merged ([`forgejo::Session::closing_pulls`]).
+    /// The open or merged PRs that close this issue on merge ([`forgejo::Session::closing_pulls`]).
     /// A PR the token can't read is left out rather than failing the field.
     async fn closed_by_pull_requests_references(
         &self,
