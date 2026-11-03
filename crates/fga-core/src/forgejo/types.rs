@@ -86,23 +86,10 @@ impl Branch {
 
     /// Whether the head is a branch that still exists. Forgejo puts the branch name in `ref` only
     /// then (`label` always holds it); an AGit PR, a deleted branch or a deleted fork has
-    /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`). A branch itself named
-    /// `refs/pull/…` can't be told from that placeholder, so it counts as gone.
+    /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`). A name starting with
+    /// `refs/` can't be told from that placeholder, so it counts as gone.
     pub fn exists(&self) -> bool {
-        !self.label.is_empty()
-            && self.ref_name == self.label
-            && !self.ref_name.starts_with("refs/pull/")
-    }
-
-    /// The name gh sees as `headRefName`. gh fetches the PR into a local branch of this name, and
-    /// `fetch …:refs/…` would write a raw ref that a branch of the same name shadows. An AGit PR has
-    /// no branch, only Forgejo's `refs/pull/N/head`, so it's reported as `pull/N/head`. A real branch
-    /// keeps its own name, so no two branches are reported alike.
-    pub fn reported_name(&self) -> &str {
-        match self.ref_name.strip_prefix("refs/") {
-            Some(rest) if self.label.is_empty() => rest,
-            _ => self.name(),
-        }
+        !self.label.is_empty() && self.ref_name == self.label && !self.ref_name.starts_with("refs/")
     }
 
     pub fn label(&self) -> String {
@@ -118,9 +105,9 @@ impl Branch {
                 self.label()
                     .split_once(':')
                     .is_some_and(|(login, _)| login.eq_ignore_ascii_case(owner))
-                    && (self.name() == branch || self.reported_name() == branch)
+                    && self.name() == branch
             }
-            None => self.name() == filter || self.reported_name() == filter,
+            None => self.name() == filter,
         }
     }
 }
