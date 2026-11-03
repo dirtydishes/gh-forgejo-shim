@@ -211,7 +211,13 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   each served host's login before it starts gh. It uses the gateway's own `authenticate`, which
   warms the session cache, so gh's own requests repeat nothing. It writes that login as `user`,
   and the entry's token again under `users.<login>.oauth_token`, as gh's own plain-text login
-  writes it. gh then prints the token for that login and refuses any other, as it would. If the
+  writes it. gh then prints the token for that login and refuses any other, as it would. One
+  exception is gh's own: a named-user lookup reads the system keyring (`gh:<host>`, keyed by
+  login) before any config file (`gh/internal/config/config.go:693-705`), whatever
+  `GH_CONFIG_DIR` says. A keyring login for that host, left by another gh config, therefore wins,
+  for that login or another. It is the user's own credential for the same host, which plain gh
+  would print too, and `auth token` sends nothing anywhere; the launcher can't hide it without
+  answering `auth token --user` itself. If the
   lookup fails, the entry has neither, and gh reports the failure itself. Other commands never
   show the account, so they get no `user` and no lookup.
   - A served host (the set *S*, below) gets a per-call token: 32 random bytes from the OS RNG as
