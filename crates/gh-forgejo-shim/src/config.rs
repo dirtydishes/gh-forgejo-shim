@@ -30,8 +30,9 @@ pub struct HostConfig {
     pub api_url: Option<String>,
     pub token_env: Option<String>,
     pub ca_file: Option<PathBuf>,
-    /// Title prefixes this forge marks drafts with, such as `WIP:`; the gateway reports a PR
-    /// whose title starts with one as a draft (F17). Unset keeps the gateway's default.
+    /// Title prefixes this forge marks drafts with, such as `WIP:`, matching the forge's own WIP
+    /// setting (F17). Forgejo decides what is a draft; the gateway strips these from a draft's
+    /// title and adds the first when it makes a draft. Unset keeps the gateway's default.
     pub wip_prefixes: Option<Vec<String>>,
 }
 
