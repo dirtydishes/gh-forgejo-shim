@@ -99,7 +99,7 @@ client ──https──▶ reverse proxy (git.example.com)
 | `GET /api/v3/repos/{o}/{r}/commits/{sha}/pulls` | Codex CLI | |
 | `GET /api/v3/repos/{o}/{r}/commits/{ref}/status`, `/commits/{ref}/check-runs` | Claude desktop | A PR head's CI state; the check mapping in MAPPING §3 |
 | `GET /api/v3/repos/{o}/{r}/actions/runs`, `/actions/workflows` | gh run list, Claude desktop (`head_sha`) | A repeated parameter takes its last value. A run Forgejo never started (its Unix-0 start time) reports `created_at` as `run_started_at` |
-| `DELETE /api/v3/repos/{o}/{r}/git/refs/heads/{branch}` | gh pr merge --delete-branch | Forgejo's branch delete, with the caller's token (or the host's upstream token, where one is set). gh reads 404 and 422 as "already deleted", so only a missing branch, or a name with an empty part, answers GitHub's 422 `Reference does not exist`. A default or protected branch, or a token without write access, stays `403`; a name the path guard won't send is `400`; anything else Forgejo answers (such as an archived repository's `423`) is `502` |
+| `DELETE /api/v3/repos/{o}/{r}/git/refs/heads/{branch}` | gh pr merge --delete-branch | Reads the branch, then Forgejo's branch delete, with the caller's token (or the host's upstream token, where one is set). gh reads 404 and 422 as "already deleted", so only a branch known to be absent (the readable repository lacks it, or its name has an empty part) answers GitHub's 422 `Reference does not exist`. A default or protected branch, no write access, or a repository the token can't see is `403`; a name the path guard won't send is `400`; anything but Forgejo's `204` is `502` |
 
 **GraphQL operations gh 2.103.3 sends** (named and fixed per gh version):
 
