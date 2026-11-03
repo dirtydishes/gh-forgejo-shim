@@ -14,8 +14,11 @@ RUN arch="$(dpkg --print-architecture)" \
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+# The shim embeds its gh grammar and usage captures at compile time.
+COPY contract ./contract
 RUN --mount=type=cache,id=fga-cargo-registry,target=/usr/local/cargo/registry --mount=type=cache,id=fga-g2a-target,target=/src/target \
-    cargo build -p fga-server --locked && cp target/debug/fga-server /usr/local/bin/fga-server
+    cargo build -p fga-server --locked && cp target/debug/fga-server /usr/local/bin/fga-server \
+    && cargo build -p gh-forgejo-shim --locked && cp target/debug/gh-forgejo-shim /usr/local/bin/gh-forgejo-shim
 COPY scripts/e2e/client.sh /test/client.sh
 COPY scripts/e2e/assert.py /test/assert.py
 COPY fixtures/gh-pr-view.graphql /test/gh-pr-view.graphql

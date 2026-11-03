@@ -3,7 +3,7 @@
 # nginx serves Forgejo and mounts the gateway with packaging/gateway/nginx/fga-locations.conf; then
 # the same routes through the shipped Caddyfile, over HTTP.
 set -euo pipefail
-cp /tls/cert.pem /usr/local/share/ca-certificates/forge-test.crt
+cp /tls/ca.pem /usr/local/share/ca-certificates/forge-test.crt
 update-ca-certificates >/dev/null 2>&1
 export GH_CONFIG_DIR=/tmp/gh-server GH_PROMPT_DISABLED=1
 unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_HOST
