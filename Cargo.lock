@@ -701,6 +701,7 @@ dependencies = [
  "fga-core",
  "fga-server",
  "glob",
+ "memchr",
  "reqwest",
  "rpassword",
  "rustix",

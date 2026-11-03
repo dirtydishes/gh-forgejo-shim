@@ -205,6 +205,11 @@ fn executable(path: &Path, contents: &str) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
+/// `path` as one shell word, whatever it holds: `'it'\''s'`.
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 /// Writes an executable script from a child `sh`, so this process never holds a write descriptor
 /// on it that a sibling test's fork could inherit (ETXTBSY when it runs).
 fn executable_from_child(path: &Path, contents: &str) -> io::Result<()> {
@@ -336,10 +341,10 @@ fn audit_route_moved_dispatcher_rejects_a_copied_gfj() -> TestResult {
     let moving = fixture.root.join("moving");
     fs::create_dir(&moving)?;
     let mover = format!(
-        "#!/bin/sh\n/bin/mv '{}' '{}' 2>/dev/null\nexec '{}' \"$@\"\n",
-        dispatcher.display(),
-        moved.display(),
-        fixture.bin.join("git").display()
+        "#!/bin/sh\n/bin/mv {} {} 2>/dev/null\nexec {} \"$@\"\n",
+        sh_quote(&dispatcher),
+        sh_quote(&moved),
+        sh_quote(&fixture.bin.join("git"))
     );
     executable_from_child(&moving.join("git"), &mover)?;
     let path = std::env::join_paths([

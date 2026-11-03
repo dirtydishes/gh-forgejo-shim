@@ -392,6 +392,7 @@ fn carries_marker(path: &Path) -> Option<bool> {
     use std::io::Read;
 
     let marker = DISPATCHER_MARKER.as_slice();
+    let finder = memchr::memmem::Finder::new(marker);
     let mut file = fs::File::open(path).ok()?;
     let mut buffer = vec![0; 64 * 1024 + marker.len()];
     // Bytes kept from the last piece, so a marker split across two reads is still seen.
@@ -404,10 +405,7 @@ fn carries_marker(path: &Path) -> Option<bool> {
             Err(_) => return None,
         };
         let filled = kept + read;
-        if buffer[..filled]
-            .windows(marker.len())
-            .any(|window| window == marker)
-        {
+        if finder.find(&buffer[..filled]).is_some() {
             return Some(true);
         }
         kept = filled.min(marker.len() - 1);
@@ -578,6 +576,47 @@ mod tests {
         let found = find_program_with_fallbacks("gh", Some(&configured), &env, &[fallback_dir]);
 
         assert_eq!(found, Some(fallback));
+        Ok(())
+    }
+
+    #[test]
+    fn the_marker_is_found_anywhere_and_only_whole() -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let path = fixture.root.join("candidate");
+        let marker = DISPATCHER_MARKER.as_slice();
+        let mut near_miss = marker.to_vec();
+        near_miss[marker.len() - 1] ^= 1;
+        for (haystack, expected) in [
+            (marker.to_vec(), true),
+            ([b"x".as_slice(), marker].concat(), true),
+            ([marker, b"x".as_slice()].concat(), true),
+            ([marker[..10].to_vec(), marker.to_vec()].concat(), true),
+            (marker[..marker.len() - 1].to_vec(), false),
+            (near_miss.clone(), false),
+            ([near_miss.as_slice(), &marker[1..]].concat(), false),
+            (Vec::new(), false),
+        ] {
+            fs::write(&path, &haystack)?;
+            assert_eq!(carries_marker(&path), Some(expected), "{haystack:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_marker_split_between_two_reads_is_found() -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let marker = DISPATCHER_MARKER.as_slice();
+        for split in [1, marker.len() / 2, marker.len() - 1] {
+            let path = fixture.root.join(format!("split-{split}"));
+            let mut bytes = vec![b'x'; 64 * 1024 + marker.len() - split];
+            bytes.extend_from_slice(marker);
+            bytes.extend(vec![b'y'; 70 * 1024]);
+            fs::write(&path, &bytes)?;
+            assert_eq!(carries_marker(&path), Some(true), "split {split}");
+            bytes.truncate(64 * 1024 + marker.len() - split + marker.len() - 1);
+            fs::write(&path, &bytes)?;
+            assert_eq!(carries_marker(&path), Some(false), "cut {split}");
+        }
         Ok(())
     }
 
