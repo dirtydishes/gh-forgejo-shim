@@ -200,45 +200,108 @@ async fn project_cards_are_an_empty_connection() {
     );
 }
 
-/// gh pr checkout fetches `refs/heads/{headRefName}` from the head repository, or `refs/pull/N/head`
-/// from the base when there's none. Forgejo names the head branch in `ref` only while it exists
-/// (`services/convert/pull.go`); an AGit PR or a deleted branch reports `refs/pull/N/head`. The
-/// gateway then reports no head repository, so gh fetches the PR's own ref rather than a branch
-/// that isn't there, or one recreated since under the old name. GitHub nulls it only for a deleted
-/// fork; the owner and `isCrossRepository` stay as GitHub reports them.
+/// gh pr checkout fetches `refs/heads/{headRefName}` from the head repository, or the PR's own ref
+/// `refs/pull/N/head` from the base when there's none. The gateway reports a head repository only
+/// while the head branch exists and its tip is the PR's head, so gh never checks out a branch that
+/// isn't there, was recreated, or has moved since (a closed PR; a PR reopened through the API). The
+/// owner and `isCrossRepository` stay as GitHub reports them. A name starting with `refs/` counts as
+/// gone and loses its `refs/` prefixes, so gh's local branch is never a raw ref.
 #[tokio::test]
 async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let repo = |owner: &str| json!({"name":"r","owner":{"id":1,"login":owner,"avatar_url":""}});
-    let pull_with = move |number: i32, label: &str, reference: &str, owner: &str| {
-        let mut source = pull(number, false);
-        source["state"] = json!("open");
-        source["merged"] = json!(false);
-        source["head"] = json!({"label":label,"ref":reference,"sha":"abc","repo":repo(owner)});
-        source
-    };
-    let pulls = [
-        pull_with(1, "feature", "feature", "o"),
-        pull_with(2, "feature", "refs/pull/2/head", "o"),
-        pull_with(3, "", "refs/pull/3/head", "o"),
-        pull_with(4, "feature", "feature", "f"),
-        pull_with(5, "feature", "refs/pull/5/head", "f"),
-        // A live branch named like the placeholder can't be told from it: counted as gone, so gh
-        // fetches the PR's own ref, which is still the PR's commit.
-        pull_with(6, "refs/pull/6/head", "refs/pull/6/head", "o"),
-        // A closed and a merged PR whose branch exists, maybe recreated since: the branch no longer
-        // follows the PR, so only the PR's own ref is its head.
-        {
-            let mut closed = pull_with(7, "feature", "feature", "o");
-            closed["state"] = json!("closed");
-            closed
-        },
-        {
-            let mut merged = pull_with(8, "feature", "feature", "o");
-            merged["state"] = json!("closed");
-            merged["merged"] = json!(true);
-            merged
-        },
+    // (label, ref, head repository owner, head SHA, state, merged, the PR ref's SHA if readable)
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        bool,
+        Option<&'static str>,
+    );
+    let cases: [Case; 11] = [
+        ("feature", "feature", "o", "aaa", "open", false, Some("aaa")),
+        (
+            "feature",
+            "refs/pull/2/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        (
+            "",
+            "refs/pull/3/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        ("feature", "feature", "f", "aaa", "open", false, Some("aaa")),
+        (
+            "feature",
+            "refs/pull/5/head",
+            "f",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        (
+            "refs/pull/6/head",
+            "refs/pull/6/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        // Closed with its branch still at the PR's head: the branch is the PR's head.
+        (
+            "feature",
+            "feature",
+            "o",
+            "aaa",
+            "closed",
+            true,
+            Some("aaa"),
+        ),
+        // Closed, then the branch recreated at another commit.
+        (
+            "feature",
+            "feature",
+            "o",
+            "ccc",
+            "closed",
+            false,
+            Some("aaa"),
+        ),
+        // Reopened through the API after the branch moved: the PR's ref stayed where it was.
+        ("feature", "feature", "o", "ccc", "open", false, Some("aaa")),
+        (
+            "refs/refs/topic",
+            "refs/refs/topic",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        // The PR's ref can't be read: unknown counts as moved.
+        ("feature", "feature", "o", "aaa", "open", false, None),
     ];
+    let pulls: Vec<Value> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, (label, reference, owner, sha, state, merged, _))| {
+            let mut source = pull(i as i32 + 1, *merged);
+            source["state"] = json!(state);
+            source["head"] = json!({"label":label,"ref":reference,"sha":sha,"repo":repo(owner)});
+            source
+        })
+        .collect();
     let repository = |owner: &'static str| {
         get(move || async move {
             Json(
@@ -250,20 +313,35 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             )
         })
     };
+    let listed = Value::Array(pulls.clone());
     let mut upstream = Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
         .route("/api/v1/repos/o/r", repository("o"))
-        .route("/api/v1/repos/f/r", repository("f"));
-    for (number, source) in (1..).zip(pulls) {
+        .route("/api/v1/repos/f/r", repository("f"))
+        .route(
+            "/api/v1/repos/o/r/pulls",
+            get(move || async move { Json(listed) }),
+        );
+    for (number, (source, case)) in (1..).zip(pulls.into_iter().zip(cases)) {
         upstream = upstream.route(
             &format!("/api/v1/repos/o/r/pulls/{number}"),
             get(move || async move { Json(source) }),
         );
+        if let Some(sha) = case.6 {
+            let reference = format!("refs/pull/{number}/head");
+            upstream = upstream.route(
+                &format!("/api/v1/repos/o/r/git/refs/pull/{number}/head"),
+                get(move || async move {
+                    Json(json!({"ref":reference,"object":{"type":"commit","sha":sha}}))
+                }),
+            );
+        }
     }
     let (session, task) = session(upstream).await;
     let fields = "headRefName isCrossRepository headRepository{name} headRepositoryOwner{login}";
-    let query = (1..=8)
+    let query = (1..=cases.len())
         .map(|n| format!("p{n}:pullRequest(number:{n}){{{fields}}}"))
+        .chain(["agit:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into()])
         .collect::<Vec<_>>()
         .join(" ");
     let response = graphql::schema()
@@ -283,13 +361,17 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         json!({
             "p1":head("feature", false, r.clone(), "o"),
             "p2":head("feature", false, Value::Null, "o"),
-            // gh names the local branch after headRefName; `refs/` would make it a raw ref.
             "p3":head("pull/3/head", false, Value::Null, "o"),
-            "p4":head("feature", true, r, "f"),
+            "p4":head("feature", true, r.clone(), "f"),
             "p5":head("feature", true, Value::Null, "f"),
             "p6":head("pull/6/head", false, Value::Null, "o"),
-            "p7":head("feature", false, Value::Null, "o"),
+            "p7":head("feature", false, r, "o"),
             "p8":head("feature", false, Value::Null, "o"),
+            "p9":head("feature", false, Value::Null, "o"),
+            "p10":head("topic", false, Value::Null, "o"),
+            "p11":head("feature", false, Value::Null, "o"),
+            // gh pr list --head takes the name gh was shown.
+            "agit":{"nodes":[{"number":3}]},
         })
     );
 }
