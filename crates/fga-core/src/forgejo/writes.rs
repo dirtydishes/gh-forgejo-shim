@@ -277,9 +277,9 @@ impl Session {
 
     /// Delete a branch, for GitHub's `DELETE git/refs/heads/{branch}`. Forgejo checks the token's
     /// write access and refuses the default and protected branches (`Forbidden`). `NotFound` only
-    /// for a branch known to be absent: a name with an empty part, or one the readable repository
-    /// doesn't have; a repository the token can't see is `Forbidden`. A branch name with slashes
-    /// goes out as several segments.
+    /// for a branch known to be absent: a name with an empty part, or one Forgejo says doesn't
+    /// exist; any other 404 (a hidden repository, a disabled Code unit) is `Forbidden`. A branch
+    /// name with slashes goes out as several segments.
     pub async fn delete_branch(
         &self,
         owner: &str,
@@ -299,19 +299,30 @@ impl Session {
         }
         let mut segments = vec!["repos", owner, repo, "branches"];
         segments.extend(parts);
-        // gh reads "not found" as "already deleted", so prove the branch is absent before saying
-        // so. Forgejo's delete answers 500 for a missing branch, and its 404 also means a
-        // repository the token can't see (`routers/api/v1/permissions/repo_access.go`).
-        match self.get::<serde_json::Value>(&segments, &[]).await {
-            Ok(_) => {}
-            Err(Error::NotFound) => {
-                return Err(match self.repository(owner, repo).await {
-                    Ok(_) => Error::NotFound.into(),
-                    Err(Error::NotFound) => Error::Forbidden.into(),
-                    Err(error) => error.into(),
-                });
+        // gh reads "not found" as "already deleted", so only Forgejo's own word that the branch
+        // doesn't exist may say so. Its delete answers 500 for a missing branch, so read the branch
+        // first: `GetBranch` names a missing branch in the 404's `errors`
+        // (`routers/api/v1/repo/branch.go`), while a 404 from a permission check (a repository the
+        // token can't see, a disabled Code unit) carries none and proves nothing.
+        let read = self.send::<()>(Method::GET, &segments, &[], None).await?;
+        if read.status == StatusCode::NOT_FOUND {
+            let body: serde_json::Value = read.json().unwrap_or_default();
+            let absent = body["errors"].as_array().is_some_and(|errors| {
+                errors.iter().any(|error| {
+                    error
+                        .as_str()
+                        .is_some_and(|error| error.starts_with("branch does not exist ["))
+                })
+            });
+            return Err(if absent {
+                Error::NotFound
+            } else {
+                Error::Forbidden
             }
-            Err(error) => return Err(error.into()),
+            .into());
+        }
+        if ok(read)?.status != StatusCode::OK {
+            return Err(Error::Upstream.into());
         }
         let reply = self.write::<()>(Method::DELETE, &segments, None).await?;
         if reply.status == StatusCode::NO_CONTENT {
