@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::config::{self, normalize_host};
@@ -103,9 +102,6 @@ enum DelegateMode<'a> {
     },
 }
 
-/// Whether this process started as the launcher's credential helper (`FJ_SHIM_CREDENTIALS` set).
-static LAUNCHED_HELPER_CALL: AtomicBool = AtomicBool::new(false);
-
 pub fn run_gh_from_env<I>(args: I) -> i32
 where
     I: IntoIterator<Item = OsString>,
@@ -125,15 +121,11 @@ where
     }
     // Not a credential request the helper answers: the variable the run directory's script set
     // must not reach anything this call starts, or a later `auth git-credential` would be answered
-    // from a launcher's file instead of delegating (§3). Single-threaded here. Whether it was set
-    // decides how this call treats any other `auth git-credential` form (`run_gh`).
+    // from a launcher's file instead of delegating (§3). Single-threaded here. That it was set at
+    // all, even empty, makes this a launched call's helper context (`run_gh`).
+    let helper_call = std::env::var_os(crate::launcher::credentials::CREDENTIALS_VAR).is_some();
     #[cfg(unix)]
-    {
-        let helper_call = std::env::var_os(crate::launcher::credentials::CREDENTIALS_VAR)
-            .is_some_and(|value| !value.is_empty());
-        LAUNCHED_HELPER_CALL.store(helper_call, Ordering::Relaxed);
-        std::env::remove_var(crate::launcher::credentials::CREDENTIALS_VAR);
-    }
+    std::env::remove_var(crate::launcher::credentials::CREDENTIALS_VAR);
     // Guards 2 and 3 (launcher spec §8) come before routing, so a loop stops at once.
     let entry_env = routing_env();
     if let Some(code) = crate::launcher::recursion_guard(&entry_env) {
@@ -149,7 +141,13 @@ where
     }
     let env = routing_env();
     let cwd = std::env::current_dir().ok();
-    run_gh(argv, env, cwd.as_deref(), DelegateMode::Inherit)
+    run_gh(
+        argv,
+        env,
+        cwd.as_deref(),
+        DelegateMode::Inherit,
+        helper_call,
+    )
 }
 
 /// The environment routing reads. `std::env::vars` panics on a value that isn't UTF-8 (audit
@@ -163,16 +161,22 @@ fn routing_env() -> HashMap<String, String> {
 
 pub fn run_gh_captured(
     argv: Vec<String>,
-    env: HashMap<String, String>,
+    mut env: HashMap<String, String>,
     cwd: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
+    // As `run_gh_from_env`, from this call's own environment: the marker makes it a launched
+    // call's helper context, and goes no further.
+    let helper_call = env
+        .remove(crate::launcher::credentials::CREDENTIALS_VAR)
+        .is_some();
     run_gh(
         argv.into_iter().map(OsString::from).collect(),
         env,
         cwd,
         DelegateMode::Capture { stdout, stderr },
+        helper_call,
     )
 }
 
@@ -213,7 +217,9 @@ fn decide_invocation_route(
     // gh's root command (`gh`, `gh --version`, `gh --help`, or a stray flag it rejects) and
     // `gh version` answer from gh itself and send no request, so whatever repo the call is in,
     // plain gh runs.
-    if invocation.command.is_empty() || invocation.command == "version" {
+    // `version` only as the leading word: `gh --notes version release create v1` is
+    // `release create` to gh (cobra reads `version` as `--notes`'s value).
+    if invocation.command.is_empty() || (leads && invocation.command == "version") {
         return RouteDecision::delegate("gh's root or version command", None);
     }
     // Only when the command word comes first: with a flag before it, the command gh runs may not
@@ -362,11 +368,13 @@ pub fn load_dispatcher_config(env: &HashMap<String, String>) -> crate::Result<Di
     })
 }
 
+/// `helper_call`: this call started with `FJ_SHIM_CREDENTIALS` set, as the launcher's helper does.
 fn run_gh(
     original_argv: Vec<OsString>,
     env: HashMap<String, String>,
     cwd: Option<&Path>,
     mut mode: DelegateMode<'_>,
+    helper_call: bool,
 ) -> i32 {
     let argv = original_argv
         .iter()
@@ -385,7 +393,7 @@ fn run_gh(
     // Inside a launched call, git's credentials come only from the launcher's helper (§3). A
     // form its exact match didn't take (`auth git-credential -- get`, an alias) is refused, never
     // handed to plain gh, which would answer from the user's own logins.
-    if LAUNCHED_HELPER_CALL.load(Ordering::Relaxed) && routed.command == "auth git-credential" {
+    if helper_call && routed.command == "auth git-credential" {
         write_error(
             &mut mode,
             "gh-forgejo-shim: inside a launched gh, git's credentials come only from the launcher's helper",
@@ -746,10 +754,48 @@ mod tests {
     }
 
     #[test]
+    fn a_captured_call_takes_the_helper_context_from_its_own_environment() {
+        let call = |marker: bool| {
+            let mut env = env(&[
+                ("FJ_SHIM_REAL_GH", "/nonexistent/gh"),
+                ("HOME", "/nonexistent-home"),
+            ]);
+            if marker {
+                env.insert(
+                    crate::launcher::credentials::CREDENTIALS_VAR.to_string(),
+                    String::new(),
+                );
+            }
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let code = run_gh_captured(
+                argv(&["auth", "git-credential", "--", "erase"]),
+                env,
+                Some(Path::new("/nonexistent-gfjs-repo")),
+                &mut stdout,
+                &mut stderr,
+            );
+            (code, String::from_utf8_lossy(&stderr).into_owned())
+        };
+        // With the marker, refused; without, never refused because an earlier call had one.
+        let (code, stderr) = call(true);
+        assert_eq!(code, 1, "{stderr}");
+        assert!(
+            stderr.contains("come only from the launcher's helper"),
+            "{stderr}"
+        );
+        let (_, stderr) = call(false);
+        assert!(
+            !stderr.contains("come only from the launcher's helper"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
     fn a_flag_before_the_command_keeps_the_forgejo_route() {
         // gh reads `config` as --notes's value and runs release create, a write: never plain gh.
         for args in [
             &["--notes", "config", "release", "create", "v1"][..],
+            &["--notes", "version", "release", "create", "v1"][..],
             &["-R", "o/r", "config", "get", "editor"][..],
             &["--repo", "o/r", "pr", "view", "--help"][..],
         ] {
