@@ -26,12 +26,12 @@ impl PullRequestReviewComment {
     /// Forgejo lets the poster or a repository writer edit, delete or resolve a code comment.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
-        Ok(self
+        let author = self
             .source
             .user
             .as_ref()
-            .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer))
-            || viewer_can_write(ctx, &self.review.owner, &self.review.repo).await?)
+            .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer));
+        viewer_may_change(ctx, &self.review.owner, &self.review.repo, author).await
     }
 }
 #[Object]
@@ -67,7 +67,7 @@ impl PullRequestReviewComment {
         Some((*self.review).clone())
     }
     async fn url(&self) -> Uri {
-        Uri(self.source.html_url.clone())
+        Uri(crate::map::pull_web_url(&self.source.html_url))
     }
     async fn viewer_can_update(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         self.viewer_can_change(ctx).await
@@ -121,8 +121,8 @@ impl PullRequestReviewThread {
     async fn viewer_can_mark(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let review = &self.first().review;
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
-        Ok(self.pr_author.eq_ignore_ascii_case(viewer)
-            || viewer_can_write(ctx, &review.owner, &review.repo).await?)
+        let author = self.pr_author.eq_ignore_ascii_case(viewer);
+        viewer_may_change(ctx, &review.owner, &review.repo, author).await
     }
     fn first(&self) -> &PullRequestReviewComment {
         &self.comments[0]
@@ -197,11 +197,13 @@ impl PullRequestReviewThread {
 
 /// The commented line as the reviewer saw it: the last line of the comment's diff hunk, which
 /// Forgejo cuts to end there (`CutDiffAroundLine`, Forgejo v15.0.0 `modules/git/diff.go`). Without
-/// a hunk (Forgejo's `CODE_COMMENT_LINES = 0`, or one that can't be read) the line is unknown:
-/// Forgejo's own `position` is the line in the commit that last changed it (`LineBlame`), which
-/// can be another line entirely.
+/// a hunk (Forgejo's `CODE_COMMENT_LINES = 0`, or one that can't be read) a new-side line is
+/// unknown: its `position` is the line in the commit that last changed it (`LineBlame`), which can
+/// be another line entirely. An old-side position is never blamed, so it stands.
 fn commented_line(source: &forgejo::ReviewComment) -> Option<i32> {
-    let line = hunk_end(&source.diff_hunk, source.line() < 0)?;
+    // Forgejo blames only new-side lines, so an old-side position is the line the reviewer chose.
+    let old = source.line() < 0;
+    let line = hunk_end(&source.diff_hunk, old).or(old.then_some(source.original_position))?;
     i32::try_from(line).ok().filter(|line| *line != 0)
 }
 
@@ -309,5 +311,7 @@ mod tests {
         );
         assert_eq!(commented_line(&comment("", 3, 0)), None);
         assert_eq!(commented_line(&comment("not a hunk", 3, 0)), None);
+        // Forgejo blames only new-side lines: an old-side position is the reviewer's own line.
+        assert_eq!(commented_line(&comment("", 0, 5)), Some(5));
     }
 }
