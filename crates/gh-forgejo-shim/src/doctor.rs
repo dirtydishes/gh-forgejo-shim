@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
+use crate::gh_version;
 use crate::gui_path;
 use crate::invocation::Invocation;
 use crate::repo::{self, Checkout, GhHosts, RepoRef};
@@ -107,7 +108,7 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
 
     let mut checks = vec![
         current_path_check(&setup_model),
-        real_gh_check(&setup_model, &options.platform),
+        real_gh_check(&setup_model, &options.env, &options.platform),
         managed_gh_check(&setup_model),
     ];
     if let Some(check) = duplicate_managed_gh_check(&setup_model) {
@@ -397,21 +398,18 @@ fn current_path_check(model: &setup::SetupModel) -> Check {
     )
 }
 
-fn real_gh_check(model: &setup::SetupModel, platform: &str) -> Check {
-    if let Some(real_gh) = model.real_gh.as_ref() {
-        return Check::new(
-            "real gh",
-            true,
-            format!("found {} via {}", real_gh.path.display(), real_gh.source),
-            Vec::<String>::new(),
-        );
+/// Whether real gh is there and new enough ([`gh_version::MINIMUM`]).
+fn real_gh_check(model: &setup::SetupModel, env: &EnvMap, platform: &str) -> Check {
+    let check = gh_version::check(model.real_gh.as_ref(), env, platform);
+    match check.status {
+        gh_version::Status::Supported => {
+            Check::new("real gh", true, check.detail, Vec::<String>::new())
+        }
+        gh_version::Status::AllowedUnknown => Check::warn("real gh", check.detail),
+        gh_version::Status::Refused => {
+            Check::new("real gh", false, check.detail, check.repair_commands)
+        }
     }
-    Check::new(
-        "real gh",
-        false,
-        "could not find the real GitHub CLI from config, env, current PATH, or common install dirs",
-        real_gh_repair_commands(platform),
-    )
 }
 
 fn managed_gh_check(model: &setup::SetupModel) -> Check {
@@ -662,7 +660,10 @@ mod tests {
             &shim_b.join("gh"),
             &crate::shim::shim_script(&fixture.root.join("gh-forgejo-shim")),
         )?;
-        write_executable(&real_dir.join("gh"), "#!/bin/sh\nexit 0\n")?;
+        write_executable(
+            &real_dir.join("gh"),
+            "#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n",
+        )?;
 
         let checks = run_checks(CheckOptions {
             config: Some(Config {
@@ -711,7 +712,10 @@ mod tests {
         let homebrew = fixture.root.join("homebrew").join("bin");
         fs::create_dir_all(&cargo_bin)?;
         fs::create_dir_all(&homebrew)?;
-        write_executable(&homebrew.join("gh"), "#!/bin/sh\nexit 0\n")?;
+        write_executable(
+            &homebrew.join("gh"),
+            "#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n",
+        )?;
 
         let checks = run_checks(CheckOptions {
             config: Some(Config {
@@ -776,22 +780,37 @@ mod tests {
         }
     }
 
-    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
-        fs::write(path, contents)?;
-        make_executable(path)
-    }
-
+    /// Doctor now runs the fake real gh (`--version`), so it's written from a child `sh`: this
+    /// process never holds a write descriptor a sibling test's fork could inherit (ETXTBSY).
     #[cfg(unix)]
-    fn make_executable(path: &Path) -> io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions)
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let written = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no stdin"))?
+            .write_all(contents.as_bytes());
+        let status = child.wait()?;
+        written?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "writing {}: {status}",
+                path.display()
+            )))
+        }
     }
 
     #[cfg(not(unix))]
-    fn make_executable(_path: &Path) -> io::Result<()> {
-        Ok(())
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        fs::write(path, contents)
     }
 }

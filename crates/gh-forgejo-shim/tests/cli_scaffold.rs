@@ -12,7 +12,7 @@ use std::process::Command;
 
 use gh_forgejo_shim::VERSION;
 use serde_json::Value;
-use support::{load_contract, CliFixture, TestResult};
+use support::{load_contract, write_script_from_child, CliFixture, TestResult};
 
 #[test]
 fn long_binary_prints_help_under_isolated_environment() -> TestResult {
@@ -83,6 +83,7 @@ fn bootstrap(fixture: &CliFixture, env: &[(&str, &str)]) -> io::Result<String> {
     let output = fixture
         .command("gfj")?
         .env_remove("FJ_SHIM_HOSTS")
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .envs(env.iter().copied())
         .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
@@ -164,6 +165,7 @@ fn bootstrap_first_run_allowlists_a_forge_gh_does_not_know_yet() -> TestResult {
 
     let output = fixture
         .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .env_remove("FJ_SHIM_HOSTS")
         .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
@@ -774,6 +776,7 @@ fn bootstrap_in_a_fork_leaves_an_unknown_forge_upstream_alone() -> TestResult {
 
     let output = fixture
         .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .env_remove("FJ_SHIM_HOSTS")
         .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
@@ -825,6 +828,7 @@ fn bootstrap_installs_shim_allowlists_repo_and_prints_repairs() -> TestResult {
 
     let output = fixture
         .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .env("FJ_SHIM_TOKEN", "secret-token")
         .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
@@ -881,6 +885,7 @@ fn install_and_uninstall_shim_use_isolated_bin_dir() -> TestResult {
 
     let output = fixture
         .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .args(["install-shim", "--bin-dir"])
         .arg(fixture.bin())
         .output()?;
@@ -923,6 +928,7 @@ fn install_shim_refuses_unmanaged_file_until_forced() -> TestResult {
 
     let output = fixture
         .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .args(["install-shim", "--bin-dir"])
         .arg(fixture.bin())
         .output()?;
@@ -937,6 +943,7 @@ fn install_shim_refuses_unmanaged_file_until_forced() -> TestResult {
 
     let output = fixture
         .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .args(["install-shim", "--force", "--bin-dir"])
         .arg(fixture.bin())
         .output()?;
@@ -960,6 +967,7 @@ fn bootstrap_leaves_out_a_remote_host_spelled_differently_from_where_it_leads() 
 
     let output = fixture
         .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
         .output()?;
@@ -988,6 +996,7 @@ fn bootstrap_installs_shim_and_prints_temp_repo_repairs() -> TestResult {
 
     let output = fixture
         .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", fixture.supported_gh()?)
         .env("FJ_SHIM_TOKEN", "bootstrap-token")
         .args(["bootstrap", "--no-gui-path", "--bin-dir"])
         .arg(fixture.bin())
@@ -1018,7 +1027,7 @@ fn bootstrap_default_current_target_uses_visible_user_dir() -> TestResult {
     fixture.init_git_repo()?;
     let cargo_bin = fixture.home().join(".cargo").join("bin");
     fs::create_dir_all(&cargo_bin)?;
-    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let real_gh = fixture.supported_gh()?;
 
     let output = fixture
         .command("gfj")?
@@ -1054,7 +1063,7 @@ fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visibl
 {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
-    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let real_gh = fixture.supported_gh()?;
     let target = fixture.home().join(".local").join("bin").join("gh");
 
     let output = fixture
@@ -1077,7 +1086,7 @@ fn bootstrap_default_current_target_falls_back_to_user_local_without_safe_visibl
 fn bootstrap_dry_run_writes_nothing_and_prints_planned_actions() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
-    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let real_gh = fixture.supported_gh()?;
     let target = fixture.bin().join("gh");
     let config_path = fixture
         .home()
@@ -1110,7 +1119,7 @@ fn bootstrap_dry_run_writes_nothing_and_prints_planned_actions() -> TestResult {
 fn bootstrap_refuses_unmanaged_target_until_forced() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
-    let real_gh = fixture.write_executable("real-gh", "#!/bin/sh\necho real-gh\n")?;
+    let real_gh = fixture.supported_gh()?;
     let target = fixture.bin().join("gh");
     fs::write(&target, "unrelated")?;
 
@@ -1553,5 +1562,213 @@ fn harness_loads_phase_01_compatibility_contract() -> TestResult {
     assert!(golden_probe_ids.contains("gh_version_delegated"));
     assert!(golden_probe_ids.contains("gh_pr_checks_json"));
     assert!(golden_probe_ids.contains("git_upstream_trace"));
+    Ok(())
+}
+
+/// A fake real gh whose `--version` prints `first_line`, in a directory of its own.
+fn gh_reporting(
+    fixture: &CliFixture,
+    name: &str,
+    first_line: &str,
+) -> io::Result<std::path::PathBuf> {
+    let dir = fixture.root().join(name);
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("gh");
+    write_script_from_child(
+        &path,
+        &format!("#!/bin/sh\nprintf '%s\\n' '{first_line}'\n"),
+    )?;
+    Ok(path)
+}
+
+fn bootstrap_with_gh(
+    fixture: &CliFixture,
+    real_gh: &OsStr,
+    env: &[(&str, &str)],
+) -> io::Result<(Option<i32>, String)> {
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", real_gh)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .envs(env.iter().copied())
+        .args(["bootstrap", "--no-gui-path", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+    Ok((
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    ))
+}
+
+#[test]
+fn bootstrap_without_a_supported_gh_changes_nothing() -> TestResult {
+    // D3: no real gh, an older one, a pre-release of the minimum, or one whose version can't be
+    // read: bootstrap says why and what to install, and neither allowlists nor installs.
+    for (name, first_line, said) in [
+        ("missing", None, "could not find the real GitHub CLI"),
+        (
+            "older",
+            Some("gh version 2.103.2 (2026-04-01)"),
+            "found gh 2.103.2",
+        ),
+        (
+            "pre",
+            Some("gh version 2.103.3-rc.1"),
+            "found gh 2.103.3-rc.1",
+        ),
+        ("odd", Some("hub version 2.14.2"), "not `gh version`"),
+        ("dev", Some("gh version DEV"), "a development build"),
+    ] {
+        let fixture = CliFixture::new()?;
+        fixture.init_git_repo()?;
+        let real_gh = match first_line {
+            Some(line) => gh_reporting(&fixture, name, line)?.into_os_string(),
+            None => "/missing/gh".into(),
+        };
+        let (code, stdout) = bootstrap_with_gh(&fixture, &real_gh, &[])?;
+        assert_eq!(code, Some(1), "{name}: {stdout}");
+        assert!(
+            stdout.contains("[fix] real gh:") && stdout.contains(said),
+            "{name}: {stdout}"
+        );
+        assert!(stdout.contains("gh 2.103.3 or newer"), "{name}: {stdout}");
+        assert!(
+            stdout.contains("https://github.com/cli/cli#installation"),
+            "{name}: {stdout}"
+        );
+        assert!(
+            !fixture.bin().join("gh").exists(),
+            "{name}: installed the shim"
+        );
+        assert_eq!(shim_config(&fixture)?, "", "{name}: wrote the config");
+    }
+    Ok(())
+}
+
+#[test]
+fn bootstrap_accepts_the_minimum_gh_and_newer() -> TestResult {
+    for first_line in [
+        "gh version 2.103.3 (2026-05-01)",
+        "gh version 2.104.0-rc.1 (2026-06-01)",
+        "gh version 3.0.0",
+    ] {
+        let fixture = CliFixture::new()?;
+        fixture.init_git_repo()?;
+        let real_gh = gh_reporting(&fixture, "real", first_line)?;
+        let (_, stdout) = bootstrap_with_gh(&fixture, real_gh.as_os_str(), &[])?;
+        assert!(
+            stdout.contains("[ok] real gh: found gh "),
+            "{first_line}: {stdout}"
+        );
+        assert!(fixture.bin().join("gh").exists(), "{first_line}: {stdout}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_opt_in_covers_an_unreadable_gh_but_never_an_older_one() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let dev = gh_reporting(&fixture, "dev", "gh version DEV")?;
+    let (_, stdout) = bootstrap_with_gh(
+        &fixture,
+        dev.as_os_str(),
+        &[("FJ_SHIM_ALLOW_UNKNOWN_GH", "1")],
+    )?;
+    assert!(stdout.contains("[warn] real gh:"), "{stdout}");
+    assert!(
+        stdout.contains("FJ_SHIM_ALLOW_UNKNOWN_GH is set"),
+        "{stdout}"
+    );
+    assert!(fixture.bin().join("gh").exists(), "{stdout}");
+
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let older = gh_reporting(&fixture, "older", "gh version 2.90.0")?;
+    let (code, stdout) = bootstrap_with_gh(
+        &fixture,
+        older.as_os_str(),
+        &[("FJ_SHIM_ALLOW_UNKNOWN_GH", "1")],
+    )?;
+    assert_eq!(code, Some(1), "{stdout}");
+    assert!(
+        stdout.contains("[fix] real gh: found gh 2.90.0"),
+        "{stdout}"
+    );
+    assert!(!fixture.bin().join("gh").exists(), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn a_dry_run_with_an_older_gh_reports_it_and_still_shows_the_plan() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let older = gh_reporting(&fixture, "older", "gh version 2.103.2")?;
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", &older)
+        .args(["bootstrap", "--dry-run", "--no-gui-path", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("[fix] real gh: found gh 2.103.2"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("would allowlist"), "{stdout}");
+    assert!(!fixture.bin().join("gh").exists(), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn install_shim_refuses_an_older_gh_and_installs_with_the_minimum() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let older = gh_reporting(&fixture, "older", "gh version 2.103.2")?;
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", &older)
+        .args(["install-shim", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("not installing the gh shim"), "{stderr}");
+    assert!(
+        stderr.contains("found gh 2.103.2") && stderr.contains("2.103.3"),
+        "{stderr}"
+    );
+    assert!(!fixture.bin().join("gh").exists());
+
+    let minimum = gh_reporting(&fixture, "minimum", "gh version 2.103.3 (2026-05-01)")?;
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", &minimum)
+        .args(["install-shim", "--bin-dir"])
+        .arg(fixture.bin())
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(fixture.bin().join("gh").exists());
+    Ok(())
+}
+
+#[test]
+fn doctor_reports_an_older_gh_and_warns_for_an_allowed_dev_build() -> TestResult {
+    let fixture = CliFixture::new()?;
+    let older = gh_reporting(&fixture, "older", "gh version 2.103.2")?;
+    let older = older.to_string_lossy().into_owned();
+    let stdout = doctor(&fixture, &[("FJ_SHIM_REAL_GH", &older)])?;
+    assert!(
+        stdout.contains("[fix] real gh: found gh 2.103.2"),
+        "{stdout}"
+    );
+
+    let dev = gh_reporting(&fixture, "dev", "gh version DEV")?;
+    let dev = dev.to_string_lossy().into_owned();
+    let stdout = doctor(
+        &fixture,
+        &[("FJ_SHIM_REAL_GH", &dev), ("FJ_SHIM_ALLOW_UNKNOWN_GH", "1")],
+    )?;
+    assert!(stdout.contains("[warn] real gh:"), "{stdout}");
     Ok(())
 }

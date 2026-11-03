@@ -3,6 +3,19 @@
 `gh-forgejo-shim` is distributed as native Rust binaries. Python packaging is
 not part of the supported product runtime.
 
+## Requirements
+
+The `gh` wrapper hands GitHub work to the real GitHub CLI, so it needs `gh`
+2.103.3 or newer ([installation](https://github.com/cli/cli#installation)).
+`gfj bootstrap` and `gfj install-shim` check the `gh` they find, by running
+`gh --version`, and stop without changing anything when it is missing, older,
+or a pre-release of 2.103.3. `gfj doctor` reports the same check.
+
+A `gh` you built yourself may report `DEV` or a `git describe` version that
+can't be compared. To go ahead with it, set `FJ_SHIM_ALLOW_UNKNOWN_GH=1`;
+`doctor` then shows a warning instead. A `gh` that reports an older version is
+refused even then.
+
 ## Homebrew
 
 On macOS and Linux, the intended native installer is Homebrew:
