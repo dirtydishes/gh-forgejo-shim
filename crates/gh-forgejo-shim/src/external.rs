@@ -7,8 +7,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-#[cfg(test)]
-use std::sync::{Mutex, OnceLock};
 
 use crate::shim::is_managed_shim;
 
@@ -221,10 +219,7 @@ pub fn git_run(args: &[&str], cwd: Option<&Path>) -> GitRunResult {
 pub fn open_web_url(url: &str) {
     #[cfg(test)]
     {
-        opened_web_urls()
-            .lock()
-            .expect("web url mutex")
-            .push(url.to_string());
+        OPENED_WEB_URLS.with(|urls| urls.borrow_mut().push(url.to_string()));
     }
     #[cfg(not(test))]
     {
@@ -251,13 +246,15 @@ pub fn open_web_url(url: &str) {
 
 #[cfg(test)]
 pub fn take_opened_web_urls() -> Vec<String> {
-    std::mem::take(&mut *opened_web_urls().lock().expect("web url mutex"))
+    OPENED_WEB_URLS.with(|urls| std::mem::take(&mut *urls.borrow_mut()))
 }
 
 #[cfg(test)]
-fn opened_web_urls() -> &'static Mutex<Vec<String>> {
-    static OPENED_WEB_URLS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
-    OPENED_WEB_URLS.get_or_init(|| Mutex::new(Vec::new()))
+thread_local! {
+    /// The URLs this test thread asked to open. Per thread, not per process: tests run in
+    /// parallel, and one that opens a URL must never see, or take, another's (2ny).
+    static OPENED_WEB_URLS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn command_with_env<K, V>(
