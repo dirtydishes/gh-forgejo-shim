@@ -540,6 +540,7 @@ dependencies = [
  "axum",
  "axum-server",
  "fga-core",
+ "futures-util",
  "rustls",
  "serde",
  "serde_json",

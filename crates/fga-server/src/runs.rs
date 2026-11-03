@@ -161,14 +161,19 @@ pub async fn runs(
         let workflows = session.workflows(&owner, &repo).await?;
         // A run of a workflow that exists only on its own branch is named from there, so it never
         // fails the page.
+        let named = futures_util::future::join_all(
+            runs.workflow_runs
+                .iter()
+                .map(|run| session.workflow_for(&owner, &repo, run, &workflows)),
+        )
+        .await;
         let mut mapped = Vec::new();
-        for run in &runs.workflow_runs {
-            let workflow = session.workflow_for(&owner, &repo, run, &workflows).await;
+        for (run, workflow) in runs.workflow_runs.iter().zip(&named) {
             mapped.push(with_links(
                 &host,
                 &owner,
                 &repo,
-                actions::run(run, &workflow)?,
+                actions::run(run, workflow)?,
             ));
         }
         Ok((
@@ -286,10 +291,20 @@ pub async fn workflow(
 ) -> Response {
     let result = async {
         let workflows = session.workflows(&owner, &repo).await?;
-        let workflow = workflows
-            .into_values()
-            .find(|v| v.id == id)
+        if let Some(workflow) = workflows.values().find(|v| v.id == id) {
+            return Ok(Json(workflow).into_response());
+        }
+        // gh's `run view` and `run watch` look up the workflow a run names (`GetRun` in
+        // `pkg/cmd/run/shared/shared.go`) and stop on a 404. A workflow that exists only on a
+        // branch isn't among the default branch's, but its ID is its file name's hash, so find a
+        // recent run of it and name it as that run's list entry does.
+        let recent = session.action_runs(&owner, &repo, &[], 0, 50).await?;
+        let run = recent
+            .workflow_runs
+            .iter()
+            .find(|run| actions::workflow_id(&run.workflow_id) == id)
             .ok_or(Error::NotFound)?;
+        let workflow = session.workflow_for(&owner, &repo, run, &workflows).await;
         Ok(Json(workflow).into_response())
     }
     .await;
