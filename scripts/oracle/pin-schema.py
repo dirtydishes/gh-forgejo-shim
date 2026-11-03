@@ -26,7 +26,7 @@ def fields(body):
     matches = list(re.finditer(r'^\t?(?:  )?(\w+)\s*(?=[:(])', body, re.M))
     for i, m in enumerate(matches):
         field = body[m.start():matches[i+1].start() if i+1 < len(matches) else len(body)].strip()
-        field = re.sub(r'\s+@\w+(?:\([^)]*\))?', '', field, flags=re.S)
+        field = re.sub(r'\s+@\w+(?:\((?:"[^"]*"|[^)"])*\))?', '', field, flags=re.S)
         result[m[1]] = re.sub(r'\s+', ' ', field).strip()
     return result
 
