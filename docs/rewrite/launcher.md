@@ -141,11 +141,12 @@ a help flag delegates only there, and for command groups, which have no `-h` of 
 `repo edit -h URL` sets a homepage, and keeps the refusal.
 
 **When the parse may differ from gh's.** Routing reads `-R`, `--hostname` and an `api` URL from
-its own parse. That parse matches gh's only when the command word comes first, the command is in
-the shim's grammar, and the call passes the grammar's checks. Otherwise a word it took for `-R`
+its own parse. That parse matches gh's only when the command word comes first and either the
+call has no flags but `--help`, or the command is in the shim's grammar and the call passes its checks. Otherwise a word it took for `-R`
 may be another flag's value to gh, or the reverse: `gh release create v1 --notes -R
 github.com/o/r` creates the release where the checkout points. Such a call runs plain gh only when
-no Forgejo host is in reach: none in its words, `GH_HOST`, `GH_REPO` or the checkout's remotes.
+no Forgejo host is in reach: none in its words, `GH_HOST`, `GH_REPO` or any of the checkout's
+remotes, whichever one the command would pick.
 Otherwise the wrapper refuses it with exit 1, and says to run it where no Forgejo host is in reach
 (or to put the command word first, when a flag comes before it). A grammar check failing near a
 forge is refused too, since a newer gh may have the flag. The cost is calls that name another host

@@ -249,14 +249,17 @@ fn decide_invocation_route(
     }
     let decision = route_by_target(invocation, config, env, cwd);
     // The parse names gh's target only when it reads the call as gh does: the command word first,
-    // and a grammar for its flags. Otherwise a word it took for `-R`, `--hostname` or an `api` URL
-    // may be another flag's value to gh (`gh release create v1 --notes -R github.com/o/r` creates
-    // the release where the checkout points), or the reverse. So plain gh runs such a call only
-    // when nothing in reach names a Forgejo host.
-    let certain = leads && invocation.has_grammar() && invocation.validate().is_ok();
-    if decision.kind == RouteKind::Delegate
-        && !certain
-        && forgejo_in_reach(words, invocation, config, env, cwd)
+    // and either no flags but `--help` (cobra's own, which takes no value; `-h` may, as in
+    // `auth token -h HOST`) or a grammar for them. Otherwise a word it took for `-R`,
+    // `--hostname` or an `api` URL may be another flag's value to gh (`gh release create v1
+    // --notes -R github.com/o/r` creates the release where the checkout points), or the reverse.
+    // So plain gh runs such a call only when nothing in reach names a Forgejo host.
+    let flagless = words
+        .iter()
+        .all(|word| !word.starts_with('-') || word == "-" || word == "--help");
+    let certain =
+        leads && (flagless || (invocation.has_grammar() && invocation.validate().is_ok()));
+    if decision.kind == RouteKind::Delegate && !certain && forgejo_in_reach(words, config, env, cwd)
     {
         return RouteDecision::refuse(format!(
             "a Forgejo host is in reach (GH_REPO, GH_HOST, the checkout or an argument), and the \
@@ -272,10 +275,10 @@ fn decide_invocation_route(
     decision
 }
 
-/// Whether the call's words, `GH_HOST`, `GH_REPO` or the checkout name a Forgejo host.
+/// Whether the call's words, `GH_HOST`, `GH_REPO` or any of the checkout's remotes name a Forgejo
+/// host. Every remote: which one gh picks depends on the command, which is what's uncertain.
 fn forgejo_in_reach(
     words: &[String],
-    invocation: &Invocation,
     config: &DispatcherConfig,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
@@ -289,17 +292,11 @@ fn forgejo_in_reach(
         let word = word.to_ascii_lowercase();
         hosts.iter().any(|host| word.contains(host.as_str()))
     });
-    // Only the command: its flags and arguments are what's uncertain.
-    let bare = Invocation::parse(
-        &invocation
-            .command
-            .split_whitespace()
-            .map(String::from)
-            .collect::<Vec<_>>(),
-    );
-    let checkout = Checkout::new(cwd);
-    let detected = |hosts: &GhHosts| {
-        detect_repo(&bare, env, &checkout, hosts)
+    // `GH_REPO` with its host resolved as gh would; no remote, flag or argument of the call.
+    let bare = Invocation::default();
+    let none = Checkout::new(None);
+    let gh_repo = |hosts: &GhHosts| {
+        detect_repo(&bare, env, &none, hosts)
             .repo
             .is_some_and(|repo| config.forgejo_host(&repo.host).is_some())
     };
@@ -307,8 +304,11 @@ fn forgejo_in_reach(
         || env
             .get("GH_HOST")
             .is_some_and(|host| config.forgejo_host(host).is_some())
-        || detected(&GhHosts::load(env, &config.hosts))
-        || detected(&GhHosts::user(env))
+        || gh_repo(&GhHosts::load(env, &config.hosts))
+        || gh_repo(&GhHosts::user(env))
+        || Checkout::new(cwd)
+            .remote_hosts()
+            .any(|host| config.forgejo_host(host).is_some())
 }
 
 fn route_by_target(

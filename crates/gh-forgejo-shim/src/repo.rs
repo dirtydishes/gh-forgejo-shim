@@ -169,6 +169,13 @@ impl<'a> Checkout<'a> {
     fn remotes(&self) -> &[Remote] {
         self.remotes.get_or_init(|| git_remotes(self.cwd))
     }
+
+    /// Every remote's host, whichever one a command would pick.
+    pub fn remote_hosts(&self) -> impl Iterator<Item = &str> {
+        self.remotes()
+            .iter()
+            .map(|remote| remote.repo.host.as_str())
+    }
 }
 
 pub fn detect_repo(
