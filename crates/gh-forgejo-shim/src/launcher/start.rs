@@ -5,9 +5,6 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fga_core::map::WipPrefixes;
-use url::Url;
-
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::external::find_program;
@@ -18,6 +15,7 @@ use crate::launcher::gateway::GatewayHost;
 use crate::launcher::ghconfig::{self, ServedHost, ServedToken};
 use crate::launcher::run::{self, Edits, Files, Launch};
 use crate::launcher::rundir;
+use crate::launcher::upstream::Upstream;
 use crate::repo::{self, gh_hostname};
 
 /// The token variables gh would prefer over `hosts.yml` (spec fact 3). A launched gh never sees
@@ -114,8 +112,8 @@ pub fn launch(
         ));
     }
     // A host-less `auth status` leaves such a routed host out of S and serves the rest (§3).
-    let forgejo_url = upstream_url(host, &config, env);
-    if forgejo_url.is_none() && !all_hosts {
+    let routed_upstream = upstream(host, &config, env);
+    if routed_upstream.is_none() && !all_hosts {
         return None;
     }
     let token = auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()));
@@ -171,8 +169,8 @@ pub fn launch(
     // logged in to, and settings the gateway can't honour yet.
     let routed_entry = config::normalize_host(host);
     let mut served_hosts = Vec::new();
-    if let (Some(token), Some(url)) = (&token, forgejo_url) {
-        served_hosts.push((routed_entry.clone(), token.token.clone(), url));
+    if let (Some(token), Some(upstream)) = (&token, routed_upstream) {
+        served_hosts.push((routed_entry.clone(), token.token.clone(), upstream));
     }
     if all_hosts {
         for entry in config
@@ -189,13 +187,13 @@ pub fn launch(
             if entry == routed_entry || shared || logged_in(&user_hosts, &entry) {
                 continue;
             }
-            let (Some(url), Some(found)) = (
-                upstream_url(&entry, &config, env),
+            let (Some(upstream), Some(found)) = (
+                upstream(&entry, &config, env),
                 auth::resolve_token(&entry, &config, &env_map, home.as_deref(), Some(platform())),
             ) else {
                 continue;
             };
-            served_hosts.push((entry, found.token, url));
+            served_hosts.push((entry, found.token, upstream));
         }
     }
     // A host-less `auth status` whose hosts all lack tokens keeps the built-in answer.
@@ -212,9 +210,9 @@ pub fn launch(
         .collect();
     let gateway: Vec<GatewayHost> = served_hosts
         .into_iter()
-        .map(|(entry, real, forgejo_url)| GatewayHost {
+        .map(|(entry, real, upstream)| GatewayHost {
             entry,
-            forgejo_url,
+            forgejo_url: upstream.base.clone(),
             // `auth status --show-token` presents the real token, which it prints (§3, §5).
             expected: if expect_real {
                 real.clone()
@@ -223,7 +221,7 @@ pub fn launch(
             },
             upstream: real,
             answer_portless: true,
-            wip_prefixes: WipPrefixes::default(),
+            wip_prefixes: upstream.wip(),
         })
         .collect();
     let allowlist = config.hosts.clone();
@@ -319,26 +317,17 @@ fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
     }
 }
 
-/// The forge's own base URL, or `None` while the gateway can't honour this host's settings.
-fn upstream_url(host: &str, config: &Config, env: &HashMap<String, String>) -> Option<Url> {
+/// The forge's upstream (L4), or `None` while the gateway can't honour this host's settings. A
+/// setting the built-in client would refuse, such as an unreadable CA file, also leaves the call
+/// to the built-in path, which reports it.
+fn upstream(host: &str, config: &Config, env: &HashMap<String, String>) -> Option<Upstream> {
     // gh can't use an IPv6 host, and routing declines them (L2); never launch one.
     if config::normalize_host(host).starts_with('[') {
         return None;
     }
-    let settings = config.host.get(&config::normalize_host(host));
-    let custom_ca = settings.is_some_and(|settings| settings.ca_file.is_some())
-        || env
-            .get("FJ_SHIM_CA_FILE")
-            .is_some_and(|path| !path.is_empty());
-    if custom_ca {
-        return None;
-    }
-    let base = settings
-        .and_then(|settings| settings.api_url.clone())
-        .unwrap_or_else(|| format!("https://{}", config::normalize_host(host)));
-    let url = Url::parse(&format!("{}/", base.trim_end_matches('/'))).ok()?;
-    // fga-core joins absolute `/api/v1/...` paths, which would drop a path prefix.
-    (url.path() == "/").then_some(url)
+    Upstream::for_host(host, config, env)
+        .ok()
+        .filter(Upstream::gateway_ready)
 }
 
 /// Whether the user's own gh is logged in to `host`: an `oauth_token` or a `user` under the key
@@ -488,12 +477,12 @@ mod tests {
         let none = HashMap::new();
         let plain = config("hosts = [\"forge.test\"]\n");
         assert_eq!(
-            upstream_url("forge.test", &plain, &none).map(String::from),
+            upstream("forge.test", &plain, &none).map(|upstream| upstream.base.to_string()),
             Some("https://forge.test/".to_string())
         );
         let api = config("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\napi_url = \"http://127.0.0.1:3000\"\n");
         assert_eq!(
-            upstream_url("forge.test", &api, &none).map(String::from),
+            upstream("forge.test", &api, &none).map(|upstream| upstream.base.to_string()),
             Some("http://127.0.0.1:3000/".to_string())
         );
     }
@@ -502,13 +491,31 @@ mod tests {
     fn settings_the_gateway_lacks_keep_the_built_in_path() {
         let none = HashMap::new();
         let prefixed = config("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\napi_url = \"http://127.0.0.1:3000/forgejo\"\n");
-        assert_eq!(upstream_url("forge.test", &prefixed, &none), None);
-        let ca =
-            config("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\nca_file = \"/etc/ca.pem\"\n");
-        assert_eq!(upstream_url("forge.test", &ca, &none), None);
+        assert!(upstream("forge.test", &prefixed, &none).is_none());
+        // A valid CA file: extra roots wait for fga-core, not just a file that can't be read.
+        let test_ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+        let ca = config(&format!(
+            "hosts = [\"forge.test\"]\n[host.\"forge.test\"]\nca_file = \"{}\"\n",
+            test_ca.display()
+        ));
+        assert!(upstream("forge.test", &ca, &none).is_none());
         let plain = config("hosts = [\"forge.test\"]\n");
-        let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), "/etc/ca.pem".to_string())]);
-        assert_eq!(upstream_url("forge.test", &plain, &env), None);
+        let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), test_ca.display().to_string())]);
+        assert!(upstream("forge.test", &plain, &env).is_none());
+        let missing = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), "/etc/ca.pem".to_string())]);
+        assert!(
+            upstream("forge.test", &plain, &missing).is_none(),
+            "the built-in path reports it"
+        );
+    }
+
+    #[test]
+    fn a_hosts_wip_prefixes_reach_its_upstream() {
+        let set = config(
+            "hosts = [\"forge.test\"]\n[host.\"forge.test\"]\nwip_prefixes = [\"DRAFT:\"]\n",
+        );
+        let upstream = upstream("forge.test", &set, &HashMap::new()).expect("served");
+        assert_eq!(upstream.wip().strip("DRAFT: x"), "x");
     }
 
     fn plan(args: &[&str], env: &[(&str, &str)]) -> Plan {
@@ -604,7 +611,7 @@ mod tests {
     #[test]
     fn an_ipv6_host_keeps_the_built_in_path() {
         let plain = config("hosts = [\"forge.test\"]\n");
-        assert_eq!(upstream_url("[::1]:3000", &plain, &HashMap::new()), None);
+        assert!(upstream("[::1]:3000", &plain, &HashMap::new()).is_none());
     }
 
     #[test]
