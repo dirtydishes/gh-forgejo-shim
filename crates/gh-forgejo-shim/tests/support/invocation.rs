@@ -1,7 +1,5 @@
 //! Process-level routing checks, including arguments that are not valid UTF-8.
 
-use std::fs;
-
 use super::support::{CliFixture, TestResult};
 
 #[test]
@@ -100,35 +98,35 @@ fn invalid_invocation_with_a_late_attached_repo_flag_stays_local() -> TestResult
 }
 
 #[test]
-fn auth_hostname_on_commands_missing_from_the_table_stays_local() -> TestResult {
+fn gh_state_commands_and_help_run_plain_gh_in_a_forgejo_context() -> TestResult {
+    // Launcher spec §2's delegate list: these call no API or write gh's own state, and help is
+    // gh's own; real gh answers them even with GH_HOST naming an allowlisted forge.
     let fixture = CliFixture::new()?;
-    let output = fixture
-        .command("gh-forgejo-shim")?
-        .args(["gh", "auth", "login", "--hostname", "git.example.com"])
-        .output()?;
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(String::from_utf8(output.stderr)?,
-        "gh-forgejo-shim: \"gh auth login\" is not supported for Forgejo host git.example.com yet\n");
-    Ok(())
-}
-
-#[test]
-fn local_help_uses_the_captured_gh_help_without_auth() -> TestResult {
-    let fixture = CliFixture::new()?;
-    let output = fixture
-        .command("gh-forgejo-shim")?
-        .env("GH_HOST", "git.example.com")
-        .args(["gh", "pr", "view", "--help"])
-        .output()?;
-    assert!(output.status.success(), "{output:?}");
-    assert!(output.stderr.is_empty());
-    let usage: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/usage-errors.json"),
-    )?)?;
-    assert_eq!(
-        String::from_utf8(output.stdout)?,
-        usage["pr view"]["help"].as_str().expect("help")
-    );
+    let real = fixture.write_executable(
+        "gh",
+        "#!/bin/sh\nprintf 'real gh:'; printf ' %s' \"$@\"; echo\n",
+    )?;
+    for args in [
+        &["auth", "login", "--hostname", "git.example.com"][..],
+        &["auth", "setup-git"][..],
+        &["config", "get", "editor"][..],
+        &["alias", "list"][..],
+        &["pr", "view", "--help"][..],
+    ] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env("GH_HOST", "git.example.com")
+            .env("FJ_SHIM_REAL_GH", &real)
+            .arg("gh")
+            .args(args)
+            .output()?;
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout)?,
+            format!("real gh: {}\n", args.join(" ")),
+            "{args:?}"
+        );
+    }
     Ok(())
 }
 
