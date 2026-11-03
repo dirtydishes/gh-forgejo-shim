@@ -32,6 +32,9 @@ ERROR_PROBES = [
 # Off-list commands that must delegate, so the runner can prove they still reach the decoy.
 DECOY_PROBES = [
     ["pr", "list", "-R", f"github.com/{REPO}"],
+    # gh's own version, in a Forgejo checkout: real gh answers it without a request.
+    ["--version"],
+    ["version"],
 ]
 LOCAL_PROBES = [
     ["pr", "merge", "1"],
