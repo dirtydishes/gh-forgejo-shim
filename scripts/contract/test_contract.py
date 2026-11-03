@@ -119,6 +119,17 @@ class ContractTests(unittest.TestCase):
             ({"shim_config": {"hosts": ["github.com"]}}, "wip_prefixes"),
             ({"state": [{"path": "pulls/1", "fields": {}}]}, "own pull request"),
             ({"oracle": {}}, "own expect"),
+            ({"xfail": "x"}, "own expect"),
+            ({"id": "create-x"}, "start with twin-"),
+            # No selector: gh would pick the checkout's branch, scenario PR 1.
+            ({"argv": ["pr", "edit", "--title", "t"]}, "one selector"),
+            ({"argv": ["pr", "comment", "--body", "b"]}, "one selector"),
+            ({"argv": ["pr", "create", "--title", "t"]}, "one --head"),
+            ({"argv": ["pr", "create", "--head", "{branch}", "--base", "s/pass"]}, "base must be main"),
+            ({"setup": {"branch": "twin/x"}}, "needs setup.pr"),
+            ({"expect": {"exit": 0, "stdout": "(", "stderr": ""}}, "isn't a pattern"),
+            ({"expect": {"exit": "0", "stdout": "", "stderr": ""}}, "integer"),
+            ({"state": [{"path": "pulls/{pr}", "any": {"title": "t"}}]}, "comments list"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)

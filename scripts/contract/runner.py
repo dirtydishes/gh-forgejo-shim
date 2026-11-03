@@ -113,7 +113,8 @@ def main():
         # Checksum-pinned official gh, as the oracle captures use; a mismatch raises.
         gh_dir = Path(tempfile.mkdtemp(prefix="real-gh-", dir=work_dir))
         real_gh = official_gh(gh_dir)
-    for _, case in cases:
+    # Twin cases write to the twin, so they run after every case that reads it.
+    for _, case in sorted(cases, key=lambda item: item[1].get("kind") == "twin"):
         try:
             actual = execute(case, binary, seed_home, work_dir,
                              real_gh if launched(case, commands) else None)

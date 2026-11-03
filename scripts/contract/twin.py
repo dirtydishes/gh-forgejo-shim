@@ -26,11 +26,16 @@ BRANCH = re.compile(r"twin/[a-z0-9-]+")
 
 
 def validate(case):
-    """Reject a twin case that could act outside its own branch on the twin."""
+    """Reject a twin case that could act outside its own branch on the twin, or crash the run."""
+    if not case["id"].startswith("twin-"):
+        raise ValueError("twin case ids start with twin-")
     argv = case["argv"]
-    flags = TWIN_COMMANDS.get(tuple(argv[:2]))
+    command = tuple(argv[:2])
+    flags = TWIN_COMMANDS.get(command)
     if flags is None:
         raise ValueError("twin command is outside the twin allowlist")
+    selectors = []
+    heads = []
     index = 2
     while index < len(argv):
         arg = argv[index]
@@ -41,25 +46,49 @@ def validate(case):
                 index += 1
                 if index == len(argv):
                     raise ValueError(f"missing value for {arg}")
-                if argv[index - 1] in {"--head"} and argv[index] != "{branch}":
-                    raise ValueError("--head must be the case's own branch")
-        elif arg not in PLACEHOLDERS:
+                if arg == "--head":
+                    heads.append(argv[index])
+                if arg == "--base" and argv[index] != "main":
+                    raise ValueError("--base must be main")
+        elif arg in PLACEHOLDERS:
+            selectors.append(arg)
+        else:
             raise ValueError("a twin selector must be {pr} or {branch}")
         index += 1
+    # Without a selector gh picks the checkout's branch, s/pass: scenario PR 1.
+    if command == ("pr", "create"):
+        if heads != ["{branch}"] or selectors:
+            raise ValueError("pr create needs one --head {branch}, its own branch")
+    elif len(selectors) != 1:
+        raise ValueError("a twin pr command needs one selector, {pr} or {branch}")
     setup = case.get("setup")
     if not isinstance(setup, dict) or not BRANCH.fullmatch(setup.get("branch", "")):
         raise ValueError("twin setup needs a branch named twin/<name>")
     if set(setup) - {"branch", "pr"}:
         raise ValueError("twin setup takes only branch and pr")
+    if "{pr}" in argv and not setup.get("pr"):
+        raise ValueError("{pr} needs setup.pr")
     if set(case.get("shim_config", {})) - {"wip_prefixes"}:
         raise ValueError("twin shim_config may only name wip_prefixes")
     expect = case.get("expect")
     if not isinstance(expect, dict) or set(expect) != {"exit", "stdout", "stderr"}:
         raise ValueError("twin expect needs exit, stdout and stderr")
+    if not isinstance(expect["exit"], int):
+        raise ValueError("twin expect.exit must be an integer")
+    for stream in ("stdout", "stderr"):
+        try:
+            re.compile(expect[stream])
+        except (TypeError, re.error) as error:
+            raise ValueError(f"twin expect.{stream} isn't a pattern: {error}") from error
     for check in case.get("state", []):
-        if not STATE_PATH.fullmatch(check.get("path", "")) or not (set(check) - {"path"}) <= {"fields", "any"}:
+        path = check.get("path", "")
+        if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any"}:
             raise ValueError("twin state checks read the case's own pull request")
-    if "oracle" in case or "expected" in case:
+        if "fields" in check and not isinstance(check["fields"], dict):
+            raise ValueError("twin state fields must be an object")
+        if "any" in check and (not path.endswith("/comments") or not isinstance(check["any"], dict)):
+            raise ValueError("twin state any is an object, on a comments list")
+    if set(case) & {"oracle", "expected", "xfail"}:
         raise ValueError("twin cases expect only their own expect and state")
 
 
@@ -76,7 +105,8 @@ def request(base, token, method, path, body=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(f"{base}/api/v1/repos/{REPO}/{path}", data=data, method=method,
                                  headers={"Authorization": f"token {token}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as response:
+    # No proxy, as seed.py: the token must go to the local twin, not to a proxy that resolves it.
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=30) as response:
         return json.loads(response.read() or b"null")
 
 
