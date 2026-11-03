@@ -252,6 +252,7 @@ const GH_COMMANDS: &[&str] = &[
     "cs",
     "project",
     "preview",
+    "skill",
     "skills",
     "copilot",
     "status",
@@ -430,6 +431,7 @@ fn honors_saved_default(group: &str) -> bool {
             | "cs"
             | "project"
             | "preview"
+            | "skill"
             | "skills"
             | "copilot"
             | "status"
