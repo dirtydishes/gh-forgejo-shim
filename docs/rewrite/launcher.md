@@ -124,7 +124,7 @@ gh would write to a throwaway copy (section 3):
   `agent-tasks`, `agent` and `agents`), which serve only github.com and,
   for `codespace ssh --config`, write `GH_PATH` into a lasting file;
 - `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials"). Inside a
-  launched call (`FJ_SHIM_CREDENTIALS` set), any form the helper's exact match doesn't take, such
+  launched call (`FJ_SHIM_CREDENTIALS` set, even empty), any form the helper's exact match doesn't take, such
   as `auth git-credential -- get` or an alias, is refused rather than delegated: plain gh would
   answer from the user's own logins.
 
