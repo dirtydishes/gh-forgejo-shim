@@ -290,8 +290,12 @@ fn runs_on_its_own(invocation: &Invocation) -> bool {
             | "codespace"
             | "cs"
             | "copilot"
+            | "skill"
             | "skills"
             | "agent-task"
+            | "agent-tasks"
+            | "agent"
+            | "agents"
             | "help"
     ) || matches!(
         command,
@@ -302,6 +306,14 @@ fn runs_on_its_own(invocation: &Invocation) -> bool {
             | "auth setup-git"
             | "auth git-credential"
     )
+}
+
+/// Whether an invocation asks for help, as gh's own flag grammar reads it. Only a command in the
+/// shim's grammar knows its own `-h` and which flags take a value: without one, the parser's
+/// fallback reads every `-h` as help, but `repo edit -h URL` sets a homepage and `release create
+/// v1 --notes --help` sets notes, both real writes. Those keep the Forgejo path's refusal.
+fn runs_help(invocation: &Invocation) -> bool {
+    invocation.has_grammar() && invocation.flag("help") == Some("true")
 }
 
 fn host_route(host: &str, config: &DispatcherConfig) -> RouteDecision {
@@ -346,16 +358,22 @@ fn run_gh(
         }
     };
     let routed = routing_invocation(&argv, &env);
-    let decision = decide_invocation_route(&routed, &config, &env, cwd);
+    let mut decision = decide_invocation_route(&routed, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
+    let help = decision.kind == RouteKind::Forgejo && runs_help(&routed);
+    if help {
+        // The trace still names the forge routing chose, and says plain gh ran.
+        // A prefix: callers read the reason's ending (`… user's gh hosts`).
+        decision.reason = format!("help, run by plain gh; {}", decision.reason);
+    }
 
     let exit_code = match decision.kind {
         RouteKind::Delegate => {
             run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
         }
-        // Help for any command is plain gh's (launcher spec §2), as the parser reads gh's help
-        // flag: routing still records the forge it would have used, and real gh prints the help.
-        RouteKind::Forgejo if routed.flag("help") == Some("true") => {
+        // Help for any command is plain gh's (launcher spec §2): routing still records the forge
+        // it would have used, and real gh prints the help.
+        RouteKind::Forgejo if help => {
             run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
         }
         RouteKind::Forgejo => {
@@ -479,6 +497,8 @@ fn run_forgejo(
         write_stderr(mode, &error.render());
         return error.exit_code();
     }
+    // Help with grammar runs plain gh in `run_gh`. This answers only the original argv's help
+    // flag when an alias expansion hid it from routing.
     if let Some(help) = invocation.help() {
         match mode {
             DelegateMode::Inherit => {
@@ -618,6 +638,12 @@ mod tests {
             &["ext", "install", "o/gh-x"][..],
             &["codespace", "list"][..],
             &["copilot", "suggest", "x"][..],
+            &["skill", "list"][..],
+            &["skills", "list"][..],
+            &["agent-task", "list"][..],
+            &["agent-tasks", "list"][..],
+            &["agent", "list"][..],
+            &["agents", "list"][..],
             &["help", "pr"][..],
         ] {
             let decision = decide_route(
@@ -646,6 +672,31 @@ mod tests {
                 Some(Path::new("/nonexistent-gfjs-repo")),
             );
             assert_eq!(decision.kind, RouteKind::Forgejo, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn help_runs_plain_gh_only_where_the_grammar_knows_the_flag() {
+        let help = |args: &[&str]| runs_help(&Invocation::parse(&argv(args)));
+        for args in [
+            &["pr", "view", "--help"][..],
+            &["pr", "view", "1", "-h"][..],
+            &["issue", "list", "--help"][..],
+        ] {
+            assert!(help(args), "{args:?}");
+        }
+        for args in [
+            // In the auth commands -h is --hostname.
+            &["auth", "token", "-h", "git.example.com"][..],
+            // A flag's value, and after --.
+            &["pr", "create", "--title", "--help"][..],
+            &["pr", "view", "--", "--help"][..],
+            // No grammar: -h is --homepage there, and --help may be a value. These are writes.
+            &["repo", "edit", "-h", "https://x.test"][..],
+            &["repo", "create", "foo", "--public", "-h", "https://x.test"][..],
+            &["release", "create", "v1", "--notes", "--help"][..],
+        ] {
+            assert!(!help(args), "{args:?}");
         }
     }
 
