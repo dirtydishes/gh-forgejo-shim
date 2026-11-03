@@ -18,8 +18,11 @@ async fn execute(router: Router, query: String) -> async_graphql::Response {
         .parse()
         .unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    // Four attempts while Forgejo is still checking (at 0, 0.25, 0.75 and 1.75 s), well clear of
+    // the window's end on either side.
     let session = Forgejo::new(base)
         .unwrap()
+        .with_merge_wait(std::time::Duration::from_millis(2500))
         .authenticate("token disposable")
         .await
         .unwrap();
@@ -888,4 +891,47 @@ async fn a_pr_from_a_deleted_fork_stays_cross_repository() {
         assert_eq!(pull["headRefName"], json!("feature"), "{number}");
     }
     task.abort();
+}
+
+/// Forgejo answers "Please try again later" while it still checks a PR it was just sent, which can
+/// take longer than a second or two on a busy forge. The merge keeps retrying for up to 10 s (and
+/// never past the request's deadline), so a PR pushed moments ago merges instead of reading as a
+/// conflict.
+#[tokio::test]
+async fn merge_waits_out_a_slow_mergeability_check() {
+    let started = std::time::Instant::now();
+    let app = router().route(
+        "/api/v1/repos/o/r/pulls/1/merge",
+        axum::routing::post(move || async move {
+            if started.elapsed() < std::time::Duration::from_millis(2500) {
+                (
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    Json(api_error("Please try again later")),
+                )
+                    .into_response()
+            } else {
+                (StatusCode::OK, Json(Value::Null)).into_response()
+            }
+        }),
+    );
+    let query = format!(
+        r#"mutation {{mergePullRequest(input:{{pullRequestId:"{}", mergeMethod:SQUASH}}){{pullRequest{{number}}}}}}"#,
+        node_id("PullRequest", "o/r", 1)
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    // The default window, as fga-server uses it.
+    let session = Forgejo::new(base)
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    let response = graphql::schema()
+        .execute(Request::new(query).data(session))
+        .await;
+    task.abort();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
 }
