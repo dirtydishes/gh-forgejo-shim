@@ -488,6 +488,52 @@ fn a_credential_request_is_answered_before_the_guards() {
 }
 
 #[test]
+fn other_git_credential_forms_in_a_launch_never_reach_plain_gh() {
+    // Inside a launched call only the launcher's helper answers git (§3). A form its exact match
+    // doesn't take is refused, not delegated: plain gh would answer from the user's own logins.
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let credentials = fixture.dir.join("credentials");
+    fs::write(&credentials, "forge.test real-token\n").expect("credentials");
+    let user_gh = fixture.home.join(".config/gh");
+    fs::create_dir_all(&user_gh).expect("gh config");
+    fs::write(
+        user_gh.join("config.yml"),
+        "aliases:\n    gc: auth git-credential\n",
+    )
+    .expect("alias");
+    let gh = fixture.fake_gh(r#"echo ran > "$REPORT"; echo password=user-token"#);
+    for args in [
+        &["auth", "git-credential", "--", "get"][..],
+        &["auth", "git-credential", "--help=false", "get"][..],
+        &["gc", "get"][..],
+    ] {
+        let mut child = fixture
+            .command(&gh, args)
+            .env("FJ_SHIM_CREDENTIALS", &credentials)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn wrapper");
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(b"protocol=https\nhost=gist.github.com\n\n")
+            .expect("write");
+        let output = child.wait_with_output().expect("wait");
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("password="),
+            "{args:?}: {output:?}"
+        );
+        assert_eq!(fixture.report(), "", "{args:?}: plain gh ran");
+    }
+}
+
+#[test]
 fn a_repeated_depth_entry_still_counts_toward_the_cap() {
     let _serial = serial();
     let fixture = Fixture::new("http://127.0.0.1:9");

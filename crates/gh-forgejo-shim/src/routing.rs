@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::config::{self, normalize_host};
@@ -102,6 +103,9 @@ enum DelegateMode<'a> {
     },
 }
 
+/// Whether this process started as the launcher's credential helper (`FJ_SHIM_CREDENTIALS` set).
+static LAUNCHED_HELPER_CALL: AtomicBool = AtomicBool::new(false);
+
 pub fn run_gh_from_env<I>(args: I) -> i32
 where
     I: IntoIterator<Item = OsString>,
@@ -119,11 +123,17 @@ where
     ) {
         return code;
     }
-    // Not a credential request: the variable the run directory's script set must not reach
-    // anything this call starts, or a later `auth git-credential` would be answered from a
-    // launcher's file instead of delegating (§3). Single-threaded here.
+    // Not a credential request the helper answers: the variable the run directory's script set
+    // must not reach anything this call starts, or a later `auth git-credential` would be answered
+    // from a launcher's file instead of delegating (§3). Single-threaded here. Whether it was set
+    // decides how this call treats any other `auth git-credential` form (`run_gh`).
     #[cfg(unix)]
-    std::env::remove_var(crate::launcher::credentials::CREDENTIALS_VAR);
+    {
+        let helper_call = std::env::var_os(crate::launcher::credentials::CREDENTIALS_VAR)
+            .is_some_and(|value| !value.is_empty());
+        LAUNCHED_HELPER_CALL.store(helper_call, Ordering::Relaxed);
+        std::env::remove_var(crate::launcher::credentials::CREDENTIALS_VAR);
+    }
     // Guards 2 and 3 (launcher spec §8) come before routing, so a loop stops at once.
     let entry_env = routing_env();
     if let Some(code) = crate::launcher::recursion_guard(&entry_env) {
@@ -172,20 +182,30 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    decide_invocation_route(&routing_invocation(argv, env), config, env, cwd)
+    let (invocation, leads) = routing_invocation(argv, env);
+    decide_invocation_route(&invocation, leads, config, env, cwd)
 }
 
 /// The invocation routing decides on: `argv` with a plain gh alias expanded as gh expands it, so
-/// an alias's own flags and arguments count. gh itself still gets the original `argv`.
-fn routing_invocation(argv: &[String], env: &HashMap<String, String>) -> Invocation {
-    match expand_alias(argv, env) {
-        Some(expanded) => Invocation::parse(&expanded),
-        None => Invocation::parse(argv),
-    }
+/// an alias's own flags and arguments count. gh itself still gets the original `argv`. Also
+/// whether that argv starts with the command's first word: a flag before it may take a value the
+/// parser doesn't know, so `gh --notes config release create v1` is `release create` to gh, not
+/// `config` (cobra reads `config` as `--notes`'s value).
+fn routing_invocation(argv: &[String], env: &HashMap<String, String>) -> (Invocation, bool) {
+    let expanded = expand_alias(argv, env);
+    let words = expanded.as_deref().unwrap_or(argv);
+    let invocation = Invocation::parse(words);
+    let leads = invocation
+        .command
+        .split_whitespace()
+        .next()
+        .is_some_and(|first| words.first().map(String::as_str) == Some(first));
+    (invocation, leads)
 }
 
 fn decide_invocation_route(
     invocation: &Invocation,
+    leads: bool,
     config: &DispatcherConfig,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
@@ -196,7 +216,9 @@ fn decide_invocation_route(
     if invocation.command.is_empty() || invocation.command == "version" {
         return RouteDecision::delegate("gh's root or version command", None);
     }
-    if runs_on_its_own(invocation) {
+    // Only when the command word comes first: with a flag before it, the command gh runs may not
+    // be the one the parser found, and these delegate without looking for a Forgejo repo.
+    if leads && runs_on_its_own(invocation) {
         return RouteDecision::delegate("a command gh runs on its own", None);
     }
     // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
@@ -359,10 +381,20 @@ fn run_gh(
             return 1;
         }
     };
-    let routed = routing_invocation(&argv, &env);
-    let mut decision = decide_invocation_route(&routed, &config, &env, cwd);
+    let (routed, leads) = routing_invocation(&argv, &env);
+    // Inside a launched call, git's credentials come only from the launcher's helper (§3). A
+    // form its exact match didn't take (`auth git-credential -- get`, an alias) is refused, never
+    // handed to plain gh, which would answer from the user's own logins.
+    if LAUNCHED_HELPER_CALL.load(Ordering::Relaxed) && routed.command == "auth git-credential" {
+        write_error(
+            &mut mode,
+            "gh-forgejo-shim: inside a launched gh, git's credentials come only from the launcher's helper",
+        );
+        return 1;
+    }
+    let mut decision = decide_invocation_route(&routed, leads, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
-    let help = decision.kind == RouteKind::Forgejo && runs_help(&routed);
+    let help = decision.kind == RouteKind::Forgejo && leads && runs_help(&routed);
     if help {
         // The trace still names the forge routing chose, and says plain gh ran.
         // A prefix: callers read the reason's ending (`… user's gh hosts`).
@@ -714,12 +746,44 @@ mod tests {
     }
 
     #[test]
+    fn a_flag_before_the_command_keeps_the_forgejo_route() {
+        // gh reads `config` as --notes's value and runs release create, a write: never plain gh.
+        for args in [
+            &["--notes", "config", "release", "create", "v1"][..],
+            &["-R", "o/r", "config", "get", "editor"][..],
+            &["--repo", "o/r", "pr", "view", "--help"][..],
+        ] {
+            let decision = decide_route(
+                &argv(args),
+                &config(&["git.example.com"]),
+                &env(&[("GH_REPO", "git.example.com/owner/repo")]),
+                Some(Path::new("/nonexistent-gfjs-repo")),
+            );
+            assert_eq!(decision.kind, RouteKind::Forgejo, "{args:?}");
+        }
+    }
+
+    #[test]
     fn an_alias_to_a_delegated_command_delegates() {
         // Launcher spec §11, test 14: `gh sg` with `sg: auth setup-git`.
         let dir = std::env::temp_dir().join(format!("gfj-alias-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
-        std::fs::write(dir.join("config.yml"), "aliases:\n    sg: auth setup-git\n")
-            .expect("config");
+        std::fs::write(
+            dir.join("config.yml"),
+            "aliases:\n    sg: auth setup-git\n    sl: skill list\n",
+        )
+        .expect("config");
+        // gh's own name is skill; an alias can expand to it.
+        let skill = decide_route(
+            &argv(&["sl"]),
+            &config(&["git.example.com"]),
+            &env(&[
+                ("GH_REPO", "git.example.com/owner/repo"),
+                ("GH_CONFIG_DIR", dir.to_str().expect("utf-8")),
+            ]),
+            Some(Path::new("/nonexistent-gfjs-repo")),
+        );
+        assert_eq!(skill.kind, RouteKind::Delegate, "{skill:?}");
         let decision = decide_route(
             &argv(&["sg"]),
             &config(&["git.example.com"]),
