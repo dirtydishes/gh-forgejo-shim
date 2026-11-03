@@ -40,8 +40,9 @@ printf '#!/bin/sh\n# managed by gh-forgejo-shim\n# rollback-compatible marker: g
 chmod 755 /tmp/launcher-bin/gh
 export PATH="/tmp/launcher-bin:$PATH" FJ_SHIM_REAL_GH=/usr/local/bin/gh LAUNCHER_E2E_TOKEN="$token"
 export GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0 TMPDIR=/tmp/launcher-tmp
+# Without XDG_RUNTIME_DIR the run directory goes in TMPDIR, where the checks below look.
 unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_HOST GH_CONFIG_DIR \
-    GIT_ASKPASS SSH_ASKPASS GIT_CONFIG_PARAMETERS
+    GIT_ASKPASS SSH_ASKPASS GIT_CONFIG_PARAMETERS XDG_RUNTIME_DIR
 mkdir -m 700 "$TMPDIR"
 git config --global user.name e2e && git config --global user.email e2e@example.invalid
 check '[ -z "$(git config --get-all credential.helper || true)" ] && [ -z "$(git config --get core.askPass || true)" ]' \
@@ -57,9 +58,28 @@ check '[ "$(git rev-parse --abbrev-ref HEAD)" = s/pass ] && [ "$(git rev-parse H
     'gh pr checkout 1 checks out the pull request head'
 # git quotes the helper's path: run_command: '"<run dir>/gh" auth git-credential get'
 check 'grep -qE "run_command: .*/gfj-[0-9a-f]{16}/gh.? auth git-credential get" /tmp/launcher-trace' 'git asked the launcher'"'"'s helper'
-check '! grep -E "run_command: .*(credential-|git credential-)" /tmp/launcher-trace' 'no other credential helper ran'
 check '[ -z "$(ls -A "$TMPDIR")" ]' 'the run directory is gone'
-check '! grep -rq "$token" .git' 'the token is nowhere in the checkout'
+# Every helper git ran: a run_command naming a credential helper or askpass must be the launcher's.
+only_launcher() {
+    ! grep -E "run_command: .*(credential|askpass)" "$1" |
+        grep -vqE "run_command: .*/gfj-[0-9a-f]{16}/gh.? auth git-credential (get|store|erase)"
+}
+leftover() { grep -rlF "$token" "$HOME" /tmp/launcher-checkout "$TMPDIR" /tmp/launcher-trace* 2>/dev/null; }
+check '[ -z "$(leftover)" ]' 'the token is nowhere in the checkout, the home directory or the trace'
+
+# Competing helpers, as a user's own setup has them: a generic one and real gh's own, which
+# would answer from gh's hosts.yml. Neither may run inside a launch.
+printf '#!/bin/sh\necho "$*" >> /tmp/launcher-other-helper\n' > /tmp/launcher-bin/other-helper
+chmod 755 /tmp/launcher-bin/other-helper
+git config --global credential.helper /tmp/launcher-bin/other-helper
+git config --global --add credential.https://forge.test.helper '!/usr/local/bin/gh auth git-credential'
+git checkout -q main
+GIT_TRACE=/tmp/launcher-trace-helpers gh pr checkout 1 --detach
+check 'only_launcher /tmp/launcher-trace-helpers && [ ! -e /tmp/launcher-other-helper ]' \
+    'with other helpers configured, only the launcher'"'"'s helper ran'
+check 'only_launcher /tmp/launcher-trace' 'the first checkout ran only the launcher'"'"'s helper too'
+git config --global --unset-all credential.helper
+git config --global --unset-all credential.https://forge.test.helper
 
 # The other launched flags, each git-side.
 git checkout -q main
@@ -74,5 +94,7 @@ git checkout -q s/pass && git commit -q --allow-empty -m 'local only' && git che
 gh pr checkout 1 --force
 check '[ "$(git rev-parse --abbrev-ref HEAD)" = s/pass ] && [ "$(git rev-parse HEAD)" = "$head" ]' \
     'gh pr checkout --force resets a diverged local branch to the pull request head'
-check '[ -z "$(ls -A "$TMPDIR")" ]' 'no run directory is left after four launches'
+gh pr checkout 1 --detach -R forge.test/e2e/launcher
+check '[ "$(git rev-parse HEAD)" = "$head" ]' 'gh pr checkout -R names the repository'
+check '[ -z "$(ls -A "$TMPDIR")" ] && [ -z "$(leftover)" ]' 'no run directory or token is left after six launches'
 printf 'PASS client-mode e2e: a launched gh pr checkout fetches over TLS with only the launcher'"'"'s helper\n'
