@@ -423,16 +423,12 @@ fn too_much(cap: usize) -> Reading {
 /// Kills `child`'s process group, then `child`, and reaps it. The group is named only while
 /// `child` is unreaped, so its id can't have passed to another group.
 fn stop(child: &mut Child) {
+    // If the group is already gone, killing `child` below is all that's left to do.
     #[cfg(unix)]
-    {
-        let _ = Command::new("/bin/kill")
-            .args(["-KILL", "--", &format!("-{}", child.id())])
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+    let _ = rustix::process::kill_process_group(
+        rustix::process::Pid::from_child(child),
+        rustix::process::Signal::KILL,
+    );
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -611,11 +607,12 @@ mod tests {
             "{:?}",
             other.repair_commands
         );
-        assert!(is_homebrew(Path::new("/opt/homebrew/bin/gh")));
+        // Paths that don't exist, so the result doesn't depend on what this machine has there.
+        assert!(is_homebrew(Path::new("/opt/homebrew/nonexistent-bin/gh")));
         assert!(is_homebrew(Path::new(
-            "/usr/local/Cellar/gh/2.103.3/bin/gh"
+            "/nonexistent/usr/local/Cellar/gh/2.103.3/bin/gh"
         )));
-        assert!(!is_homebrew(Path::new("/usr/bin/gh")));
+        assert!(!is_homebrew(Path::new("/nonexistent/usr/bin/gh")));
     }
 
     #[test]
