@@ -503,14 +503,25 @@ fn other_git_credential_forms_in_a_launch_never_reach_plain_gh() {
     )
     .expect("alias");
     let gh = fixture.fake_gh(r#"echo ran > "$REPORT"; echo password=user-token"#);
-    for args in [
-        &["auth", "git-credential", "--", "get"][..],
-        &["auth", "git-credential", "--help=false", "get"][..],
-        &["gc", "get"][..],
+    // Set but empty counts too: the marker's presence makes it a launched call's helper context.
+    for (args, marker) in [
+        (
+            &["auth", "git-credential", "--", "get"][..],
+            credentials.as_os_str(),
+        ),
+        (
+            &["auth", "git-credential", "--help=false", "get"][..],
+            credentials.as_os_str(),
+        ),
+        (&["gc", "get"][..], credentials.as_os_str()),
+        (
+            &["auth", "git-credential", "--", "get"][..],
+            std::ffi::OsStr::new(""),
+        ),
     ] {
         let mut child = fixture
             .command(&gh, args)
-            .env("FJ_SHIM_CREDENTIALS", &credentials)
+            .env("FJ_SHIM_CREDENTIALS", marker)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
