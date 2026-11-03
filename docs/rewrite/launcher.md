@@ -362,8 +362,8 @@ it removes only logins and fails on a host without one
 (`gh/pkg/cmd/auth/logout/logout.go:111-129`). The user's config is left alone (§3).
 
 *S* is the routed host. For a host-less `gh auth status` it is every allowlist host that has a
-token, doesn't share its hostname with another entry, and isn't one the user's gh is logged in to
-(§2), so the status reports all of them.
+token, doesn't share its hostname with another entry, isn't one the user's gh is logged in to
+(§2), and has settings the built-in client accepts (§5), so the status reports all of them.
 
 What this guarantees:
 
@@ -532,8 +532,12 @@ the main thread runs the accept loop, the wait for gh and the signal streams.
 L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
 `AppState::new(hosts, ghes_version)`, with one `Host` per host in *S*:
 
-- `Host::new(public_url, forgejo, wip_prefixes)`. `forgejo` is that host's own upstream: base URL
-  and HTTP client, with the CA and `api_url` settings from L4. `wip_prefixes` is the host's
+- `Host::new(public_url, forgejo, wip_prefixes)`. `forgejo` is that host's own upstream,
+  `Forgejo::new_with_roots(base, roots)` (L4, `launcher::upstream`). `base` is the host's
+  `api_url`, path included, or `https://<entry>`. `roots` are the certificates in the host's
+  `ca_file`, then in `FJ_SHIM_CA_FILE`; they join the built-in trust store, and verification stays
+  on. The launcher checks both as the built-in client does: a CA file it couldn't read, or one
+  with no PEM certificate, leaves the call to the built-in path, which reports it. `wip_prefixes` is the host's
   `[host.<entry>].wip_prefixes` from the shim config, or the gateway's default (`WIP:`, `[WIP]`)
   when unset; the gateway strips them from a draft's title. `public_url` is `https://<entry>`,
   the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
