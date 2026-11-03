@@ -144,8 +144,10 @@ pub fn launches(invocation: &Invocation) -> bool {
             == 1;
     LAUNCH_LIST.contains(&command)
         && one_method
-        // Usage errors, help and forms the built-in path refuses as unsupported keep its
-        // answers, which need no token (spec §2, "Transition: the launch list").
+        // Usage errors and forms the built-in path refuses as unsupported keep its answers,
+        // which need no token (spec §2, "Transition: the launch list"). Help never gets here:
+        // `routing::run_gh` hands it to plain gh first; the check keeps `launches` alone from
+        // ever launching a help form.
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && served
