@@ -780,26 +780,43 @@ async fn comments_go_to_issues_and_pull_requests_by_their_own_ids() {
                     (
                         StatusCode::CREATED,
                         Json(json!({"id":9,"user":user(),"body":"hi","created_at":"2026-11-03T00:00:00Z",
-                            "html_url":format!("https://forge.test/o/r/issues/{number}#issuecomment-9")})),
+                            "html_url":if number == 1 {
+                                // Forgejo links a PR's comment under /pulls/.
+                                "https://forge.test/o/r/pulls/1#issuecomment-9".to_owned()
+                            } else {
+                                format!("https://forge.test/o/r/issues/{number}#issuecomment-9")
+                            }})),
                     )
                 }
             }),
         );
     let comment = |kind: &str, number: i32| {
         format!(
-            r#"mutation{{addComment(input:{{subjectId:"{}",body:"hi"}}){{commentEdge{{node{{body}}}}}}}}"#,
+            r#"mutation{{addComment(input:{{subjectId:"{}",body:"hi"}}){{commentEdge{{node{{url}}}}}}}}"#,
             node_id(kind, "o/r", number)
         )
     };
-    for (kind, number) in [("Issue", 2), ("PullRequest", 1)] {
+    // gh reads back only the comment's URL: an issue's stays under /issues/, a PR's takes GitHub's
+    // /pull/ layout (MAPPING §8).
+    for (kind, number, url) in [
+        ("Issue", 2, "https://forge.test/o/r/issues/2#issuecomment-9"),
+        (
+            "PullRequest",
+            1,
+            "https://forge.test/o/r/pull/1#issuecomment-9",
+        ),
+    ] {
         let response = execute(router.clone(), comment(kind, number)).await;
         assert!(response.errors.is_empty(), "{kind}: {:?}", response.errors);
         assert_eq!(
             response.data.into_json().unwrap(),
-            json!({"addComment":{"commentEdge":{"node":{"body":"hi"}}}})
+            json!({"addComment":{"commentEdge":{"node":{"url":url}}}})
         );
     }
-    let response = execute(router.clone(), comment("Issue", 1)).await;
-    assert_eq!(response.errors[0].message, "Not Found");
+    // Each kind of ID names only its own kind: an issue ID for a PR, a PR ID for an issue.
+    for (kind, number) in [("Issue", 1), ("PullRequest", 2)] {
+        let response = execute(router.clone(), comment(kind, number)).await;
+        assert_eq!(response.errors[0].message, "Not Found", "{kind} {number}");
+    }
     assert_eq!(*posted.lock().unwrap(), [2, 1]);
 }
