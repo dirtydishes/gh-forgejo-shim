@@ -533,7 +533,9 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
 `AppState::new(hosts, ghes_version)`, with one `Host` per host in *S*:
 
 - `Host::new(public_url, forgejo, wip_prefixes)`. `forgejo` is that host's own upstream: base URL
-  and HTTP client, with the CA and `api_url` settings from L4. `public_url` is `https://<entry>`,
+  and HTTP client, with the CA and `api_url` settings from L4. `wip_prefixes` is the host's
+  `[host.<entry>].wip_prefixes` from the shim config, or the gateway's default (`WIP:`, `[WIP]`)
+  when unset; the gateway strips them from a draft's title. `public_url` is `https://<entry>`,
   the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
   at the forge's web UI. Per D2, PR links end in `/pull/N`.
 - `.expecting(per_call).upstream_token(real)` (gateway PR #66), for every served host. gh
