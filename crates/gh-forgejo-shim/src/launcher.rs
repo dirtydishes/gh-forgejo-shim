@@ -45,9 +45,11 @@ pub const LAUNCH_LIST: &[&str] = &[
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
 /// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
 /// which serves or refuses that form before anything is written: gh would write part of a
-/// `pr edit` and then fail on a reviewer the gateway can't set. `--delete-branch` reports what
-/// happened: the gateway answers gh's branch delete with 422 only when Forgejo says the branch
-/// doesn't exist, and with an error for a branch it couldn't delete.
+/// `pr edit` and then fail on a reviewer the gateway can't set. For `--delete-branch`, the
+/// gateway answers gh's branch delete with 422 only when Forgejo says the branch doesn't exist
+/// (`pr merge` takes that as already deleted, `pr close` as a failure), and with an error for a
+/// branch it couldn't delete. On a PR merged before the call, gh 2.103.3 sends no delete and
+/// still prints, in a terminal, that it deleted the branch (`merge.go:523-545`), as on GitHub.
 /// For these commands the list replaces `is_native()`, which can't see the built-in path's
 /// per-flag refusals.
 const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
