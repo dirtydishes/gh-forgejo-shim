@@ -52,7 +52,11 @@ impl Fixture {
         ] {
             fs::create_dir_all(dir)?;
         }
-        fixture.tool("gh", "#!/bin/sh\nexit 0\n")?;
+        // The oldest gh the shim supports, so install and doctor accept it.
+        fixture.tool(
+            "gh",
+            "#!/bin/sh\n[ \"$1\" = --version ] && echo 'gh version 2.103.3 (2026-05-01)'\nexit 0\n",
+        )?;
         fixture.tool("git", "#!/bin/sh\nexit 1\n")?;
         fixture.tool("security", "#!/bin/sh\nexit 98\n")?;
         fixture.tool("launchctl", "#!/bin/sh\nexit 1\n")?;

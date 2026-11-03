@@ -257,7 +257,9 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn find_real_gh(
+/// The gh the wrapper delegates to: the configured one, else the first on PATH or in the
+/// common install dirs, passing over the shim itself.
+pub(crate) fn find_real_gh(
     config: Option<&Config>,
     env: &EnvMap,
     fallback_dirs: &[PathBuf],
@@ -352,7 +354,7 @@ fn expanded_common_package_dirs(home: Option<&Path>, env: &EnvMap) -> Vec<PathBu
         .collect()
 }
 
-fn default_fallback_dirs() -> Vec<PathBuf> {
+pub(crate) fn default_fallback_dirs() -> Vec<PathBuf> {
     external::DEFAULT_FALLBACK_DIRS
         .iter()
         .map(PathBuf::from)

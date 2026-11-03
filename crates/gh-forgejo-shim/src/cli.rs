@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, EnvMap};
 use crate::routing;
 use crate::{
-    auth, bootstrap, codex_smoke, doctor, external, git_recorder, gui_path, setup, shim,
-    trace_summary, Result, ShimError, VERSION,
+    auth, bootstrap, codex_smoke, doctor, external, gh_version, git_recorder, gui_path, setup,
+    shim, trace_summary, Result, ShimError, VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,6 +355,30 @@ fn run_install_shim(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runti
     }
 
     let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
+    // The shim delegates to real gh, so it isn't installed without one new enough (decision D3).
+    let config =
+        config::load_config_with_env(Some(&config::config_path(runtime.home())), runtime.env())?;
+    let real_gh = setup::find_real_gh(
+        Some(&config),
+        runtime.env(),
+        &setup::default_fallback_dirs(),
+    );
+    let gh = gh_version::check(real_gh.as_ref(), runtime.env(), runtime.platform());
+    match gh.status {
+        gh_version::Status::Supported => {}
+        gh_version::Status::AllowedUnknown => writeln!(stdout, "warning: real gh: {}", gh.detail)?,
+        gh_version::Status::Refused => {
+            let mut message = format!("not installing the gh shim: real gh: {}", gh.detail);
+            if !gh.repair_commands.is_empty() {
+                message.push_str("\nrepair commands:");
+                for command in &gh.repair_commands {
+                    message.push_str("\n  ");
+                    message.push_str(command);
+                }
+            }
+            return Err(ShimError::new(message));
+        }
+    }
     let path = shim::install_shim(
         bin_dir.as_deref(),
         runtime.home(),
@@ -1305,6 +1329,7 @@ mod tests {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
         runtime.current_exe = home.join("runtime bin").join("gfj");
+        use_supported_gh(&mut runtime, &home)?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -1334,6 +1359,7 @@ mod tests {
     fn install_shim_refuses_unmanaged_target_without_force() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
+        use_supported_gh(&mut runtime, &home)?;
         let bin = home.join("custom-bin");
         fs::create_dir(&bin)?;
         fs::write(bin.join("gh"), "unrelated")?;
@@ -1941,6 +1967,36 @@ mod tests {
 
     fn os_args<const N: usize>(values: [&str; N]) -> Vec<OsString> {
         values.into_iter().map(OsString::from).collect()
+    }
+
+    /// Points `runtime` at a fake real gh that reports the oldest supported version, so install
+    /// never looks for one in this machine's install dirs. Written from a child `sh`, so no
+    /// sibling test's fork holds it open for writing when it runs (ETXTBSY).
+    fn use_supported_gh(runtime: &mut FakeRuntime, home: &Path) -> Result<()> {
+        use std::process::{Command, Stdio};
+
+        let dir = home.join("real gh");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("gh");
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let written = child
+            .stdin
+            .take()
+            .ok_or_else(|| ShimError::new("no stdin"))?
+            .write_all(b"#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n");
+        let status = child.wait()?;
+        written?;
+        if !status.success() {
+            return Err(ShimError::new(format!("writing the fake gh: {status}")));
+        }
+        runtime
+            .env
+            .insert("FJ_SHIM_REAL_GH".to_string(), path.display().to_string());
+        Ok(())
     }
 
     fn temp_root() -> Result<PathBuf> {

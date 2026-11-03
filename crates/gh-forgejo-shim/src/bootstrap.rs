@@ -6,6 +6,7 @@ use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::doctor;
 use crate::external;
+use crate::gh_version;
 use crate::gui_path;
 use crate::repo::{self, RepoRef};
 use crate::setup::{self, SetupInspectOptions, TargetMode};
@@ -159,6 +160,20 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     let target_bin_dir = setup_model.target_bin_dir.clone();
     let target_shim = setup_model.target_shim_path.clone();
     let mut checks = Vec::new();
+
+    // Nothing is written or installed for a gh the shim can't use (decision D3). A dry run goes
+    // on, to show the rest of the plan.
+    let gh_check = real_gh_check(&setup_model, &options.env, &options.platform);
+    if gh_check.status == BootstrapCheckStatus::Fix && !options.dry_run {
+        return Ok(BootstrapResult {
+            repo: None,
+            config_path: config.path,
+            shim: None,
+            checks: vec![gh_check],
+            dry_run: false,
+            gui_path_apply: None,
+        });
+    }
 
     let repo = match plan {
         Some(RepoPlan::Allowlist { repo, entry }) => {
@@ -333,7 +348,7 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         }
     };
 
-    checks.push(real_gh_check(&setup_model, &options.platform));
+    checks.push(gh_check);
 
     let installed = if options.dry_run {
         dry_run_shim_check(&target_bin_dir, &target_shim, options.force, &mut checks);
@@ -693,21 +708,18 @@ impl BootstrapCheck {
     }
 }
 
-fn real_gh_check(model: &setup::SetupModel, platform: &str) -> BootstrapCheck {
-    if let Some(real_gh) = model.real_gh.as_ref() {
-        return BootstrapCheck::new(
-            "real gh",
-            true,
-            format!("found {} via {}", real_gh.path.display(), real_gh.source),
-            Vec::<String>::new(),
-        );
+/// Whether real gh is there and new enough ([`gh_version::MINIMUM`]).
+fn real_gh_check(model: &setup::SetupModel, env: &EnvMap, platform: &str) -> BootstrapCheck {
+    let check = gh_version::check(model.real_gh.as_ref(), env, platform);
+    match check.status {
+        gh_version::Status::Supported => {
+            BootstrapCheck::new("real gh", true, check.detail, Vec::<String>::new())
+        }
+        gh_version::Status::AllowedUnknown => BootstrapCheck::warn("real gh", check.detail),
+        gh_version::Status::Refused => {
+            BootstrapCheck::new("real gh", false, check.detail, check.repair_commands)
+        }
     }
-    BootstrapCheck::new(
-        "real gh",
-        false,
-        "could not find the real GitHub CLI from config, env, current PATH, or common install dirs",
-        real_gh_repair_commands(platform),
-    )
 }
 
 fn dry_run_shim_check(
@@ -1058,15 +1070,6 @@ fn path_repair_commands(target_bin_dir: &Path) -> Vec<String> {
         ),
         "gh-forgejo-shim doctor".to_string(),
     ]
-}
-
-fn real_gh_repair_commands(platform: &str) -> Vec<String> {
-    let mut commands = Vec::new();
-    if platform == "darwin" {
-        commands.push("brew install gh".to_string());
-    }
-    commands.push("FJ_SHIM_REAL_GH=/path/to/gh gh-forgejo-shim doctor".to_string());
-    commands
 }
 
 fn target_dir_precedes_path(model: &setup::SetupModel, path: &Path) -> bool {

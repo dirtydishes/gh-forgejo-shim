@@ -16,6 +16,7 @@ pub mod create;
 pub mod doctor;
 pub mod external;
 pub mod forgejo;
+pub mod gh_version;
 pub mod git_recorder;
 pub mod gui_path;
 pub mod invocation;
