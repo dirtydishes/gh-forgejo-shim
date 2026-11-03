@@ -32,16 +32,17 @@ TWIN_COMMANDS = {
     ("run", "view"): {"--json", "--jq"},
     ("issue", "comment"): {"--body"},
     # The case's own issue: read back, listed, or made with a title naming the case (C4).
-    ("issue", "view"): {"--json", "--jq", "--comments"},
-    ("issue", "list"): {"--json", "--jq", "--state", "--author", "--search", "--limit"},
+    ("issue", "view"): {"--json", "--jq"},
+    ("issue", "list"): {"--json", "--jq", "--state", "--author", "--assignee", "--label", "--limit"},
     ("issue", "create"): {"--title", "--body"},
 }
-BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--comments"}
+BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo"}
 PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
+ISSUE_SELECT = "select(.number == {issue})"
 # The selector each command takes; `run list` takes `--branch {branch}` instead.
 SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
 STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?")
-SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue"}
+SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label"}
 # The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
 # default branch. It runs only for `twin/run-*` branches, so creating such a case's branch
 # queues that case's one run, which waits (the twin has no runner), and no other push queues any.
@@ -104,9 +105,10 @@ def validate(case):
         if branches != ["{branch}"] or selectors:
             raise ValueError("run list needs one --branch {branch}, the case's own, and no selector")
     elif command == ("issue", "list"):
-        # Other cases make issues too: the case's --jq picks out its own.
-        if not any("{issue}" in jq for jq in values.get("--jq", [])) or selectors:
-            raise ValueError("issue list needs a --jq that selects {issue}, and no selector")
+        # Other cases make issues too: the case's --jq picks out its own, so nothing it prints
+        # depends on theirs (a count of them would).
+        if not any(ISSUE_SELECT in jq for jq in values.get("--jq", [])) or selectors:
+            raise ValueError(f"issue list needs a --jq with {ISSUE_SELECT}, and no selector")
     elif command == ("issue", "create"):
         # The issue it makes names the case, and stdout gives its number as (?P<issue>...).
         titles = values.get("--title", [])
@@ -122,7 +124,7 @@ def validate(case):
     # prepare() names a case's own base <branch>-base; no case may claim such a name.
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
-    for flag in ("pr", "base", "draft", "closed", "workflow", "issue"):
+    for flag in ("pr", "base", "draft", "closed", "workflow", "issue", "label"):
         if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
@@ -137,6 +139,8 @@ def validate(case):
         raise ValueError('setup.workflow "branch" needs a branch outside twin/run-*, made from main')
     if command[0] == "issue" and (not setup.get("issue")) != (command == ("issue", "create")):
         raise ValueError("a twin issue command needs setup.issue, its own issue (issue create makes its own)")
+    if setup.get("label") and not setup.get("issue"):
+        raise ValueError("setup.label labels the case's own issue, so it needs setup.issue")
     # A merge goes into the case's own base branch, never main, which other cases read.
     if command == ("pr", "merge") and not setup.get("base"):
         raise ValueError("a twin merge needs setup.base, its own base branch")
@@ -163,6 +167,13 @@ def validate(case):
             re.compile(expect[stream])
         except (TypeError, re.error) as error:
             raise ValueError(f"twin expect.{stream} isn't a pattern: {error}") from error
+    # stdout may name only what the command makes, never what setup bound: a rebound {issue}
+    # would point the state checks at another case's issue.
+    bound = {"branch", "head"} | {name for name, made in (
+        ("pr", setup.get("pr")), ("issue", setup.get("issue")), ("run", setup.get("workflow")),
+        ("label", setup.get("label"))) if made}
+    if set(re.compile(expect["stdout"]).groupindex) & bound:
+        raise ValueError("a stdout pattern can't rebind a placeholder the case's setup made")
     for check in case.get("state", []):
         path = check.get("path", "")
         if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any", "none"}:
@@ -235,7 +246,13 @@ def prepare(case, home, token):
         if setup.get("closed"):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "closed"})
     if setup.get("issue"):
-        issue = request(base, token, "POST", "issues", {"title": f"twin: {branch}", "body": "twin"})
+        # Assigned to the twin's user, and labelled with the case's own label when asked.
+        body = {"title": f"twin: {branch}", "body": "twin", "assignees": [REPO.split("/")[0]]}
+        if setup.get("label"):
+            subs["label"] = "twin-" + branch.removeprefix("twin/")
+            label = request(base, token, "POST", "labels", {"name": subs["label"], "color": "#ededed"})
+            body["labels"] = [label["id"]]
+        issue = request(base, token, "POST", "issues", body)
         subs["issue"] = str(issue["number"])
     if setup.get("workflow"):
         subs["run"] = own_run(base, token, branch)
