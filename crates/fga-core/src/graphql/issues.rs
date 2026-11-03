@@ -184,6 +184,35 @@ impl Issue {
     ) -> async_graphql::Result<ProjectV2ItemConnection> {
         Ok(page(Vec::new(), first, last, after, before)?.into())
     }
+    /// Forgejo's pin order: non-zero while the issue is pinned.
+    async fn is_pinned(&self) -> Option<bool> {
+        Some(self.source.pin_order > 0)
+    }
+    /// The open PRs that would close this issue when merged ([`forgejo::Session::closing_pulls`]).
+    /// A PR the token can't read is left out rather than failing the field.
+    async fn closed_by_pull_requests_references(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<Option<PullRequestConnection>> {
+        let session = ctx.data_unchecked::<forgejo::Session>();
+        let references = session
+            .closing_pulls(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?;
+        let mut pulls = Vec::new();
+        for (owner, repo, number) in references {
+            match session.pull_request(&owner, &repo, number).await {
+                Ok(source) => pulls.push(PullRequest::new(source, &owner, &repo)),
+                Err(forgejo::Error::NotFound | forgejo::Error::Forbidden) => {}
+                Err(e) => return Err(error(e)),
+            }
+        }
+        Ok(Some(page(pulls, first, last, after, before)?.into()))
+    }
     async fn project_cards(
         &self,
         first: Option<i32>,

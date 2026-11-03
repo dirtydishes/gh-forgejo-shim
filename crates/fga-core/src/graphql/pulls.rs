@@ -168,6 +168,15 @@ impl PullRequest {
             .as_ref()
             .map(|r| User(r.owner.clone()).into())
     }
+    /// The base repository, which the PR belongs to.
+    async fn repository(&self, ctx: &Context<'_>) -> async_graphql::Result<Repository> {
+        let source = ctx
+            .data_unchecked::<Session>()
+            .repository(&self.owner, &self.repo)
+            .await
+            .map_err(error)?;
+        Ok(Repository { source })
+    }
     async fn head_repository(
         &self,
         ctx: &Context<'_>,
