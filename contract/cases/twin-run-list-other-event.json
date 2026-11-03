@@ -1,0 +1,26 @@
+{
+  "id": "twin-run-list-other-event",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/run-list-event",
+    "workflow": true
+  },
+  "argv": [
+    "run",
+    "list",
+    "--branch",
+    "{branch}",
+    "--event",
+    "pull_request",
+    "--json",
+    "status"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "\\[\\]\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}
