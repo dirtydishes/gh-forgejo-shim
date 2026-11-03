@@ -454,6 +454,21 @@ impl ProjectV2Item {
         None
     }
 }
+/// A classic project card. Forgejo has no classic projects and GitHub has retired them, so
+/// `projectCards` is always empty; these types exist for the shape gh selects.
+#[derive(SimpleObject)]
+pub struct ProjectCard {
+    pub project: Project,
+    pub column: Option<ProjectColumn>,
+}
+#[derive(SimpleObject)]
+pub struct Project {
+    pub name: String,
+}
+#[derive(SimpleObject)]
+pub struct ProjectColumn {
+    pub name: String,
+}
 #[derive(SimpleObject)]
 pub struct ProjectV2 {
     pub id: ID,

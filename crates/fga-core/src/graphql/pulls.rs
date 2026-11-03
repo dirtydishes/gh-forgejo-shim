@@ -556,6 +556,15 @@ impl PullRequest {
     ) -> async_graphql::Result<ProjectV2ItemConnection> {
         Ok(page(Vec::new(), first, last, after, before)?.into())
     }
+    async fn project_cards(
+        &self,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<ProjectCardConnection> {
+        Ok(page(Vec::new(), first, last, after, before)?.into())
+    }
 }
 
 #[derive(async_graphql::SimpleObject)]
