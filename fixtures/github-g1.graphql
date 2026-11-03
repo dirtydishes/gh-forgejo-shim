@@ -226,6 +226,7 @@ type Issue implements Node {
   reactionGroups: [ReactionGroup!]
   comments( after: String before: String first: Int last: Int orderBy: IssueCommentOrder ): IssueCommentConnection!
   projectItems( after: String before: String first: Int includeArchived: Boolean = true last: Int ): ProjectV2ItemConnection!
+  projectCards( after: String archivedStates: [ProjectCardArchivedState] = [ARCHIVED, NOT_ARCHIVED] before: String first: Int last: Int ): ProjectCardConnection!
   repository: Repository!
   issueType: IssueType
   blockedBy(orderBy: IssueDependencyOrder = {field: DEPENDENCY_ADDED_AT, direction: DESC}, after: String, before: String, first: Int, last: Int): IssueConnection!
@@ -413,6 +414,25 @@ type PageInfo {
   endCursor: String
 }
 
+type Project implements Node {
+  name: String!
+}
+
+type ProjectCard implements Node {
+  project: Project!
+  column: ProjectColumn
+}
+
+type ProjectCardConnection {
+  nodes: [ProjectCard]
+  totalCount: Int!
+  pageInfo: PageInfo!
+}
+
+type ProjectColumn implements Node {
+  name: String!
+}
+
 type ProjectV2 implements Node {
   id: ID!
   title: String!
@@ -490,6 +510,7 @@ type PullRequest implements Node {
   comments( after: String before: String first: Int last: Int orderBy: IssueCommentOrder ): IssueCommentConnection!
   commits( after: String before: String first: Int last: Int ): PullRequestCommitConnection!
   projectItems( after: String before: String first: Int includeArchived: Boolean = true last: Int ): ProjectV2ItemConnection!
+  projectCards( after: String archivedStates: [ProjectCardArchivedState] = [ARCHIVED, NOT_ARCHIVED] before: String first: Int last: Int ): ProjectCardConnection!
 }
 
 type PullRequestCommit implements Node {

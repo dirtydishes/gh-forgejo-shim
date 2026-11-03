@@ -94,6 +94,7 @@ connection!(PullRequestReviewCommentConnection, PullRequestReviewComment);
 connection!(PullRequestReviewThreadConnection, PullRequestReviewThread);
 connection!(GitActorConnection, GitActor);
 connection!(ProjectV2ItemConnection, ProjectV2Item);
+connection!(ProjectCardConnection, ProjectCard);
 
 #[derive(SimpleObject)]
 pub struct PullRequestEdge {

@@ -156,3 +156,46 @@ async fn pull_request_urls_use_githubs_layout() {
             "issue":{"url":"https://forge.test/o/r/issues/2"}}})
     );
 }
+
+/// gh's `--json projectCards` selection on `pr list` and `issue list`. Forgejo has no classic
+/// projects, so both answer an empty connection, as the built-in path's `[]` did.
+#[tokio::test]
+async fn project_cards_are_an_empty_connection() {
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r",
+            get(|| async {
+                Json(json!({"id":1,"name":"r","full_name":"o/r","private":false,
+                    "owner":{"id":1,"login":"o","avatar_url":"https://forge.test/avatar"},
+                    "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,
+                    "archived":false,"permissions":{"admin":false,"push":false,"pull":true}}))
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/2",
+            get(|| async { Json(pull(2, false)) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/issues/4",
+            get(|| async { Json(issue(4, "plain")) }),
+        );
+    let (session, task) = session(upstream).await;
+    let cards = "projectCards(first:100){nodes{project{name}column{name}},totalCount}";
+    let response = graphql::schema()
+        .execute(
+            Request::new(format!(
+                r#"{{repository(owner:"o",name:"r"){{
+                    pullRequest(number:2){{{cards}}} issue(number:4){{{cards}}}}}}}"#
+            ))
+            .data(session),
+        )
+        .await;
+    task.abort();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let empty = json!({"projectCards":{"nodes":[],"totalCount":0}});
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"repository":{"pullRequest":empty,"issue":empty}})
+    );
+}
