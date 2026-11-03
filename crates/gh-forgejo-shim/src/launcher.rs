@@ -32,7 +32,14 @@ pub const LAUNCH_LIST: &[&str] = &[
     "api",
     "auth token",
     "auth status",
+    "pr create",
+    "pr comment",
+    "pr edit",
 ];
+
+/// Launch-listed commands the built-in path refuses in every form (`support = "planned"` in
+/// `contract/tiers.toml`): there is no built-in answer to keep, so the listing alone decides.
+const BUILT_IN_REFUSES: &[&str] = &["pr edit"];
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
@@ -41,7 +48,7 @@ pub fn launches(invocation: &Invocation) -> bool {
         // answers, which need no token (spec §2, "Transition: the launch list").
         && invocation.validate().is_ok()
         && invocation.help().is_none()
-        && invocation.is_native()
+        && (invocation.is_native() || BUILT_IN_REFUSES.contains(&invocation.command.as_str()))
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -103,6 +110,16 @@ mod tests {
             "pr", "checks", "12", "--json", "name"
         ])));
         assert!(launches(&invocation(&["pr", "list", "--json", "number"])));
+        assert!(launches(&invocation(&[
+            "pr", "create", "--title", "t", "--body", "b"
+        ])));
+        assert!(launches(&invocation(&[
+            "pr", "comment", "12", "--body", "b"
+        ])));
+        assert!(
+            launches(&invocation(&["pr", "edit", "12", "--title", "t"])),
+            "the built-in path refuses every pr edit"
+        );
         assert!(!launches(&invocation(&["issue", "list"])));
         assert!(!launches(&invocation(&["issue", "view", "3"])));
         assert!(

@@ -1,0 +1,30 @@
+{
+  "id": "twin-pr-comment",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-comment",
+    "pr": true
+  },
+  "argv": [
+    "pr",
+    "comment",
+    "{pr}",
+    "--body",
+    "twin: a comment"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/pull/{pr}#issuecomment-[0-9]+\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "issues/{pr}/comments",
+      "any": {
+        "body": "twin: a comment"
+      }
+    }
+  ],
+  "normalize": []
+}

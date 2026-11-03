@@ -1,0 +1,40 @@
+{
+  "id": "twin-pr-create-draft",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-create-draft"
+  },
+  "shim_config": {
+    "wip_prefixes": [
+      "scenario: draft"
+    ]
+  },
+  "argv": [
+    "pr",
+    "create",
+    "--head",
+    "{branch}",
+    "--base",
+    "main",
+    "--title",
+    "twin: draft",
+    "--body",
+    "made by gh",
+    "--draft"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/pull/(?P<pr>[0-9]+)\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "draft": true
+      }
+    }
+  ],
+  "normalize": []
+}

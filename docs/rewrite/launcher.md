@@ -92,7 +92,7 @@ only to the commands on one list in code, `launcher::LAUNCH_LIST`, matched on th
 alias expansion (L2). Every other Forgejo route keeps the shim's built-in path, as before the
 launcher. So do usage errors, help, and a listed command's forms the built-in path refuses as
 unsupported, such as `pr checks --watch`: their answers need no token, and they stay as they are
-until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, then adds `pr list`, `api`, `auth token` and `auth status`. `pr checkout` joins with section 11's test 14, run end to end in the e2e environment (`cwe.17`). Each later gateway command adds its name to the list, with a test, in the change that
+until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, then adds `pr list`, `api`, `auth token` and `auth status`. C3a adds `pr create`, `pr comment` and `pr edit`. A listed command the built-in path refuses in every form, such as `pr edit`, has no built-in answer to keep; `launcher::BUILT_IN_REFUSES` names those, and their listing alone decides. `pr checkout` joins with section 11's test 14, run end to end in the e2e environment (`cwe.17`). Each later gateway command adds its name to the list, with a test, in the change that
 makes the gateway serve it. Once the list covers everything, C5 (`cwe.19`) deletes the built-in
 path and the list with it, and this rule becomes the one above.
 
