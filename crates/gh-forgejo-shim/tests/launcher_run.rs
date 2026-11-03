@@ -517,6 +517,8 @@ fn other_git_credential_forms_in_a_launch_never_reach_plain_gh() {
         ),
         (&["gc", "get"][..], credentials.as_os_str()),
         (&["true", "get"][..], credentials.as_os_str()),
+        // cobra adds `help` after gh registers aliases, so an alias can take the name (Sol r4#2).
+        (&["help", "get"][..], credentials.as_os_str()),
         // An extension, or any word that isn't one of gh's commands.
         (&["gfjs-extension", "get"][..], credentials.as_os_str()),
         (
