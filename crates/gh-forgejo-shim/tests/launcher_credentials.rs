@@ -152,3 +152,52 @@ fn only_the_launchers_helper_answers_and_only_for_served_hosts() {
         "a helper from the user's config, GIT_CONFIG_COUNT or the inherited GIT_CONFIG_PARAMETERS ran"
     );
 }
+
+#[test]
+fn git_parses_the_launchers_config_with_the_users_unset_empty_or_set() {
+    // Launcher spec §11, test 14: whatever the user's GIT_CONFIG_PARAMETERS, every git in the
+    // call reads the launcher's value, plus a -c of its own, with no config parse error.
+    let fixture = Fixture::new();
+    for user in [None, Some(""), Some("'a.b'='c'")] {
+        let value = git_config_parameters(user.map(OsString::from).as_deref(), &fixture.run_dir);
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "x.y=z",
+                "config",
+                "--get-regexp",
+                r"^(a\.b|x\.y|credential\.helper)$",
+            ])
+            .current_dir(&fixture.root)
+            .env_clear()
+            .env("HOME", &fixture.home)
+            .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_PARAMETERS", &value)
+            .output()
+            .expect("git");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{user:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{user:?}: {output:?}");
+        assert!(stdout.contains("x.y z\n"), "{user:?}: {stdout}");
+        assert_eq!(
+            stdout.contains("a.b c\n"),
+            user.is_some_and(|value| !value.is_empty()),
+            "{user:?}: {stdout}"
+        );
+        // The clearing entry comes before the launcher's helper, after anything the user set.
+        let helpers: Vec<&str> = stdout
+            .lines()
+            .filter(|line| line.starts_with("credential.helper"))
+            .collect();
+        assert_eq!(
+            helpers.len(),
+            3,
+            "{user:?}: the user's .gitconfig, the clear, the launcher's: {stdout}"
+        );
+        assert!(
+            helpers[2].ends_with("gh auth git-credential"),
+            "{user:?}: {stdout}"
+        );
+    }
+}
