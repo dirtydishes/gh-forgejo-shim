@@ -41,7 +41,9 @@ pub fn workflow_id(filename: &str) -> i64 {
 
 pub fn status(native: &str) -> Result<(&'static str, Option<&'static str>), Error> {
     Ok(match native {
-        "waiting" | "blocked" => ("queued", None),
+        // Forgejo gives a run with no jobs `unknown` and counts it as pending
+        // (`models/actions/run_job.go` `AggregateJobStatus`, `status.go` `PendingStatuses`).
+        "waiting" | "blocked" | "unknown" => ("queued", None),
         "running" => ("in_progress", None),
         "success" => ("completed", Some("success")),
         "failure" => ("completed", Some("failure")),
@@ -168,7 +170,8 @@ mod tests {
         ] {
             assert_eq!(status(native).unwrap(), expected);
         }
-        assert!(status("unknown").is_err());
+        // A run with no jobs; Forgejo counts it as pending (`PendingStatuses`).
+        assert_eq!(status("unknown").unwrap(), ("queued", None));
         assert!(status("future-state").is_err());
         assert_eq!(workflow_id("ci.yml"), workflow_id("ci.yml"));
         assert_ne!(workflow_id("ci.yml"), workflow_id("other.yml"));

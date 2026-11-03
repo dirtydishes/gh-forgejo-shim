@@ -115,7 +115,7 @@ pub async fn runs(
     }
     if let Some(status) = q.status {
         let native: &[&str] = match status.as_str() {
-            "queued" => &["waiting", "blocked"],
+            "queued" => &["waiting", "blocked", "unknown"],
             "in_progress" => &["running"],
             "completed" => &["success", "failure", "cancelled", "skipped"],
             "success" => &["success"],

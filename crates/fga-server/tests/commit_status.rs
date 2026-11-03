@@ -152,3 +152,18 @@ async fn workflow_runs_by_head_sha_accept_a_repeated_parameter() {
     let (code, _) = get_json(addr, "/api/v3/repos/o/r/actions/runs?bogus=1").await;
     assert_eq!(code, 422);
 }
+
+/// `status=queued` asks Forgejo for every state the gateway reports as queued, including
+/// `unknown`, its state for a run with no jobs.
+#[tokio::test]
+async fn queued_runs_include_forgejos_unknown_state() {
+    let (addr, runs) = gateway().await;
+    let (code, body) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=queued").await;
+    assert_eq!(code, 200, "{body}");
+    let seen = runs.lock().unwrap().clone();
+    assert!(
+        seen.iter()
+            .any(|q| q.contains("status=waiting&status=blocked&status=unknown")),
+        "Forgejo got {seen:?}"
+    );
+}
