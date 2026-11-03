@@ -86,23 +86,23 @@ impl Branch {
 
     /// Whether the head is a branch that still exists. Forgejo puts the branch name in `ref` only
     /// then (`label` always holds it); an AGit PR, a deleted branch or a deleted fork has
-    /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`). A name starting with
-    /// `refs/` can't be told from that placeholder and would make gh write a raw ref, so it counts
-    /// as gone, which sends gh to the PR's own ref: still the PR's commit.
+    /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`). A branch itself named
+    /// `refs/pull/…` can't be told from that placeholder, so it counts as gone.
     pub fn exists(&self) -> bool {
-        !self.label.is_empty() && self.ref_name == self.label && !self.ref_name.starts_with("refs/")
+        !self.label.is_empty()
+            && self.ref_name == self.label
+            && !self.ref_name.starts_with("refs/pull/")
     }
 
-    /// The name gh sees as `headRefName`: Forgejo's, with every leading `refs/` removed. gh fetches
-    /// the PR into a local branch of this name, and `fetch …:refs/…` would write a raw ref that a
-    /// branch of the same name shadows. Only a head that doesn't [`exist`](Self::exists) can start
-    /// with `refs/`, so the shortened name never sends gh to another branch.
+    /// The name gh sees as `headRefName`. gh fetches the PR into a local branch of this name, and
+    /// `fetch …:refs/…` would write a raw ref that a branch of the same name shadows. An AGit PR has
+    /// no branch, only Forgejo's `refs/pull/N/head`, so it's reported as `pull/N/head`. A real branch
+    /// keeps its own name, so no two branches are reported alike.
     pub fn reported_name(&self) -> &str {
-        let mut name = self.name();
-        while let Some(rest) = name.strip_prefix("refs/") {
-            name = rest;
+        match self.ref_name.strip_prefix("refs/") {
+            Some(rest) if self.label.is_empty() => rest,
+            _ => self.name(),
         }
-        name
     }
 
     pub fn label(&self) -> String {
