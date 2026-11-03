@@ -27,9 +27,8 @@ const TOKEN_VARIABLES: [&str; 4] = [
     "GITHUB_ENTERPRISE_TOKEN",
 ];
 
-/// Launches real gh for `host`, or returns `None` when this host can't be launched yet and the
-/// built-in path should serve the call: a custom CA, or an `api_url` with a path, until the
-/// config bridge (L4) gives the gateway those settings.
+/// Launches real gh for `host`, or returns `None` when the built-in path should serve the call:
+/// an IPv6 host, or settings the built-in client would refuse, which it then reports.
 pub fn launch(
     host: &str,
     routed: &Invocation,
@@ -111,7 +110,8 @@ pub fn launch(
             crate::trace::tracing_enabled(env),
         ));
     }
-    // A host-less `auth status` leaves such a routed host out of S and serves the rest (§3).
+    // A host-less `auth status` leaves a routed host it can't serve out of S and serves the
+    // rest (§3).
     let routed_upstream = upstream(host, &config, env);
     if routed_upstream.is_none() && !all_hosts {
         return None;
@@ -166,7 +166,7 @@ pub fn launch(
     };
     // S, the served hosts (§3): the routed host, or for a host-less `auth status` every
     // allowlist entry with a token, except entries sharing a hostname, forges the user's gh is
-    // logged in to, and settings the gateway can't honour yet.
+    // logged in to, and settings the built-in client would refuse.
     let routed_entry = config::normalize_host(host);
     let mut served_hosts = Vec::new();
     if let (Some(token), Some(upstream)) = (&token, routed_upstream) {
@@ -213,6 +213,7 @@ pub fn launch(
         .map(|(entry, real, upstream)| GatewayHost {
             entry,
             forgejo_url: upstream.base.clone(),
+            roots: upstream.roots.clone(),
             // `auth status --show-token` presents the real token, which it prints (§3, §5).
             expected: if expect_real {
                 real.clone()
@@ -307,17 +308,15 @@ fn is_executable_file(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
-/// The forge's upstream (L4), or `None` while the gateway can't honour this host's settings. A
-/// setting the built-in client would refuse, such as an unreadable CA file, also leaves the call
-/// to the built-in path, which reports it.
+/// The forge's upstream (L4): its base URL, CA roots and draft prefixes. `None` for a setting the
+/// built-in client would refuse, such as an unreadable CA file, which leaves the call to the
+/// built-in path to report.
 fn upstream(host: &str, config: &Config, env: &HashMap<String, String>) -> Option<Upstream> {
     // gh can't use an IPv6 host, and routing declines them (L2); never launch one.
     if config::normalize_host(host).starts_with('[') {
         return None;
     }
-    Upstream::for_host(host, config, env)
-        .ok()
-        .filter(Upstream::gateway_ready)
+    Upstream::for_host(host, config, env).ok()
 }
 
 /// Whether the user's own gh is logged in to `host`: an `oauth_token` or a `user` under the key
@@ -478,25 +477,37 @@ mod tests {
     }
 
     #[test]
-    fn settings_the_gateway_lacks_keep_the_built_in_path() {
+    fn a_path_prefix_and_ca_roots_reach_the_upstream() {
         let none = HashMap::new();
         let prefixed = config("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\napi_url = \"http://127.0.0.1:3000/forgejo\"\n");
-        assert!(upstream("forge.test", &prefixed, &none).is_none());
-        // A valid CA file: extra roots wait for fga-core, not just a file that can't be read.
+        assert_eq!(
+            upstream("forge.test", &prefixed, &none).map(|upstream| upstream.base.to_string()),
+            Some("http://127.0.0.1:3000/forgejo/".to_string())
+        );
         let test_ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
         let ca = config(&format!(
             "hosts = [\"forge.test\"]\n[host.\"forge.test\"]\nca_file = \"{}\"\n",
             test_ca.display()
         ));
-        assert!(upstream("forge.test", &ca, &none).is_none());
+        assert!(!upstream("forge.test", &ca, &none)
+            .expect("ca_file")
+            .roots
+            .is_empty());
         let plain = config("hosts = [\"forge.test\"]\n");
         let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), test_ca.display().to_string())]);
-        assert!(upstream("forge.test", &plain, &env).is_none());
-        let missing = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), "/etc/ca.pem".to_string())]);
-        assert!(
-            upstream("forge.test", &plain, &missing).is_none(),
-            "the built-in path reports it"
-        );
+        assert!(!upstream("forge.test", &plain, &env)
+            .expect("FJ_SHIM_CA_FILE")
+            .roots
+            .is_empty());
+    }
+
+    #[test]
+    fn a_ca_file_the_built_in_client_refuses_keeps_the_built_in_path() {
+        let plain = config("hosts = [\"forge.test\"]\n");
+        for path in ["/etc/missing-ca.pem", "ca.pem"] {
+            let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), path.to_string())]);
+            assert!(upstream("forge.test", &plain, &env).is_none(), "{path}");
+        }
     }
 
     #[test]

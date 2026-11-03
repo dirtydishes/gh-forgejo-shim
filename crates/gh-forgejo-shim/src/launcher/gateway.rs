@@ -24,6 +24,8 @@ pub struct GatewayHost {
     pub entry: String,
     /// The forge's own base URL, where Forgejo's API lives.
     pub forgejo_url: Url,
+    /// Extra CA roots for the forge, joining the built-in trust store (L4).
+    pub roots: Vec<reqwest::Certificate>,
     /// The token gh presents: the per-call one, or the real one in a `--show-token` call.
     pub expected: String,
     /// The token the gateway sends upstream.
@@ -43,7 +45,7 @@ pub fn router(hosts: Vec<GatewayHost>) -> Result<(Router, Vec<Forgejo>), String>
     for host in hosts {
         let public_url = Url::parse(&format!("https://{}", host.entry))
             .map_err(|error| format!("{}: {error}", host.entry))?;
-        let forgejo = Forgejo::new(host.forgejo_url.clone())
+        let forgejo = Forgejo::new_with_roots(host.forgejo_url.clone(), host.roots.clone())
             .map_err(|error| format!("{}: {error}", host.entry))?;
         clients.push(forgejo.clone());
         let mut gateway_host = Host::new(public_url, forgejo, host.wip_prefixes.clone())
@@ -109,6 +111,7 @@ mod tests {
         GatewayHost {
             entry: entry.to_string(),
             forgejo_url: Url::parse(&format!("https://{entry}/")).expect("url"),
+            roots: Vec::new(),
             expected: "per-call".to_string(),
             upstream: "real".to_string(),
             answer_portless,

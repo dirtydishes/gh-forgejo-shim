@@ -869,14 +869,14 @@ fn host_less_auth_status_serves_every_eligible_host_with_its_login() {
 }
 
 #[test]
-fn host_less_auth_status_serves_the_rest_when_the_routed_host_waits_for_l4() {
+fn host_less_auth_status_serves_the_rest_when_the_routed_host_cant_be_served() {
     let _serial = serial();
     let api = stub_forgejo(&[("other-secret", "login-b")]);
     let fixture = Fixture::new(&api);
     fs::write(
         fixture.home.join(".config/gh-forgejo-shim/config.toml"),
         format!(
-            "hosts = [\"forge.test\", \"other.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}/forgejo\"\n[host.\"other.test\"]\ntoken_env = \"OTHER_TOKEN\"\napi_url = \"{api}\"\n"
+            "hosts = [\"forge.test\", \"other.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\nca_file = \"/nonexistent/ca.pem\"\n[host.\"other.test\"]\ntoken_env = \"OTHER_TOKEN\"\napi_url = \"{api}\"\n"
         ),
     )
     .expect("config");
@@ -904,7 +904,7 @@ fn host_less_auth_status_serves_the_rest_when_the_routed_host_waits_for_l4() {
     assert_eq!(
         field("forge.test", "oauth_token").as_deref(),
         Some("gfj-not-served"),
-        "an api_url with a path waits for the config bridge"
+        "a CA file the built-in client would refuse"
     );
 }
 
@@ -1087,53 +1087,102 @@ fn a_signal_during_the_login_lookup_ends_the_launch_at_once() {
     assert!(fixture.parent_is_empty(), "run directory removed");
 }
 
-/// A Forgejo that knows one user and one draft pull request, `o/r#1`, titled `DRAFT: x`.
-fn draft_forgejo() -> String {
+/// A Forgejo that knows one user and one draft pull request, `o/r#1`, titled `DRAFT: x`, with
+/// its API under `prefix`. Over TLS, it serves `localhost` with a certificate from the test CA.
+fn draft_forgejo(prefix: &'static str, tls: bool) -> String {
     use std::io::{BufRead, BufReader, Write as _};
+    fn answer(stream: impl std::io::Read + std::io::Write, prefix: &str) {
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+            if request.is_empty() {
+                request = line.clone();
+            }
+            line.clear();
+        }
+        let user = r#"{"id":1,"login":"o","avatar_url":""}"#;
+        let body = if request.starts_with(&format!("GET {prefix}/api/v1/user ")) {
+            user.to_string()
+        } else if request.starts_with(&format!("GET {prefix}/api/v1/repos/o/r/pulls/1 ")) {
+            format!(
+                r#"{{"number":1,"title":"DRAFT: x","state":"open","merged":false,"draft":true,"html_url":"https://forge.test/o/r/pulls/1","head":{{"label":"topic","ref":"topic","sha":"abc","repo":null}},"base":{{"label":"main","ref":"main","sha":"def","repo":null}},"user":{user},"merged_at":null}}"#
+            )
+        } else {
+            String::new()
+        };
+        let status = if body.is_empty() {
+            "404 Not Found"
+        } else {
+            "200 OK"
+        };
+        let _ = write!(
+            reader.get_mut(),
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = reader.get_mut().flush();
+    }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let address = listener.local_addr().expect("address");
+    let port = listener.local_addr().expect("address").port();
+    let server = tls.then(|| {
+        let cert = rustls::pki_types::CertificateDer::from(
+            include_bytes!("fixtures/test-server.der").to_vec(),
+        );
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            include_bytes!("fixtures/test-server-key.der")
+                .to_vec()
+                .into(),
+        );
+        std::sync::Arc::new(
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .expect("server config"),
+        )
+    });
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let mut reader = BufReader::new(stream);
-            let mut request = String::new();
-            let mut line = String::new();
-            while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
-                if request.is_empty() {
-                    request = line.clone();
+            match &server {
+                Some(config) => {
+                    let Ok(connection) = rustls::ServerConnection::new(config.clone()) else {
+                        continue;
+                    };
+                    let mut tls = rustls::StreamOwned::new(connection, stream);
+                    answer(&mut tls, prefix);
+                    tls.conn.send_close_notify();
+                    let _ = tls.flush();
                 }
-                line.clear();
+                None => answer(stream, prefix),
             }
-            let user = r#"{"id":1,"login":"o","avatar_url":""}"#;
-            let body = if request.starts_with("GET /api/v1/user ") {
-                user.to_string()
-            } else if request.starts_with("GET /api/v1/repos/o/r/pulls/1 ") {
-                format!(
-                    r#"{{"number":1,"title":"DRAFT: x","state":"open","merged":false,"draft":true,"html_url":"https://forge.test/o/r/pulls/1","head":{{"label":"topic","ref":"topic","sha":"abc","repo":null}},"base":{{"label":"main","ref":"main","sha":"def","repo":null}},"user":{user},"merged_at":null}}"#
-                )
-            } else {
-                String::new()
-            };
-            let status = if body.is_empty() {
-                "404 Not Found"
-            } else {
-                "200 OK"
-            };
-            let _ = write!(
-                reader.get_mut(),
-                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
         }
     });
-    format!("http://{address}")
+    if tls {
+        format!("https://localhost:{port}{prefix}")
+    } else {
+        format!("http://127.0.0.1:{port}{prefix}")
+    }
+}
+
+/// A fake gh that asks the launched gateway for `o/r#1` and reports the status, then the body.
+const GH_READS_THE_PR: &str = r#"token=$(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)
+curl -s -w '%{http_code}\n' -o "$REPORT.body" --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" "http://forge.test/api/v3/repos/o/r/pulls/1" > "$REPORT"
+cat "$REPORT.body" >> "$REPORT""#;
+
+/// The gateway's answer to [`GH_READS_THE_PR`]: the status, and the pull request as JSON.
+fn gateways_pr(fixture: &Fixture) -> (String, serde_json::Value) {
+    let report = fixture.report();
+    let (status, body) = report.split_once('\n').unwrap_or((&report, ""));
+    (
+        status.to_string(),
+        serde_json::from_str(body).unwrap_or(serde_json::Value::Null),
+    )
 }
 
 #[test]
 fn a_hosts_wip_prefixes_reach_the_launched_gateway() {
     let _serial = serial();
-    let api = draft_forgejo();
-    let gh_reads_the_pr = r#"token=$(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)
-curl -s --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" "http://forge.test/api/v3/repos/o/r/pulls/1" > "$REPORT""#;
+    let api = draft_forgejo("", false);
     for (prefixes, title) in [("wip_prefixes = [\"DRAFT:\"]\n", "x"), ("", "DRAFT: x")] {
         let fixture = Fixture::new(&api);
         fs::write(
@@ -1141,12 +1190,42 @@ curl -s --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" "http:
             format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\n{prefixes}"),
         )
         .expect("config");
-        let gh = fixture.fake_gh(gh_reads_the_pr);
+        let gh = fixture.fake_gh(GH_READS_THE_PR);
         let output = fixture.launch(&gh);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        let pr: serde_json::Value = serde_json::from_str(&fixture.report())
-            .unwrap_or_else(|error| panic!("{error}: {}", fixture.report()));
+        let (status, pr) = gateways_pr(&fixture);
+        assert_eq!(status, "200", "{}", fixture.report());
         assert_eq!(pr["draft"], true, "{pr}");
         assert_eq!(pr["title"], title, "{prefixes:?}: {pr}");
+    }
+}
+
+#[test]
+fn a_private_ca_forge_under_a_path_is_served_with_verification_on() {
+    let _serial = serial();
+    let api = draft_forgejo("/forgejo", true);
+    let ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+    for (ca_file, served) in [
+        (format!("ca_file = \"{}\"\n", ca.display()), true),
+        (String::new(), false),
+    ] {
+        let fixture = Fixture::new(&api);
+        fs::write(
+            fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+            format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\nwip_prefixes = [\"DRAFT:\"]\n{ca_file}"),
+        )
+        .expect("config");
+        let gh = fixture.fake_gh(GH_READS_THE_PR);
+        let output = fixture.launch(&gh);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let (status, pr) = gateways_pr(&fixture);
+        if served {
+            // The test CA's root verifies the forge, and the API lives under `/forgejo`.
+            assert_eq!(status, "200", "{}", fixture.report());
+            assert_eq!(pr["title"], "x", "{pr}");
+        } else {
+            // Without the root, verification stays on and the upstream request fails.
+            assert_ne!(status, "200", "{}", fixture.report());
+        }
     }
 }

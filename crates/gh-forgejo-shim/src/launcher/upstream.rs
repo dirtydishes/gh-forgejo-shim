@@ -1,7 +1,7 @@
 //! The config bridge (L4, finding F10): one served host's shim settings, as the gateway's
 //! upstream client needs them. The built-in path reads the same settings in
 //! `forgejo::ForgejoClient::for_host`; this keeps the launched path to the same rules. The
-//! result is shaped for fga-core's `Forgejo::new_with_roots(base, roots)`.
+//! result is what fga-core's `Forgejo::new_with_roots(base, roots)` takes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,6 +40,18 @@ impl Upstream {
             .unwrap_or_else(|| format!("https://{host}"));
         let base = Url::parse(&format!("{}/", base_text.trim_end_matches('/')))
             .map_err(|error| format!("invalid base URL for {host}: {error}"))?;
+        // `new_with_roots` leaves this check to its caller. Config loading already makes it of
+        // `api_url`; this covers the `https://<host>` default too.
+        if !matches!(base.scheme(), "http" | "https")
+            || !base.username().is_empty()
+            || base.password().is_some()
+            || base.query().is_some()
+            || base.fragment().is_some()
+        {
+            return Err(format!(
+                "invalid base URL for {host}: expected HTTP(S) without credentials, query or fragment"
+            ));
+        }
 
         let mut ca_files: Vec<PathBuf> = settings
             .and_then(|settings| settings.ca_file.clone())
@@ -70,13 +82,6 @@ impl Upstream {
             Some(prefixes) => WipPrefixes::from_csv(&prefixes.join(",")),
             None => WipPrefixes::default(),
         }
-    }
-
-    /// Whether the gateway's client can honour these settings today: no extra CA roots, and a
-    /// base at the forge's root (fga-core joins absolute `/api/v1/...` paths). Until
-    /// `new_with_roots` and relative joins land, such a host keeps the built-in path.
-    pub fn gateway_ready(&self) -> bool {
-        self.roots.is_empty() && self.base.path() == "/"
     }
 }
 
@@ -125,14 +130,39 @@ mod tests {
         let plain = Upstream::for_host("forge.test", &config("hosts = [\"forge.test\"]\n"), &none)
             .expect("plain");
         assert_eq!(plain.base.as_str(), "https://forge.test/");
-        assert!(plain.gateway_ready());
         let api = config("[host.\"forge.test\"]\napi_url = \"http://127.0.0.1:3000/forgejo\"\n");
         let upstream = Upstream::for_host("forge.test", &api, &none).expect("api_url");
         assert_eq!(upstream.base.as_str(), "http://127.0.0.1:3000/forgejo/");
-        assert!(
-            !upstream.gateway_ready(),
-            "a path prefix waits for fga-core"
-        );
+    }
+
+    #[test]
+    fn a_base_new_with_roots_would_refuse_is_an_error() {
+        // Config loading refuses these in `api_url`; a hand-built config shows the check holds.
+        for base in [
+            "ftp://forge.test",
+            "https://user:pw@forge.test",
+            "https://forge.test/?q=1",
+            "https://forge.test/#f",
+        ] {
+            let config = Config {
+                hosts: vec!["forge.test".to_string()],
+                host: std::collections::BTreeMap::from([(
+                    "forge.test".to_string(),
+                    config::HostConfig {
+                        api_url: Some(base.to_string()),
+                        ..Default::default()
+                    },
+                )]),
+                paths: config::PathsConfig { gh: None, fj: None },
+                path: PathBuf::from("/nonexistent/config.toml"),
+            };
+            assert!(
+                Upstream::for_host("forge.test", &config, &HashMap::new())
+                    .expect_err(base)
+                    .starts_with("invalid base URL for forge.test"),
+                "{base}"
+            );
+        }
     }
 
     #[test]
@@ -150,7 +180,6 @@ mod tests {
         let host_only =
             Upstream::for_host("forge.test", &with_host_ca, &HashMap::new()).expect("host CA");
         assert_eq!(host_only.roots.len(), one_file);
-        assert!(!upstream.gateway_ready(), "extra roots wait for fga-core");
     }
 
     #[test]
