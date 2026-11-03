@@ -69,7 +69,9 @@ review requests, an issue's pin (`isPinned`) and the open or merged PRs that clo
 (`closedByPullRequestsReferences`: each PR's newest `closes` or `reopens` reference on the issue's
 timeline, as Forgejo applies it), and empty project connections: `projectItems`, and `projectCards`
 for classic projects, which Forgejo lacks. Its mutations cover `gh pr create`, `comment`, `edit`,
-`close`, `reopen`, `ready` (both ways) and `merge`, including auto-merge, and `gh issue comment`.
+`close`, `reopen`, `ready` (both ways) and `merge`, including auto-merge, `gh issue comment`, and a
+non-interactive `gh issue create` with a title and body ([DESIGN.md](DESIGN.md) lists the flags it
+refuses).
 `search` supports the repo-scoped author and review-request queries from `pr status`. Other search
 qualifiers return an error. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the
 source commit and checksum. Its contract test checks type kinds, fields, nullability, arguments,
