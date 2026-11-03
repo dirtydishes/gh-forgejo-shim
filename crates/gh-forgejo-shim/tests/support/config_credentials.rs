@@ -51,16 +51,17 @@ gh = '{}'
             .env_remove("FJ_SHIM_HOSTS")
             .env_remove("FJ_SHIM_REAL_GH")
             .env("HOST_TOKEN", "host-secret")
-            // A command the built-in path still serves: `pr list` now launches real gh (L3).
-            .args(["gh", "issue", "list", "--json", "number"])
+            // A command the built-in path still serves: `pr list` (L3) and `issue list` (C4) now
+            // launch real gh.
+            .args(["gh", "pr", "diff", "1"])
             .output()?;
 
         assert!(output.status.success(), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
-        assert_eq!(String::from_utf8(output.stdout)?.trim(), "[]");
+        // What this checks is the route and the credential; `[]` is no pull request to print.
         let request = server.join().expect("HTTP server")?;
         assert!(
-            request.starts_with("GET /api/v1/repos/owner/repo/issues?"),
+            request.starts_with("GET /api/v1/repos/owner/repo/pulls/1"),
             "{request}"
         );
         assert!(
