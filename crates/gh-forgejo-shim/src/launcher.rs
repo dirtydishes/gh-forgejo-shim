@@ -92,15 +92,15 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     ("run view", &["json", "jq", "repo"]),
     // `--edit-last`, `--delete-last` and `--create-if-none` need mutations the gateway lacks.
     ("issue comment", &["body", "body-file", "repo"]),
-    // `--milestone`, `--type` and `--app` fail on the gateway (C4).
+    // `--milestone`, `--type` and `--app` fail on the gateway, and `--search` passes GitHub's
+    // query syntax through, which the gateway reads its own way (`label:a,b` as one label).
     (
         "issue list",
         &[
-            "state", "limit", "json", "jq", "author", "assignee", "label", "mention", "search",
-            "repo",
+            "state", "limit", "json", "jq", "author", "assignee", "label", "mention", "repo",
         ],
     ),
-    ("issue view", &["comments", "json", "jq", "repo"]),
+    ("issue view", &["json", "jq", "repo"]),
     // Title and body only. `--type`, `--parent`, `--blocked-by` and `--blocking` fail after the
     // issue is made (bead `r0t`); labels, assignees, milestone, projects and templates fail first.
     ("issue create", &["title", "body", "body-file", "repo"]),
@@ -165,6 +165,21 @@ pub fn launches(invocation: &Invocation) -> bool {
         && !(matches!(command, "pr comment" | "issue comment")
             && !invocation.flags.contains_key("body")
             && !invocation.flags.contains_key("body-file"))
+        // Issue fields the gateway leaves empty though Forgejo has them: dependencies and
+        // reactions. gh would print none and exit 0. `issue view`'s text lists the dependencies,
+        // so it launches only with `--json` (o1#2 on #131).
+        && !(matches!(command, "issue list" | "issue view")
+            && invocation.json_fields.as_ref().is_some_and(|fields| {
+                fields
+                    .iter()
+                    .any(|field| matches!(field.as_str(), "blockedBy" | "blocking" | "reactionGroups"))
+            }))
+        && !(command == "issue view" && invocation.json_fields.is_none())
+        // With a label too, gh searches with a `mentions:` qualifier the gateway refuses; alone
+        // it filters, as traced.
+        && !(command == "issue list"
+            && invocation.flags.contains_key("mention")
+            && invocation.flags.contains_key("label"))
         // Without a title and a body gh prompts for them in a terminal (`create.go`'s
         // interactive path), which no trace has covered.
         && !(command == "issue create"
@@ -270,7 +285,7 @@ mod tests {
             &["api", "/rate_limit", "--jq", ".rate", "-i", "-X", "GET"][..],
             &["issue", "list"][..],
             &[
-                "issue", "list", "-s", "all", "-L", "5", "-A", "me", "-l", "bug", "-S", "x",
+                "issue", "list", "-s", "all", "-L", "5", "-A", "me", "-l", "bug",
             ][..],
             &[
                 "issue",
@@ -284,8 +299,7 @@ mod tests {
                 "--mention",
                 "me",
             ][..],
-            &["issue", "view", "3"][..],
-            &["issue", "view", "3", "-c", "--json", "title"][..],
+            &["issue", "view", "3", "--json", "title,comments"][..],
             &["issue", "create", "-t", "t", "-b", "b"][..],
             &[
                 "issue", "create", "--title", "t", "-F", "body.md", "-R", "o/r",
@@ -366,6 +380,15 @@ mod tests {
             &["issue", "list", "--milestone", "m1"][..],
             &["issue", "list", "--app", "x"][..],
             &["issue", "view", "3", "--web"][..],
+            // Text view, or fields the gateway leaves empty (o1#2).
+            &["issue", "view", "3"][..],
+            &["issue", "view", "3", "--comments"][..],
+            &["issue", "view", "3", "--json", "title,blockedBy"][..],
+            &["issue", "list", "--json", "number,blocking"][..],
+            &["issue", "list", "--json", "reactionGroups"][..],
+            // Searches the gateway reads its own way, or refuses (o1#1, o1#4).
+            &["issue", "list", "--search", "label:a,b"][..],
+            &["issue", "list", "--mention", "me", "--label", "bug"][..],
             // gh would prompt for the title or the body in a terminal.
             &["issue", "create"][..],
             &["issue", "create", "-t", "t"][..],
