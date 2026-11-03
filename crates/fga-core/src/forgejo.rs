@@ -111,6 +111,52 @@ fn ok(reply: Reply) -> Result<Reply, Error> {
     }
 }
 
+/// Whether a path segment could leave the base path once a proxy in front of Forgejo decodes and
+/// resolves it before choosing where to send the request, as nginx does: it is `.` or `..`, or
+/// holds `/` or `\`, as written or after up to three rounds of percent-decoding (each proxy in a
+/// chain may decode once). Such a segment would take the token to another service behind the same
+/// proxy, so it is never sent. Names never need one; multi-part paths are split into segments.
+fn climbs(segment: &str) -> bool {
+    let mut text = segment.to_owned();
+    for _ in 0..=3 {
+        if matches!(text.as_str(), "." | "..") || text.contains(['/', '\\']) {
+            return true;
+        }
+        let decoded = percent_decode(&text);
+        if decoded == text {
+            return false;
+        }
+        text = decoded;
+    }
+    // Still decoding after three rounds: refuse rather than guess what a proxy will make of it.
+    true
+}
+
+/// One round of percent-decoding; an escape that isn't two hex digits stays as written.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).and_then(|&b| hex(b)),
+            bytes.get(i + 2).and_then(|&b| hex(b)),
+        ) {
+            (b'%', Some(high), Some(low)) => {
+                out.push((high * 16 + low) as u8);
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 impl Forgejo {
     /// A client for the Forgejo at `base`, the forge's own address. A base with a path, such as a
     /// forge served under `/forgejo/`, keeps it: every API call goes below it, to `{base}/api/v1/...`.
@@ -192,14 +238,7 @@ impl Forgejo {
         authorization: &str,
         budget: &AtomicUsize,
     ) -> Result<Reply, Error> {
-        // A segment holding `/` or `\`, or one that is `.` or `..`, would be percent-encoded here,
-        // but a proxy in front of Forgejo decodes and resolves it before choosing where to send
-        // the request (nginx does), so it could leave a base path such as `/forgejo/` and take the
-        // token to another service. Names never need one; multi-part paths are split into segments.
-        if segments
-            .iter()
-            .any(|segment| matches!(*segment, "." | "..") || segment.contains(['/', '\\']))
-        {
+        if segments.iter().any(|segment| climbs(segment)) {
             return Err(Error::NotFound);
         }
         let mut url = self.base.clone();
@@ -779,7 +818,20 @@ mod tests {
             .authenticate("token t")
             .await
             .unwrap();
-        for owner in ["../../outside", "..", ".", "a/b", "a\\b"] {
+        // Literal, once-encoded (a chain of two decoding proxies) and twice-encoded forms.
+        for owner in [
+            "../../outside",
+            "..",
+            ".",
+            "a/b",
+            "a\\b",
+            "..%2F..%2Foutside",
+            "%2e%2e",
+            ".%2E",
+            "a%5Cb",
+            "%252e%252e%252foutside",
+            "%25252e%25252e",
+        ] {
             let result = session
                 .get::<serde_json::Value>(&["repos", owner, "r"], &[])
                 .await;
@@ -802,6 +854,35 @@ mod tests {
             .unwrap();
         assert_eq!(entries, serde_json::json!([]));
         server.abort();
+    }
+
+    /// Names with a `%` that never decodes to a separator or a dot segment still go out: a branch
+    /// or file may be called `100%`, `a%zz` or `%2e.txt`.
+    #[test]
+    fn only_climbing_segments_are_refused() {
+        for name in [
+            "100%",
+            "a%zz",
+            "%2e.txt",
+            "50%25off",
+            "v1.2",
+            "..x",
+            "...",
+            "%E2%9C%93",
+        ] {
+            assert!(!climbs(name), "{name}");
+        }
+        for name in [
+            "..",
+            "%2E%2E",
+            "a%2Fb",
+            "%5C",
+            "%252F",
+            "%25252F",
+            "%2525252F",
+        ] {
+            assert!(climbs(name), "{name}");
+        }
     }
 
     /// A private CA's root is trusted only where passed, and hostname checks stay on: `new` refuses
