@@ -24,7 +24,7 @@ scripts/contract/capture-oracle.sh
 
 Use repeated `--case <id>` options to capture selected cases and preserve the other captures and scenarios.
 Cases with `kind = "shim-local"` use `expected` instead of `oracle`. Capture skips these cases, and
-`oracle_argv` rejects them. The exact local allowlist covers unsupported merge, edit, and repository API calls.
+`oracle_argv` rejects them. The exact local allowlist covers unsupported merge and repository API calls.
 The runner still checks exit code, both streams, and the real-gh decoy for these cases.
 
 ## The launcher's commands
@@ -46,6 +46,25 @@ writes, API method/body flags, other repos, web/browser flags, token disclosure,
 overrides that could redirect or authenticate a request. The token stays in memory and the child
 environment. Captures refuse output containing it. Refreshing also records PRs 1-7 in `scenarios.json`
 and the downloaded CLI's version in `oracle-version.txt`. Review those changes before committing.
+
+## Write commands: `twin` cases
+
+Captures are read-only, so a write command has no GitHub oracle. A case with `kind = "twin"` runs
+real gh 2.103.3 through the shim against the local Forgejo twin instead. gh is the real binary, so
+its output formatting is GitHub's by construction; the case checks what the gateway decides: that
+its answers drive gh to the expected exit code and output, and that the forge ends up in the state
+asked for. Before the run, the runner makes the case's own branch (`setup.branch`, `twin/<name>`)
+with one new file, and with `setup.pr` opens a pull request from it, both through Forgejo's API.
+`argv` may use `{branch}` and `{pr}`. `expect` holds the exit code and full-match regular
+expressions for stdout and stderr; a stdout pattern can name the pull request gh made with
+`(?P<pr>[0-9]+)`. Each `state` entry then reads the case's own pull request, or its comments, back
+from Forgejo and compares `fields` (dotted keys) or looks for `any` matching item. `shim_config`
+may add `wip_prefixes`, for the twin's draft prefix. The validator allows only the launched write
+commands and their listed flags, never another branch, repository or host, and the runner writes
+only to a twin on `127.0.0.1`.
+
+The limit: a twin case doesn't compare output with GitHub's for the same write. That would need
+writes to GitHub, which these tests never make.
 
 ## Cases and comparison
 

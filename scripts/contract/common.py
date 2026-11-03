@@ -38,7 +38,6 @@ DECOY_PROBES = [
 ]
 LOCAL_PROBES = [
     ["pr", "merge", "1"],
-    ["pr", "edit", "1", "--title", "x"],
     ["api", f"repos/{REPO}/pulls"],
 ]
 
@@ -66,6 +65,11 @@ def validate_case(case):
             raise ValueError("decoy command is outside the exact decoy allowlist")
         if "oracle" in case or "expected" in case:
             raise ValueError("decoy cases expect only the decoy")
+        return
+    if kind == "twin":
+        from twin import validate as validate_twin
+
+        validate_twin(case)
         return
     if kind == "shim-local":
         if argv not in LOCAL_PROBES:
@@ -128,10 +132,10 @@ def launch_list():
 
 
 def launched(case, commands):
-    """Whether real gh, not the decoy, sits on this case's PATH: oracle cases on the list."""
+    """Whether real gh, not the decoy, sits on this case's PATH: oracle and twin cases on the list."""
     argv = case["argv"]
     # An entry is one word (`api`) or two (`pr view`); match as many leading words as it has.
-    return case.get("kind", "oracle") == "oracle" and any(
+    return case.get("kind", "oracle") in ("oracle", "twin") and any(
         argv[:len(command.split())] == command.split() for command in commands
     )
 
@@ -146,12 +150,15 @@ def load_cases(directory):
         cases.append((path, case))
     if not cases or len({case["id"] for _, case in cases}) != len(cases):
         raise ValueError("case directory is empty or has duplicate ids")
+    branches = [case["setup"]["branch"] for _, case in cases if case.get("kind") == "twin"]
+    if len(set(branches)) != len(branches):
+        raise ValueError("twin cases need a branch each")
     return cases
 
 
 def oracle_argv(case):
-    if case.get("kind") in ("shim-local", "decoy"):
-        raise ValueError("shim-local cases must never reach real gh")
+    if case.get("kind") in ("shim-local", "decoy", "twin"):
+        raise ValueError("only oracle cases are captured from GitHub")
     return [arg.replace(f"forge.test/{REPO}", f"github.com/{REPO}") for arg in case["argv"]]
 
 

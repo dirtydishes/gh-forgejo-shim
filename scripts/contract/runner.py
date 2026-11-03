@@ -11,12 +11,16 @@ from pathlib import Path
 
 from capture import official_gh
 from common import REPO, ROOT, launch_list, launched, load_cases, normalize
+import twin
 
 
 def classify(case, actual):
     if case.get("kind") == "decoy":
         # execute() already required the decoy to run; there is no output to compare.
         return "pass", ""
+    if case.get("kind") == "twin":
+        # execute() checked the exit, the output patterns and the forge's state.
+        return ("unexpected", "\n".join(actual["diffs"])) if actual["diffs"] else ("pass", "")
     expected = case["expected"] if case.get("kind") == "shim-local" else case["oracle"]
     diffs = []
     if actual["exit"] != expected["exit"]:
@@ -75,7 +79,11 @@ def execute(case, binary, seed_home, work_dir, real_gh=None):
         } | case.get("env", {})
         for args in (("init", "-q", "-b", "s/pass"), ("remote", "add", "origin", f"https://forge.test/{REPO}.git")):
             subprocess.run([git, *args], cwd=checkout, env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        result = subprocess.run([str(entrypoint), *case["argv"]], cwd=checkout, env=env,
+        argv = case["argv"]
+        if case.get("kind") == "twin":
+            subs = twin.prepare(case, home, env["GFJS_TOKEN"])
+            argv = [twin.fill(arg, subs) for arg in argv]
+        result = subprocess.run([str(entrypoint), *argv], cwd=checkout, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
         if case.get("kind") == "decoy":
             if not marker.exists() or result.returncode != 97:
@@ -88,6 +96,8 @@ def execute(case, binary, seed_home, work_dir, real_gh=None):
         actual = {"exit": result.returncode, "stdout": result.stdout.decode(), "stderr": result.stderr.decode()}
         if env["GFJS_TOKEN"] in actual["stdout"] or env["GFJS_TOKEN"] in actual["stderr"]:
             raise RuntimeError(f"{case['id']}: refused output containing the Forgejo token")
+        if case.get("kind") == "twin":
+            actual["diffs"] = twin.check(case, actual, home, env["GFJS_TOKEN"], subs)
         return actual
 
 
