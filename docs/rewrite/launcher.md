@@ -90,7 +90,7 @@ An alias such as `gh co 12` in a Forgejo checkout has to reach a gh that can tal
 **Transition: the launch list.** Until the gateway serves every command, the rule above applies
 only to the commands on one list in code, `launcher::LAUNCH_LIST`, matched on the command after
 alias expansion (L2). Every other Forgejo route keeps the shim's built-in path, as before the
-launcher. So do usage errors, help, and a listed command's forms the built-in path refuses as
+launcher. So do usage errors and a listed command's forms the built-in path refuses as
 unsupported, such as `pr checks --watch`: their answers need no token, and they stay as they are
 until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, then adds `pr list`, `api`, `auth token` and `auth status`. C3a adds `pr create`, `pr comment` and `pr edit`, each launching only with the flags a trace showed the gateway serves (`launcher::LAUNCH_FLAGS`); any other flag keeps the built-in path, which serves or refuses that form before writing. For these commands the flag list replaces the built-in path's own test for the forms it serves. C3b adds `pr merge` (`--merge`, `--squash`, `--rebase`, `--auto`, `--match-head-commit`), `pr ready` (with `--undo`), `pr close` and `pr reopen`, the same way. `--delete-branch` stays off the list until the gateway can delete a branch: gh treats the gateway's 404 as already deleted and reports success, with the branch still there. C3c adds `pr checkout`, with `--branch`, `--detach` and `--force`, all git-side (`cwe.17`). The e2e environment runs it end to end for a same-repository pull request, with each of those flags and `-R`: a launched `gh pr checkout` fetches from the forge over TLS with only the launcher's credential helper, even with other helpers configured. That is test 14's first clause, a default-port fetch; its other clauses run as process tests or wait for `cwe.43`. Each later gateway command adds its name to the list, with a test, in the change that
 makes the gateway serve it. Once the list covers everything, C5 (`cwe.19`) deletes the built-in
@@ -119,13 +119,16 @@ gh would write to a throwaway copy (section 3):
 - `config …`, `alias …`;
 - `auth login`, `auth logout`, `auth switch`, `auth refresh`, `auth setup-git`;
 - `extension …`, because install, upgrade, browse and search call github.com;
-- `codespace …`, `copilot …`, `skills …` and `agent-task …`, which serve only github.com and,
+- `codespace …`, `copilot …`, `skill …` and `agent-task …` (with gh's aliases `cs`, `skills`,
+  `agent-tasks`, `agent` and `agents`), which serve only github.com and,
   for `codespace ssh --config`, write `GH_PATH` into a lasting file;
 - `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials").
 
 The list applies to the command gh will run: routing expands a plain alias first (L2), so
 `gh sg` with alias `sg: auth setup-git` delegates too. Help delegates after routing has chosen a
-forge, so the route trace still names it; plain gh then prints the help.
+forge, so the route trace still names it, with a reason saying plain gh ran; plain gh then prints
+the help. Only a command in the shim's grammar knows its own `-h` and which flags take a value, so
+a help flag delegates only there: `repo edit -h URL` sets a homepage, and keeps the refusal.
 
 **Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
 `--hostname`, don't use the checkout's repository to pick a host. They use gh's default host
