@@ -113,7 +113,11 @@ pub fn launch(
             crate::trace::tracing_enabled(env),
         ));
     }
-    let forgejo_url = upstream_url(host, &config, env)?;
+    // A host-less `auth status` leaves such a routed host out of S and serves the rest (§3).
+    let forgejo_url = upstream_url(host, &config, env);
+    if forgejo_url.is_none() && !all_hosts {
+        return None;
+    }
     let token = auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()));
     // `auth status` keeps its current answer for a host with no token (§2), the built-in path's
     // "Not logged in", unless it's host-less and other hosts have tokens: S is every allowlist
@@ -167,8 +171,8 @@ pub fn launch(
     // logged in to, and settings the gateway can't honour yet.
     let routed_entry = config::normalize_host(host);
     let mut served_hosts = Vec::new();
-    if let Some(token) = &token {
-        served_hosts.push((routed_entry.clone(), token.token.clone(), forgejo_url));
+    if let (Some(token), Some(url)) = (&token, forgejo_url) {
+        served_hosts.push((routed_entry.clone(), token.token.clone(), url));
     }
     if all_hosts {
         for entry in config

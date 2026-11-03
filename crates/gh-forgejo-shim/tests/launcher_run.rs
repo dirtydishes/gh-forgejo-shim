@@ -842,6 +842,46 @@ fn host_less_auth_status_serves_every_eligible_host_with_its_login() {
 }
 
 #[test]
+fn host_less_auth_status_serves_the_rest_when_the_routed_host_waits_for_l4() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("other-secret", "login-b")]);
+    let fixture = Fixture::new(&api);
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}/forgejo\"\n[host.\"other.test\"]\ntoken_env = \"OTHER_TOKEN\"\napi_url = \"{api}\"\n"
+        ),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .env("OTHER_TOKEN", "other-secret")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Mapping = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    let field = |key: &str, name: &str| {
+        hosts
+            .get(key)
+            .and_then(|entry| entry.get(name))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(field("other.test", "user").as_deref(), Some("login-b"));
+    assert_eq!(
+        field("other.test", "oauth_token").map(|token| token.len()),
+        Some(64)
+    );
+    assert_eq!(
+        field("forge.test", "oauth_token").as_deref(),
+        Some("gfj-not-served"),
+        "an api_url with a path waits for the config bridge"
+    );
+}
+
+#[test]
 fn show_token_puts_the_real_token_in_hosts_yml_and_the_gateway_accepts_it() {
     let _serial = serial();
     let api = stub_forgejo(&[("host-secret", "login-a")]);
