@@ -45,8 +45,9 @@ unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_HOST 
     GIT_ASKPASS SSH_ASKPASS GIT_CONFIG_PARAMETERS XDG_RUNTIME_DIR
 mkdir -m 700 "$TMPDIR"
 git config --global user.name e2e && git config --global user.email e2e@example.invalid
-check '[ -z "$(git config --get-all credential.helper || true)" ] && [ -z "$(git config --get core.askPass || true)" ]' \
-    'no credential helper or askpass is configured'
+# Any credential.helper or credential.<url>.helper, at any level, and askpass.
+check '[ -z "$(git config --get-regexp "^credential\..*helper$" || true)" ] && [ -z "$(git config --get core.askPass || true)" ]' \
+    'no credential helper (generic or URL-scoped) or askpass is configured'
 # The clone's credential lives only in this command's -c; nothing is stored.
 git -c "http.extraHeader=Authorization: token $token" clone -q https://forge.test/e2e/launcher.git /tmp/launcher-checkout
 cd /tmp/launcher-checkout
