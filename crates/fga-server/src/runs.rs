@@ -11,7 +11,7 @@ use fga_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,10 +171,11 @@ async fn list(
         public.push(("exclude_pull_requests", exclude.to_string()));
     }
     let result = async {
+        let workflows = session.workflows(owner, repo).await?;
         let mut resource = vec!["runs"];
         if let Some(selector) = workflow {
             // Forgejo keys a run's workflow by its bare file name.
-            let found = find_workflow(session, owner, repo, selector).await?;
+            let found = find_workflow(session, owner, repo, selector, &workflows).await?;
             let file = found.path.rsplit('/').next().unwrap_or_default();
             upstream.push(("workflow_id", file.to_owned()));
             resource = vec!["workflows", selector, "runs"];
@@ -188,7 +189,6 @@ async fn list(
                 limit,
             )
             .await?;
-        let workflows = session.workflows(owner, repo).await?;
         // A run of a workflow that exists only on its own branch is named from there, so it never
         // fails the page.
         let named = futures_util::future::join_all(
@@ -322,7 +322,12 @@ pub async fn workflow(
     Extension(session): Extension<Session>,
     Path((owner, repo, selector)): Path<(String, String, String)>,
 ) -> Response {
-    match find_workflow(&session, &owner, &repo, &selector).await {
+    let result = async {
+        let workflows = session.workflows(&owner, &repo).await?;
+        find_workflow(&session, &owner, &repo, &selector, &workflows).await
+    }
+    .await;
+    match result {
         Ok(workflow) => Json(workflow).into_response(),
         Err(error) => rest_error(error),
     }
@@ -334,8 +339,8 @@ async fn find_workflow(
     owner: &str,
     repo: &str,
     selector: &str,
+    workflows: &BTreeMap<String, actions::Workflow>,
 ) -> Result<actions::Workflow, Error> {
-    let workflows = session.workflows(owner, repo).await?;
     let Ok(id) = selector.parse::<i64>() else {
         return workflows.get(selector).cloned().ok_or(Error::NotFound);
     };
@@ -352,5 +357,5 @@ async fn find_workflow(
         .iter()
         .find(|run| actions::workflow_id(&run.workflow_id) == id)
         .ok_or(Error::NotFound)?;
-    Ok(session.workflow_for(owner, repo, run, &workflows).await)
+    Ok(session.workflow_for(owner, repo, run, workflows).await)
 }
