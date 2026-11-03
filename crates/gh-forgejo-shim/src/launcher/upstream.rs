@@ -43,6 +43,7 @@ impl Upstream {
         // `new_with_roots` leaves this check to its caller. Config loading already makes it of
         // `api_url`; this covers the `https://<host>` default too.
         if !matches!(base.scheme(), "http" | "https")
+            || base.host_str().is_none()
             || !base.username().is_empty()
             || base.password().is_some()
             || base.query().is_some()
