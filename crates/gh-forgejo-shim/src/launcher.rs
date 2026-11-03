@@ -42,11 +42,12 @@ pub const LAUNCH_LIST: &[&str] = &[
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
-/// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. `--delete-branch` stays off: the gateway
-/// can't delete a branch yet, and gh would report success with the branch still there. Any other flag keeps the built-in path, which serves or
-/// refuses that form before anything is written: gh would write part of a `pr edit` and then
-/// fail on a reviewer the gateway can't set. For these commands the list replaces
-/// `is_native()`, which can't see the built-in path's per-flag refusals.
+/// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
+/// which serves or refuses that form before anything is written: gh would write part of a
+/// `pr edit` and then fail on a reviewer the gateway can't set. `--delete-branch` stays off: the
+/// gateway can't delete a branch yet, and gh would report success with the branch still there.
+/// For these commands the list replaces `is_native()`, which can't see the built-in path's
+/// per-flag refusals.
 const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     (
         "pr create",
@@ -80,7 +81,16 @@ pub fn launches(invocation: &Invocation) -> bool {
             .all(|flag| flags.contains(&flag.as_str())),
         None => invocation.is_native(),
     };
+    // Without a method, gh's terminal prompts ask whether to delete the branch, and to edit the
+    // commit message: the forms kept off above. One method skips both prompts (`merge.go:307-330`).
+    let one_method = command != "pr merge"
+        || ["merge", "squash", "rebase"]
+            .iter()
+            .filter(|method| invocation.flags.contains_key(**method))
+            .count()
+            == 1;
     LAUNCH_LIST.contains(&command)
+        && one_method
         // Usage errors, help and forms the built-in path refuses as unsupported keep its
         // answers, which need no token (spec §2, "Transition: the launch list").
         && invocation.validate().is_ok()
@@ -202,6 +212,10 @@ mod tests {
             &["pr", "close", "12", "--delete-branch"][..],
             &["pr", "merge", "12", "--merge", "--subject", "s"][..],
             &["pr", "close", "12", "--comment", "c"][..],
+            // No method: in a terminal gh would ask to delete the branch.
+            &["pr", "merge", "12"][..],
+            &["pr", "merge", "12", "--auto"][..],
+            &["pr", "merge", "12", "--merge", "--squash"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
