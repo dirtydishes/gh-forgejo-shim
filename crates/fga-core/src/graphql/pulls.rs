@@ -25,8 +25,8 @@ impl PullRequest {
     /// Forgejo lets the poster or a repository writer edit, close and reopen a PR.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
-        Ok(self.source.user.login.eq_ignore_ascii_case(viewer)
-            || viewer_can_write(ctx, &self.owner, &self.repo).await?)
+        let author = self.source.user.login.eq_ignore_ascii_case(viewer);
+        viewer_may_change(ctx, &self.owner, &self.repo, author).await
     }
     async fn archived(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let session = ctx.data_unchecked::<Session>();

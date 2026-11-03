@@ -200,7 +200,8 @@ A review thread's `viewerCanResolve` and `viewerCanUnresolve` follow Forgejo's `
 the PR's author or a repository writer. Forgejo also lets an official reviewer without write access
 resolve a conversation; the gateway reports `false` for them, since it can't tell cheaply.
 
-The `viewerCan*` flags are hints for a client's buttons; Forgejo enforces every action. Editing,
+The `viewerCan*` flags are hints for a client's buttons; Forgejo enforces every action. In an
+archived repository every write flag is false, as on GitHub: Forgejo's write routes answer 423. Editing,
 closing and reopening a PR or a comment, and resolving a conversation, need write access to Forgejo's
 pull request or issue unit, but its API reports only code access (`permissions.push`). The gateway
 uses code access for both (Kell, 2026-11-02, rather than rebuilding Forgejo's team and collaborator
@@ -225,7 +226,8 @@ last changed it, which differs once later commits move the line; an old-side pos
 the reviewer chose. `line` is the same value while the PR's head is still the
 commit the thread's review was made on, and null after a push: Forgejo's API doesn't say whether the
 push moved or deleted the line. GitHub would still give a current line for a thread whose line
-survived the push. Without a hunk (Forgejo's `CODE_COMMENT_LINES = 0`), both are null.
+survived the push. Without a hunk (Forgejo's `CODE_COMMENT_LINES = 0`), a new-side thread's lines
+are null; an old-side thread keeps its position, the line the reviewer chose.
 
 Forgejo sets a pending review's commit to the head at submit time and doesn't update its comments'
 hunks (`models/issues/review.go`). A review started before a push and submitted after it therefore
