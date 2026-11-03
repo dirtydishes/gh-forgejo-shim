@@ -112,12 +112,26 @@ fn ok(reply: Reply) -> Result<Reply, Error> {
 }
 
 impl Forgejo {
+    /// A client for the Forgejo at `base`, the forge's own address. A base with a path, such as a
+    /// forge served under `/forgejo/`, keeps it: every API call goes below it, to `{base}/api/v1/...`.
     pub fn new(base: Url) -> Result<Self, reqwest::Error> {
+        Self::new_with_roots(base, Vec::new())
+    }
+
+    /// [`Forgejo::new`], also trusting `roots`, for a forge behind a private CA. The roots join the
+    /// built-in trust store; certificate checks stay on.
+    pub fn new_with_roots(
+        base: Url,
+        roots: Vec<reqwest::Certificate>,
+    ) -> Result<Self, reqwest::Error> {
+        let mut client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none());
+        for root in roots {
+            client = client.add_root_certificate(root);
+        }
         Ok(Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(10))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            client: client.build()?,
             base,
             sessions: Arc::default(),
             page_size: Arc::default(),
@@ -699,6 +713,38 @@ mod tests {
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
         drop(session);
         upstream.join().unwrap();
+    }
+
+    /// A forge served under a path keeps it: the identity read goes to `/forgejo/api/v1/user`,
+    /// with or without a trailing slash on the base.
+    #[tokio::test]
+    async fn a_base_with_a_path_keeps_it() {
+        let user = r#"{"id":1,"login":"t","avatar_url":""}"#;
+        let upstream = axum::Router::new().route(
+            "/forgejo/api/v1/user",
+            axum::routing::get(move || async move { user }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        for base in [
+            format!("http://{addr}/forgejo"),
+            format!("http://{addr}/forgejo/"),
+        ] {
+            let forgejo = Forgejo::new(base.parse().unwrap()).unwrap();
+            let session = forgejo.authenticate("token t").await.unwrap();
+            assert_eq!(session.viewer.login, "t", "{base}");
+        }
+        server.abort();
+    }
+
+    /// Extra CA roots build a client. Whether a CA file holds certificates is the caller's check
+    /// (the launcher reads and checks each file before this).
+    #[test]
+    fn extra_roots_build_a_client() {
+        const ROOT: &str = "-----BEGIN CERTIFICATE-----\nMIIBXzCCAQagAwIBAgIUTNP6z2knfOPj6US15ma5BfA2DX4wCgYIKoZIzj0EAwIw\nFTETMBEGA1UEAwwKZm9yZ2UudGVzdDAgFw0yNjExMDMwMjEzMDNaGA8yMTI2MTAx\nMDAyMTMwM1owFTETMBEGA1UEAwwKZm9yZ2UudGVzdDBZMBMGByqGSM49AgEGCCqG\nSM49AwEHA0IABPcQ77XIeK1OQLd0PgjXH1WHj5IFhAKfOlPTpFGuGRuebqRLfjWm\njL0E+VMxWD4gKhjyx18IhAVxfmEIlitOXXKjMjAwMB0GA1UdDgQWBBT0evzgdITL\nk2pgp7hoqbLwJJbtLjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQC\nICD8vb9VVPZUYbXTY1/N7y/FrA6uNqenRTylj8YijsoZAiB9bfMXIWC9eES7R9q/\nQuzkmObSkPWeq492gfUpF/twyg==\n-----END CERTIFICATE-----";
+        let root = reqwest::Certificate::from_pem(ROOT.as_bytes()).unwrap();
+        Forgejo::new_with_roots("https://forge.test".parse().unwrap(), vec![root]).unwrap();
     }
 
     /// The identity lookup on a cache miss counts toward the request's budget (parallax r1#1).
