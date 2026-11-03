@@ -33,13 +33,16 @@ docker build -q -f scripts/e2e/Dockerfile -t fga-g2a-e2e:local . >/dev/null
 docker network create "$run" >/dev/null
 docker volume create "$run-tls" >/dev/null
 # A CA and a forge.test leaf it signs: rustls, which the shim's gateway client uses, refuses a
-# self-signed CA certificate as a server's own.
+# self-signed CA certificate as a server's own. The CA's key goes once the leaf is signed: every
+# client mounts this volume.
 docker run --rm --name "$run-cert" -v "$run-tls:/tls" fga-g2a-e2e:local sh -c '
-    openssl req -x509 -newkey rsa:2048 -nodes -keyout /tls/ca-key.pem -out /tls/ca.pem -days 1 -subj "/CN=e2e CA" &&
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout /tls/ca-key.pem -out /tls/ca.pem -days 1 -subj "/CN=e2e CA" \
+        -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign &&
     openssl req -newkey rsa:2048 -nodes -keyout /tls/key.pem -out /tls/leaf.csr -subj /CN=forge.test &&
     printf "subjectAltName=DNS:forge.test\nbasicConstraints=CA:FALSE\n" > /tls/leaf.ext &&
     openssl x509 -req -in /tls/leaf.csr -CA /tls/ca.pem -CAkey /tls/ca-key.pem -CAcreateserial \
-        -days 1 -extfile /tls/leaf.ext -out /tls/cert.pem' >/dev/null 2>&1
+        -days 1 -extfile /tls/leaf.ext -out /tls/cert.pem &&
+    rm /tls/ca-key.pem' >/dev/null 2>&1
 docker run -d --name "$run-forgejo" --network "$run" --network-alias forgejo \
     -e FORGEJO__security__INSTALL_LOCK=true -e FORGEJO__database__DB_TYPE=sqlite3 \
     -e FORGEJO__server__ROOT_URL=https://forge.test/ -e FORGEJO__server__DOMAIN=forge.test \
@@ -66,4 +69,4 @@ docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" \
 docker run --name "$run-launcher" --network "$run" -v "$run-tls:/tls:ro" \
     -v "$PWD/scripts/e2e/launcher-client.sh:/test/launcher-client.sh:ro" fga-g2a-e2e:local bash /test/launcher-client.sh
 printf 'PASS server-mode e2e: the shipped image and nginx snippet serve gh and Claude for Forgejo 15\n'
-printf 'PASS client-mode e2e: the shim launches real gh against the same forge\n'
+printf 'PASS client-mode e2e: the shim launches real gh for gh pr checkout against the same forge\n'
