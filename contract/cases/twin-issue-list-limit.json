@@ -1,0 +1,26 @@
+{
+  "id": "twin-issue-list-limit",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-list-limit",
+    "issue": true
+  },
+  "argv": [
+    "issue",
+    "list",
+    "--limit",
+    "1",
+    "--json",
+    "number",
+    "--jq",
+    "[.[] | select(.number == {issue})] == ."
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "true\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

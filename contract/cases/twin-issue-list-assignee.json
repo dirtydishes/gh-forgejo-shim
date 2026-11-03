@@ -1,0 +1,26 @@
+{
+  "id": "twin-issue-list-assignee",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-list-assignee",
+    "issue": true
+  },
+  "argv": [
+    "issue",
+    "list",
+    "--assignee",
+    "dirtydishes",
+    "--json",
+    "number,title",
+    "--jq",
+    ".[] | select(.number == {issue}) | .title"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "twin:\\ twin/issue\\-list\\-assignee\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

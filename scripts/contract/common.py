@@ -41,6 +41,9 @@ LOCAL_PROBES = [
     ["run", "list", "--workflow", "ci.yml"],
     # run view's text lists the run's jobs, which the gateway can't (o2#1 on #125).
     ["run", "view", "1"],
+    # issue view's text keeps the built-in path, whose own view has no dependencies to leave empty
+    # (o1#2 on #131); a launched gh's lists them, and the gateway leaves them empty.
+    ["issue", "view", "1"],
     # --delete-branch: the gateway can't delete a branch yet, and gh would report success.
     ["pr", "merge", "1", "--merge", "--delete-branch"],
     # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
