@@ -1281,3 +1281,24 @@ fn host_less_auth_status_serves_a_private_ca_host_beside_one_it_refuses() {
     // The login lookup went through the gateway's client, trusting the test CA.
     assert_eq!(hosts["other.test"]["user"].as_str(), Some("o"), "{hosts:?}");
 }
+
+#[test]
+fn a_launched_web_open_reaches_a_forge_under_a_path() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9/forgejo");
+    let browser = fixture.dir.join("browser");
+    fs::write(&browser, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$REPORT\"\n").expect("browser");
+    fs::set_permissions(&browser, fs::Permissions::from_mode(0o755)).expect("chmod");
+    // gh shlex-splits GH_BROWSER and appends the URL; the gateway's link keeps the prefix.
+    let gh = fixture.fake_gh(r#"eval "$GH_BROWSER 'https://forge.test/forgejo/o/r/pull/1'""#);
+    let output = fixture
+        .command(&gh, &["pr", "view", "1", "--web", "-R", "forge.test/o/r"])
+        .env("BROWSER", &browser)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        fixture.report().trim(),
+        "https://forge.test/forgejo/o/r/pulls/1"
+    );
+}
