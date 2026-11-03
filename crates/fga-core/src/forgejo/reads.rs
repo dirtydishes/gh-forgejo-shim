@@ -63,9 +63,10 @@ impl Session {
         Ok(issue)
     }
     pub async fn file_text(&self, owner: &str, repo: &str, path: &str) -> Result<String, Error> {
-        let value: serde_json::Value = self
-            .get(&["repos", owner, repo, "contents", path], &[])
-            .await?;
+        // The route's `*` takes the path's slashes as segments; one segment may not hold a slash.
+        let mut segments = vec!["repos", owner, repo, "contents"];
+        segments.extend(path.split('/'));
+        let value: serde_json::Value = self.get(&segments, &[]).await?;
         let content = value["content"].as_str().ok_or(Error::Upstream)?;
         let bytes = STANDARD
             .decode(
