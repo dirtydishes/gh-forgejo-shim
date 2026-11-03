@@ -202,67 +202,77 @@ async fn project_cards_are_an_empty_connection() {
 
 /// gh pr checkout fetches `refs/heads/{headRefName}` from the head repository, or `refs/pull/N/head`
 /// from the base when there's none. Forgejo names the head branch in `ref` only while it exists
-/// (`services/convert/pull.go`); an AGit PR or a deleted branch reports `refs/pull/N/head`, so the
-/// gateway reports no head repository, as GitHub does for a head that's gone. Otherwise gh would
-/// fetch a branch that isn't the PR's, or one recreated since under the old name.
+/// (`services/convert/pull.go`); an AGit PR or a deleted branch reports `refs/pull/N/head`. The
+/// gateway then reports no head repository, so gh fetches the PR's own ref rather than a branch
+/// that isn't there, or one recreated since under the old name. GitHub nulls it only for a deleted
+/// fork; the owner and `isCrossRepository` stay as GitHub reports them.
 #[tokio::test]
 async fn a_head_branch_that_is_gone_has_no_head_repository() {
-    let base_repo = json!({"name":"r","owner":{"id":1,"login":"o","avatar_url":""}});
-    let pull_with = move |number: i32, label: &str, reference: &str| {
+    let repo = |owner: &str| json!({"name":"r","owner":{"id":1,"login":owner,"avatar_url":""}});
+    let pull_with = move |number: i32, label: &str, reference: &str, owner: &str| {
         let mut source = pull(number, false);
         source["state"] = json!("open");
-        source["head"] =
-            json!({"label":label,"ref":reference,"sha":"abc","repo":base_repo.clone()});
+        source["head"] = json!({"label":label,"ref":reference,"sha":"abc","repo":repo(owner)});
         source
     };
-    let live = pull_with(1, "feature", "feature");
-    let deleted = pull_with(2, "feature", "refs/pull/2/head");
-    let agit = pull_with(3, "", "refs/pull/3/head");
-    let upstream = Router::new()
+    let pulls = [
+        pull_with(1, "feature", "feature", "o"),
+        pull_with(2, "feature", "refs/pull/2/head", "o"),
+        pull_with(3, "", "refs/pull/3/head", "o"),
+        pull_with(4, "feature", "feature", "f"),
+        pull_with(5, "feature", "refs/pull/5/head", "f"),
+        // A live branch named like the placeholder can't be told from it: counted as gone, so gh
+        // fetches the PR's own ref, which is still the PR's commit.
+        pull_with(6, "refs/pull/6/head", "refs/pull/6/head", "o"),
+    ];
+    let repository = |owner: &'static str| {
+        get(move || async move {
+            Json(
+                json!({"id":1,"name":"r","full_name":format!("{owner}/r"),"private":false,
+                "owner":{"id":1,"login":owner,"avatar_url":"https://forge.test/avatar"},
+                "html_url":format!("https://forge.test/{owner}/r"),"default_branch":"main",
+                "fork":owner != "o","archived":false,
+                "permissions":{"admin":false,"push":true,"pull":true}}),
+            )
+        })
+    };
+    let mut upstream = Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
-        .route(
-            "/api/v1/repos/o/r",
-            get(|| async {
-                Json(json!({"id":1,"name":"r","full_name":"o/r","private":false,
-                    "owner":{"id":1,"login":"o","avatar_url":"https://forge.test/avatar"},
-                    "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,
-                    "archived":false,"permissions":{"admin":false,"push":true,"pull":true}}))
-            }),
-        )
-        .route(
-            "/api/v1/repos/o/r/pulls/1",
-            get(move || async move { Json(live) }),
-        )
-        .route(
-            "/api/v1/repos/o/r/pulls/2",
-            get(move || async move { Json(deleted) }),
-        )
-        .route(
-            "/api/v1/repos/o/r/pulls/3",
-            get(move || async move { Json(agit) }),
+        .route("/api/v1/repos/o/r", repository("o"))
+        .route("/api/v1/repos/f/r", repository("f"));
+    for (number, source) in (1..).zip(pulls) {
+        upstream = upstream.route(
+            &format!("/api/v1/repos/o/r/pulls/{number}"),
+            get(move || async move { Json(source) }),
         );
+    }
     let (session, task) = session(upstream).await;
-    let fields = "headRefName headRepository{name} headRepositoryOwner{login}";
+    let fields = "headRefName isCrossRepository headRepository{name} headRepositoryOwner{login}";
+    let query = (1..=6)
+        .map(|n| format!("p{n}:pullRequest(number:{n}){{{fields}}}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     let response = graphql::schema()
         .execute(
-            Request::new(format!(
-                r#"{{repository(owner:"o",name:"r"){{live:pullRequest(number:1){{{fields}}}
-                    deleted:pullRequest(number:2){{{fields}}} agit:pullRequest(number:3){{{fields}}}}}}}"#
-            ))
-            .data(session),
+            Request::new(format!(r#"{{repository(owner:"o",name:"r"){{{query}}}}}"#)).data(session),
         )
         .await;
     task.abort();
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let gone =
-        |name: &str| json!({"headRefName":name,"headRepository":null,"headRepositoryOwner":null});
+    let head = |name: &str, cross: bool, repository: Value, owner: &str| {
+        json!({"headRefName":name,"isCrossRepository":cross,"headRepository":repository,
+            "headRepositoryOwner":{"login":owner}})
+    };
+    let r = json!({"name":"r"});
     assert_eq!(
         response.data.into_json().unwrap()["repository"],
         json!({
-            "live":{"headRefName":"feature","headRepository":{"name":"r"},
-                "headRepositoryOwner":{"login":"o"}},
-            "deleted":gone("feature"),
-            "agit":gone("refs/pull/3/head"),
+            "p1":head("feature", false, r.clone(), "o"),
+            "p2":head("feature", false, Value::Null, "o"),
+            "p3":head("refs/pull/3/head", false, Value::Null, "o"),
+            "p4":head("feature", true, r, "f"),
+            "p5":head("feature", true, Value::Null, "f"),
+            "p6":head("refs/pull/6/head", false, Value::Null, "o"),
         })
     );
 }
