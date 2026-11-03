@@ -190,6 +190,11 @@ fn decide_invocation_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
+    // gh's root command (`gh`, `gh --version`, `gh --help`) and `gh version` answer from gh
+    // itself and send no request, so whatever repo the call is in, plain gh runs.
+    if invocation.command.is_empty() || invocation.command == "version" {
+        return RouteDecision::delegate("gh's own version or help", None);
+    }
     // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
     // (`gh/pkg/cmd/api/http.go:19-21`).
     if invocation.command == "api" {
@@ -526,6 +531,25 @@ mod tests {
 
     fn argv(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn gh_s_own_version_and_root_help_delegate_even_for_a_forgejo_repo() {
+        for args in [
+            &["--version"][..],
+            &["version"][..],
+            &["--help"][..],
+            &[][..],
+        ] {
+            let decision = decide_route(
+                &argv(args),
+                &config(&["git.example.com"]),
+                &env(&[("GH_REPO", "git.example.com/owner/repo")]),
+                Some(Path::new("/nonexistent-gfjs-repo")),
+            );
+            assert_eq!(decision.kind, RouteKind::Delegate, "{args:?}");
+            assert_eq!(decision.reason, "gh's own version or help", "{args:?}");
+        }
     }
 
     #[test]
