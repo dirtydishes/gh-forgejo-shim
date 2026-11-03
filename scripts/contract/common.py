@@ -31,7 +31,6 @@ ERROR_PROBES = [
 ]
 # Off-list commands that must delegate, so the runner can prove they still reach the decoy.
 DECOY_PROBES = [
-    ["pr", "list", "-R", f"github.com/{REPO}"],
     # gh's own version, in a Forgejo checkout: real gh answers it without a request.
     ["--version"],
     ["version"],
@@ -41,6 +40,9 @@ DECOY_PROBES = [
     ["pr", "view", "--help"],
 ]
 LOCAL_PROBES = [
+    # Near a forge (the runner's checkout and GH_HOST), a call off the delegate list never runs
+    # plain gh, even one naming GitHub (launcher §2).
+    ["pr", "list", "-R", f"github.com/{REPO}"],
     # gh sends the workflow's file name, which the gateway can't take yet (C4, cwe.18.1).
     ["run", "list", "--workflow", "ci.yml"],
     # run view's text lists the run's jobs, which the gateway can't (o2#1 on #125).
