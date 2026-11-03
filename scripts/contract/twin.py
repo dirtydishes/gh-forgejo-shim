@@ -311,7 +311,12 @@ def check(case, actual, home, token, subs):
                 request(base, token, "GET", path)
                 gone = False
             except urllib.error.HTTPError as error:
-                if error.code != 404:
+                # Only Forgejo's word that the branch doesn't exist counts: a 404 from a
+                # permission check names no branch, as the gateway's delete also reads it.
+                errors = json.loads(error.read() or b"{}").get("errors") or []
+                if error.code != 404 or not any(
+                    str(e).startswith("branch does not exist [") for e in errors
+                ):
                     raise
                 gone = True
             if gone != state["gone"]:
