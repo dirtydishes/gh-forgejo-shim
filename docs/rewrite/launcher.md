@@ -216,7 +216,9 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   login) before any config file (`gh/internal/config/config.go:693-705`), whatever
   `GH_CONFIG_DIR` says. A keyring login for that host, left by another gh config, therefore wins,
   for that login or another. It is the user's own credential for the same host, which plain gh
-  would print too, and `auth token` sends nothing anywhere; the launcher can't hide it without
+  would print too. For a plain keyring token, `auth token` sends nothing anywhere; a refreshable
+  credential near expiry (`gh:_refreshable:<host>`) makes gh refresh it with that host's OAuth
+  endpoint first (`gh/pkg/cmd/auth/token/token.go:198`), as plain gh would. The launcher can't hide it without
   answering `auth token --user` itself. If the
   lookup fails, the entry has neither, and gh reports the failure itself. Other commands never
   show the account, so they get no `user` and no lookup.
