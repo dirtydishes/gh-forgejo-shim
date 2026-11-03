@@ -1086,3 +1086,67 @@ fn a_signal_during_the_login_lookup_ends_the_launch_at_once() {
     assert_eq!(status.signal(), Some(2), "{status}");
     assert!(fixture.parent_is_empty(), "run directory removed");
 }
+
+/// A Forgejo that knows one user and one draft pull request, `o/r#1`, titled `DRAFT: x`.
+fn draft_forgejo() -> String {
+    use std::io::{BufRead, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                if request.is_empty() {
+                    request = line.clone();
+                }
+                line.clear();
+            }
+            let user = r#"{"id":1,"login":"o","avatar_url":""}"#;
+            let body = if request.starts_with("GET /api/v1/user ") {
+                user.to_string()
+            } else if request.starts_with("GET /api/v1/repos/o/r/pulls/1 ") {
+                format!(
+                    r#"{{"number":1,"title":"DRAFT: x","state":"open","merged":false,"draft":true,"html_url":"https://forge.test/o/r/pulls/1","head":{{"label":"topic","ref":"topic","sha":"abc","repo":null}},"base":{{"label":"main","ref":"main","sha":"def","repo":null}},"user":{user},"merged_at":null}}"#
+                )
+            } else {
+                String::new()
+            };
+            let status = if body.is_empty() {
+                "404 Not Found"
+            } else {
+                "200 OK"
+            };
+            let _ = write!(
+                reader.get_mut(),
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{address}")
+}
+
+#[test]
+fn a_hosts_wip_prefixes_reach_the_launched_gateway() {
+    let _serial = serial();
+    let api = draft_forgejo();
+    let gh_reads_the_pr = r#"token=$(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)
+curl -s --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" "http://forge.test/api/v3/repos/o/r/pulls/1" > "$REPORT""#;
+    for (prefixes, title) in [("wip_prefixes = [\"DRAFT:\"]\n", "x"), ("", "DRAFT: x")] {
+        let fixture = Fixture::new(&api);
+        fs::write(
+            fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+            format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\n{prefixes}"),
+        )
+        .expect("config");
+        let gh = fixture.fake_gh(gh_reads_the_pr);
+        let output = fixture.launch(&gh);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let pr: serde_json::Value = serde_json::from_str(&fixture.report())
+            .unwrap_or_else(|error| panic!("{error}: {}", fixture.report()));
+        assert_eq!(pr["draft"], true, "{pr}");
+        assert_eq!(pr["title"], title, "{prefixes:?}: {pr}");
+    }
+}
