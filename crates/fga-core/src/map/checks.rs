@@ -334,7 +334,9 @@ pub fn check_runs(checks: &[Check], sha: &str) -> Value {
                 "html_url": details_url.as_str(),
                 "details_url": details_url.as_str(),
                 "output": {"title": source.description, "summary": null},
-                "check_suite": {"workflow_name": workflow},
+                // GitHub always sends these; a client may read them without checking.
+                "pull_requests": [],
+                "check_suite": {"id": source.id, "workflow_name": workflow},
                 "app": {"slug": "forgejo-actions", "name": "Forgejo Actions"},
             })),
             Check::Status { .. } => None,

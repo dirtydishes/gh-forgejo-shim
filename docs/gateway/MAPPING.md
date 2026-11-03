@@ -54,6 +54,9 @@ Return that rejection as a GitHub-shaped error (G3).
 REST reuses this mapping: `GET commits/{ref}/check-runs` lists the Actions statuses as check runs,
 with the same status and conclusion, and `GET commits/{ref}/status` combines the other statuses as
 GitHub does (`failure` if any failed or errored, `pending` if any is pending or there are none).
+Both echo `{ref}` as the commit (`sha`, `head_sha`) rather than resolving a branch name or short SHA,
+and an unknown commit answers 200 with no statuses (pending, no check runs) where GitHub answers 422:
+Forgejo lists statuses for an unresolved ref as empty. Claude desktop sends full head SHAs.
 
 Forgejo has commit statuses only. Reads return the state in the field **`status`**, while POSTs send
 `state`. (`GET repos/{o}/{r}/commits/{sha}/statuses`; states `pending`,
