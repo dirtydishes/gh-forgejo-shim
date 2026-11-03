@@ -49,6 +49,8 @@ pub struct Forgejo {
     sessions: Arc<Mutex<SessionCache>>,
     /// [`Session::page_size`] and when it was read; Forgejo changes it only on restart.
     page_size: Arc<Mutex<Option<(usize, Instant)>>>,
+    /// How long a merge keeps retrying while Forgejo is still checking the PR.
+    pub(crate) merge_wait: Duration,
 }
 
 impl From<reqwest::Error> for Error {
@@ -183,7 +185,15 @@ impl Forgejo {
             base,
             sessions: Arc::default(),
             page_size: Arc::default(),
+            merge_wait: Duration::from_secs(10),
         })
+    }
+
+    /// The same client, retrying a merge for `wait` while Forgejo is still checking the PR (10 s by
+    /// default, and never into the last 2 s of the request's deadline).
+    pub fn with_merge_wait(mut self, wait: Duration) -> Self {
+        self.merge_wait = wait;
+        self
     }
 
     pub async fn authenticate(&self, authorization: &str) -> Result<Session, Error> {

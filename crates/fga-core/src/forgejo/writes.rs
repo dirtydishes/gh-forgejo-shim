@@ -257,19 +257,23 @@ impl Session {
         let segments = ["repos", owner, repo, "pulls", &number.to_string(), "merge"];
         // Forgejo sends "Please try again later" both while it is still checking a PR and when the
         // PR conflicts (`services/pull/check.go:97`), and a PR pushed moments ago is usually still
-        // being checked. A refused merge changes nothing, so retry before reporting a conflict.
-        let mut retries = 3;
+        // being checked, which a busy forge can take seconds over. A refused merge changes nothing,
+        // so retry, waiting longer each time, before reporting a conflict. The last 2 s of the
+        // request's deadline stay for the final attempt and reading the merged PR back.
+        let give_up = (tokio::time::Instant::now() + self.forgejo.merge_wait)
+            .min(self.deadline - Duration::from_secs(2));
+        let mut pause = Duration::from_millis(250);
         let response = loop {
             let response = self.write(Method::POST, &segments, Some(&input)).await?;
             let checking = response.status == StatusCode::METHOD_NOT_ALLOWED
                 && response
                     .json::<serde_json::Value>()
                     .is_ok_and(|value| value["message"] == "Please try again later");
-            if !checking || retries == 0 {
+            if !checking || tokio::time::Instant::now() + pause > give_up {
                 break response;
             }
-            retries -= 1;
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(pause).await;
+            pause = (pause * 2).min(Duration::from_secs(2));
         };
         if matches!(
             response.status,
