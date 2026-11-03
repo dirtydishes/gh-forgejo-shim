@@ -185,14 +185,16 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                     Vec::<String>::new(),
                 ));
             } else {
+                // Quoted: an IPv6 host such as `[::1]:3000` is a glob pattern to the shell.
+                let command = format!(
+                    "gh-forgejo-shim config add-host {}",
+                    setup::shell_quote(&repo.host)
+                );
                 checks.push(Check::new(
                     "current repo host",
                     false,
-                    format!(
-                        "{} is not allowlisted; run gh-forgejo-shim config add-host {}",
-                        repo.host, repo.host
-                    ),
-                    [format!("gh-forgejo-shim config add-host {}", repo.host)],
+                    format!("{} is not allowlisted; run {command}", repo.host),
+                    [command],
                 ));
             }
         }
