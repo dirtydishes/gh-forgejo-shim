@@ -302,8 +302,8 @@ fn candidate_dirs(env: &HashMap<String, String>, fallback_dirs: &[PathBuf]) -> V
     result
 }
 
-/// `~` and `~/…` under `HOME`; any other path, and any path when `HOME` is unset, as it is. Shared
-/// with the launcher, so a configured `~/gh` expands one way everywhere (n2e). It compares bytes,
+/// `~` and `~/…` under `HOME`; any other path, and any path when `HOME` is unset, as it is. For
+/// the launcher to share, so a configured `~/gh` expands one way everywhere (n2e). It compares bytes,
 /// not path components: the rest after `~/` is joined exactly as written, so `~//gh` is still
 /// `/gh` and `~/gh/` keeps its slash, and bytes that aren't UTF-8 stay as they are.
 #[cfg(unix)]
