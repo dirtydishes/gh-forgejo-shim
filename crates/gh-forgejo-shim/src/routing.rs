@@ -308,12 +308,14 @@ fn runs_on_its_own(invocation: &Invocation) -> bool {
     )
 }
 
-/// Whether an invocation asks for help, as gh's own flag grammar reads it. Only a command in the
-/// shim's grammar knows its own `-h` and which flags take a value: without one, the parser's
-/// fallback reads every `-h` as help, but `repo edit -h URL` sets a homepage and `release create
-/// v1 --notes --help` sets notes, both real writes. Those keep the Forgejo path's refusal.
+/// Whether an invocation asks for help that gh would print: a command with captured help
+/// (`contract/usage-errors.json`), which is either in the shim's grammar, where the parser knows
+/// the command's own `-h` and its value flags, or a group such as `pr`, which has no `-h` of its
+/// own. A leaf without grammar has no captured help, and the parser's fallback would misread it:
+/// `repo edit -h URL` sets a homepage and `release create v1 --notes --help` sets notes, both
+/// writes. Those keep the Forgejo path's refusal. A unit test keeps the two lists in step.
 fn runs_help(invocation: &Invocation) -> bool {
-    invocation.has_grammar() && invocation.flag("help") == Some("true")
+    invocation.help().is_some()
 }
 
 fn host_route(host: &str, config: &DispatcherConfig) -> RouteDecision {
@@ -371,8 +373,8 @@ fn run_gh(
         RouteKind::Delegate => {
             run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
         }
-        // Help for any command is plain gh's (launcher spec §2): routing still records the forge
-        // it would have used, and real gh prints the help.
+        // Help is plain gh's (launcher spec §2): routing still records the forge it would have
+        // used, and real gh prints the help.
         RouteKind::Forgejo if help => {
             run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
         }
@@ -496,19 +498,6 @@ fn run_forgejo(
     if let Err(error) = invocation.validate() {
         write_stderr(mode, &error.render());
         return error.exit_code();
-    }
-    // Help with grammar runs plain gh in `run_gh`. This answers only the original argv's help
-    // flag when an alias expansion hid it from routing.
-    if let Some(help) = invocation.help() {
-        match mode {
-            DelegateMode::Inherit => {
-                let _ = io::stdout().write_all(help.as_bytes());
-            }
-            DelegateMode::Capture { stdout, .. } => {
-                let _ = stdout.write_all(help.as_bytes());
-            }
-        }
-        return 0;
     }
     if !invocation.is_native() {
         write_error(
@@ -682,6 +671,10 @@ mod tests {
             &["pr", "view", "--help"][..],
             &["pr", "view", "1", "-h"][..],
             &["issue", "list", "--help"][..],
+            // Groups have no -h of their own.
+            &["pr", "--help"][..],
+            &["repo", "-h"][..],
+            &["auth", "--help"][..],
         ] {
             assert!(help(args), "{args:?}");
         }
@@ -697,6 +690,26 @@ mod tests {
             &["release", "create", "v1", "--notes", "--help"][..],
         ] {
             assert!(!help(args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn every_command_with_captured_help_is_a_group_or_in_the_grammar() {
+        // runs_help trusts captured help to mean the parser read the help flag right; a leaf
+        // with captured help but no grammar would bring back repo edit -h URL as "help".
+        let usage: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contract/usage-errors.json"))
+                .expect("usage");
+        let grammar = include_str!("../../../contract/tiers.toml");
+        for (command, entry) in usage.as_object().expect("object") {
+            let group = entry["commands"]
+                .as_array()
+                .is_some_and(|commands| !commands.is_empty());
+            let listed = grammar.contains(&format!("[command.\"{command}\"]"));
+            assert!(
+                group || listed,
+                "{command} has captured help but is neither a group nor in the grammar"
+            );
         }
     }
 
