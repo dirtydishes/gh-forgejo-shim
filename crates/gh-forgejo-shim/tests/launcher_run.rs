@@ -1229,3 +1229,42 @@ fn a_private_ca_forge_under_a_path_is_served_with_verification_on() {
         }
     }
 }
+
+#[test]
+fn host_less_auth_status_serves_a_private_ca_host_beside_one_it_refuses() {
+    let _serial = serial();
+    let api = draft_forgejo("/forgejo", true);
+    let fixture = Fixture::new(&api);
+    // A PEM block that isn't a certificate: reqwest refuses it only when the client is built.
+    let bad = fixture.dir.join("bad-ca.pem");
+    fs::write(
+        &bad,
+        "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+    )
+    .expect("bad ca");
+    let ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\nca_file = \"{}\"\n[host.\"other.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\nca_file = \"{}\"\n",
+            bad.display(),
+            ca.display()
+        ),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Value = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    assert_eq!(
+        hosts["forge.test"]["oauth_token"].as_str(),
+        Some("gfj-not-served"),
+        "{hosts:?}"
+    );
+    // The login lookup went through the gateway's client, trusting the test CA.
+    assert_eq!(hosts["other.test"]["user"].as_str(), Some("o"), "{hosts:?}");
+}

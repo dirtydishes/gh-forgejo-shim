@@ -68,6 +68,11 @@ impl Upstream {
         for path in &ca_files {
             roots.extend(certificates(path)?);
         }
+        // `from_pem_bundle` only splits PEM blocks; a block that isn't a certificate fails when
+        // the client is built, as the built-in client reports it. Building one here keeps such a
+        // host out of the launch, so it never fails gateway setup for the other hosts (§3).
+        fga_core::forgejo::Forgejo::new_with_roots(base.clone(), roots.clone())
+            .map_err(|error| format!("could not configure HTTP client for {host}: {error}"))?;
 
         Ok(Self {
             base,
@@ -197,6 +202,20 @@ mod tests {
         assert!(Upstream::for_host("forge.test", &plain, &missing)
             .expect_err("missing")
             .starts_with("could not read CA certificate /nonexistent/ca.pem"));
+        let scratch =
+            std::env::temp_dir().join(format!("gfj-upstream-bad-{}.pem", std::process::id()));
+        std::fs::write(
+            &scratch,
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        )
+        .expect("bad pem");
+        let bad_block =
+            HashMap::from([("FJ_SHIM_CA_FILE".to_string(), scratch.display().to_string())]);
+        let refused = Upstream::for_host("forge.test", &plain, &bad_block);
+        std::fs::remove_file(&scratch).expect("cleanup");
+        assert!(refused
+            .expect_err("not a certificate")
+            .starts_with("could not configure HTTP client for forge.test"));
         let not_pem = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         let not_pem_env =
             HashMap::from([("FJ_SHIM_CA_FILE".to_string(), not_pem.display().to_string())]);
