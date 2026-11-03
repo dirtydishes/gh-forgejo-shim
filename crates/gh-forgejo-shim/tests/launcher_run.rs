@@ -1204,28 +1204,41 @@ fn a_hosts_wip_prefixes_reach_the_launched_gateway() {
 fn a_private_ca_forge_under_a_path_is_served_with_verification_on() {
     let _serial = serial();
     let api = draft_forgejo("/forgejo", true);
+    // The test server's certificate names `localhost`, not `127.0.0.1`.
+    let by_address = api.replace("localhost", "127.0.0.1");
     let ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
-    for (ca_file, served) in [
-        (format!("ca_file = \"{}\"\n", ca.display()), true),
-        (String::new(), false),
+    let ca_file = format!("ca_file = \"{}\"\n", ca.display());
+    for (what, url, settings, env_ca, status) in [
+        ("ca_file", &api, ca_file.as_str(), false, "200"),
+        ("FJ_SHIM_CA_FILE", &api, "", true, "200"),
+        ("no extra root", &api, "", false, "502"),
+        (
+            "a hostname the certificate doesn't name",
+            &by_address,
+            ca_file.as_str(),
+            false,
+            "502",
+        ),
     ] {
-        let fixture = Fixture::new(&api);
+        let fixture = Fixture::new(url);
         fs::write(
             fixture.home.join(".config/gh-forgejo-shim/config.toml"),
-            format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\nwip_prefixes = [\"DRAFT:\"]\n{ca_file}"),
+            format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{url}\"\nwip_prefixes = [\"DRAFT:\"]\n{settings}"),
         )
         .expect("config");
         let gh = fixture.fake_gh(GH_READS_THE_PR);
-        let output = fixture.launch(&gh);
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        let (status, pr) = gateways_pr(&fixture);
-        if served {
-            // The test CA's root verifies the forge, and the API lives under `/forgejo`.
-            assert_eq!(status, "200", "{}", fixture.report());
-            assert_eq!(pr["title"], "x", "{pr}");
-        } else {
-            // Without the root, verification stays on and the upstream request fails.
-            assert_ne!(status, "200", "{}", fixture.report());
+        let mut command = fixture.command(&gh, &["pr", "view", "1", "-R", "forge.test/o/r"]);
+        if env_ca {
+            command.env("FJ_SHIM_CA_FILE", &ca);
+        }
+        let output = command.output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{what}: {output:?}");
+        let (got, pr) = gateways_pr(&fixture);
+        // A failed verification is an upstream failure: the gateway's 502.
+        assert_eq!(got, status, "{what}: {}", fixture.report());
+        if status == "200" {
+            // The API lives under `/forgejo`, and the host's draft prefix is stripped.
+            assert_eq!(pr["title"], "x", "{what}: {pr}");
         }
     }
 }
