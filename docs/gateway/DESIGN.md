@@ -97,7 +97,7 @@ client ──https──▶ reverse proxy (git.example.com)
 | `GET /api/v3/repos/{o}/{r}/pulls?head={o}:{branch}&state=&per_page=` | Claude | Branch → PR lookup |
 | `GET /api/v3/repos/{o}/{r}/pulls/{n}` | gh pr diff, pr status | With `Accept: application/vnd.github.v3.diff`, return the diff |
 | `GET /api/v3/repos/{o}/{r}/commits/{sha}/pulls` | Codex CLI | |
-| `GET /api/v3/repos/{o}/{r}/actions/runs/{id}/jobs`, `/artifacts` | gh run view | Forgejo 15's API has neither per run, so a run's `jobs_url` and `artifacts_url` point here and answer empty lists; 404 for an unknown run |
+| `GET /api/v3/repos/{o}/{r}/actions/runs/{id}/jobs`, `/artifacts` | gh run view | Forgejo 15's API has neither per run, so a run's `jobs_url` (which gh follows) and `artifacts_url` point here and answer empty lists; 404 for an unknown run. Known limits until jobs are mapped (bead `ccq`): with no jobs, gh tells every failed run it "likely failed because of a workflow file issue", and `--log`, `--log-failed`, `--job` and `--attempt` still reach routes the gateway doesn't serve |
 | `GET /api/v3/repos/{o}/{r}/commits/{ref}/status`, `/commits/{ref}/check-runs` | Claude desktop | A PR head's CI state; the check mapping in MAPPING §3 |
 | `GET /api/v3/repos/{o}/{r}/actions/runs`, `/actions/workflows` | gh run list, Claude desktop (`head_sha`) | A repeated parameter takes its last value |
 

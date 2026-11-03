@@ -90,6 +90,10 @@ async fn run_view_finds_jobs_and_artifacts_under_the_gateway() {
     let (code, list) = get_json(addr, "/api/v3/repos/o/r/actions/runs").await;
     assert_eq!(code, 200, "{list}");
     assert_eq!(list["workflow_runs"][0]["jobs_url"], format!("{base}/jobs"));
+    assert_eq!(
+        list["workflow_runs"][0]["artifacts_url"],
+        format!("{base}/artifacts")
+    );
     let (code, jobs) = get_json(addr, "/api/v3/repos/o/r/actions/runs/5/jobs").await;
     assert_eq!((code, jobs), (200, json!({"total_count":0,"jobs":[]})));
     let (code, artifacts) = get_json(addr, "/api/v3/repos/o/r/actions/runs/5/artifacts").await;
