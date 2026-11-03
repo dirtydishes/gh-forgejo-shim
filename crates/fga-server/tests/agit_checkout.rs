@@ -22,8 +22,20 @@ fn real_gh() -> Option<PathBuf> {
         .then_some(gh)
 }
 
+/// HOME and the XDG directories for a program the test runs, so its state stays in the test's temp
+/// directory and never lands in the repository or the user's home.
+fn isolated<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
+    command
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("XDG_STATE_HOME", home.join(".local/state"))
+        .env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CACHE_HOME", home.join(".cache"))
+}
+
 fn git(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    let home = std::env::temp_dir().join(format!("fga-agit-{}", std::process::id()));
+    isolated(&mut Command::new("git"), &home)
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -171,12 +183,12 @@ async fn an_agit_checkout_lands_detached_on_the_pr_head() {
             ssh.clone(),
         );
         tokio::task::spawn_blocking(move || {
-            Command::new(gh)
+            let mut command = Command::new(gh);
+            command.env_clear();
+            isolated(&mut command, &root)
                 .args(["pr", "checkout", "3", "-R", "forge.test/o/r"])
                 .current_dir(&work)
-                .env_clear()
                 .env("PATH", std::env::var("PATH").unwrap())
-                .env("HOME", &root)
                 .env("GH_CONFIG_DIR", &config)
                 .env("GH_PROMPT_DISABLED", "1")
                 .env("GH_NO_UPDATE_NOTIFIER", "1")
