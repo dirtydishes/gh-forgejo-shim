@@ -400,11 +400,14 @@ struct Plan {
 impl Plan {
     fn for_invocation(routed: &Invocation, host: &str, env: &HashMap<String, String>) -> Self {
         let command = routed.command.as_str();
+        // gh's auth commands read an empty `--hostname` as none (gh `auth/token/token.go:71`,
+        // `auth/status/status.go:291`); `gh api` rejects it before any request.
+        let hostname = routed.flag("hostname").filter(|value| !value.is_empty());
         let mut extra_edits = Edits::new();
         // Decision 4 (§2): host-less `gh api` and `gh auth token` use gh's default host, so the
         // forge becomes it. Portless, because gh drops the port from remotes before comparing
         // them with GH_HOST. A user GH_HOST with that value already stays as it is.
-        if matches!(command, "api" | "auth token") && routed.flag("hostname").is_none() {
+        if matches!(command, "api" | "auth token") && hostname.is_none() {
             let hostname = gh_hostname(host);
             if env.get("GH_HOST") != Some(&hostname) {
                 extra_edits.push(("GH_HOST", Edit::Set(hostname.into())));
@@ -416,7 +419,7 @@ impl Plan {
         Self {
             real_token: command == "auth token" || show_token,
             expect_real: show_token,
-            all_hosts: status && routed.flag("hostname").is_none(),
+            all_hosts: status && hostname.is_none(),
             look_up_logins: status,
             extra_edits,
         }
@@ -536,6 +539,11 @@ mod tests {
         assert!(plan(&["auth", "token", "-h", "forge.test"], &[])
             .extra_edits
             .is_empty());
+        assert_eq!(
+            plan(&["auth", "token", "--hostname="], &[]).extra_edits,
+            vec![("GH_HOST", gh_host.clone())],
+            "an empty hostname is none"
+        );
         assert!(plan(&["pr", "view", "1"], &[]).extra_edits.is_empty());
     }
 
@@ -577,6 +585,10 @@ mod tests {
         assert!(host_less.all_hosts && host_less.look_up_logins);
         let one = plan(&["auth", "status", "--hostname", "forge.test"], &[]);
         assert!(!one.all_hosts && one.look_up_logins);
+        assert!(
+            plan(&["auth", "status", "--hostname="], &[]).all_hosts,
+            "an empty hostname is none"
+        );
         assert!(!plan(&["pr", "view", "1"], &[]).look_up_logins);
     }
 
