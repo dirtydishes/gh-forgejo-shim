@@ -84,6 +84,13 @@ impl Branch {
         }
     }
 
+    /// Whether the head is a branch that still exists. Forgejo puts the branch name in `ref` only
+    /// then (`label` always holds it); an AGit PR, a deleted branch or a deleted fork has
+    /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`).
+    pub fn exists(&self) -> bool {
+        !self.label.is_empty() && self.ref_name == self.label
+    }
+
     pub fn label(&self) -> String {
         match &self.repo {
             Some(repo) => format!("{}:{}", repo.owner.login, self.name()),
