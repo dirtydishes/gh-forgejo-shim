@@ -1,0 +1,9 @@
+{
+  "id": "decoy-version-command",
+  "kind": "decoy",
+  "argv": [
+    "version"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": []
+}
