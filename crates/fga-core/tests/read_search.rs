@@ -212,6 +212,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let pull_with = move |number: i32, label: &str, reference: &str, owner: &str| {
         let mut source = pull(number, false);
         source["state"] = json!("open");
+        source["merged"] = json!(false);
         source["head"] = json!({"label":label,"ref":reference,"sha":"abc","repo":repo(owner)});
         source
     };
@@ -224,6 +225,19 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         // A live branch named like the placeholder can't be told from it: counted as gone, so gh
         // fetches the PR's own ref, which is still the PR's commit.
         pull_with(6, "refs/pull/6/head", "refs/pull/6/head", "o"),
+        // A closed and a merged PR whose branch exists, maybe recreated since: the branch no longer
+        // follows the PR, so only the PR's own ref is its head.
+        {
+            let mut closed = pull_with(7, "feature", "feature", "o");
+            closed["state"] = json!("closed");
+            closed
+        },
+        {
+            let mut merged = pull_with(8, "feature", "feature", "o");
+            merged["state"] = json!("closed");
+            merged["merged"] = json!(true);
+            merged
+        },
     ];
     let repository = |owner: &'static str| {
         get(move || async move {
@@ -248,7 +262,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
     }
     let (session, task) = session(upstream).await;
     let fields = "headRefName isCrossRepository headRepository{name} headRepositoryOwner{login}";
-    let query = (1..=6)
+    let query = (1..=8)
         .map(|n| format!("p{n}:pullRequest(number:{n}){{{fields}}}"))
         .collect::<Vec<_>>()
         .join(" ");
@@ -269,10 +283,13 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         json!({
             "p1":head("feature", false, r.clone(), "o"),
             "p2":head("feature", false, Value::Null, "o"),
-            "p3":head("refs/pull/3/head", false, Value::Null, "o"),
+            // gh names the local branch after headRefName; `refs/` would make it a raw ref.
+            "p3":head("pull/3/head", false, Value::Null, "o"),
             "p4":head("feature", true, r, "f"),
             "p5":head("feature", true, Value::Null, "f"),
-            "p6":head("refs/pull/6/head", false, Value::Null, "o"),
+            "p6":head("pull/6/head", false, Value::Null, "o"),
+            "p7":head("feature", false, Value::Null, "o"),
+            "p8":head("feature", false, Value::Null, "o"),
         })
     );
 }
