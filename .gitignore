@@ -18,5 +18,6 @@ target/
 # bd lock file at the repo root
 .beads.gate.lock
 
-# Gateway e2e artifacts
-/.local/
+# Gateway e2e artifacts, and state a program run by a test may write at any depth (gh keeps
+# a device id under .local/state)
+.local/

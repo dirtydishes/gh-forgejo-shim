@@ -20,8 +20,9 @@ pub const MINIMUM: Version = Version {
     patch: 3,
 };
 
-/// Set to `1` to go ahead with a gh whose version can't be read, such as one built from source.
-/// A gh that reports an older version is refused even then.
+/// Set to `1` to go ahead with a gh that answers `--version` with something this can't compare,
+/// such as one built from source. A gh that reports an older version, or doesn't answer, is
+/// refused even then.
 pub const ALLOW_UNKNOWN_ENV: &str = "FJ_SHIM_ALLOW_UNKNOWN_GH";
 
 /// Tokens gh reads from the environment. `--version` needs none, so none is passed to it.
@@ -69,8 +70,11 @@ pub enum Reading {
         text: String,
         after: Option<Version>,
     },
-    /// No version could be read, and why.
+    /// It answered, but with no version this can read, and why.
     Unknown(String),
+    /// It didn't answer: it couldn't be started, failed, ran past [`TIMEOUT`] or printed more
+    /// than [`OUTPUT_CAP`]. The opt-in doesn't cover this.
+    Failed(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,29 +109,52 @@ pub fn check(real_gh: Option<&ToolPath>, env: &EnvMap, platform: &str) -> GhChec
     let found = format!("{} via {}", real_gh.path.display(), real_gh.source);
     assess(
         &found,
+        is_homebrew(&real_gh.path),
         &probe(&real_gh.path, env),
         allows_unknown(env),
-        platform,
     )
 }
 
 fn allows_unknown(env: &EnvMap) -> bool {
-    env.get(ALLOW_UNKNOWN_ENV).is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes"
-        )
-    })
+    env.get(ALLOW_UNKNOWN_ENV).is_some_and(|value| value == "1")
 }
 
-fn assess(found: &str, reading: &Reading, allow_unknown: bool, platform: &str) -> GhCheck {
+/// Whether Homebrew installed the gh at `path`, so `brew upgrade gh` is the advice that works.
+fn is_homebrew(path: &Path) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path = path.to_string_lossy();
+    path.contains("/Cellar/")
+        || path.starts_with("/opt/homebrew/")
+        || path.starts_with("/home/linuxbrew/.linuxbrew/")
+}
+
+/// `text` as a message shows it: at most 60 characters, and quoted and escaped unless it's plain
+/// printable ASCII, so a gh can't put control bytes on the terminal.
+fn shown(text: &str) -> String {
+    let short = text.chars().take(60).collect::<String>();
+    if short.len() == text.len() && short.chars().all(|character| character.is_ascii_graphic()) {
+        short
+    } else {
+        format!("{short:?}")
+    }
+}
+
+fn assess(found: &str, homebrew: bool, reading: &Reading, allow_unknown: bool) -> GhCheck {
+    let upgrade = || {
+        if homebrew {
+            repair_commands("darwin", "upgrade")
+        } else {
+            repair_commands("", "upgrade")
+        }
+    };
     let older = |text: &str| GhCheck {
         status: Status::Refused,
         detail: format!(
-            "found gh {text} at {found}, but gh-forgejo-shim needs gh {MINIMUM} or newer; \
-             upgrade it from {GET_GH}"
+            "found gh {} at {found}, but gh-forgejo-shim needs gh {MINIMUM} or newer; \
+             upgrade it from {GET_GH}",
+            shown(text)
         ),
-        repair_commands: repair_commands(platform, "upgrade"),
+        repair_commands: upgrade(),
     };
     let unknown = |reason: &str| {
         if allow_unknown {
@@ -147,7 +174,7 @@ fn assess(found: &str, reading: &Reading, allow_unknown: bool, platform: &str) -
                      newer, from {GET_GH}. For a gh you built yourself, set \
                      {ALLOW_UNKNOWN_ENV}=1 to go ahead"
                 ),
-                repair_commands: repair_commands(platform, "upgrade"),
+                repair_commands: upgrade(),
             }
         }
     };
@@ -160,7 +187,7 @@ fn assess(found: &str, reading: &Reading, allow_unknown: bool, platform: &str) -
             if *version > MINIMUM || (*version == MINIMUM && !pre_release) {
                 GhCheck {
                     status: Status::Supported,
-                    detail: format!("found gh {text} at {found}"),
+                    detail: format!("found gh {} at {found}", shown(text)),
                     repair_commands: Vec::new(),
                 }
             } else {
@@ -173,8 +200,18 @@ fn assess(found: &str, reading: &Reading, allow_unknown: bool, platform: &str) -
             text,
             after: Some(after),
         } if *after < MINIMUM => older(text),
-        Reading::Dev { text, .. } => unknown(&format!("it's a development build ({text})")),
+        Reading::Dev { text, .. } => {
+            unknown(&format!("it's a development build ({})", shown(text)))
+        }
         Reading::Unknown(reason) => unknown(reason),
+        Reading::Failed(reason) => GhCheck {
+            status: Status::Refused,
+            detail: format!(
+                "found {found}, but {reason}, so its version can't be checked; gh-forgejo-shim \
+                 needs gh {MINIMUM} or newer, from {GET_GH}"
+            ),
+            repair_commands: upgrade(),
+        },
     }
 }
 
@@ -212,7 +249,7 @@ pub fn parse(stdout: &str) -> Reading {
         None => (bare, None),
     };
     let Some(version) = parse_core(core) else {
-        return Reading::Unknown(format!("its version, {text:?}, isn't X.Y.Z"));
+        return Reading::Unknown(format!("its version, {}, isn't X.Y.Z", shown(&text)));
     };
     match suffix {
         None => Reading::Release {
@@ -259,8 +296,8 @@ fn is_describe_suffix(suffix: &str) -> bool {
 }
 
 /// Runs `path --version` and reads its answer. The environment is `env` without any token, and
-/// with gh's update notices off, so the check never reaches the network. Stdin is closed. A gh
-/// that runs past [`TIMEOUT`] or prints more than [`OUTPUT_CAP`] is killed.
+/// with gh's update notices and telemetry off. Stdin is closed. A gh that runs past [`TIMEOUT`]
+/// or prints more than [`OUTPUT_CAP`] is killed, with anything it started in its process group.
 pub fn probe(path: &Path, env: &EnvMap) -> Reading {
     probe_with(path, env, TIMEOUT, OUTPUT_CAP)
 }
@@ -276,16 +313,21 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
         )
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("GH_NO_EXTENSION_UPDATE_NOTIFIER", "1")
+        .env("GH_TELEMETRY", "false")
+        .env("DO_NOT_TRACK", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // A group of its own, so `stop` reaches anything a gh wrapper starts, too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(error) => return Reading::Unknown(format!("it couldn't be run ({error})")),
+        Err(error) => return Reading::Failed(format!("it couldn't be run ({error})")),
     };
     let Some(stdout) = child.stdout.take() else {
         stop(&mut child);
-        return Reading::Unknown("its output couldn't be read".to_string());
+        return Reading::Failed("its output couldn't be read".to_string());
     };
     // A reader thread, so a gh that never writes or never exits can't hold this one up. It reads
     // one byte past the cap to tell a full answer from too much.
@@ -313,7 +355,7 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
                 stop(&mut child);
-                return Reading::Unknown(format!(
+                return Reading::Failed(format!(
                     "its `--version` didn't finish within {} seconds",
                     timeout.as_secs()
                 ));
@@ -321,7 +363,7 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
                 stop(&mut child);
-                return Reading::Unknown(format!("waiting for it failed ({error})"));
+                return Reading::Failed(format!("waiting for it failed ({error})"));
             }
         }
     };
@@ -331,7 +373,7 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
         None => match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(output) => output,
             Err(_) => {
-                return Reading::Unknown(
+                return Reading::Failed(
                     "its `--version` output didn't end when it exited".to_string(),
                 )
             }
@@ -339,25 +381,37 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
     };
     let bytes = match output {
         Ok(bytes) => bytes,
-        Err(error) => return Reading::Unknown(format!("its output couldn't be read ({error})")),
+        Err(error) => return Reading::Failed(format!("its output couldn't be read ({error})")),
     };
     if bytes.len() > cap {
         return too_much(cap);
     }
     if !status.success() {
-        return Reading::Unknown(format!("its `--version` failed ({status})"));
+        return Reading::Failed(format!("its `--version` failed ({status})"));
     }
     parse(&String::from_utf8_lossy(&bytes))
 }
 
 fn too_much(cap: usize) -> Reading {
-    Reading::Unknown(format!(
+    Reading::Failed(format!(
         "its `--version` printed more than {} KiB",
         cap / 1024
     ))
 }
 
+/// Kills `child`'s process group, then `child`, and reaps it. The group is named only while
+/// `child` is unreaped, so its id can't have passed to another group.
 fn stop(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -460,7 +514,7 @@ mod tests {
             ("gh version 2.90.0-4-g0123abc", Status::Refused),
         ] {
             for allow_unknown in [false, true] {
-                let check = assess("gh via PATH", &parse(stdout), allow_unknown, "linux");
+                let check = assess("gh via PATH", false, &parse(stdout), allow_unknown);
                 assert_eq!(check.status, expected, "{stdout} (opt-in {allow_unknown})");
                 if expected == Status::Refused {
                     assert!(check.detail.contains("2.103.3"), "{}", check.detail);
@@ -477,7 +531,7 @@ mod tests {
             "gh version 2.103.3-12-gabc1234",
             "something else",
         ] {
-            let refused = assess("gh via PATH", &parse(stdout), false, "darwin");
+            let refused = assess("gh via PATH", true, &parse(stdout), false);
             assert_eq!(refused.status, Status::Refused, "{stdout}");
             assert!(
                 refused.detail.contains(ALLOW_UNKNOWN_ENV),
@@ -487,9 +541,60 @@ mod tests {
             assert!(refused
                 .repair_commands
                 .contains(&"brew upgrade gh".to_string()));
-            let allowed = assess("gh via PATH", &parse(stdout), true, "darwin");
+            let allowed = assess("gh via PATH", true, &parse(stdout), true);
             assert_eq!(allowed.status, Status::AllowedUnknown, "{stdout}");
         }
+    }
+
+    #[test]
+    fn a_gh_that_doesnt_answer_is_refused_even_with_the_opt_in() {
+        for allow_unknown in [false, true] {
+            let check = assess(
+                "gh via PATH",
+                false,
+                &Reading::Failed("its `--version` failed (exit status: 1)".to_string()),
+                allow_unknown,
+            );
+            assert_eq!(check.status, Status::Refused);
+            assert!(
+                !check.detail.contains(ALLOW_UNKNOWN_ENV),
+                "{}",
+                check.detail
+            );
+        }
+    }
+
+    #[test]
+    fn brew_is_advised_only_for_a_homebrew_gh() {
+        let older = parse("gh version 2.90.0");
+        let brew = assess("gh via PATH", true, &older, false);
+        assert_eq!(brew.repair_commands[0], "brew upgrade gh");
+        let other = assess("gh via PATH", false, &older, false);
+        assert!(
+            !other
+                .repair_commands
+                .iter()
+                .any(|command| command.starts_with("brew")),
+            "{:?}",
+            other.repair_commands
+        );
+        assert!(is_homebrew(Path::new("/opt/homebrew/bin/gh")));
+        assert!(is_homebrew(Path::new(
+            "/usr/local/Cellar/gh/2.103.3/bin/gh"
+        )));
+        assert!(!is_homebrew(Path::new("/usr/bin/gh")));
+    }
+
+    #[test]
+    fn version_text_is_shortened_and_escaped_in_messages() {
+        let long = format!("gh version 1.{}.0", "9".repeat(200));
+        let check = assess("gh via PATH", false, &parse(&long), false);
+        assert!(check.detail.len() < 500, "{}", check.detail);
+        let escape = "gh version 2.0.0-\u{1b}[31mred";
+        let check = assess("gh via PATH", false, &parse(escape), false);
+        assert!(!check.detail.contains('\u{1b}'), "{:?}", check.detail);
+        let dev = assess("gh via PATH", false, &parse("gh version de\u{7}v"), true);
+        assert!(!dev.detail.contains('\u{7}'), "{:?}", dev.detail);
     }
 
     #[test]
@@ -501,14 +606,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_yes_value_opts_in() {
+    fn only_1_opts_in() {
         for (value, allowed) in [
             ("1", true),
-            ("true", true),
-            ("YES", true),
+            ("true", false),
+            ("yes", false),
+            (" 1", false),
             ("0", false),
             ("", false),
-            ("no", false),
         ] {
             let env = EnvMap::from([(ALLOW_UNKNOWN_ENV.to_string(), value.to_string())]);
             assert_eq!(allows_unknown(&env), allowed, "{value:?}");
@@ -580,11 +685,22 @@ mod tests {
             Ok((dir, path))
         }
 
+        /// HOME and the XDG dirs in the test's own directory, so nothing a fake gh runs writes
+        /// state into the repo or the user's home.
         fn env_with(dir: &Path) -> EnvMap {
-            EnvMap::from([
+            let mut env = EnvMap::from([
                 ("PATH".to_string(), "/usr/bin:/bin".to_string()),
                 ("HOME".to_string(), dir.display().to_string()),
-            ])
+            ]);
+            for (key, sub) in [
+                ("XDG_CONFIG_HOME", ".config"),
+                ("XDG_STATE_HOME", ".local/state"),
+                ("XDG_DATA_HOME", ".local/share"),
+                ("XDG_CACHE_HOME", ".cache"),
+            ] {
+                env.insert(key.to_string(), dir.join(sub).display().to_string());
+            }
+            env
         }
 
         #[test]
@@ -598,13 +714,15 @@ mod tests {
         }
 
         #[test]
-        fn passes_no_token_and_turns_update_notices_off() -> io::Result<()> {
+        fn passes_no_token_and_turns_update_notices_and_telemetry_off() -> io::Result<()> {
             let (dir, gh) = fake_gh(
                 "#!/bin/sh\n\
                  [ \"$1\" = --version ] || exit 3\n\
                  [ -z \"$GH_TOKEN$GITHUB_TOKEN$GH_ENTERPRISE_TOKEN$GITHUB_ENTERPRISE_TOKEN\" ] || exit 4\n\
                  [ \"$GH_NO_UPDATE_NOTIFIER\" = 1 ] || exit 5\n\
                  [ \"$GH_NO_EXTENSION_UPDATE_NOTIFIER\" = 1 ] || exit 6\n\
+                 [ \"$GH_TELEMETRY\" = false ] || exit 9\n\
+                 [ \"$DO_NOT_TRACK\" = 1 ] || exit 10\n\
                  [ \"$KEPT\" = yes ] || exit 7\n\
                  read -r line && exit 8\n\
                  printf 'gh version 2.103.3\\n'\n",
@@ -619,12 +737,13 @@ mod tests {
         }
 
         #[test]
-        fn a_gh_that_fails_reads_as_unknown() -> io::Result<()> {
-            let (dir, gh) = fake_gh("#!/bin/sh\nprintf 'gh version 2.103.3\\n'\nexit 1\n")?;
-            assert!(matches!(
-                probe(&gh, &env_with(dir.path())),
-                Reading::Unknown(_)
-            ));
+        fn a_gh_that_fails_hasnt_answered() -> io::Result<()> {
+            let (dir, gh) = fake_gh("#!/bin/sh\nprintf 'gh version 2.90.0\\n'\nexit 1\n")?;
+            let reading = probe(&gh, &env_with(dir.path()));
+            assert!(
+                matches!(&reading, Reading::Failed(reason) if reason.contains("failed")),
+                "{reading:?}"
+            );
             Ok(())
         }
 
@@ -647,7 +766,7 @@ mod tests {
                 started.elapsed()
             );
             assert!(
-                matches!(&reading, Reading::Unknown(reason) if reason.contains("didn't finish")),
+                matches!(&reading, Reading::Failed(reason) if reason.contains("didn't finish")),
                 "{reading:?}"
             );
             Ok(())
@@ -670,7 +789,7 @@ mod tests {
                 started.elapsed()
             );
             assert!(
-                matches!(&reading, Reading::Unknown(reason) if reason.contains("more than")),
+                matches!(&reading, Reading::Failed(reason) if reason.contains("more than")),
                 "{reading:?}"
             );
             Ok(())
@@ -693,7 +812,42 @@ mod tests {
                 "{:?}",
                 started.elapsed()
             );
-            assert!(matches!(reading, Reading::Unknown(_)), "{reading:?}");
+            assert!(
+                matches!(&reading, Reading::Failed(reason) if reason.contains("didn't end")),
+                "{reading:?}"
+            );
+            Ok(())
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_gh_that_hangs_in_a_child_has_its_whole_group_killed() -> io::Result<()> {
+            // A wrapper that runs the real gh as a child rather than through `exec`.
+            let (dir, gh) = fake_gh("#!/bin/sh\nsleep 60 &\necho $! > \"$HOME/child\"\nwait\n")?;
+            let reading = probe_with(
+                &gh,
+                &env_with(dir.path()),
+                Duration::from_secs(1),
+                OUTPUT_CAP,
+            );
+            assert!(matches!(reading, Reading::Failed(_)), "{reading:?}");
+            let pid = std::fs::read_to_string(dir.path().join("child"))?;
+            let stat = Path::new("/proc").join(pid.trim()).join("stat");
+            let started = Instant::now();
+            // Gone, or a zombie for want of a reaping init in a container: either way, killed.
+            while std::fs::read_to_string(&stat).is_ok_and(|stat| {
+                !stat
+                    .split(") ")
+                    .nth(1)
+                    .is_some_and(|rest| rest.starts_with('Z'))
+            }) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "the wrapper's child {} survived",
+                    pid.trim()
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
             Ok(())
         }
     }

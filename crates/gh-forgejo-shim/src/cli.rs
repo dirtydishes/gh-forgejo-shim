@@ -355,13 +355,16 @@ fn run_install_shim(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runti
     }
 
     let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
-    // The shim delegates to real gh, so it isn't installed without one new enough (decision D3).
+    // The shim delegates to real gh, so it isn't installed without one new enough (decision D3):
+    // the one the wrapper will run once installed, so not a gh at the target it replaces.
     let config =
         config::load_config_with_env(Some(&config::config_path(runtime.home())), runtime.env())?;
-    let real_gh = setup::find_real_gh(
+    let target = shim::shim_path(bin_dir.as_deref(), runtime.home())?;
+    let real_gh = setup::find_real_gh_after_install(
         Some(&config),
         runtime.env(),
         &setup::default_fallback_dirs(),
+        &target,
     );
     let gh = gh_version::check(real_gh.as_ref(), runtime.env(), runtime.platform());
     match gh.status {
@@ -1970,7 +1973,7 @@ mod tests {
     }
 
     /// Points `runtime` at a fake real gh that reports the oldest supported version, so install
-    /// never looks for one in this machine's install dirs. Written from a child `sh`, so no
+    /// never looks for one in this machine's install dirs, and gives it a HOME of its own. Written from a child `sh`, so no
     /// sibling test's fork holds it open for writing when it runs (ETXTBSY).
     fn use_supported_gh(runtime: &mut FakeRuntime, home: &Path) -> Result<()> {
         use std::process::{Command, Stdio};
@@ -1996,6 +1999,19 @@ mod tests {
         runtime
             .env
             .insert("FJ_SHIM_REAL_GH".to_string(), path.display().to_string());
+        // Whatever install runs keeps its state in this test's own directory: with no HOME, a
+        // real gh writes `.local/state` into the current directory, the repo.
+        for (key, sub) in [
+            ("HOME", ""),
+            ("XDG_CONFIG_HOME", ".config"),
+            ("XDG_STATE_HOME", ".local/state"),
+            ("XDG_DATA_HOME", ".local/share"),
+            ("XDG_CACHE_HOME", ".cache"),
+        ] {
+            runtime
+                .env
+                .insert(key.to_string(), home.join(sub).display().to_string());
+        }
         Ok(())
     }
 
