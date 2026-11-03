@@ -148,6 +148,17 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
                 .filter(|prefix| !prefix.is_empty())
                 .collect()
         });
+        // The gateway marks a new draft with the first prefix, so an empty list would turn drafts
+        // off; leaving the key unset keeps the default.
+        if settings
+            .wip_prefixes
+            .as_ref()
+            .is_some_and(|prefixes| prefixes.is_empty())
+        {
+            return Err(ShimError::new(format!(
+                "invalid wip_prefixes for {host}: name at least one prefix, or leave the key unset"
+            )));
+        }
         // The gateway takes the list as comma-separated text, so a prefix can't hold a comma.
         if settings
             .wip_prefixes
@@ -593,6 +604,14 @@ mod tests {
             error.to_string().contains("can't contain a comma"),
             "{error}"
         );
+        for empty in ["[]", "[\" \", \"\"]"] {
+            fs::write(
+                &path,
+                format!("[host.\"a.example.com\"]\nwip_prefixes = {empty}\n"),
+            )?;
+            let error = load_config_at(&path).expect_err(empty);
+            assert!(error.to_string().contains("at least one prefix"), "{error}");
+        }
         fs::remove_dir_all(&dir)?;
         Ok(())
     }
