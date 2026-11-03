@@ -87,6 +87,14 @@ assert all(r['status'] == 'queued' and r['conclusion'] == '' and r['workflowName
 assert gh('run', 'list', '--branch', 'probe', '--event', 'push', '--status', 'queued', '--json', fields) == [next(r for r in actual if r['headBranch'] == 'probe')]
 assert gh('run', 'list', '--status', 'completed', '--json', fields) == []
 print('PASS native Forgejo Actions runs through real gh run list: queued, workflow name, branches, event', flush=True)
+# --workflow by file name and by name: gh resolves the workflow, then reads
+# actions/workflows/{id}/runs, which asks Forgejo for runs of that file.
+for selector in ('ci.yaml', 'native ci'):
+    by_workflow = gh('run', 'list', '--workflow', selector, '--json', fields)
+    assert sorted(map(json.dumps, by_workflow)) == sorted(map(json.dumps, actual)), (selector, by_workflow)
+result = subprocess.run(['gh', 'run', 'list', '--workflow', 'missing.yml', '-R', 'forge.test/' + REPO], capture_output=True, text=True)
+assert result.returncode != 0 and 'not found' in result.stderr, (result.returncode, result.stderr)
+print('PASS real gh run list --workflow by file name and by name; a missing file is not found', flush=True)
 # The simple JSON form needs only a mapped run, not the unsupported jobs/log APIs.
 actual = gh('run', 'view', str(runs[0]['id']), '--json', 'status,headBranch,displayTitle')
 assert actual['status'] == 'queued' and actual['headBranch'] in ('main', 'probe'), actual
