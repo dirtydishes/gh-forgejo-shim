@@ -205,11 +205,15 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   `oauth_token`, plus the `git_protocol` from the user's entry for that host, if any. A host-level
   `oauth_token` needs no `user` key for gh to find it. `gh auth status` reads the account name from
   `user`, though, and fetches it only for tokens from the environment
-  (`gh/pkg/cmd/auth/status/status.go:314-320,484-490`). For an `auth status` call, the launcher
-  therefore looks up each served host's login before it starts gh. It uses the gateway's own
-  `authenticate`, which warms the session cache, so gh's own requests repeat nothing. It writes
-  that login as `user`. If the lookup fails, the entry has no `user`, and gh reports the failure
-  itself. Other commands never show the account, so they get no `user` and no lookup.
+  (`gh/pkg/cmd/auth/status/status.go:314-320,484-490`), and `gh auth token --user <login>` finds
+  a token only under `users.<login>.oauth_token` (`gh/internal/config/config.go:693-709`). For an
+  `auth status` call, or an `auth token` call with a `--user`, the launcher therefore looks up
+  each served host's login before it starts gh. It uses the gateway's own `authenticate`, which
+  warms the session cache, so gh's own requests repeat nothing. It writes that login as `user`,
+  and the entry's token again under `users.<login>.oauth_token`, as gh's own plain-text login
+  writes it. gh then prints the token for that login and refuses any other, as it would. If the
+  lookup fails, the entry has neither, and gh reports the failure itself. Other commands never
+  show the account, so they get no `user` and no lookup.
   - A served host (the set *S*, below) gets a per-call token: 32 random bytes from the OS RNG as
     hex, made for this call. The gateway accepts it for that host and authenticates upstream
     with the real token (§5). Outside the gateway it opens nothing, so no gh credential helper,
@@ -456,7 +460,7 @@ The order is fixed:
    no other process can cause, the launcher stops with exit 1.
 3. Write `credentials` and the `gh` script, then `config.yml`, and make gh's environment edits
    (§7), all before any thread starts.
-4. Start the gateway's runtime. For an `auth status` call, look up each served host's login
+4. Start the gateway's runtime. For an `auth status` call or an `auth token --user`, look up each served host's login
    through the gateway's own client (§3). Write `hosts.yml`, with those logins.
 5. Bind the socket.
 

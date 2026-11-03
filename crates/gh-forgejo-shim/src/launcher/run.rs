@@ -50,7 +50,8 @@ pub struct Launch<'a> {
     /// `hosts.yml`, given each served host's login, in `gateway` order: `None` unless
     /// `look_up_logins`, or when a lookup fails (§3).
     pub hosts_yml: HostsYmlBuilder<'a>,
-    /// An `auth status` call: look up each served host's login before gh starts (§3).
+    /// An `auth status` or `auth token --user` call: look up each served host's login before gh
+    /// starts (§3).
     pub look_up_logins: bool,
     /// The environment edits for gh, given the run directory.
     pub edits: Box<dyn FnOnce(&Path) -> Edits + 'a>,
@@ -58,7 +59,7 @@ pub struct Launch<'a> {
 
 const SIGNALS: [Signal; 4] = [Signal::INT, Signal::QUIT, Signal::TERM, Signal::HUP];
 
-/// How long an `auth status` login lookup may take before the account is left out (§3); gh then
+/// How long a login lookup may take before the account is left out (§3); gh then
 /// reports that host's status itself.
 const LOGIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -203,8 +204,9 @@ async fn serve_gh(
         }
     };
     // gh's `auth status` shows the account from `user` in hosts.yml and fetches it only for
-    // environment tokens, so the launcher looks each login up first, through the gateway's own
-    // client, which warms its session cache (§3).
+    // environment tokens, and `auth token --user` finds a token only under `users.<login>`, so
+    // the launcher looks each login up first, through the gateway's own client, which warms its
+    // session cache (§3).
     // The lookups run at once, each within LOGIN_BUDGET, and a signal ends the launch as it would
     // before gh starts: a forge that is down mustn't hold off Ctrl-C.
     let mut logins = vec![None; clients.len()];

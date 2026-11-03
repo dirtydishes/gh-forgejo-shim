@@ -396,7 +396,8 @@ struct Plan {
     expect_real: bool,
     /// A host-less `auth status`: every eligible allowlist host is served (§3).
     all_hosts: bool,
-    /// `auth status` shows each account, from `user` in `hosts.yml` (§3).
+    /// `auth status` shows each account, from `user` in `hosts.yml`, and `auth token --user`
+    /// finds its token under `users.<login>` (§3).
     look_up_logins: bool,
     extra_edits: Edits,
 }
@@ -424,7 +425,9 @@ impl Plan {
             real_token: command == "auth token" || show_token,
             expect_real: show_token,
             all_hosts: status && hostname.is_none(),
-            look_up_logins: status,
+            look_up_logins: status
+                || (command == "auth token"
+                    && routed.flag("user").is_some_and(|user| !user.is_empty())),
             extra_edits,
         }
     }
@@ -594,6 +597,8 @@ mod tests {
             "an empty hostname is none"
         );
         assert!(!plan(&["pr", "view", "1"], &[]).look_up_logins);
+        assert!(plan(&["auth", "token", "-u", "kell"], &[]).look_up_logins);
+        assert!(!plan(&["auth", "token"], &[]).look_up_logins);
     }
 
     #[test]
