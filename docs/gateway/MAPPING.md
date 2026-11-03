@@ -276,35 +276,32 @@ Escaping costs nothing and can't inject markup. Optional sanitized rendering is
 
 Forgejo's `head.label` holds the head branch's name, and `head.ref` holds it too only while the
 branch exists. For an AGit PR, a deleted branch or a deleted fork, `head.ref` is `refs/pull/N/head`
-(`services/convert/pull.go:106-110,165-231`).
+(`services/convert/pull.go:106-110,165-231`). While the branch exists, `head.sha` is its tip, which
+need not be the PR's head: the PR's own ref `refs/pull/N/head` in the base repository is.
 
 | GitHub | Forgejo |
 |---|---|
-| `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit), without a leading `refs/` |
+| `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit), with every leading `refs/` removed |
 | `headRepositoryOwner` | `head.repo.owner`; null only for a deleted fork |
-| `headRepository` | `head.repo`, but null unless the PR is open and `head.ref` equals a non-empty `head.label` that doesn't start with `refs/pull/` |
-| `isCrossRepository` | whether `head.repo` differs from the base |
+| `headRepository` | `head.repo`, but null unless `head.ref` equals a non-empty `head.label` that doesn't start with `refs/`, **and** `head.sha` equals the commit of `refs/pull/N/head` (`GET repos/{o}/{r}/git/refs/pull/{n}/head`; unreadable counts as different) |
+| `isCrossRepository` | whether `head.repo` differs from the base; true when `head.repo` is null (a deleted fork) |
 
 **A deliberate difference from GitHub.** GitHub keeps `headRepository` when the head branch is
 deleted and nulls it only for a deleted fork. `gh pr checkout` reads `headRepository` alone to
 choose what to fetch: with one it fetches `refs/heads/{headRefName}`, without one `refs/pull/N/head`
-from the base. For an AGit PR there's no such branch at all, and for a deleted branch there's
-either nothing or a branch created since under the old name, which gh would check out without an
-error. So the gateway reports no head repository for a head that's gone, and gh fetches the PR's own
-ref. The owner and `isCrossRepository` stay as GitHub reports them, which keeps gh's
-`owner:branch` labels and current-branch matching. A live branch named like the placeholder
-(`refs/pull/N/head`) can't be told from a gone one, so it counts as gone; gh then fetches the PR's
-ref, which still holds the PR's commit.
+from the base. So the gateway reports a head repository only when that branch is the PR's head.
+Otherwise gh would fetch nothing (AGit), or a branch that differs from the PR: deleted and created
+again at another commit, or moved after the PR closed. A PR reopened through Forgejo's API keeps its
+old `refs/pull/N/head` while the branch may have moved, so even an open PR is checked against its
+ref. The owner and `isCrossRepository` stay as GitHub reports them, which keeps gh's `owner:branch`
+labels and current-branch matching.
 
-The same holds for a closed or merged PR. Forgejo moves an open PR's head with its branch, but once
-the PR is closed or merged its branch can be deleted and created again at another commit, which
-Forgejo then reports as the head. So `headRepository` is null for those too, and gh fetches the PR's
-final commit from `refs/pull/N/head`.
-
-gh names the local branch after `headRefName` and fetches into it (`fetch {remote} {ref}:{name}`).
-A name starting with `refs/`, such as an AGit PR's `refs/pull/N/head`, would make git write a raw ref
-that an existing branch of the same name shadows, so `headRefName` drops that prefix
-(`pull/N/head`). REST `head.ref`, which Claude desktop reads, keeps Forgejo's value.
+gh names the local branch after `headRefName` and fetches into it (`fetch {remote} {ref}:{name}`). A
+name starting with `refs/` would make git write a raw ref that an existing branch of the same name
+shadows. Such a head always counts as gone, so gh fetches the PR's own ref, and `headRefName` drops
+every leading `refs/` (an AGit PR's `refs/pull/N/head` becomes `pull/N/head`; `refs/refs/topic`
+becomes `topic`). The `headRefName` filter accepts that name as well as Forgejo's. REST `head.ref`,
+which Claude desktop reads, keeps Forgejo's value.
 
 If the local branch already holds commits on top of the PR's head, gh keeps them: it merges the
 fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
