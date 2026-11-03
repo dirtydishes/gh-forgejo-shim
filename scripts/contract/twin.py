@@ -49,6 +49,10 @@ WORKFLOW_PATH = ".forgejo/workflows/twin.yml"
 WORKFLOW = ("name: twin\non:\n  push:\n    branches: ['twin/run-*']\njobs:\n  check:\n"
             "    runs-on: docker\n    steps:\n      - run: \"true\"\n")
 RUN_BRANCH = re.compile(r"twin/run-[a-z0-9-]+")
+# `workflow: "branch"` instead puts this one on the case's own branch only, outside twin/run-*, so
+# it queues the only run: a run whose workflow isn't on the default branch (the gateway's #128).
+BRANCH_WORKFLOW_PATH = ".forgejo/workflows/branch.yml"
+BRANCH_WORKFLOW = "name: branch\non: push\njobs:\n  check:\n    runs-on: docker\n    steps:\n      - run: \"true\"\n"
 # The twin's own draft prefix (seed.py), which Forgejo reads to mark a pull request a draft.
 DRAFT_PREFIX = "scenario: draft"
 BRANCH = re.compile(r"twin/[a-z0-9-]+")
@@ -119,7 +123,7 @@ def validate(case):
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
     for flag in ("pr", "base", "draft", "closed", "workflow", "issue"):
-        if flag in setup and not isinstance(setup[flag], bool):
+        if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
         raise ValueError("setup.draft and setup.closed need setup.pr")
@@ -127,8 +131,10 @@ def validate(case):
         raise ValueError("{pr} needs setup.pr")
     if command[0] == "run" and not setup.get("workflow"):
         raise ValueError("a twin run command needs setup.workflow, its own run")
-    if setup.get("workflow") and (not RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
+    if setup.get("workflow") is True and (not RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
         raise ValueError("setup.workflow needs a twin/run-<name> branch made from main")
+    if setup.get("workflow") == "branch" and (RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
+        raise ValueError('setup.workflow "branch" needs a branch outside twin/run-*, made from main')
     if command[0] == "issue" and (not setup.get("issue")) != (command == ("issue", "create")):
         raise ValueError("a twin issue command needs setup.issue, its own issue (issue create makes its own)")
     # A merge goes into the case's own base branch, never main, which other cases read.
@@ -199,7 +205,7 @@ def prepare(case, home, token):
     branch = setup["branch"]
     # A merge case's own base branch, so nothing it merges reaches main.
     target = f"{branch}-base" if setup.get("base") else "main"
-    if setup.get("workflow"):
+    if setup.get("workflow") is True:
         try:
             request(base, token, "GET", f"contents/{WORKFLOW_PATH}")
         except urllib.error.HTTPError as error:
@@ -212,6 +218,9 @@ def prepare(case, home, token):
                 {"content": "dHdpbgo=", "branch": "main", "new_branch": target, "message": target})
     request(base, token, "POST", f"contents/{branch}.txt",
             {"content": "dHdpbgo=", "branch": target, "new_branch": branch, "message": branch})
+    if setup.get("workflow") == "branch":
+        request(base, token, "POST", f"contents/{BRANCH_WORKFLOW_PATH}",
+                {"content": base64.b64encode(BRANCH_WORKFLOW.encode()).decode(), "branch": branch, "message": "branch"})
     head = request(base, token, "GET", f"branches/{urllib.parse.quote(branch, safe='')}")["commit"]["id"]
     subs = {"branch": branch, "head": head}
     if setup.get("status"):

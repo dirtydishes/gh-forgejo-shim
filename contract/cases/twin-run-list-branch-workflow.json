@@ -1,0 +1,24 @@
+{
+  "id": "twin-run-list-branch-workflow",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/branch-workflow",
+    "workflow": "branch"
+  },
+  "argv": [
+    "run",
+    "list",
+    "--branch",
+    "{branch}",
+    "--json",
+    "status,workflowName,headBranch,databaseId"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "\\[\\{\"databaseId\":{run},\"headBranch\":\"twin/branch\\-workflow\",\"status\":\"queued\",\"workflowName\":\"branch\"\\}\\]\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}
