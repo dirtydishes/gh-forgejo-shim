@@ -190,10 +190,11 @@ fn decide_invocation_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    // gh's root command (`gh`, `gh --version`, `gh --help`) and `gh version` answer from gh
-    // itself and send no request, so whatever repo the call is in, plain gh runs.
+    // gh's root command (`gh`, `gh --version`, `gh --help`, or a stray flag it rejects) and
+    // `gh version` answer from gh itself and send no request, so whatever repo the call is in,
+    // plain gh runs.
     if invocation.command.is_empty() || invocation.command == "version" {
-        return RouteDecision::delegate("gh's own version or help", None);
+        return RouteDecision::delegate("gh's root or version command", None);
     }
     // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
     // (`gh/pkg/cmd/api/http.go:19-21`).
@@ -535,20 +536,27 @@ mod tests {
 
     #[test]
     fn gh_s_own_version_and_root_help_delegate_even_for_a_forgejo_repo() {
+        // `-h pr` is gh's help for `pr`; the shim reads `-h` as a value flag, leaving no command.
         for args in [
             &["--version"][..],
             &["version"][..],
             &["--help"][..],
+            &["-h", "pr"][..],
             &[][..],
         ] {
-            let decision = decide_route(
-                &argv(args),
-                &config(&["git.example.com"]),
-                &env(&[("GH_REPO", "git.example.com/owner/repo")]),
-                Some(Path::new("/nonexistent-gfjs-repo")),
-            );
-            assert_eq!(decision.kind, RouteKind::Delegate, "{args:?}");
-            assert_eq!(decision.reason, "gh's own version or help", "{args:?}");
+            for forgejo in [
+                ("GH_REPO", "git.example.com/owner/repo"),
+                ("GH_HOST", "git.example.com"),
+            ] {
+                let decision = decide_route(
+                    &argv(args),
+                    &config(&["git.example.com"]),
+                    &env(&[forgejo]),
+                    Some(Path::new("/nonexistent-gfjs-repo")),
+                );
+                assert_eq!(decision.kind, RouteKind::Delegate, "{args:?} {forgejo:?}");
+                assert_eq!(decision.reason, "gh's root or version command", "{args:?}");
+            }
         }
     }
 
