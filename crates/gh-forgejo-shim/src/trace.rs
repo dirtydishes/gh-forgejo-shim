@@ -29,10 +29,23 @@ const SENSITIVE_KEY_PARTS: &[&str] = &[
     "private_key",
     "secret",
     "token",
+    "passcode",
+    "passkey",
 ];
-/// Matched only as a whole part of a key, split at `-`, `_` and `.`: `db_pass` and
-/// `Authorization` are secrets, `bypass` and `authorizations_url` aren't.
+/// Matched as a whole word of a key (`key_words`): `db_pass`, `smtpPass` and `Authorization`
+/// are secrets, `authorizations_url` isn't. A word ending in `pass` is one too (`ftppass`),
+/// unless it's one of `ORDINARY_PASS_WORDS`.
 const SENSITIVE_KEY_WORDS: &[&str] = &["authorization", "pass"];
+/// Ordinary words that end in `pass`, so `bypass_pull_request_allowances` stays readable.
+const ORDINARY_PASS_WORDS: &[&str] = &[
+    "bypass",
+    "compass",
+    "encompass",
+    "overpass",
+    "surpass",
+    "trespass",
+    "underpass",
+];
 /// Authorization schemes. A first word that isn't one of these is part of the credential.
 const AUTH_SCHEMES: &[&str] = &[
     "aws4-hmac-sha256",
@@ -268,13 +281,33 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
         None
     };
     if let Some((quoted_start, quoted_end, quote_len)) = quoted {
-        // An Authorization value doesn't end at a quote with more of it glued on, as in
-        // `"first"tail`. Whitespace or a JSON delimiter ends it, so the next field stays.
-        if authorization && quoted_end < value.len() {
-            let after = quoted_end + quote_len;
+        let after = (quoted_end + quote_len).min(value.len());
+        // A quoted scheme, or nothing, with the credential after it on the line
+        // (`"token" secret`): the rest of the line is the credential, as unquoted. A delimiter
+        // after the quote instead (`"",`) ends the value there.
+        if authorization {
+            let quoted_text = value[quoted_start..quoted_end].trim().to_ascii_lowercase();
+            let rest = value[after..]
+                .split(['\n', '\r'])
+                .next()
+                .unwrap_or_default();
+            let follows = rest.starts_with(char::is_whitespace)
+                && rest
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .is_some_and(|next| !matches!(next, ',' | ';' | '}' | ']' | ')' | '&'));
+            if follows && (quoted_text.is_empty() || AUTH_SCHEMES.contains(&quoted_text.as_str())) {
+                return Some(authorization_credential_range(value, value_start));
+            }
+        }
+        // A secret doesn't end at a quote with more of it glued on, as in `"first"tail` or the
+        // shell's `'it'\''s'`. Whitespace or a delimiter ends it, so the next field stays.
+        if quoted_end < value.len() {
             let glued_end = value[after..]
                 .find(|character: char| {
-                    character.is_whitespace() || matches!(character, ',' | ';' | '}' | ']' | ')')
+                    character.is_whitespace()
+                        || matches!(character, ',' | ';' | '}' | ']' | ')' | '&')
                 })
                 .map_or(value.len(), |offset| after + offset);
             if glued_end > after {
@@ -365,9 +398,33 @@ pub(crate) fn is_sensitive_key(key: &str) -> bool {
     SENSITIVE_KEY_PARTS
         .iter()
         .any(|part| normalized.contains(part))
-        || normalized
-            .split(['-', '_', '.'])
-            .any(|word| SENSITIVE_KEY_WORDS.contains(&word))
+        || key_words(key).any(|word| {
+            SENSITIVE_KEY_WORDS.contains(&word.as_str())
+                || (word.ends_with("pass") && !ORDINARY_PASS_WORDS.contains(&word.as_str()))
+        })
+}
+
+/// A key's words, lowercased, with trailing digits dropped (`authorization2`): each part between
+/// `-`, `_` and `.` whole, and also split at camelCase boundaries (git's `sendemail.smtpPass` has
+/// `smtp` and `pass`). Whole parts too, so mixed case such as `aUtHoRiZaTiOn` still counts.
+fn key_words(key: &str) -> impl Iterator<Item = String> + '_ {
+    key.split(['-', '_', '.']).flat_map(|part| {
+        let mut words = vec![part];
+        let mut start = 0;
+        let mut previous_lower = false;
+        for (index, character) in part.char_indices() {
+            if character.is_ascii_uppercase() && previous_lower {
+                words.push(&part[start..index]);
+                start = index;
+            }
+            previous_lower = character.is_ascii_lowercase() || character.is_ascii_digit();
+        }
+        words.push(&part[start..]);
+        words.into_iter().map(|word| {
+            word.trim_end_matches(|character: char| character.is_ascii_digit())
+                .to_ascii_lowercase()
+        })
+    })
 }
 
 fn is_key_character(character: char) -> bool {
@@ -702,6 +759,14 @@ mod tests {
     }
 
     #[test]
+    fn a_glued_tail_stops_at_a_query_separator() {
+        assert_eq!(
+            redact_text(r#"authorization="x"&state=1 next"#),
+            r#"authorization="<redacted>"&state=1 next"#
+        );
+    }
+
+    #[test]
     fn a_quoted_authorization_value_ends_at_its_quote_and_keeps_the_next_field() {
         assert_eq!(
             redact_text(r#"{"authorization":"","status":200}"#),
@@ -739,6 +804,22 @@ mod tests {
                 r#""{\"authorization\":\"first\"audit-tail\"}""#,
                 "audit-tail",
             ),
+            // A quoted scheme, or nothing, with the credential after it (Opus o1#1 on #94).
+            (r#"Authorization: "token" audit-cred"#, "audit-cred"),
+            (r#"Authorization: "" audit-cred2"#, "audit-cred2"),
+            (
+                r#"http.extraHeader=Authorization: "Bearer" audit-cred"#,
+                "audit-cred",
+            ),
+            // `pass` inside a key's last word, camelCase, or with a digit after it.
+            ("sendemail.smtpPass=audit-hunter2", "audit-hunter2"),
+            ("ftppass: audit-ftp", "audit-ftp"),
+            ("passcode=audit-1234", "audit-1234"),
+            ("authorization2: audit-abc", "audit-abc"),
+            // Text glued to any quoted secret's closing quote.
+            (r#"--config=password='it'\''s-audit-tail'"#, "audit-tail"),
+            (r#""{\"token\":\"first\"audit-tail\"}""#, "audit-tail"),
+            (r#"token="a"audit-b"#, "audit-b"),
         ] {
             for replacement in [REDACTED, "[REDACTED]"] {
                 let redacted = redact_text_with(text, replacement);
