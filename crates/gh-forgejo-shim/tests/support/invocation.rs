@@ -233,6 +233,32 @@ fn github_target_in_doubt_near_a_forge_is_refused() -> TestResult {
 }
 
 #[test]
+fn every_remote_counts_when_the_command_is_in_doubt() -> TestResult {
+    // gh runs `release create`, which honors the saved default, the Forgejo `origin`. The parse
+    // sees `auth release`, which ranks `upstream` first. Any Forgejo remote is in reach (Sol r4#1).
+    let fixture = CliFixture::new()?;
+    let decoy = fixture.write_executable("gh", "#!/bin/sh\necho ran\nexit 23\n")?;
+    fixture.git(["init", "-q"])?;
+    fixture.git(["remote", "add", "upstream", "https://github.com/o/r.git"])?;
+    fixture.git(["remote", "add", "origin", "https://git.example.com/o/r.git"])?;
+    fixture.git(["config", "remote.origin.gh-resolved", "base"])?;
+    let gh_dir = fixture.home().join(".config/gh");
+    std::fs::create_dir_all(&gh_dir)?;
+    std::fs::write(
+        gh_dir.join("hosts.yml"),
+        "github.com:\n    user: u\ngit.example.com:\n    user: u\n",
+    )?;
+    let output = fixture
+        .command("gh-forgejo-shim")?
+        .env("FJ_SHIM_REAL_GH", &decoy)
+        .args(["gh", "--notes", "auth", "release", "create", "v1"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "plain gh ran");
+    Ok(())
+}
+
+#[test]
 fn github_delegation_keeps_every_original_argument_byte() -> TestResult {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
