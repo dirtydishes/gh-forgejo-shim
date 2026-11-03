@@ -243,14 +243,25 @@ pub fn parse(stdout: &str) -> Reading {
         return Reading::Dev { text, after: None };
     }
     let bare = text.strip_prefix('v').unwrap_or(&text);
-    let bare = bare.split_once('+').map_or(bare, |(core, _build)| core);
+    let (bare, build) = match bare.split_once('+') {
+        Some((bare, build)) => (bare, Some(build)),
+        None => (bare, None),
+    };
     let (core, suffix) = match bare.split_once('-') {
         Some((core, suffix)) => (core, Some(suffix)),
         None => (bare, None),
     };
+    let not_semver = || Reading::Unknown(format!("its version, {}, isn't semver", shown(&text)));
     let Some(version) = parse_core(core) else {
-        return Reading::Unknown(format!("its version, {}, isn't X.Y.Z", shown(&text)));
+        return not_semver();
     };
+    // Semver's own rules for the parts after the version, so a malformed answer needs the
+    // opt-in like any other unreadable one.
+    if !build.is_none_or(|build| identifiers(build, false))
+        || !suffix.is_none_or(|suffix| is_describe_suffix(suffix) || identifiers(suffix, true))
+    {
+        return not_semver();
+    }
     match suffix {
         None => Reading::Release {
             text,
@@ -269,11 +280,29 @@ pub fn parse(stdout: &str) -> Reading {
     }
 }
 
+/// Semver's dot-separated identifiers: ASCII letters, digits and `-`, none empty. In a
+/// pre-release, a numeric identifier has no leading zero.
+fn identifiers(text: &str, pre_release: bool) -> bool {
+    text.split('.').all(|identifier| {
+        !identifier.is_empty()
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && !(pre_release
+                && identifier.len() > 1
+                && identifier.starts_with('0')
+                && identifier.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
+/// `X.Y.Z`, numbers without leading zeros, as semver writes them.
 fn parse_core(core: &str) -> Option<Version> {
     let mut parts = core.split('.').map(|part| {
-        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-            .then(|| part.parse::<u64>().ok())
-            .flatten()
+        (!part.is_empty()
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+            && !(part.len() > 1 && part.starts_with('0')))
+        .then(|| part.parse::<u64>().ok())
+        .flatten()
     });
     let version = Version {
         major: parts.next()??,
@@ -340,25 +369,36 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
     });
 
     let deadline = Instant::now() + timeout;
-    let mut output = None;
+    let didnt_finish = || {
+        Reading::Failed(format!(
+            "its `--version` didn't finish within {} seconds",
+            timeout.as_secs()
+        ))
+    };
+    // gh isn't reaped until its output has ended. Until then its id still names its process
+    // group, so `stop` reaches whatever it started that holds the output open, and nothing
+    // else: once reaped, the id could pass to another process.
+    let bytes = match receiver.recv_timeout(timeout) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) => {
+            stop(&mut child);
+            return Reading::Failed(format!("its output couldn't be read ({error})"));
+        }
+        Err(_) => {
+            stop(&mut child);
+            return didnt_finish();
+        }
+    };
+    if bytes.len() > cap {
+        stop(&mut child);
+        return too_much(cap);
+    }
     let status = loop {
-        if output.is_none() {
-            output = receiver.try_recv().ok();
-        }
-        if let Some(Ok(bytes)) = &output {
-            if bytes.len() > cap {
-                stop(&mut child);
-                return too_much(cap);
-            }
-        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
                 stop(&mut child);
-                return Reading::Failed(format!(
-                    "its `--version` didn't finish within {} seconds",
-                    timeout.as_secs()
-                ));
+                return didnt_finish();
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
@@ -367,25 +407,6 @@ fn probe_with(path: &Path, env: &EnvMap, timeout: Duration, cap: usize) -> Readi
             }
         }
     };
-    // It exited, but whatever it started may still hold its output open.
-    let output = match output {
-        Some(output) => output,
-        None => match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(output) => output,
-            Err(_) => {
-                return Reading::Failed(
-                    "its `--version` output didn't end when it exited".to_string(),
-                )
-            }
-        },
-    };
-    let bytes = match output {
-        Ok(bytes) => bytes,
-        Err(error) => return Reading::Failed(format!("its output couldn't be read ({error})")),
-    };
-    if bytes.len() > cap {
-        return too_much(cap);
-    }
     if !status.success() {
         return Reading::Failed(format!("its `--version` failed ({status})"));
     }
@@ -445,6 +466,10 @@ mod tests {
             ),
             ("gh version 2.103.3 (Debian 2.103.3-1)\n", release("2.103.3", 2, 103, 3, false)),
             ("gh version v2.110.0\n", release("v2.110.0", 2, 110, 0, false)),
+            (
+                "gh version 2.104.0-alpha-1.0.x7\n",
+                release("2.104.0-alpha-1.0.x7", 2, 104, 0, true),
+            ),
             ("gh version 2.103.3+build.7\n", release("2.103.3+build.7", 2, 103, 3, false)),
             (
                 "gh version DEV\n",
@@ -490,6 +515,14 @@ mod tests {
             "gh version 2..3\n",
             "gh version +2.103.3\n",
             "gh version 99999999999999999999.0.0\n",
+            // Malformed semver after the version (Sol s1#2), and leading zeros.
+            "gh version 2.104.0-@@@\n",
+            "gh version 2.104.0-\n",
+            "gh version 2.103.3+bad!meta\n",
+            "gh version 2.103.3+\n",
+            "gh version 2.104.0-rc..1\n",
+            "gh version 2.104.0-01\n",
+            "gh version 02.103.3\n",
             "warning: something\ngh version 2.103.3\n",
         ] {
             assert!(
@@ -795,11 +828,36 @@ mod tests {
             Ok(())
         }
 
+        /// Waits for the process whose id the fake gh wrote to `$HOME/child` to be killed: gone,
+        /// or a zombie for want of a reaping init in a container.
+        #[cfg(target_os = "linux")]
+        fn assert_killed(dir: &Path) -> io::Result<()> {
+            let pid = std::fs::read_to_string(dir.join("child"))?;
+            let stat = Path::new("/proc").join(pid.trim()).join("stat");
+            let started = Instant::now();
+            while std::fs::read_to_string(&stat).is_ok_and(|stat| {
+                !stat
+                    .split(") ")
+                    .nth(1)
+                    .is_some_and(|rest| rest.starts_with('Z'))
+            }) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "the gh's child {} survived",
+                    pid.trim()
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+            Ok(())
+        }
+
         #[cfg(target_os = "linux")]
         #[test]
-        fn a_gh_whose_child_keeps_its_output_open_is_not_waited_on_forever() -> io::Result<()> {
-            let (dir, gh) =
-                fake_gh("#!/bin/sh\nprintf 'gh version 2.103.3\\n'\n(sleep 60) &\nexit 0\n")?;
+        fn a_gh_whose_child_keeps_its_output_open_is_stopped_with_it() -> io::Result<()> {
+            // gh exits, but something it started still holds its output (Sol s1#3).
+            let (dir, gh) = fake_gh(
+                "#!/bin/sh\nprintf 'gh version 2.103.3\\n'\nsleep 60 &\necho $! > \"$HOME/child\"\nexit 0\n",
+            )?;
             let started = Instant::now();
             let reading = probe_with(
                 &gh,
@@ -813,10 +871,10 @@ mod tests {
                 started.elapsed()
             );
             assert!(
-                matches!(&reading, Reading::Failed(reason) if reason.contains("didn't end")),
+                matches!(&reading, Reading::Failed(reason) if reason.contains("didn't finish")),
                 "{reading:?}"
             );
-            Ok(())
+            assert_killed(dir.path())
         }
 
         #[cfg(target_os = "linux")]
@@ -831,24 +889,7 @@ mod tests {
                 OUTPUT_CAP,
             );
             assert!(matches!(reading, Reading::Failed(_)), "{reading:?}");
-            let pid = std::fs::read_to_string(dir.path().join("child"))?;
-            let stat = Path::new("/proc").join(pid.trim()).join("stat");
-            let started = Instant::now();
-            // Gone, or a zombie for want of a reaping init in a container: either way, killed.
-            while std::fs::read_to_string(&stat).is_ok_and(|stat| {
-                !stat
-                    .split(") ")
-                    .nth(1)
-                    .is_some_and(|rest| rest.starts_with('Z'))
-            }) {
-                assert!(
-                    started.elapsed() < Duration::from_secs(5),
-                    "the wrapper's child {} survived",
-                    pid.trim()
-                );
-                thread::sleep(Duration::from_millis(20));
-            }
-            Ok(())
+            assert_killed(dir.path())
         }
     }
 }

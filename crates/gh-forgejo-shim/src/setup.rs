@@ -285,16 +285,42 @@ pub(crate) fn find_real_gh_after_install(
     find_tool_passing_over("gh", configured, env, fallback_dirs, true, Some(target))
 }
 
-/// Whether `path` names the directory entry `target` does, even through a symlinked directory.
-/// A symlink at `target` counts as `target`, not as the file it points to: installing replaces
-/// the link and leaves that file alone.
+/// Whether `path` reaches the directory entry `target` names, which installing replaces with the
+/// shim: it is that entry (through any symlinked directory), or a symlink whose chain passes
+/// through it. A symlink at `target` is replaced itself, so the file it points to doesn't count.
 fn same_location(path: &Path, target: &Path) -> bool {
-    path == target
-        || (path.file_name() == target.file_name()
-            && match (path.parent(), target.parent()) {
-                (Some(left), Some(right)) => same_file(left, right),
-                _ => false,
-            })
+    let Some(target) = entry_location(target) else {
+        return false;
+    };
+    let mut current = path.to_path_buf();
+    // Bounded like the system's own symlink limit, so a loop can't hold this up.
+    for _ in 0..40 {
+        if entry_location(&current).as_ref() == Some(&target) {
+            return true;
+        }
+        let Ok(link) = fs::read_link(&current) else {
+            return false;
+        };
+        current = match current.parent() {
+            Some(parent) if link.is_relative() => parent.join(link),
+            _ => link,
+        };
+    }
+    false
+}
+
+/// The directory entry `path` names: its directory resolved through symlinks, then its file
+/// name, unresolved. A bare name (`gh`) is in the current directory.
+fn entry_location(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let directory = directory
+        .canonicalize()
+        .unwrap_or_else(|_| directory.to_path_buf());
+    Some(directory.join(name))
 }
 
 /// The gh the wrapper delegates to: the configured one, else the first on PATH or in the
@@ -588,6 +614,60 @@ mod tests {
 
         assert!(model.codex_restricted_path);
         assert!(model.real_gh.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn a_gh_install_would_replace_is_found_through_links() -> io::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new()?;
+        let target_dir = fixture.root.join("target");
+        let elsewhere = fixture.root.join("elsewhere");
+        let alias = fixture.root.join("alias");
+        for dir in [&target_dir, &elsewhere, &alias] {
+            fs::create_dir(dir)?;
+        }
+        let target = target_dir.join("gh");
+        fs::write(&target, "gh")?;
+        // The entry itself, also through a symlinked directory.
+        assert!(same_location(&target, &target));
+        symlink(&target_dir, fixture.root.join("linked-dir"))?;
+        assert!(same_location(&fixture.root.join("linked-dir/gh"), &target));
+        // A symlink to it, absolute or relative, and a chain through it (Sol s1#1).
+        symlink(&target, alias.join("gh"))?;
+        assert!(same_location(&alias.join("gh"), &target));
+        symlink(Path::new("../target/gh"), elsewhere.join("relative"))?;
+        assert!(same_location(&elsewhere.join("relative"), &target));
+        symlink(alias.join("gh"), elsewhere.join("chain"))?;
+        assert!(same_location(&elsewhere.join("chain"), &target));
+        // When the target is itself a link, installing replaces the link: the file it points to
+        // stays, so a gh there doesn't count, though a link through the target still does.
+        let real = elsewhere.join("gh");
+        fs::write(&real, "gh")?;
+        let linked_target_dir = fixture.root.join("linked-target");
+        fs::create_dir(&linked_target_dir)?;
+        let linked_target = linked_target_dir.join("gh");
+        symlink(&real, &linked_target)?;
+        assert!(!same_location(&real, &linked_target));
+        symlink(&linked_target, alias.join("through"))?;
+        assert!(same_location(&alias.join("through"), &linked_target));
+        // Somewhere else entirely, and a symlink loop.
+        assert!(!same_location(&elsewhere.join("gh"), &target));
+        symlink(elsewhere.join("loop"), elsewhere.join("loop"))?;
+        assert!(!same_location(&elsewhere.join("loop"), &target));
+        Ok(())
+    }
+
+    #[test]
+    fn a_bare_gh_is_in_the_current_directory() -> io::Result<()> {
+        // `FJ_SHIM_REAL_GH=gh` with `--bin-dir "$PWD"` (Sol s1#1).
+        let target = std::env::current_dir()?.join("gh");
+        assert!(same_location(Path::new("gh"), &target));
+        assert!(!same_location(
+            Path::new("gh"),
+            Path::new("/nonexistent/dir/gh")
+        ));
         Ok(())
     }
 
