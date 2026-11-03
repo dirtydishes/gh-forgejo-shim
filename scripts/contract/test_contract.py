@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import capture
 import runner
+import twin
 from common import (DECOY_PROBES, LOCAL_PROBES, REPO, ROOT, launch_list, launched, load_cases, normalize,
                     oracle_argv, validate_case)
 
@@ -151,6 +152,26 @@ class ContractTests(unittest.TestCase):
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
+
+    def test_a_fork_case_deletes_its_fork_when_setup_fails(self):
+        # Forgejo allows one fork per owner: a fork left behind would fail the next fork case.
+        case = {"id": "twin-x", "setup": {"branch": "twin/x", "pr": True, "fork": True}}
+        for failing in ("/pulls", "/contents/fork.txt"):
+            calls = []
+
+            def fake_api(base, token, method, path, body=None, failing=failing):
+                calls.append((method, path))
+                if path.endswith(failing):
+                    raise twin.urllib.error.HTTPError(path, 500, "boom", {}, None)
+                if "/branches/" in path:
+                    return {"commit": {"id": "abc"}}
+                return {}
+
+            with self.subTest(failing=failing), patch.object(twin, "api", fake_api), \
+                    patch.object(twin, "api_base", return_value="http://127.0.0.1:1"):
+                with self.assertRaises(twin.urllib.error.HTTPError):
+                    twin.prepare(case, "/nonexistent", "t")
+                self.assertIn(("DELETE", "repos/gfj-forks/fork-x"), calls)
 
     def test_decoy_cases_are_exact_and_never_captured(self):
         case = {"id": "probe", "kind": "decoy", "repo": REPO, "argv": DECOY_PROBES[0], "normalize": []}

@@ -188,12 +188,16 @@ def prepare(case, home, token):
     if setup.get("pr"):
         title = f"{DRAFT_PREFIX} twin: {branch}" if setup.get("draft") else f"twin: {branch}"
         head_ref = fork_head(base, token, branch) if setup.get("fork") else branch
-        pr = request(base, token, "POST", "pulls", {"head": head_ref, "base": target, "title": title})
+        try:
+            pr = request(base, token, "POST", "pulls", {"head": head_ref, "base": target, "title": title})
+        finally:
+            # Forgejo allows one fork per owner, so a fork left behind would fail the next case.
+            # It closes a fork's pull requests when the fork is deleted, and reopens one on
+            # request: an open pull request whose head repository is gone (`head.repo` null).
+            if setup.get("fork"):
+                delete_fork(base, token, branch)
         subs["pr"] = str(pr["number"])
         if setup.get("fork"):
-            # Forgejo closes a fork's pull requests when the fork is deleted, and reopens one on
-            # request: an open pull request whose head repository is gone (`head.repo` null).
-            api(base, token, "DELETE", f"repos/{FORK_OWNER}/{fork_name(branch)}")
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "open"})
         if setup.get("closed"):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "closed"})
@@ -202,6 +206,10 @@ def prepare(case, home, token):
 
 def fork_name(branch):
     return "fork-" + branch.removeprefix("twin/")
+
+
+def delete_fork(base, token, branch):
+    api(base, token, "DELETE", f"repos/{FORK_OWNER}/{fork_name(branch)}")
 
 
 def fork_head(base, token, branch):
@@ -215,17 +223,21 @@ def fork_head(base, token, branch):
             raise
     name = fork_name(branch)
     request(base, token, "POST", "forks", {"organization": FORK_OWNER, "name": name})
-    # Forgejo makes the fork in the background.
-    for _ in range(30):
-        try:
-            api(base, token, "POST", f"repos/{FORK_OWNER}/{name}/contents/fork.txt",
-                {"content": "Zm9yawo=", "branch": branch, "message": "fork"})
-            return f"{FORK_OWNER}:{branch}"
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-            time.sleep(1)
-    raise RuntimeError(f"the fork {FORK_OWNER}/{name} never took a branch")
+    try:
+        # Forgejo makes the fork in the background.
+        for _ in range(30):
+            try:
+                api(base, token, "POST", f"repos/{FORK_OWNER}/{name}/contents/fork.txt",
+                    {"content": "Zm9yawo=", "branch": branch, "message": "fork"})
+                return f"{FORK_OWNER}:{branch}"
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                time.sleep(1)
+        raise RuntimeError(f"the fork {FORK_OWNER}/{name} never took a branch")
+    except BaseException:
+        delete_fork(base, token, branch)
+        raise
 
 
 def fill(text, subs):
