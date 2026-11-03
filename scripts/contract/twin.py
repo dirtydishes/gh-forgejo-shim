@@ -9,6 +9,7 @@ request, of its own, so cases don't depend on their order.
 
 import json
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -20,15 +21,15 @@ TWIN_COMMANDS = {
     ("pr", "create"): {"--head", "--base", "--title", "--body", "--draft"},
     ("pr", "comment"): {"--body"},
     ("pr", "edit"): {"--title", "--body"},
-    ("pr", "merge"): {"--merge", "--squash", "--rebase", "--auto", "--match-head-commit"},
+    ("pr", "merge"): {"--merge", "--squash", "--rebase", "--auto", "--match-head-commit", "--delete-branch"},
     ("pr", "ready"): {"--undo"},
-    ("pr", "close"): set(),
+    ("pr", "close"): {"--delete-branch"},
     ("pr", "reopen"): set(),
 }
-BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo"}
+BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--delete-branch"}
 PLACEHOLDERS = {"{pr}", "{branch}"}
-STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?")
-SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status"}
+STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|branches/\{branch\}")
+SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "protect_head"}
 # The twin's own draft prefix (seed.py), which Forgejo reads to mark a pull request a draft.
 DRAFT_PREFIX = "scenario: draft"
 BRANCH = re.compile(r"twin/[a-z0-9-]+")
@@ -80,7 +81,7 @@ def validate(case):
     # prepare() names a case's own base <branch>-base; no case may claim such a name.
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
-    for flag in ("pr", "base", "draft", "closed"):
+    for flag in ("pr", "base", "draft", "closed", "protect_head"):
         if flag in setup and not isinstance(setup[flag], bool):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
@@ -115,8 +116,13 @@ def validate(case):
             raise ValueError(f"twin expect.{stream} isn't a pattern: {error}") from error
     for check in case.get("state", []):
         path = check.get("path", "")
-        if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any", "none"}:
-            raise ValueError("twin state checks read the case's own pull request")
+        if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any", "none", "gone"}:
+            raise ValueError("twin state checks read the case's own pull request or branch")
+        # A branch check says only whether the case's own branch is gone.
+        if path.startswith("branches/") != ("gone" in check) or ("gone" in check and (
+            set(check) != {"path", "gone"} or not isinstance(check["gone"], bool)
+        )):
+            raise ValueError("a branches/{branch} check is exactly {path, gone: true or false}")
         if "fields" in check and not isinstance(check["fields"], dict):
             raise ValueError("twin state fields must be an object")
         for key in ("any", "none"):
@@ -164,6 +170,9 @@ def prepare(case, home, token):
     subs = {"branch": branch, "head": head}
     if setup.get("status"):
         request(base, token, "POST", f"statuses/{head}", setup["status"] | {"description": "twin"})
+    # Protecting the head branch makes Forgejo refuse to delete it.
+    if setup.get("protect_head"):
+        request(base, token, "POST", "branch_protections", {"rule_name": branch})
     if setup.get("protect"):
         request(base, token, "POST", "branch_protections",
                 {"rule_name": target, "enable_status_check": True, "status_check_contexts": setup["protect"]})
@@ -200,6 +209,18 @@ def check(case, actual, home, token, subs):
     base = api_base(home)
     for state in case.get("state", []):
         path = fill(state["path"], subs)
+        if "gone" in state:
+            path = "branches/" + urllib.parse.quote(subs["branch"], safe="")
+            try:
+                request(base, token, "GET", path)
+                gone = False
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                gone = True
+            if gone != state["gone"]:
+                diffs.append(f"branch {subs['branch']}: expected gone={state['gone']}, got gone={gone}")
+            continue
         value = request(base, token, "GET", path)
         if "fields" in state:
             for key, want in state["fields"].items():
