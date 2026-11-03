@@ -280,9 +280,9 @@ branch exists. For an AGit PR, a deleted branch or a deleted fork, `head.ref` is
 
 | GitHub | Forgejo |
 |---|---|
-| `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit) |
+| `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit), without a leading `refs/` |
 | `headRepositoryOwner` | `head.repo.owner`; null only for a deleted fork |
-| `headRepository` | `head.repo`, but null unless `head.ref` equals a non-empty `head.label` that doesn't start with `refs/pull/` |
+| `headRepository` | `head.repo`, but null unless the PR is open and `head.ref` equals a non-empty `head.label` that doesn't start with `refs/pull/` |
 | `isCrossRepository` | whether `head.repo` differs from the base |
 
 **A deliberate difference from GitHub.** GitHub keeps `headRepository` when the head branch is
@@ -295,6 +295,20 @@ ref. The owner and `isCrossRepository` stay as GitHub reports them, which keeps 
 `owner:branch` labels and current-branch matching. A live branch named like the placeholder
 (`refs/pull/N/head`) can't be told from a gone one, so it counts as gone; gh then fetches the PR's
 ref, which still holds the PR's commit.
+
+The same holds for a closed or merged PR. Forgejo moves an open PR's head with its branch, but once
+the PR is closed or merged its branch can be deleted and created again at another commit, which
+Forgejo then reports as the head. So `headRepository` is null for those too, and gh fetches the PR's
+final commit from `refs/pull/N/head`.
+
+gh names the local branch after `headRefName` and fetches into it (`fetch {remote} {ref}:{name}`).
+A name starting with `refs/`, such as an AGit PR's `refs/pull/N/head`, would make git write a raw ref
+that an existing branch of the same name shadows, so `headRefName` drops that prefix
+(`pull/N/head`). REST `head.ref`, which Claude desktop reads, keeps Forgejo's value.
+
+If the local branch already holds commits on top of the PR's head, gh keeps them: it merges the
+fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
+against GitHub, on either fetch path, so the gateway doesn't change it.
 
 ## Open items to verify against the live twin (G2/G3)
 

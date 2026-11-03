@@ -139,8 +139,12 @@ impl PullRequest {
     async fn maintainer_can_modify(&self) -> bool {
         self.source.allow_maintainer_edit
     }
+    /// gh names the local branch after this and fetches into it (`fetch …:{headRefName}`), so a
+    /// name starting with `refs/` (an AGit PR's `refs/pull/N/head`) would write a raw ref that an
+    /// existing branch of the same name shadows. Drop that prefix; Forgejo's REST `head.ref` keeps it.
     async fn head_ref_name(&self) -> &str {
-        self.source.head.name()
+        let name = self.source.head.name();
+        name.strip_prefix("refs/").unwrap_or(name)
     }
     async fn base_ref_name(&self) -> &str {
         &self.source.base.ref_name
@@ -185,15 +189,14 @@ impl PullRequest {
         // (AGit, deleted) gets null too. GitHub nulls it only for a deleted fork, but this is what
         // sends gh pr checkout to `refs/pull/N/head` on the base instead of
         // `refs/heads/{headRefName}`: nothing for AGit, and for a deleted branch either nothing or
-        // a branch recreated under the old name, checked out with exit 0. The owner stays, as on
-        // GitHub; gh's checkout reads only `headRepository` to choose.
-        let Some(head) = self
-            .source
-            .head
-            .repo
-            .as_ref()
-            .filter(|_| self.source.head.exists())
-        else {
+        // a branch recreated under the old name, checked out with exit 0. The same goes for a closed
+        // or merged PR, whose branch no longer follows it. The owner stays, as on GitHub; gh's
+        // checkout reads only `headRepository` to choose.
+        let Some(head) = self.source.head.repo.as_ref().filter(|_| {
+            // Forgejo moves an open PR's head with its branch; once the PR is closed or merged
+            // the branch can be recreated anywhere, so only the PR's own ref is its head.
+            self.source.head.exists() && self.source.state == "open" && !self.source.merged
+        }) else {
             return Ok(None);
         };
         let name = head.name.as_deref().unwrap_or(&self.repo);
