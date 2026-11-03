@@ -38,6 +38,8 @@ DECOY_PROBES = [
 ]
 LOCAL_PROBES = [
     ["pr", "merge", "1"],
+    # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
+    ["pr", "edit", "1", "--title", "x", "--add-reviewer", "alice"],
     ["api", f"repos/{REPO}/pulls"],
 ]
 
