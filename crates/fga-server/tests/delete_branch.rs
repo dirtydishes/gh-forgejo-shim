@@ -19,13 +19,21 @@ use std::{
 /// A fake Forgejo that answers as Forgejo 15 does and records every branch DELETE. `o/r` has
 /// `feature/x` and `topic` (deletable), `main` (default), `kept` (protected), `busy` (Forgejo
 /// answers 409) and `lazy` (answers 202); deleting a branch that doesn't exist is a 500 there
-/// (`GetBranchCommit` returns `ErrNotExist`). `o/hidden` is a private repository the token can't
-/// see, so every read of it is a 404.
+/// (`GetBranchCommit` returns `ErrNotExist`), and reading one is a 404 naming it in `errors`.
+/// `o/hidden` is a private repository the token can't see, so every read of it is a bare 404.
+/// `o/nocode` is readable, but its Code unit is off, so reading its existing `topic` is a bare 404.
 async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
     const BRANCHES: [&str; 6] = ["feature/x", "topic", "main", "kept", "busy", "lazy"];
     let deleted = Arc::new(Mutex::new(Vec::new()));
     let record = deleted.clone();
-    let missing = || (StatusCode::NOT_FOUND, Json(json!({"message":"not found"}))).into_response();
+    let not_found = |errors: Value| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"The target couldn't be found.",
+                "url":"https://forge.test/api/swagger","errors":errors})),
+        )
+            .into_response()
+    };
     let upstream = Router::new()
         .route(
             "/api/v1/user",
@@ -41,13 +49,26 @@ async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
             }),
         )
         .route(
+            "/api/v1/repos/o/nocode",
+            get(|| async {
+                Json(json!({"id":2,"name":"nocode","full_name":"o/nocode","private":false,
+                    "owner":{"id":1,"login":"o","avatar_url":""},"html_url":"https://forge.test/o/nocode",
+                    "default_branch":"main","fork":false,"archived":false,
+                    "permissions":{"admin":false,"push":true,"pull":true}}))
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/nocode/branches/{*branch}",
+            get(move || async move { not_found(json!([])) }),
+        )
+        .route(
             "/api/v1/repos/o/r/branches/{*branch}",
             get(move |uri: Uri| async move {
                 let branch = uri.path().trim_start_matches("/api/v1/repos/o/r/branches/");
                 if BRANCHES.contains(&branch) {
                     Json(json!({"name":branch})).into_response()
                 } else {
-                    missing()
+                    not_found(json!([format!("branch does not exist [name: {branch}]")]))
                 }
             })
             .delete(move |uri: Uri| {
@@ -113,16 +134,20 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
     // gh escapes the branch name as one path segment.
     assert_eq!(delete_ref(addr, &heads("feature%2Fx")).await.0, 204);
     assert_eq!(delete_ref(addr, &heads("topic")).await.0, 204);
-    // A branch the readable repository doesn't have gets GitHub's answer, which gh reads as
-    // already deleted; nothing is sent.
+    // A branch Forgejo says doesn't exist gets GitHub's answer, which gh reads as already
+    // deleted; nothing is sent.
     let (code, body) = delete_ref(addr, &heads("gone")).await;
     assert_eq!(
         (code, message(&body)),
         (422, json!("Reference does not exist"))
     );
     // A repository the token can't see proves nothing about the branch: a refusal, not "gone".
-    let (code, _) = delete_ref(addr, "/api/v3/repos/o/hidden/git/refs/heads/topic").await;
-    assert_eq!(code, 403);
+    // A 404 that doesn't name the branch proves nothing about it: a hidden repository, or a
+    // readable one whose Code unit is off. A refusal, not "gone".
+    for repo in ["hidden", "nocode"] {
+        let path = format!("/api/v3/repos/o/{repo}/git/refs/heads/topic");
+        assert_eq!(delete_ref(addr, &path).await.0, 403, "{repo}");
+    }
     // A refusal stays a refusal, so gh reports it instead of claiming the branch is gone.
     for branch in ["main", "kept"] {
         assert_eq!(delete_ref(addr, &heads(branch)).await.0, 403, "{branch}");
