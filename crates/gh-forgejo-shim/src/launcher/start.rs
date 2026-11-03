@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
-use crate::external::find_program;
+use crate::external::{expand_home, find_program};
 use crate::invocation::Invocation;
 use crate::launcher::credentials::git_config_parameters;
 use crate::launcher::env::Edit;
@@ -305,16 +305,6 @@ fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path)
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-/// `~` and `~/…` against `HOME`, as `external::find_program` reads a configured path.
-fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
-    let value = path.to_string_lossy();
-    match (value.strip_prefix('~'), env.get("HOME")) {
-        (Some(""), Some(home)) => PathBuf::from(home),
-        (Some(rest), Some(home)) if rest.starts_with('/') => Path::new(home).join(&rest[1..]),
-        _ => path.to_path_buf(),
-    }
 }
 
 /// The forge's upstream (L4), or `None` while the gateway can't honour this host's settings. A
