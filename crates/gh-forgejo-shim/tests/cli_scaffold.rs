@@ -1832,3 +1832,47 @@ fn install_shim_force_refuses_an_older_gh() -> TestResult {
     assert_eq!(fs::read_to_string(fixture.bin().join("gh"))?, "unrelated");
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn install_passes_over_a_link_to_the_gh_it_replaces() -> TestResult {
+    // PATH=alias:target:later, with alias/gh a link to target/gh: once the shim replaces
+    // target/gh, the link reaches the shim, so the wrapper runs later/gh (Sol s1#1).
+    for command in ["install-shim", "bootstrap"] {
+        let fixture = CliFixture::new()?;
+        fixture.init_git_repo()?;
+        let target_dir = fixture.root().join("target");
+        let supported = gh_reporting(&fixture, "target", "gh version 2.103.3")?;
+        let older = gh_reporting(&fixture, "later", "gh version 2.90.0")?;
+        let alias = fixture.root().join("alias");
+        fs::create_dir(&alias)?;
+        std::os::unix::fs::symlink(&supported, alias.join("gh"))?;
+        let path = std::env::join_paths([
+            alias.as_path(),
+            target_dir.as_path(),
+            older.parent().ok_or("no parent")?,
+            fixture.bin(),
+        ])?;
+        let mut args = vec![command, "--force"];
+        if command == "bootstrap" {
+            args.push("--no-gui-path");
+        }
+        args.push("--bin-dir");
+        let output = fixture
+            .command("gfj")?
+            .env_remove("FJ_SHIM_REAL_GH")
+            .env("PATH", &path)
+            .env("FJ_SHIM_TOKEN", "bootstrap-token")
+            .args(&args)
+            .arg(&target_dir)
+            .output()?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.code(), Some(1), "{command}: {text}");
+        assert!(text.contains("found gh 2.90.0"), "{command}: {text}");
+    }
+    Ok(())
+}
