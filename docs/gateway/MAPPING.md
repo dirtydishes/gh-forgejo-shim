@@ -201,7 +201,8 @@ the PR's author or a repository writer. Forgejo also lets an official reviewer w
 resolve a conversation; the gateway reports `false` for them, since it can't tell cheaply.
 
 The `viewerCan*` flags are hints for a client's buttons; Forgejo enforces every action. In an
-archived repository every write flag is false, as on GitHub: Forgejo's write routes answer 423. Editing,
+archived repository every write flag is false, as on GitHub and in Forgejo's web UI. Forgejo v15's API
+still accepts most of these writes there (only comment create and edit answer 423). Editing,
 closing and reopening a PR or a comment, and resolving a conversation, need write access to Forgejo's
 pull request or issue unit, but its API reports only code access (`permissions.push`). The gateway
 uses code access for both (Kell, 2026-11-02, rather than rebuilding Forgejo's team and collaborator

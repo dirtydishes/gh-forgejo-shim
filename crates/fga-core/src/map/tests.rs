@@ -892,9 +892,11 @@ fn commit_status_and_check_runs_split_like_github() {
 /// breaks a tie the same way every time (bead 1u7).
 #[test]
 fn checks_keep_context_order_whatever_forgejo_sends() {
-    let mut lint = status("ci / lint (push)", S::Success, "Successful in 1s");
-    lint.id = 2;
-    let check = status("ci / check (push)", S::Success, "Successful in 1s");
+    // The alphabetically first context has the higher id, so neither id order nor input order
+    // gives the expected result: only context order does.
+    let lint = status("ci / lint (push)", S::Success, "Successful in 1s");
+    let mut check = status("ci / check (push)", S::Success, "Successful in 1s");
+    check.id = 2;
     let names = |rows: &[CommitStatus]| -> Vec<String> {
         mapped(rows)
             .iter()
