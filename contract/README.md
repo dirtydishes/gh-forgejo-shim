@@ -56,23 +56,27 @@ its answers drive gh to the expected exit code and output, and that the forge en
 asked for. Before the run, the runner makes the case's own branch (`setup.branch`, `twin/<name>`)
 with one new file, and with `setup.pr` opens a pull request from it, both through Forgejo's API.
 Other setup options: `base` puts the branch on a base branch of its own (`<branch>-base`), which
-the pull request targets, so a merge never reaches `main`; every `pr merge` case needs it. `draft`
-opens the pull request with the twin's draft prefix, `closed` closes it, `status` posts a check
-(`context`, `state`) on the head commit, and `protect` requires the named checks on the case's own
-base. `argv` may use `{branch}`, `{pr}` and, as `--match-head-commit`'s value, `{head}`. `expect`
-holds the exit code and full-match regular expressions for stdout and stderr; a stdout pattern can
-name the pull request gh made with `(?P<pr>[0-9]+)`. Each `state` entry then reads the case's own
-pull request, its comments or its timeline back from Forgejo and compares `fields` (dotted keys) or
-looks for `any` matching item. `shim_config` may add `wip_prefixes`, for the twin's draft prefix.
-The validator allows only the launched write commands and their listed flags. Every command but `pr
-create` takes exactly one selector, `{pr}` or `{branch}`, and `pr create` exactly one `--head
-{branch}` (any `--base` must be `main`); without a selector or `--head`, gh would pick the
-checkout's branch, `s/pass`, and so scenario PR 1. A twin case's id starts with `twin-`, and the
-runner runs twin cases after every other case, so their new pull requests never reach a read. The
-runner writes only to a twin on `127.0.0.1`, without any proxy.
+the pull request targets, so a merge never reaches `main`; every `pr merge` case needs it, and no
+case's own branch may end in `-base`. `draft` opens the pull request with the twin's draft prefix,
+`closed` closes it, `status` posts a check (`context`, `state`) on the head commit, and `protect`
+requires the named checks on the case's own base. `argv` may use `{branch}`, `{pr}` and, as
+`--match-head-commit`'s value, `{head}`. `expect` holds the exit code and full-match regular
+expressions for stdout and stderr; a stdout pattern can name the pull request gh made with
+`(?P<pr>[0-9]+)`. Each `state` entry then reads the case's own pull request, its comments or its
+timeline back from Forgejo and compares `fields` (dotted keys), looks for `any` matching item, or
+requires `none`. `shim_config` may add `wip_prefixes`, for the twin's draft prefix. The validator
+allows only the launched write commands and their listed flags. Every command but `pr create` takes
+exactly one selector, `{pr}` or `{branch}`, and `pr create` exactly one `--head {branch}` (any
+`--base` must be `main`); without a selector or `--head`, gh would pick the checkout's branch,
+`s/pass`, and so scenario PR 1. A twin case's id starts with `twin-`, and the runner runs twin
+cases after every other case, so their new pull requests never reach a read. The runner writes only
+to a twin on `127.0.0.1`, without any proxy.
 
 The limit: a twin case doesn't compare output with GitHub's for the same write. That would need
-writes to GitHub, which these tests never make.
+writes to GitHub, which these tests never make. Nor do the merge cases check which method Forgejo
+used: without a terminal gh prints nothing for a merge, and the state checks read the pull request,
+which records that it merged, not how. The gateway's own tests (`crates/fga-core/tests/writes.rs`)
+check the method it sends.
 
 ## Cases and comparison
 

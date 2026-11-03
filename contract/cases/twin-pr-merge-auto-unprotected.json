@@ -26,6 +26,12 @@
         "state": "closed",
         "merged": true
       }
+    },
+    {
+      "path": "issues/{pr}/timeline",
+      "none": {
+        "type": "pull_scheduled_merge"
+      }
     }
   ],
   "normalize": []

@@ -77,6 +77,14 @@ def validate(case):
         raise ValueError("twin setup needs a branch named twin/<name>")
     if set(setup) - SETUP:
         raise ValueError(f"twin setup takes only {sorted(SETUP)}")
+    # prepare() names a case's own base <branch>-base; no case may claim such a name.
+    if setup["branch"].endswith("-base"):
+        raise ValueError("a twin branch can't end in -base, which names a case's own base")
+    for flag in ("pr", "base", "draft", "closed"):
+        if flag in setup and not isinstance(setup[flag], bool):
+            raise ValueError(f"setup.{flag} is true or false")
+    if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
+        raise ValueError("setup.draft and setup.closed need setup.pr")
     if "{pr}" in argv and not setup.get("pr"):
         raise ValueError("{pr} needs setup.pr")
     # A merge goes into the case's own base branch, never main, which other cases read.
@@ -107,12 +115,13 @@ def validate(case):
             raise ValueError(f"twin expect.{stream} isn't a pattern: {error}") from error
     for check in case.get("state", []):
         path = check.get("path", "")
-        if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any"}:
+        if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any", "none"}:
             raise ValueError("twin state checks read the case's own pull request")
         if "fields" in check and not isinstance(check["fields"], dict):
             raise ValueError("twin state fields must be an object")
-        if "any" in check and (not path.endswith(("/comments", "/timeline")) or not isinstance(check["any"], dict)):
-            raise ValueError("twin state any is an object, on a comments or timeline list")
+        for key in ("any", "none"):
+            if key in check and (not path.endswith(("/comments", "/timeline")) or not isinstance(check[key], dict)):
+                raise ValueError(f"twin state {key} is an object, on a comments or timeline list")
     if set(case) & {"oracle", "expected", "xfail"}:
         raise ValueError("twin cases expect only their own expect and state")
 
@@ -202,4 +211,7 @@ def check(case, actual, home, token, subs):
         if "any" in state:
             if not any(all(item.get(k) == v for k, v in state["any"].items()) for item in value or []):
                 diffs.append(f"{path}: no item has {state['any']!r}")
+        if "none" in state:
+            if any(all(item.get(k) == v for k, v in state["none"].items()) for item in value or []):
+                diffs.append(f"{path}: an item has {state['none']!r}")
     return diffs
