@@ -31,7 +31,7 @@ fn forgejo_errors_and_unsupported_commands_never_delegate_or_need_auth() -> Test
             "\"gh pr checks\" is not supported",
         ),
         (
-            vec!["pr", "merge", "1", "--merge", "--delete-branch"],
+            vec!["pr", "merge", "1", "--merge", "--subject", "s"],
             "\"gh pr merge\" is not supported",
         ),
         (

@@ -1,0 +1,34 @@
+{
+  "id": "twin-pr-close-delete-branch",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-close-delete",
+    "pr": true
+  },
+  "argv": [
+    "pr",
+    "close",
+    "{pr}",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": "(?s)✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete\\)\\n.*Deleted.*branch twin/pr-close-delete.*"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "closed",
+        "merged": false
+      }
+    },
+    {
+      "path": "branches/{branch}",
+      "gone": true
+    }
+  ],
+  "normalize": []
+}

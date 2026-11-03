@@ -1,0 +1,36 @@
+{
+  "id": "twin-pr-merge-delete-protected",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-merge-delete-held",
+    "pr": true,
+    "base": true,
+    "protect_head": true
+  },
+  "argv": [
+    "pr",
+    "merge",
+    "{pr}",
+    "--squash",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "(?s).*failed to delete remote branch twin/pr-merge-delete-held: HTTP 403.*"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "merged": true
+      }
+    },
+    {
+      "path": "branches/{branch}",
+      "gone": false
+    }
+  ],
+  "normalize": []
+}

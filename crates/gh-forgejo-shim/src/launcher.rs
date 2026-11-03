@@ -45,8 +45,9 @@ pub const LAUNCH_LIST: &[&str] = &[
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
 /// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
 /// which serves or refuses that form before anything is written: gh would write part of a
-/// `pr edit` and then fail on a reviewer the gateway can't set. `--delete-branch` stays off: the
-/// gateway can't delete a branch yet, and gh would report success with the branch still there.
+/// `pr edit` and then fail on a reviewer the gateway can't set. `--delete-branch` reports what
+/// happened: the gateway answers gh's branch delete with 422 only when Forgejo says the branch
+/// doesn't exist, and with an error for a branch it couldn't delete.
 /// For these commands the list replaces `is_native()`, which can't see the built-in path's
 /// per-flag refusals.
 const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
@@ -64,11 +65,12 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
             "rebase",
             "auto",
             "match-head-commit",
+            "delete-branch",
             "repo",
         ],
     ),
     ("pr ready", &["undo", "repo"]),
-    ("pr close", &["repo"]),
+    ("pr close", &["delete-branch", "repo"]),
     ("pr reopen", &["repo"]),
     // Git-side flags only; the e2e run checks `--branch`, `--detach`, `--force` and `-R` for a
     // same-repository pull request (C3c, `cwe.17`). `--recurse-submodules` and `--worktree` stay
@@ -175,6 +177,8 @@ mod tests {
             &["pr", "merge", "12", "-r", "--match-head-commit", "abc"][..],
             &["pr", "ready", "12", "--undo"][..],
             &["pr", "close", "12"][..],
+            &["pr", "close", "12", "--delete-branch"][..],
+            &["pr", "merge", "12", "--squash", "--delete-branch"][..],
             &["pr", "reopen", "12"][..],
             &["pr", "checkout", "12"][..],
             &["pr", "checkout", "12", "-b", "local", "--force"][..],
@@ -216,9 +220,6 @@ mod tests {
             ][..],
             &["pr", "comment", "12", "--edit-last", "--body", "b"][..],
             &["pr", "comment", "12", "--delete-last", "--yes"][..],
-            // The gateway can't delete a branch yet; gh would report success anyway.
-            &["pr", "merge", "12", "--squash", "--delete-branch"][..],
-            &["pr", "close", "12", "--delete-branch"][..],
             &["pr", "merge", "12", "--merge", "--subject", "s"][..],
             &["pr", "close", "12", "--comment", "c"][..],
             // No method: in a terminal gh would ask to delete the branch.
