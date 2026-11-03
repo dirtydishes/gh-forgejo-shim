@@ -19,6 +19,7 @@ pub mod run;
 pub mod rundir;
 #[cfg(unix)]
 pub mod start;
+pub mod upstream;
 
 /// The commands the launcher runs through real gh (spec §2, "Transition: the launch list"),
 /// matched on the command after alias expansion. Every other Forgejo route keeps the built-in
