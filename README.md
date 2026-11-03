@@ -531,13 +531,14 @@ hosts = ["git.example.com"]
 api_url = "https://git.example.com"
 token_env = "EXAMPLE_FORGEJO_TOKEN"
 ca_file = "/path/to/ca.pem"
+wip_prefixes = ["WIP:", "[WIP]"]
 
 [paths]
 gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
 ```
 
-The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store.
+The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store. `wip_prefixes` lists the title prefixes the forge marks drafts with, and should match the forge's own WIP setting: commands that launch real gh strip them from a draft's title, and the first one marks a new draft. It defaults to `["WIP:", "[WIP]"]`; the list can't be empty, and a prefix can't contain a comma.
 
 Config commands:
 
