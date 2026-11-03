@@ -111,13 +111,75 @@ fn ok(reply: Reply) -> Result<Reply, Error> {
     }
 }
 
+/// Whether a path segment could leave the base path once a proxy in front of Forgejo decodes and
+/// resolves it before choosing where to send the request, as nginx does: it is `.` or `..`, or
+/// holds `/` or `\`, as written or after up to three rounds of percent-decoding (each proxy in a
+/// chain may decode once). Such a segment would take the token to another service behind the same
+/// proxy, so it is never sent. A tab, CR or LF counts too: the URL parser drops them, so `.\t.`
+/// would go out as `..`. Names never need one; multi-part paths are split into segments.
+fn climbs(segment: &str) -> bool {
+    let mut text = segment.to_owned();
+    for _ in 0..=3 {
+        if matches!(text.as_str(), "." | "..") || text.contains(['/', '\\', '\t', '\r', '\n']) {
+            return true;
+        }
+        let decoded = percent_decode(&text);
+        if decoded == text {
+            return false;
+        }
+        text = decoded;
+    }
+    // Still decoding after three rounds: refuse rather than guess what a proxy will make of it.
+    true
+}
+
+/// One round of percent-decoding; an escape that isn't two hex digits stays as written.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).and_then(|&b| hex(b)),
+            bytes.get(i + 2).and_then(|&b| hex(b)),
+        ) {
+            (b'%', Some(high), Some(low)) => {
+                out.push((high * 16 + low) as u8);
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 impl Forgejo {
+    /// A client for the Forgejo at `base`, the forge's own address. A base with a path, such as a
+    /// forge served under `/forgejo/`, keeps it: every API call goes below it, to `{base}/api/v1/...`.
     pub fn new(base: Url) -> Result<Self, reqwest::Error> {
+        Self::new_with_roots(base, Vec::new())
+    }
+
+    /// [`Forgejo::new`], also trusting `roots`, for a forge behind a private CA. The roots join the
+    /// built-in trust store; certificate and hostname checks stay on. The caller checks `base`: an
+    /// HTTP or HTTPS URL without credentials, query or fragment, as fga-server's config does.
+    pub fn new_with_roots(
+        base: Url,
+        roots: Vec<reqwest::Certificate>,
+    ) -> Result<Self, reqwest::Error> {
+        let mut client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none());
+        for root in roots {
+            client = client.add_root_certificate(root);
+        }
         Ok(Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(10))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            client: client.build()?,
             base,
             sessions: Arc::default(),
             page_size: Arc::default(),
@@ -177,6 +239,9 @@ impl Forgejo {
         authorization: &str,
         budget: &AtomicUsize,
     ) -> Result<Reply, Error> {
+        if segments.iter().any(|segment| climbs(segment)) {
+            return Err(Error::NotFound);
+        }
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|_| Error::Upstream)?
@@ -699,6 +764,215 @@ mod tests {
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
         drop(session);
         upstream.join().unwrap();
+    }
+
+    /// A forge served under a path keeps it: the identity read goes to `/forgejo/api/v1/user`,
+    /// with or without a trailing slash on the base.
+    #[tokio::test]
+    async fn a_base_with_a_path_keeps_it() {
+        let user = r#"{"id":1,"login":"t","avatar_url":""}"#;
+        let upstream = axum::Router::new().route(
+            "/forgejo/api/v1/user",
+            axum::routing::get(move || async move { user }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        for base in [
+            format!("http://{addr}/forgejo"),
+            format!("http://{addr}/forgejo/"),
+        ] {
+            let forgejo = Forgejo::new(base.parse().unwrap()).unwrap();
+            let session = forgejo.authenticate("token t").await.unwrap();
+            assert_eq!(session.viewer.login, "t", "{base}");
+        }
+        server.abort();
+    }
+
+    /// A name that a proxy would resolve out of the base path never leaves the gateway: behind
+    /// nginx, `..%2F..%2Foutside` under `/forgejo/` routes to `/outside`. A path with slashes
+    /// still reaches Forgejo as segments.
+    #[tokio::test]
+    async fn names_that_climb_out_of_the_base_path_never_leave() {
+        use std::sync::atomic::AtomicUsize;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = hits.clone();
+        let upstream = axum::Router::new()
+            .route(
+                "/forgejo/api/v1/user",
+                axum::routing::get(|| async { r#"{"id":1,"login":"t","avatar_url":""}"# }),
+            )
+            .route(
+                "/forgejo/api/v1/repos/o/r/contents/.forgejo/workflows",
+                axum::routing::get(|| async { "[]" }),
+            )
+            .fallback(move || {
+                seen.fetch_add(1, Ordering::SeqCst);
+                async { axum::http::StatusCode::NOT_FOUND }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let base = format!("http://{addr}/forgejo/").parse().unwrap();
+        let session = Forgejo::new(base)
+            .unwrap()
+            .authenticate("token t")
+            .await
+            .unwrap();
+        // Literal, once-encoded (a chain of two decoding proxies) and twice-encoded forms.
+        for owner in [
+            "../../outside",
+            "..",
+            ".",
+            "a/b",
+            "a\\b",
+            "..%2F..%2Foutside",
+            "%2e%2e",
+            ".%2E",
+            "a%5Cb",
+            "%252e%252e%252foutside",
+            "%25252e%25252e",
+            // The URL parser drops tabs and newlines, so these would go out as `..`.
+            ".\t.",
+            "\n..",
+            "..\r",
+            ".%09.",
+        ] {
+            let result = session
+                .get::<serde_json::Value>(&["repos", owner, "r"], &[])
+                .await;
+            assert!(
+                matches!(result, Err(Error::NotFound)),
+                "{owner}: {result:?}"
+            );
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "a refused name reached the upstream"
+        );
+        let entries = session
+            .get::<serde_json::Value>(
+                &["repos", "o", "r", "contents", ".forgejo", "workflows"],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(entries, serde_json::json!([]));
+        server.abort();
+    }
+
+    /// Names with a `%` that never decodes to a separator or a dot segment still go out: a branch
+    /// or file may be called `100%`, `a%zz` or `%2e.txt`.
+    #[test]
+    fn only_climbing_segments_are_refused() {
+        for name in [
+            "100%",
+            "a%zz",
+            "%2e.txt",
+            "50%25off",
+            "v1.2",
+            "..x",
+            "...",
+            "%E2%9C%93",
+        ] {
+            assert!(!climbs(name), "{name}");
+        }
+        for name in [
+            "..",
+            "%2E%2E",
+            "a%2Fb",
+            "%5C",
+            "%252F",
+            "%25252F",
+            "%2525252F",
+            ".\t.",
+            "a\nb",
+            "%0D",
+        ] {
+            assert!(climbs(name), "{name}");
+        }
+    }
+
+    /// A private CA's root is trusted only where passed, and hostname checks stay on: `new` refuses
+    /// the forge's certificate, `new_with_roots` with its CA reads the user, and the same client
+    /// refuses the certificate at a host it doesn't name. The fixtures are the shim's: a CA and a
+    /// leaf for `localhost`.
+    #[tokio::test]
+    async fn extra_roots_are_trusted_with_hostname_checks_on() {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        fn serve() -> (u16, std::thread::JoinHandle<()>) {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let cert =
+                CertificateDer::from(include_bytes!("../tests/fixtures/test-server.der").to_vec());
+            let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                include_bytes!("../tests/fixtures/test-server-key.der").to_vec(),
+            ));
+            let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .unwrap();
+            let handle = std::thread::spawn(move || {
+                let (socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let connection = rustls::ServerConnection::new(Arc::new(config)).unwrap();
+                let mut stream = rustls::StreamOwned::new(connection, socket);
+                let mut request = Vec::new();
+                let mut byte = [0; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    if stream.read(&mut byte).unwrap_or(0) == 0 {
+                        return; // the client refused the handshake
+                    }
+                    request.push(byte[0]);
+                }
+                let body = r#"{"id":1,"login":"t","avatar_url":""}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+            (port, handle)
+        }
+        let join = |handle: std::thread::JoinHandle<()>| {
+            tokio::task::spawn_blocking(move || handle.join().unwrap())
+        };
+        let ca = reqwest::Certificate::from_pem(include_bytes!("../tests/fixtures/test-ca.pem"))
+            .unwrap();
+        let (port, handle) = serve();
+        let base = |host: &str| format!("https://{host}:{port}").parse().unwrap();
+        assert!(
+            Forgejo::new(base("localhost"))
+                .unwrap()
+                .authenticate("token t")
+                .await
+                .is_err()
+        );
+        join(handle).await.unwrap();
+        let (port, handle) = serve();
+        let base = |host: &str| format!("https://{host}:{port}").parse().unwrap();
+        let session = Forgejo::new_with_roots(base("localhost"), vec![ca.clone()])
+            .unwrap()
+            .authenticate("token t")
+            .await
+            .unwrap();
+        assert_eq!(session.viewer.login, "t");
+        join(handle).await.unwrap();
+        let (port, handle) = serve();
+        let wrong_host = format!("https://127.0.0.1:{port}").parse().unwrap();
+        let result = Forgejo::new_with_roots(wrong_host, vec![ca])
+            .unwrap()
+            .authenticate("token t")
+            .await;
+        assert!(result.is_err());
+        join(handle).await.unwrap();
     }
 
     /// The identity lookup on a cache miss counts toward the request's budget (parallax r1#1).

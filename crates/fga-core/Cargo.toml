@@ -19,3 +19,4 @@ yaml-rust2 = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 axum.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }

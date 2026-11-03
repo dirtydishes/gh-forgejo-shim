@@ -110,10 +110,9 @@ impl Session {
             ".gitea/workflows",
             ".github/workflows",
         ] {
-            let entries: serde_json::Value = match self
-                .get(&["repos", owner, repo, "contents", directory], &[])
-                .await
-            {
+            let mut segments = vec!["repos", owner, repo, "contents"];
+            segments.extend(directory.split('/'));
+            let entries: serde_json::Value = match self.get(&segments, &[]).await {
                 Ok(entries) => entries,
                 Err(Error::NotFound) => continue,
                 Err(e) => return Err(e),
