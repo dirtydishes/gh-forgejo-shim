@@ -92,6 +92,7 @@ client ──https──▶ reverse proxy (git.example.com)
 |---|---|---|
 | `GET /api/v3/` | gh auth login/status | Must return `X-OAuth-Scopes` (see Auth) |
 | `GET /api/v3/meta` | gh feature detection | Must include `installed_version` (configured, default `3.19.0`); gh fails with `malformed version` without it |
+| `GET /api/v3/rate_limit` | gh api rate_limit | A fixed full budget; Forgejo has no rate-limit API (gateway README) |
 | `GET /api/v3/user` | gh, ChatGPT probes | |
 | `GET /api/v3/repos/{o}/{r}` | Claude | |
 | `GET /api/v3/repos/{o}/{r}/pulls?head={o}:{branch}&state=&per_page=` | Claude | Branch → PR lookup |

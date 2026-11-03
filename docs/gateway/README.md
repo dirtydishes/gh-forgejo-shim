@@ -84,9 +84,10 @@ Forgejo has no `/pull/N` route, so links open only where the forge redirects the
 ([server-mode.md](server-mode.md)).
 Merged PRs have GraphQL state `MERGED`, REST state `closed`, and their upstream `merged_at`.
 `GET /api/v3/rate_limit` answers GitHub's shape with fixed numbers, because Forgejo has no
-rate-limit API and the gateway sets no limits of its own. `core`, `graphql`, `search` and
-`code_search` report GitHub's per-user ceilings (5000, 5000, 30, 10) with nothing used and a reset
-an hour away, so a script that paces itself by `remaining` never waits.
+rate-limit API and the gateway sets no limits of its own. It reports GitHub's per-user ceilings with
+nothing used: 5000 an hour for `core` and `graphql`, and 30 and 10 a minute for `search` and
+`code_search`, each with a reset at the end of its window. `rate` repeats `core`. A script that
+paces itself by `remaining` never waits.
 
 Run the gates from the repository root:
 
