@@ -281,12 +281,20 @@ branch exists. For an AGit PR, a deleted branch or a deleted fork, `head.ref` is
 | GitHub | Forgejo |
 |---|---|
 | `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit) |
-| `headRepository`, `headRepositoryOwner` | `head.repo`, but null unless `head.ref` equals a non-empty `head.label` |
+| `headRepositoryOwner` | `head.repo.owner`; null only for a deleted fork |
+| `headRepository` | `head.repo`, but null unless `head.ref` equals a non-empty `head.label` that doesn't start with `refs/pull/` |
+| `isCrossRepository` | whether `head.repo` differs from the base |
 
-GitHub reports no head repository once the head is gone, and `gh pr checkout` then fetches
-`refs/pull/N/head` from the base repository. A head repository for a gone branch would send gh to
-`refs/heads/{headRefName}` instead: nothing for an AGit PR, and for a deleted branch either nothing
-or a branch created since under the old name, which gh would check out without an error.
+**A deliberate difference from GitHub.** GitHub keeps `headRepository` when the head branch is
+deleted and nulls it only for a deleted fork. `gh pr checkout` reads `headRepository` alone to
+choose what to fetch: with one it fetches `refs/heads/{headRefName}`, without one `refs/pull/N/head`
+from the base. For an AGit PR there's no such branch at all, and for a deleted branch there's
+either nothing or a branch created since under the old name, which gh would check out without an
+error. So the gateway reports no head repository for a head that's gone, and gh fetches the PR's own
+ref. The owner and `isCrossRepository` stay as GitHub reports them, which keeps gh's
+`owner:branch` labels and current-branch matching. A live branch named like the placeholder
+(`refs/pull/N/head`) can't be told from a gone one, so it counts as gone; gh then fetches the PR's
+ref, which still holds the PR's commit.
 
 ## Open items to verify against the live twin (G2/G3)
 
