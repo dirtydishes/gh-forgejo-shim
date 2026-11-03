@@ -123,10 +123,15 @@ gh would write to a throwaway copy (section 3):
 - `codespace …`, `copilot …`, `skill …` and `agent-task …` (with gh's aliases `cs`, `skills`,
   `agent-tasks`, `agent` and `agents`), which serve only github.com and,
   for `codespace ssh --config`, write `GH_PATH` into a lasting file;
-- `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials").
+- `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials"). Inside a
+  launched call (`FJ_SHIM_CREDENTIALS` set), any form the helper's exact match doesn't take, such
+  as `auth git-credential -- get` or an alias, is refused rather than delegated: plain gh would
+  answer from the user's own logins.
 
 The list applies to the command gh will run: routing expands a plain alias first (L2), so
-`gh sg` with alias `sg: auth setup-git` delegates too. Help delegates after routing has chosen a
+`gh sg` with alias `sg: auth setup-git` delegates too. The list applies only when the command word comes
+first: a flag before it may take a value the parser doesn't know, as in `gh --notes config
+release create v1`, where gh runs `release create`; such a call keeps the Forgejo path. Help delegates after routing has chosen a
 forge, so the route trace still names it, with a reason saying plain gh ran; plain gh then prints
 the help. Only a command in the shim's grammar knows its own `-h` and which flags take a value, so
 a help flag delegates only there, and for command groups, which have no `-h` of their own:
