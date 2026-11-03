@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
     http::{StatusCode, Uri},
     response::IntoResponse,
-    routing::{delete, get},
+    routing::get,
 };
 use fga_core::{forgejo::Forgejo, map::WipPrefixes};
 use fga_server::{AppState, Host, app};
@@ -16,39 +16,53 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// A fake Forgejo that records every branch DELETE: `feature/x` and `topic` delete, `main` is the
-/// default branch, `kept` is protected, and anything else doesn't exist.
+/// A fake Forgejo that answers as Forgejo 15 does and records every branch DELETE. `o/r` has
+/// `feature/x` and `topic` (deletable), `main` (default), `kept` (protected), `busy` (Forgejo
+/// answers 409) and `lazy` (answers 202); deleting a branch that doesn't exist is a 500 there
+/// (`GetBranchCommit` returns `ErrNotExist`). `o/hidden` is a private repository the token can't
+/// see, so every read of it is a 404.
 async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+    const BRANCHES: [&str; 6] = ["feature/x", "topic", "main", "kept", "busy", "lazy"];
     let deleted = Arc::new(Mutex::new(Vec::new()));
     let record = deleted.clone();
+    let missing = || (StatusCode::NOT_FOUND, Json(json!({"message":"not found"}))).into_response();
     let upstream = Router::new()
         .route(
             "/api/v1/user",
             get(|| async { Json(json!({"id":1,"login":"e2e","full_name":"","avatar_url":""})) }),
         )
         .route(
+            "/api/v1/repos/o/r",
+            get(|| async {
+                Json(json!({"id":1,"name":"r","full_name":"o/r","private":false,
+                    "owner":{"id":1,"login":"o","avatar_url":""},"html_url":"https://forge.test/o/r",
+                    "default_branch":"main","fork":false,"archived":false,
+                    "permissions":{"admin":false,"push":true,"pull":true}}))
+            }),
+        )
+        .route(
             "/api/v1/repos/o/r/branches/{*branch}",
-            delete(move |uri: Uri| {
+            get(move |uri: Uri| async move {
+                let branch = uri.path().trim_start_matches("/api/v1/repos/o/r/branches/");
+                if BRANCHES.contains(&branch) {
+                    Json(json!({"name":branch})).into_response()
+                } else {
+                    missing()
+                }
+            })
+            .delete(move |uri: Uri| {
                 let path = uri.path().to_owned();
                 record.lock().unwrap().push(path.clone());
                 async move {
-                    let branch = path.trim_start_matches("/api/v1/repos/o/r/branches/");
-                    match branch {
+                    let error = |code, message: &str| (code, Json(json!({"message":message})));
+                    match path.trim_start_matches("/api/v1/repos/o/r/branches/") {
                         "feature/x" | "topic" => StatusCode::NO_CONTENT.into_response(),
-                        "main" => (
-                            StatusCode::FORBIDDEN,
-                            Json(json!({"message":"can not delete default branch"})),
-                        )
+                        "main" => error(StatusCode::FORBIDDEN, "can not delete default branch")
                             .into_response(),
-                        "kept" => (
-                            StatusCode::FORBIDDEN,
-                            Json(json!({"message":"branch protected"})),
-                        )
-                            .into_response(),
-                        "busy" => (StatusCode::CONFLICT, Json(json!({"message":"conflict"})))
-                            .into_response(),
-                        _ => (StatusCode::NOT_FOUND, Json(json!({"message":"not found"})))
-                            .into_response(),
+                        "kept" => error(StatusCode::FORBIDDEN, "branch protected").into_response(),
+                        "busy" => error(StatusCode::CONFLICT, "conflict").into_response(),
+                        "lazy" => StatusCode::ACCEPTED.into_response(),
+                        _ => error(StatusCode::INTERNAL_SERVER_ERROR, "DeleteBranch").into_response(),
                     }
                 }
             }),
@@ -95,30 +109,31 @@ fn message(body: &str) -> Value {
 #[tokio::test]
 async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
     let (addr, deleted) = gateway().await;
+    let heads = |path: &str| format!("/api/v3/repos/o/r/git/refs/heads/{path}");
     // gh escapes the branch name as one path segment.
-    let (code, _) = delete_ref(addr, "/api/v3/repos/o/r/git/refs/heads/feature%2Fx").await;
-    assert_eq!(code, 204);
-    let (code, _) = delete_ref(addr, "/api/v3/repos/o/r/git/refs/heads/topic").await;
-    assert_eq!(code, 204);
-    // GitHub's answer for a missing ref, which gh reads as already deleted.
-    let (code, body) = delete_ref(addr, "/api/v3/repos/o/r/git/refs/heads/gone").await;
+    assert_eq!(delete_ref(addr, &heads("feature%2Fx")).await.0, 204);
+    assert_eq!(delete_ref(addr, &heads("topic")).await.0, 204);
+    // A branch the readable repository doesn't have gets GitHub's answer, which gh reads as
+    // already deleted; nothing is sent.
+    let (code, body) = delete_ref(addr, &heads("gone")).await;
     assert_eq!(
         (code, message(&body)),
         (422, json!("Reference does not exist"))
     );
+    // A repository the token can't see proves nothing about the branch: a refusal, not "gone".
+    let (code, _) = delete_ref(addr, "/api/v3/repos/o/hidden/git/refs/heads/topic").await;
+    assert_eq!(code, 403);
     // A refusal stays a refusal, so gh reports it instead of claiming the branch is gone.
     for branch in ["main", "kept"] {
-        let (code, _) =
-            delete_ref(addr, &format!("/api/v3/repos/o/r/git/refs/heads/{branch}")).await;
-        assert_eq!(code, 403, "{branch}");
+        assert_eq!(delete_ref(addr, &heads(branch)).await.0, 403, "{branch}");
     }
-    // Forgejo saying something this route shouldn't is a failure gh reports.
-    let (code, _) = delete_ref(addr, "/api/v3/repos/o/r/git/refs/heads/busy").await;
-    assert_eq!(code, 502);
+    // Anything but Forgejo's 204 is a delete that didn't happen.
+    for branch in ["busy", "lazy"] {
+        assert_eq!(delete_ref(addr, &heads(branch)).await.0, 502, "{branch}");
+    }
     // No branch has an empty part; Forgejo would merge the slashes and delete another branch.
     for path in ["a//b", "feature%2Fx%2F", "feature/x/", "%2Ffeature%2Fx"] {
-        let (code, body) =
-            delete_ref(addr, &format!("/api/v3/repos/o/r/git/refs/heads/{path}")).await;
+        let (code, body) = delete_ref(addr, &heads(path)).await;
         assert_eq!(
             (code, message(&body)),
             (422, json!("Reference does not exist")),
@@ -127,18 +142,11 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
     }
     // Valid git names the path guard won't send: refused as a failure, never "already deleted".
     for path in ["a%252Fb", "%252e%252e"] {
-        let (code, _) = delete_ref(addr, &format!("/api/v3/repos/o/r/git/refs/heads/{path}")).await;
-        assert_eq!(code, 400, "{path}");
+        assert_eq!(delete_ref(addr, &heads(path)).await.0, 400, "{path}");
     }
     assert_eq!(
         *deleted.lock().unwrap(),
-        [
-            "/api/v1/repos/o/r/branches/feature/x",
-            "/api/v1/repos/o/r/branches/topic",
-            "/api/v1/repos/o/r/branches/gone",
-            "/api/v1/repos/o/r/branches/main",
-            "/api/v1/repos/o/r/branches/kept",
-            "/api/v1/repos/o/r/branches/busy",
-        ]
+        ["feature/x", "topic", "main", "kept", "busy", "lazy"]
+            .map(|branch| format!("/api/v1/repos/o/r/branches/{branch}"))
     );
 }

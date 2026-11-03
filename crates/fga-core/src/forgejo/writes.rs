@@ -276,9 +276,10 @@ impl Session {
     }
 
     /// Delete a branch, for GitHub's `DELETE git/refs/heads/{branch}`. Forgejo checks the token's
-    /// write access and refuses the default and protected branches (`Forbidden`); a missing
-    /// branch, or a name with an empty part, is `NotFound`. A branch name with slashes goes out as
-    /// several segments.
+    /// write access and refuses the default and protected branches (`Forbidden`). `NotFound` only
+    /// for a branch known to be absent: a name with an empty part, or one the readable repository
+    /// doesn't have; a repository the token can't see is `Forbidden`. A branch name with slashes
+    /// goes out as several segments.
     pub async fn delete_branch(
         &self,
         owner: &str,
@@ -298,7 +299,29 @@ impl Session {
         }
         let mut segments = vec!["repos", owner, repo, "branches"];
         segments.extend(parts);
-        written(self.write::<()>(Method::DELETE, &segments, None).await?)?;
-        Ok(())
+        // gh reads "not found" as "already deleted", so prove the branch is absent before saying
+        // so. Forgejo's delete answers 500 for a missing branch, and its 404 also means a
+        // repository the token can't see (`routers/api/v1/permissions/repo_access.go`).
+        match self.get::<serde_json::Value>(&segments, &[]).await {
+            Ok(_) => {}
+            Err(Error::NotFound) => {
+                return Err(match self.repository(owner, repo).await {
+                    Ok(_) => Error::NotFound.into(),
+                    Err(Error::NotFound) => Error::Forbidden.into(),
+                    Err(error) => error.into(),
+                });
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let reply = self.write::<()>(Method::DELETE, &segments, None).await?;
+        if reply.status == StatusCode::NO_CONTENT {
+            return Ok(());
+        }
+        // Anything but Forgejo's 204 is a delete that didn't happen. A refusal keeps its error;
+        // nothing here may read as "not found".
+        match written(reply) {
+            Ok(_) | Err(WriteError::Transport(Error::NotFound)) => Err(Error::Upstream.into()),
+            Err(error) => Err(error),
+        }
     }
 }
