@@ -359,24 +359,24 @@ mod tests {
             .arg(path)
             .stdin(Stdio::piped())
             .spawn()?;
-        child
+        let written = child
             .stdin
             .take()
-            .ok_or_else(|| io::Error::other("no stdin for the script writer"))?
-            .write_all(contents.as_bytes())?;
+            .ok_or_else(|| io::Error::other("no stdin for the script writer"))
+            .and_then(|mut stdin| stdin.write_all(contents.as_bytes()));
+        // Wait whatever happened, so no child is left behind and sh's status explains a failure.
         let status = child.wait()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
+        if !status.success() {
+            return Err(io::Error::other(format!(
                 "writing {} failed: {status}",
                 path.display()
-            )))
+            )));
         }
+        written
     }
 
     #[cfg(not(unix))]
-    fn make_executable(_path: &Path) -> io::Result<()> {
-        Ok(())
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        fs::write(path, contents)
     }
 }

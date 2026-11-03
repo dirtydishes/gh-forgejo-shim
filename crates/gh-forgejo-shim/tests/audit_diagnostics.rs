@@ -61,8 +61,7 @@ impl Fixture {
 
     fn tool(&self, name: &str, body: &str) -> io::Result<PathBuf> {
         let path = self.bin.join(name);
-        fs::write(&path, body)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        write_script_from_child(&path, body)?;
         Ok(path)
     }
 
@@ -163,9 +162,38 @@ impl Drop for Fixture {
     }
 }
 
-/// Linux refuses to exec a file any process holds open for writing. A test that writes a script
-/// and runs it can lose that race: another test's fork inherits the write descriptor and keeps it
-/// until its own exec. The window is short, so a few retries ride it out (ago, as jko.42).
+/// Writes an executable script from a child `sh`, so this test process never holds it open for
+/// writing. Linux refuses to exec a file any process holds open for writing, and a sibling test's
+/// fork keeps this process's descriptors until it execs; written here, the script could fail
+/// to run with ETXTBSY (ago, 6tt).
+fn write_script_from_child(path: &Path, body: &str) -> io::Result<()> {
+    use std::io::Write;
+
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let written = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("no stdin for the script writer"))
+        .and_then(|mut stdin| stdin.write_all(body.as_bytes()));
+    // Wait whatever happened, so no child is left behind and sh's status explains a failure.
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "writing {} failed: {status}",
+            path.display()
+        )));
+    }
+    written
+}
+
+/// For a script the shim writes in this process, such as `install_shim`'s wrapper, where a child
+/// writer isn't possible. Linux refuses to exec a file any process holds open for writing, and
+/// another test's fork keeps the write descriptor until its own exec. Retrying narrows that race
+/// but can't close it: a fork paused longer than the retries still fails the test (ago, as jko.42).
 fn output_retrying_busy(command: &mut Command) -> io::Result<Output> {
     let mut attempts = 0;
     loop {
