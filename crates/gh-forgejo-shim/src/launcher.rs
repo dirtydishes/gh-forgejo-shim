@@ -86,7 +86,8 @@ pub fn launches(invocation: &Invocation) -> bool {
     let one_method = command != "pr merge"
         || ["merge", "squash", "rebase"]
             .iter()
-            .filter(|method| invocation.flags.contains_key(**method))
+            // gh counts a method by its value, so `--merge=false` is none (`merge.go:104-118`).
+            .filter(|method| invocation.flag(method) == Some("true"))
             .count()
             == 1;
     LAUNCH_LIST.contains(&command)
@@ -216,6 +217,9 @@ mod tests {
             &["pr", "merge", "12"][..],
             &["pr", "merge", "12", "--auto"][..],
             &["pr", "merge", "12", "--merge", "--squash"][..],
+            &["pr", "merge", "12", "--merge=false"][..],
+            &["pr", "merge", "12", "--auto", "--squash=false"][..],
+            &["pr", "merge", "12", "--merge", "--merge=false"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
