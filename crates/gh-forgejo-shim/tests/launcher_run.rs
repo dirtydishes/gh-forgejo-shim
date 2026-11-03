@@ -499,7 +499,9 @@ fn other_git_credential_forms_in_a_launch_never_reach_plain_gh() {
     fs::create_dir_all(&user_gh).expect("gh config");
     fs::write(
         user_gh.join("config.yml"),
-        "aliases:\n    gc: auth git-credential\n",
+        // gh accepts what the shim's YAML reader doesn't: an unquoted Boolean name, and a repeated
+        // name (gh takes the first). Unreadable, so routing sees no alias at all (Sol r3#2).
+        "aliases:\n    gc: auth git-credential\n    true: auth git-credential\n    gc: pr view\n",
     )
     .expect("alias");
     let gh = fixture.fake_gh(r#"echo ran > "$REPORT"; echo password=user-token"#);
@@ -514,6 +516,13 @@ fn other_git_credential_forms_in_a_launch_never_reach_plain_gh() {
             credentials.as_os_str(),
         ),
         (&["gc", "get"][..], credentials.as_os_str()),
+        (&["true", "get"][..], credentials.as_os_str()),
+        // An extension, or any word that isn't one of gh's commands.
+        (&["gfjs-extension", "get"][..], credentials.as_os_str()),
+        (
+            &["--repo", "o/r", "auth", "git-credential", "get"][..],
+            credentials.as_os_str(),
+        ),
         (
             &["auth", "git-credential", "--", "get"][..],
             std::ffi::OsStr::new(""),
@@ -542,6 +551,14 @@ fn other_git_credential_forms_in_a_launch_never_reach_plain_gh() {
         );
         assert_eq!(fixture.report(), "", "{args:?}: plain gh ran");
     }
+    // A nested call with one of gh's own commands still runs.
+    let output = fixture
+        .command(&gh, &["pr", "view", "1", "-R", "github.com/o/r"])
+        .env("FJ_SHIM_CREDENTIALS", &credentials)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(fixture.report(), "ran\n");
 }
 
 #[test]

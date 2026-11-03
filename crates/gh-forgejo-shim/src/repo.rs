@@ -365,6 +365,12 @@ pub fn command_word(words: &[String]) -> Option<&str> {
     Some(words.get(command_position(words)?)?.as_str())
 }
 
+/// The command word cobra's `Find` reaches in `words`, when it's one of gh's own commands rather
+/// than an alias or an extension.
+pub fn gh_command_word(words: &[String]) -> Option<&str> {
+    command_word(words).filter(|word| GH_COMMANDS.contains(word))
+}
+
 /// `argv` as gh runs it when its command word, found past any flags before it, is a plain alias
 /// in the user's gh `config.yml`, or `None`. gh registers an alias only when its name isn't a gh
 /// command and its expansion's command word is one (`gh/pkg/cmd/alias/shared/validations.go`).
