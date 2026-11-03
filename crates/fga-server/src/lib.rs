@@ -204,6 +204,10 @@ pub fn app(state: AppState) -> Router {
             "/api/v3/repos/{owner}/{repo}/actions/workflows/{id}",
             get(runs::workflow),
         )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/actions/workflows/{id}/runs",
+            get(runs::workflow_runs),
+        )
         .route("/api/graphql", post(graphql_request))
         .fallback(|| async { rest_error(Error::NotFound) })
         .layer(middleware::from_fn(authenticate));
