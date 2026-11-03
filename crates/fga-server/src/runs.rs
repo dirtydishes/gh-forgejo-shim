@@ -87,8 +87,9 @@ fn links(
     headers
 }
 
-/// gh follows a run's `jobs_url` and reads its artifacts. Forgejo 15's API has neither per run, so
-/// both point under the gateway's API, where they answer empty lists.
+/// gh follows a run's `jobs_url`, and builds the artifacts path itself; `artifacts_url` is there for
+/// GitHub's shape. Forgejo 15's API has neither per run, so both point under the gateway's API,
+/// where they answer empty lists.
 fn with_links(host: &Host, owner: &str, repo: &str, mut run: Value) -> Value {
     let id = run["id"].to_string();
     for (field, resource) in [("jobs_url", "jobs"), ("artifacts_url", "artifacts")] {

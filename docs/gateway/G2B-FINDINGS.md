@@ -78,7 +78,7 @@ expected failure only when stdout is empty, the oracle has five completed succes
 exit code and stderr still match. No new run normalizers hide names, results, IDs, or durations.
 A separate repository creates real queued Forgejo Actions runs and checks them through real gh,
 including branch/event/status filters and `run view` with mapped JSON fields. No runner executes jobs.
-Default `run view` needs jobs; that route returns a GitHub-shaped 404. Jobs, logs, annotations, rerun
+Default `run view` needs jobs; that route returns a GitHub-shaped 404 (since changed: the gateway answers an empty jobs list; see DESIGN.md). Jobs, logs, annotations, rerun
 attempts, and workflows removed from the current default branch remain outside this subset.
 
 ## Commit lookup and seed timing
