@@ -59,11 +59,11 @@ fn forge_full(
                      "submitted_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:01Z",
                      "html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70","comments_count":2},
                     {"id":8,"user":user("e2e"),"body":"draft","state":"PENDING","commit_id":"older",
-                     "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z",
+                     "submitted_at":"2026-11-02T00:00:00Z","updated_at":"2026-11-02T00:00:00Z",
                      "html_url":"","pull_request_url":"https://forge.test/e2e/oracle/pulls/1","comments_count":1},
                     // Someone else's pending review: Forgejo shows it to site admins, GitHub to no one.
                     {"id":9,"user":user("other"),"body":"secret","state":"PENDING","commit_id":"abc",
-                     "submitted_at":null,"updated_at":"2026-11-02T00:00:00Z","html_url":"","comments_count":1},
+                     "submitted_at":"2026-11-02T00:00:00Z","updated_at":"2026-11-02T00:00:00Z","html_url":"","comments_count":1},
                     // A plain approval: no code comments, so no comments read.
                     {"id":10,"user":user("third"),"body":"","state":"APPROVED","commit_id":"abc",
                      "submitted_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z",
@@ -212,7 +212,7 @@ async fn timeline_fields_for_reviews_comments_and_commits() {
         forge(false, "other", "open"),
         r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
             author{login avatarUrl(size:48)}
-            pending:reviews(first:1,author:"E2E",states:PENDING){nodes{body state}}
+            pending:reviews(first:1,author:"E2E",states:PENDING){nodes{body state submittedAt}}
             reviews(first:10){nodes{author{login} createdAt url isMinimized viewerCanUpdate}}
             comments(first:10){nodes{viewerCanDelete viewerCanUpdate bodyHTML}}
             bodyHTML
@@ -225,18 +225,19 @@ async fn timeline_fields_for_reviews_comments_and_commits() {
     );
     assert_eq!(
         pull["pending"]["nodes"],
-        json!([{"body":"draft","state":"PENDING"}])
+        // Forgejo sends a pending review's creation time as submitted_at; GitHub gives it none.
+        json!([{"body":"draft","state":"PENDING","submittedAt":null}])
     );
     assert_eq!(
         pull["reviews"]["nodes"],
         json!([
             {"author":{"login":"other"},"createdAt":"2026-11-01T00:00:00Z",
-             "url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-70","isMinimized":false,"viewerCanUpdate":false},
+             "url":"https://forge.test/e2e/oracle/pull/1#issuecomment-70","isMinimized":false,"viewerCanUpdate":false},
             // A pending review has no URL of its own; another user's pending review isn't listed.
             {"author":{"login":"e2e"},"createdAt":"2026-11-02T00:00:00Z",
-             "url":"https://forge.test/e2e/oracle/pulls/1","isMinimized":false,"viewerCanUpdate":true},
+             "url":"https://forge.test/e2e/oracle/pull/1","isMinimized":false,"viewerCanUpdate":true},
             {"author":{"login":"third"},"createdAt":"2026-11-03T00:00:00Z",
-             "url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-100","isMinimized":false,"viewerCanUpdate":false}
+             "url":"https://forge.test/e2e/oracle/pull/1#issuecomment-100","isMinimized":false,"viewerCanUpdate":false}
         ])
     );
     // Without push access, only the viewer's own comment can be changed.
@@ -293,7 +294,7 @@ async fn review_threads_follow_forgejo_conversations() {
     let comment = |id: i64, login: &str, review_id: i64, state: &str, diff_hunk: &str| {
         json!({"author":{"login":login},"body":format!("c{id}"),"bodyHTML":format!("<p>c{id}</p>"),
             "diffHunk":diff_hunk,"state":state,
-            "url":format!("https://forge.test/e2e/oracle/pulls/1/files#issuecomment-{id}"),
+            "url":format!("https://forge.test/e2e/oracle/pull/1/files#issuecomment-{id}"),
             "pullRequestReview":{"id":review(review_id)},"viewerCanUpdate":login == "e2e"})
     };
     // a.rs's thread is on the line the reviewer saw. b.rs's review was made on an older head, so
@@ -426,4 +427,37 @@ async fn auto_merge_follows_the_merge_allowlist_and_archiving() {
     assert_eq!(flags(archived), json!([false, false]));
     let archived = query(forge_full(true, true, true, open(), None), VIEWER_CAN).await;
     assert_eq!(flags(archived), json!([false, false]));
+}
+
+/// Forgejo refuses every write in an archived repository (`mustNotBeArchived`), and GitHub reports
+/// every write flag false there, the author's included.
+#[tokio::test]
+async fn an_archived_repository_offers_no_writes() {
+    let pull = query(
+        forge_full(true, true, true, pull("e2e", "closed"), None),
+        r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
+            viewerCanUpdate viewerCanClose viewerCanReopen
+            comments(first:10){nodes{viewerCanUpdate viewerCanDelete}}
+            reviews(first:10){nodes{viewerCanUpdate}}
+            reviewThreads(first:10){nodes{viewerCanResolve viewerCanUnresolve
+                comments(first:10){nodes{viewerCanUpdate}}}}}}}"#,
+    )
+    .await;
+    fn collect(value: &Value, flags: &mut Vec<(String, Value)>) {
+        match value {
+            Value::Object(map) => map.iter().for_each(|(k, v)| {
+                if k.starts_with("viewerCan") {
+                    flags.push((k.clone(), v.clone()));
+                } else {
+                    collect(v, flags);
+                }
+            }),
+            Value::Array(items) => items.iter().for_each(|v| collect(v, flags)),
+            _ => {}
+        }
+    }
+    let mut flags = Vec::new();
+    collect(&pull, &mut flags);
+    assert!(flags.len() > 8, "{flags:?}");
+    assert!(flags.iter().all(|(_, v)| v == false), "{flags:?}");
 }

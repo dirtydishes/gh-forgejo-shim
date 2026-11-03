@@ -887,3 +887,23 @@ fn commit_status_and_check_runs_split_like_github() {
     let errored = mapped(&[status("lint", S::Error, "broke")]);
     assert_eq!(combined_status(&errored, "abc")["state"], "failure");
 }
+
+/// Checks come out in context order whatever order Forgejo lists them in, so gh's newest-first sort
+/// breaks a tie the same way every time (bead 1u7).
+#[test]
+fn checks_keep_context_order_whatever_forgejo_sends() {
+    // The alphabetically first context has the higher id, so neither id order nor input order
+    // gives the expected result: only context order does.
+    let lint = status("ci / lint (push)", S::Success, "Successful in 1s");
+    let mut check = status("ci / check (push)", S::Success, "Successful in 1s");
+    check.id = 2;
+    let names = |rows: &[CommitStatus]| -> Vec<String> {
+        mapped(rows)
+            .iter()
+            .map(|c| c.source().context.clone())
+            .collect()
+    };
+    let expected = ["ci / check (push)", "ci / lint (push)"];
+    assert_eq!(names(&[lint.clone(), check.clone()]), expected);
+    assert_eq!(names(&[check, lint]), expected);
+}

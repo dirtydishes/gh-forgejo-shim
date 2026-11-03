@@ -132,6 +132,12 @@ pub fn hosts_yml(
         }
         if let Some(login) = served_host.and_then(|host| host.login.as_deref()) {
             fields.insert("user".into(), login.into());
+            // `gh auth token --user` looks only here (§3).
+            let mut account = Mapping::new();
+            account.insert("oauth_token".into(), value.into());
+            let mut users = Mapping::new();
+            users.insert(login.into(), Value::Mapping(account));
+            fields.insert("users".into(), Value::Mapping(users));
         }
         hosts.insert(key.into(), Value::Mapping(fields));
     }
@@ -166,7 +172,7 @@ pub fn gh_script(run_dir: &Path, shim: &Path) -> String {
     )
 }
 
-fn single_quote(text: &str) -> String {
+pub(crate) fn single_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
@@ -328,6 +334,11 @@ mod tests {
             ServedToken::PerCall("pc"),
         ));
         assert_eq!(hosts["forge.test"]["user"].as_str(), Some("kell"));
+        assert_eq!(
+            hosts["forge.test"]["users"]["kell"]["oauth_token"].as_str(),
+            Some("pc"),
+            "where `auth token --user` looks"
+        );
     }
 
     #[test]

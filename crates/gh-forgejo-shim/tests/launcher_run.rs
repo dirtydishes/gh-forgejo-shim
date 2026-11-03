@@ -517,3 +517,572 @@ fn a_repeated_depth_entry_still_counts_toward_the_cap() {
     );
     assert_eq!(output.status.code(), Some(127), "{output:?}");
 }
+
+#[test]
+fn a_host_less_auth_token_gets_the_real_token_and_the_forge_as_gh_host() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    // A forge on a custom port: GH_HOST is its portless hostname (decision 4, §2).
+    let config = fixture.home.join(".config/gh-forgejo-shim/config.toml");
+    fs::write(
+        &config,
+        "hosts = [\"forge.test:3443\"]\n[host.\"forge.test:3443\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"http://127.0.0.1:9\"\n",
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(
+        r#"{ echo "GH_HOST=${GH_HOST-unset}"; cat "$GH_CONFIG_DIR/hosts.yml"; } > "$REPORT""#,
+    );
+    let output = fixture
+        .command(&gh, &["auth", "token"])
+        .env("GH_REPO", "forge.test:3443/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert!(report.starts_with("GH_HOST=forge.test\n"), "{report}");
+    assert!(report.contains("oauth_token: host-secret"), "{report}");
+}
+
+#[test]
+fn auth_token_for_a_named_user_finds_the_real_token_under_that_login() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("host-secret", "login-a")]);
+    let fixture = Fixture::new(&api);
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!("hosts = [\"forge.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}\"\n"),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "token", "--user", "login-a"])
+        .env("GH_REPO", "forge.test/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Value = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    // gh's `auth token --user` reads only `users.<login>.oauth_token` (§3).
+    assert_eq!(
+        hosts["forge.test"]["users"]["login-a"]["oauth_token"].as_str(),
+        Some("host-secret"),
+        "{hosts:?}"
+    );
+    assert_eq!(hosts["forge.test"]["user"].as_str(), Some("login-a"));
+}
+
+impl Fixture {
+    /// The shim's allowlist, each entry with the token from `HOST_TOKEN`.
+    fn allowlist(&self, entries: &[&str]) {
+        let mut text = format!(
+            "hosts = [{}]\n",
+            entries
+                .iter()
+                .map(|entry| format!("\"{entry}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for entry in entries {
+            text.push_str(&format!(
+                "[host.\"{entry}\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"http://127.0.0.1:9\"\n"
+            ));
+        }
+        fs::write(self.home.join(".config/gh-forgejo-shim/config.toml"), text).expect("config");
+    }
+
+    /// The user's own gh `hosts.yml`.
+    fn user_hosts(&self, text: &str) {
+        let dir = self.home.join(".config/gh");
+        fs::create_dir_all(&dir).expect("gh config dir");
+        fs::write(dir.join("hosts.yml"), text).expect("hosts.yml");
+    }
+}
+
+/// A fake gh that reports what a step-aside or a launch changed.
+fn reporting_gh(fixture: &Fixture) -> PathBuf {
+    fixture.fake_gh(
+        r#"for name in GH_CONFIG_DIR GH_HOST GH_TOKEN GH_ENTERPRISE_TOKEN FJ_SHIM_ORIG_GH_TOKEN FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN FJ_SHIM_LAUNCHER FJ_SHIM_SAVED; do
+  eval "printf '%s=%s\n' $name \"\${$name-unset}\""
+done > "$REPORT""#,
+    )
+}
+
+fn reported(report: &str, name: &str) -> String {
+    report
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{name}=")))
+        .unwrap_or("missing")
+        .to_string()
+}
+
+#[test]
+fn a_forge_the_users_gh_is_logged_in_to_steps_aside() {
+    let _serial = serial();
+    for login in [
+        "forge.test:\n    oauth_token: user-login\n",
+        "forge.test:\n    user: kell\n",
+    ] {
+        let fixture = Fixture::new("http://127.0.0.1:9");
+        fixture.user_hosts(login);
+        let gh = reporting_gh(&fixture);
+        let output = fixture.launch(&gh);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = fixture.report();
+        assert_eq!(
+            reported(&report, "GH_CONFIG_DIR"),
+            "unset",
+            "{login}: {report}"
+        );
+        assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset", "{login}");
+        assert_eq!(
+            reported(&report, "FJ_SHIM_SAVED"),
+            "unset",
+            "nothing changed"
+        );
+        assert!(fixture.parent_is_empty(), "no run directory");
+    }
+}
+
+#[test]
+fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.allowlist(&["forge.test:3443"]);
+    fixture.user_hosts(
+        "forge.test:\n    oauth_token: user-login\ngithub.com:\n    oauth_token: gh-login\n",
+    );
+    let gh = reporting_gh(&fixture);
+    let output = fixture
+        .command(&gh, &["api", "user"])
+        .env("GH_REPO", "forge.test:3443/o/r")
+        .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+        .env("GH_TOKEN", "ghp_github")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert_eq!(reported(&report, "GH_CONFIG_DIR"), "unset", "{report}");
+    // gh would send GH_TOKEN to a forge named github.localhost or *.ghe.com (§2).
+    assert_eq!(reported(&report, "GH_TOKEN"), "unset", "{report}");
+    assert_eq!(reported(&report, "FJ_SHIM_ORIG_GH_TOKEN"), "ghp_github");
+    assert_eq!(
+        reported(&report, "GH_HOST"),
+        "forge.test",
+        "portless: {report}"
+    );
+    assert_eq!(
+        reported(&report, "GH_ENTERPRISE_TOKEN"),
+        "unset",
+        "{report}"
+    );
+    assert_eq!(
+        reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
+        "ghe_corp"
+    );
+    assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset");
+    assert!(reported(&report, "FJ_SHIM_SAVED").contains("GH_HOST"));
+
+    // The user's own GH_HOST naming the forge stays, and so do their enterprise tokens.
+    let output = fixture
+        .command(&gh, &["api", "user"])
+        .env("GH_HOST", "forge.test")
+        .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+        .env("GH_TOKEN", "ghp_github")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert_eq!(reported(&report, "GH_HOST"), "forge.test");
+    assert_eq!(reported(&report, "GH_TOKEN"), "ghp_github", "{report}");
+    assert_eq!(
+        reported(&report, "GH_ENTERPRISE_TOKEN"),
+        "ghe_corp",
+        "{report}"
+    );
+}
+
+#[test]
+fn only_a_login_under_the_portless_key_steps_aside() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.allowlist(&["forge.test:3443"]);
+    let gh = reporting_gh(&fixture);
+    let pr_view = ["pr", "view", "1", "-R", "forge.test:3443/o/r"];
+
+    fixture.user_hosts("forge.test:\n    oauth_token: user-login\n");
+    let output = fixture
+        .command(&gh, &pr_view)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        reported(&fixture.report(), "GH_CONFIG_DIR"),
+        "unset",
+        "stepped aside"
+    );
+
+    fixture.user_hosts(
+        "forge.test:3443:\n    oauth_token: user-login\nother.test:\n    git_protocol: ssh\n",
+    );
+    let output = fixture
+        .command(&gh, &pr_view)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        reported(&fixture.report(), "GH_CONFIG_DIR").contains("/gfj-"),
+        "launched: {}",
+        fixture.report()
+    );
+}
+
+#[test]
+fn a_users_gh_hosts_route_with_no_usable_login_is_refused() {
+    let _serial = serial();
+    for (allowlist, hosts, key) in [
+        (
+            &["forge.test", "other.test"][..],
+            "forge.test:\n    git_protocol: ssh\n",
+            "forge.test",
+        ),
+        (
+            &["forge.test", "other.test"][..],
+            "Forge.Test:\n    git_protocol: ssh\n",
+            "Forge.Test",
+        ),
+        (
+            &["forge.test:3443", "other.test"][..],
+            "forge.test:3443:\n    oauth_token: user-login\n",
+            "forge.test:3443",
+        ),
+    ] {
+        let fixture = Fixture::new("http://127.0.0.1:9");
+        fixture.allowlist(allowlist);
+        fixture.user_hosts(hosts);
+        let before = fs::read(fixture.home.join(".config/gh/hosts.yml")).expect("hosts.yml");
+        let gh = reporting_gh(&fixture);
+        let output = fixture
+            .command(&gh, &["pr", "view", "1", "-R", "other/target"])
+            .output()
+            .expect("run wrapper");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{key}: {output:?}");
+        assert!(
+            stderr.contains(&format!("makes {key} gh's default host"))
+                && stderr.contains(&format!("delete the {key} entry"))
+                && stderr.contains(".config/gh/hosts.yml"),
+            "{key}: {stderr}"
+        );
+        assert_eq!(fixture.report(), "", "gh never ran");
+        assert_eq!(
+            fs::read(fixture.home.join(".config/gh/hosts.yml")).expect("hosts.yml"),
+            before,
+            "the user's config is left alone"
+        );
+    }
+}
+
+/// A stub Forgejo whose `/api/v1/user` answers with a login chosen by the request's token, for
+/// as long as the test runs.
+fn stub_forgejo(logins: &'static [(&'static str, &'static str)]) -> String {
+    use std::io::{BufRead, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream);
+            let mut token = String::new();
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                if let Some(value) = line
+                    .to_ascii_lowercase()
+                    .strip_prefix("authorization: token ")
+                {
+                    token = value.trim().to_string();
+                }
+                line.clear();
+            }
+            let login = logins
+                .iter()
+                .find(|(known, _)| *known == token)
+                .map_or("nobody", |(_, login)| login);
+            let body = format!(r#"{{"id":1,"login":"{login}","avatar_url":""}}"#);
+            let _ = write!(
+                reader.get_mut(),
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{address}")
+}
+
+#[test]
+fn host_less_auth_status_serves_every_eligible_host_with_its_login() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("host-secret", "login-a"), ("other-secret", "login-b")]);
+    let fixture = Fixture::new(&api);
+    let host = |entry: &str, token_env: &str| {
+        format!("[host.\"{entry}\"]\ntoken_env = \"{token_env}\"\napi_url = \"{api}\"\n")
+    };
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\", \"a.test:3443\", \"a.test:8443\", \"logged.test\"]\n{}{}{}{}{}",
+            host("forge.test", "HOST_TOKEN"),
+            host("other.test", "OTHER_TOKEN"),
+            host("a.test:3443", "HOST_TOKEN"),
+            host("a.test:8443", "HOST_TOKEN"),
+            host("logged.test", "HOST_TOKEN"),
+        ),
+    )
+    .expect("config");
+    fixture.user_hosts("logged.test:\n    oauth_token: user-login\n");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .env("OTHER_TOKEN", "other-secret")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Mapping = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    let field = |key: &str, name: &str| {
+        hosts
+            .get(key)
+            .and_then(|entry| entry.get(name))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+    };
+    let per_call = field("forge.test", "oauth_token").expect("forge.test token");
+    assert_eq!(per_call.len(), 64, "a per-call token, not the real one");
+    assert_eq!(field("forge.test", "user").as_deref(), Some("login-a"));
+    assert_eq!(field("other.test", "oauth_token"), Some(per_call.clone()));
+    assert_eq!(field("other.test", "user").as_deref(), Some("login-b"));
+    for unserved in ["a.test", "a.test:3443", "a.test:8443", "logged.test"] {
+        assert_eq!(
+            field(unserved, "oauth_token").as_deref(),
+            Some("gfj-not-served"),
+            "{unserved}"
+        );
+        assert_eq!(field(unserved, "user"), None, "{unserved}");
+    }
+}
+
+#[test]
+fn host_less_auth_status_serves_the_rest_when_the_routed_host_waits_for_l4() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("other-secret", "login-b")]);
+    let fixture = Fixture::new(&api);
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\"]\n[host.\"forge.test\"]\ntoken_env = \"HOST_TOKEN\"\napi_url = \"{api}/forgejo\"\n[host.\"other.test\"]\ntoken_env = \"OTHER_TOKEN\"\napi_url = \"{api}\"\n"
+        ),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(r#"cat "$GH_CONFIG_DIR/hosts.yml" > "$REPORT""#);
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .env("OTHER_TOKEN", "other-secret")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let hosts: serde_yaml::Mapping = serde_yaml::from_str(&fixture.report()).expect("hosts.yml");
+    let field = |key: &str, name: &str| {
+        hosts
+            .get(key)
+            .and_then(|entry| entry.get(name))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(field("other.test", "user").as_deref(), Some("login-b"));
+    assert_eq!(
+        field("other.test", "oauth_token").map(|token| token.len()),
+        Some(64)
+    );
+    assert_eq!(
+        field("forge.test", "oauth_token").as_deref(),
+        Some("gfj-not-served"),
+        "an api_url with a path waits for the config bridge"
+    );
+}
+
+#[test]
+fn show_token_puts_the_real_token_in_hosts_yml_and_the_gateway_accepts_it() {
+    let _serial = serial();
+    let api = stub_forgejo(&[("host-secret", "login-a")]);
+    let fixture = Fixture::new(&api);
+    let gh = fixture.fake_gh(
+        r#"token=$(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)
+code=$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" http://forge.test/api/v3/user)
+printf '%s %s\n' "$token" "$code" > "$REPORT""#,
+    );
+    for args in [
+        &["auth", "status", "-t"][..],
+        &["auth", "status", "--show-token=false"][..],
+    ] {
+        let output = fixture
+            .command(&gh, args)
+            .env("GH_REPO", "forge.test/o/r")
+            .output()
+            .expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = fixture.report();
+        let (token, code) = report.trim().split_once(' ').expect("report");
+        assert_eq!(
+            code, "200",
+            "{args:?}: the gateway accepts gh's token: {report}"
+        );
+        assert_eq!(
+            token == "host-secret",
+            args[2] == "-t",
+            "{args:?}: {report}"
+        );
+    }
+}
+
+#[test]
+fn the_browser_helper_rewrites_served_pr_pages_and_never_calls_itself() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let recorder = fixture.fake_gh(r#"printf '%s\n' "$@" > "$REPORT""#);
+    let open = |url: &str, original: &str, browser: Option<&Path>| {
+        let mut command = Command::new(SHIM);
+        command
+            .args(["__gfj-browser", "forge.test", "port.test:3443", url])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("REPORT", &fixture.report)
+            .env("FJ_SHIM_ORIG_GH_BROWSER", original);
+        if let Some(browser) = browser {
+            command.env("BROWSER", browser);
+        }
+        let output = command.output().expect("helper");
+        assert_eq!(output.status.code(), Some(0), "{url}: {output:?}");
+        fixture.report().trim().to_string()
+    };
+    let recorder_text = recorder.to_string_lossy().into_owned();
+    assert_eq!(
+        open("https://forge.test/o/r/pull/3", &recorder_text, None),
+        "https://forge.test/o/r/pulls/3"
+    );
+    assert_eq!(
+        open(
+            "https://port.test:3443/o/r/pull/3/files",
+            &recorder_text,
+            None
+        ),
+        "https://port.test:3443/o/r/pulls/3/files"
+    );
+    // The user's GH_BROWSER names this helper: skip it, use BROWSER; a GitHub URL is unchanged.
+    let itself = format!("'{SHIM}' __gfj-browser forge.test");
+    assert_eq!(
+        open("https://github.com/o/r/pull/3", &itself, Some(&recorder)),
+        "https://github.com/o/r/pull/3"
+    );
+    assert_eq!(
+        open("https://forge.test/o/r/pull/4", SHIM, Some(&recorder)),
+        "https://forge.test/o/r/pulls/4"
+    );
+}
+
+#[test]
+fn auth_status_steps_aside_or_serves_tokened_hosts_without_a_routed_token() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let host = |entry: &str, token_env: &str| {
+        format!(
+            "[host.\"{entry}\"]\ntoken_env = \"{token_env}\"\napi_url = \"http://127.0.0.1:9\"\n"
+        )
+    };
+    fs::write(
+        fixture.home.join(".config/gh-forgejo-shim/config.toml"),
+        format!(
+            "hosts = [\"forge.test\", \"other.test\"]\n{}{}",
+            host("forge.test", "NO_SUCH_TOKEN"),
+            host("other.test", "HOST_TOKEN"),
+        ),
+    )
+    .expect("config");
+    let gh = fixture.fake_gh(
+        r#"{ echo "GH_CONFIG_DIR=${GH_CONFIG_DIR-unset}"; [ -n "$GH_CONFIG_DIR" ] && cat "$GH_CONFIG_DIR/hosts.yml"; } > "$REPORT"; exit 0"#,
+    );
+
+    // Host-less, in a checkout of the forge without a token: the forge that has one is served.
+    let output = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    let hosts: serde_yaml::Mapping =
+        serde_yaml::from_str(report.split_once('\n').expect("report").1).expect("hosts.yml");
+    let token = |key: &str| {
+        hosts
+            .get(key)
+            .and_then(|entry| entry.get("oauth_token"))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(
+        token("forge.test").as_deref(),
+        Some("gfj-not-served"),
+        "{report}"
+    );
+    assert_eq!(
+        token("other.test").map(|token| token.len()),
+        Some(64),
+        "{report}"
+    );
+
+    // The user's gh is logged in to the forge: plain gh, even with no shim token for it.
+    fixture.user_hosts("forge.test:\n    oauth_token: user-login\n");
+    let output = fixture
+        .command(&gh, &["auth", "status", "--hostname", "forge.test"])
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        fixture.report().starts_with("GH_CONFIG_DIR=unset"),
+        "{}",
+        fixture.report()
+    );
+}
+
+#[test]
+fn a_signal_during_the_login_lookup_ends_the_launch_at_once() {
+    let _serial = serial();
+    // An upstream that accepts and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let api = format!("http://{}", listener.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+        }
+    });
+    let fixture = Fixture::new(&api);
+    let gh = fixture.fake_gh("exit 0");
+    let mut child = fixture
+        .command(&gh, &["auth", "status"])
+        .env("GH_REPO", "forge.test/o/r")
+        .process_group(0)
+        .spawn()
+        .expect("spawn wrapper");
+    std::thread::sleep(Duration::from_millis(700));
+    let sent = Instant::now();
+    Command::new("/bin/kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill");
+    let status = wait_bounded(&mut child, "the lookup held off SIGINT");
+    assert!(
+        sent.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        sent.elapsed()
+    );
+    assert_eq!(status.signal(), Some(2), "{status}");
+    assert!(fixture.parent_is_empty(), "run directory removed");
+}

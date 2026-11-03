@@ -92,9 +92,7 @@ only to the commands on one list in code, `launcher::LAUNCH_LIST`, matched on th
 alias expansion (L2). Every other Forgejo route keeps the shim's built-in path, as before the
 launcher. So do usage errors, help, and a listed command's forms the built-in path refuses as
 unsupported, such as `pr checks --watch`: their answers need no token, and they stay as they are
-until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, adds `pr checkout` with git's
-credentials, then `pr list`, `api`, `auth status` and `auth token` with the rest of section 11's
-tests. Each later gateway command adds its name to the list, with a test, in the change that
+until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, then adds `pr list`, `api`, `auth token` and `auth status`. `pr checkout` joins with section 11's test 14, run end to end in the e2e environment (`cwe.17`). Each later gateway command adds its name to the list, with a test, in the change that
 makes the gateway serve it. Once the list covers everything, C5 (`cwe.19`) deletes the built-in
 path and the list with it, and this rule becomes the one above.
 
@@ -172,10 +170,12 @@ for the token: a user's own `hosts.yml` has the login under the portless key onl
 `GH_HOST=forge.test:3443` gives "no oauth token found for forge.test:3443". For a forge on a
 custom port, stepping aside therefore sends gh to the forge's default port 443, where the user's
 login was checked, while the launch path reaches the entry's own port through the gateway.
-Setting `GH_HOST` also makes gh use
-`GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`, if set, for the forge ahead of the user's
-login there (fact 3), which would send a GitHub Enterprise login to the forge. So when the wrapper
-sets `GH_HOST` here, it also removes those two variables. When the user's own `GH_HOST` already
+Setting `GH_HOST` also makes gh use a token
+variable, if set, for the forge ahead of the user's login there (fact 3): `GH_ENTERPRISE_TOKEN`
+or `GITHUB_ENTERPRISE_TOKEN` for most forges, and `GH_TOKEN` or `GITHUB_TOKEN` for a forge named
+`github.localhost` or `*.ghe.com`. Either would send another site's login to the forge, where
+plain gh would have sent it to github.com. So when the wrapper sets `GH_HOST` here, it also
+removes all four token variables, as a launch does. When the user's own `GH_HOST` already
 names the forge, the wrapper sets nothing and keeps those variables, as plain gh would: the user
 chose that host. It records both changes with §7's
 `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`, so a nested call, such as one
@@ -205,11 +205,21 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   `oauth_token`, plus the `git_protocol` from the user's entry for that host, if any. A host-level
   `oauth_token` needs no `user` key for gh to find it. `gh auth status` reads the account name from
   `user`, though, and fetches it only for tokens from the environment
-  (`gh/pkg/cmd/auth/status/status.go:314-320,484-490`). For an `auth status` call, the launcher
-  therefore looks up each served host's login before it starts gh. It uses the gateway's own
-  `authenticate`, which warms the session cache, so gh's own requests repeat nothing. It writes
-  that login as `user`. If the lookup fails, the entry has no `user`, and gh reports the failure
-  itself. Other commands never show the account, so they get no `user` and no lookup.
+  (`gh/pkg/cmd/auth/status/status.go:314-320,484-490`), and `gh auth token --user <login>` finds
+  a token only under `users.<login>.oauth_token` (`gh/internal/config/config.go:693-709`). For an
+  `auth status` call, or an `auth token` call with a `--user`, the launcher therefore looks up
+  each served host's login before it starts gh. It uses the gateway's own `authenticate`, which
+  warms the session cache, so gh's own requests repeat nothing. It writes that login as `user`,
+  and the entry's token again under `users.<login>.oauth_token`, as gh's own plain-text login
+  writes it. gh then prints the token for that login and refuses any other, as it would. One
+  exception is gh's own: a named-user lookup reads the system keyring (`gh:<host>`, keyed by
+  login) before any config file (`gh/internal/config/config.go:693-705`), whatever
+  `GH_CONFIG_DIR` says. A keyring login for that host, left by another gh config, therefore wins,
+  for that login or another. It is the user's own credential for the same host, which plain gh
+  would print too, and `auth token` sends nothing anywhere; the launcher can't hide it without
+  answering `auth token --user` itself. If the
+  lookup fails, the entry has neither, and gh reports the failure itself. Other commands never
+  show the account, so they get no `user` and no lookup.
   - A served host (the set *S*, below) gets a per-call token: 32 random bytes from the OS RNG as
     hex, made for this call. The gateway accepts it for that host and authenticates upstream
     with the real token (§5). Outside the gateway it opens nothing, so no gh credential helper,
@@ -454,8 +464,11 @@ The order is fixed:
    opens the name `lock`, so it never finds an unlocked one in a live directory, and can't win a
    race against a launcher that is still setting up. If `try_lock` on the fresh file fails, which
    no other process can cause, the launcher stops with exit 1.
-3. Write `hosts.yml`, `credentials` and the `gh` script, then `config.yml`.
-4. Bind the socket.
+3. Write `credentials` and the `gh` script, then `config.yml`, and make gh's environment edits
+   (§7), all before any thread starts.
+4. Start the gateway's runtime. For an `auth status` call or an `auth token --user`, look up each served host's login
+   through the gateway's own client (§3). Write `hosts.yml`, with those logins.
+5. Bind the socket.
 
 The token is never on disk without a held lock named `lock` beside it.
 
@@ -589,7 +602,7 @@ spawn reaches no gh and isn't forwarded; pressing it again works. Forwarding it 
 pre-spawn flag can't tell that instant from the next, when the terminal already reached gh.
 
 The handlers are installed before the run directory exists. Any of these four signals arriving
-before gh is spawned aborts the launch. The launcher cleans up what it made and dies by that
+before the launcher's final pre-spawn check aborts the launch; one after it reaches gh through the run loop. The launcher cleans up what it made and dies by that
 signal.
 
 gh gets the default SIGPIPE disposition, because Rust's `Command` resets it in the child. That is
@@ -676,10 +689,9 @@ thread at the edit point. Building gh's environment by hand and spawning it with
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
 
-The table is the launch path. Stepping aside (§2) changes only `GH_HOST` and the two GitHub
-Enterprise token variables, and only for a host-less `gh api` or `gh auth token`, with
-`FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`. It never sets
-`FJ_SHIM_LAUNCHER`, and it doesn't remove `GH_TOKEN` or `GITHUB_TOKEN`.
+The table is the launch path. Stepping aside (§2) changes only `GH_HOST` and the four token
+variables, and only for a host-less `gh api` or `gh auth token`, with `FJ_SHIM_SAVED`,
+`FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`. It never sets `FJ_SHIM_LAUNCHER`.
 
 The launcher spawns gh by absolute path, so `argv[0]` is that path too.
 

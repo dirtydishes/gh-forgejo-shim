@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::invocation::Invocation;
 
+pub mod browser;
 #[cfg(unix)]
 pub mod credentials;
 #[cfg(unix)]
@@ -24,7 +25,14 @@ pub mod upstream;
 /// matched on the command after alias expansion. Every other Forgejo route keeps the built-in
 /// path. A command joins in the change that makes the gateway serve it, with its test; C5
 /// deletes the built-in path, and this list, once it covers everything.
-pub const LAUNCH_LIST: &[&str] = &["pr view", "pr checks"];
+pub const LAUNCH_LIST: &[&str] = &[
+    "pr view",
+    "pr checks",
+    "pr list",
+    "api",
+    "auth token",
+    "auth status",
+];
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
@@ -34,15 +42,15 @@ pub fn launches(invocation: &Invocation) -> bool {
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && invocation.is_native()
+        // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
+        // built-in path prints the checks instead.
+        && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
         // gh reads a PR URL only as `/pull/N`, and Forgejo's own URLs say `/pulls/N`; a URL
         // selector keeps the built-in path, which reads both, until the launcher rewrites it.
         && !invocation
             .positionals
             .iter()
             .any(|positional| positional.contains("://"))
-        // Until the browser helper (§9) lands, `--web` keeps the built-in path, which already
-        // opens Forgejo's `/pulls/N`.
-        && !invocation.flags.contains_key("web")
 }
 
 /// Guard 3's cap on nested wrapper invocations (§8).
@@ -94,10 +102,14 @@ mod tests {
         assert!(launches(&invocation(&[
             "pr", "checks", "12", "--json", "name"
         ])));
-        assert!(!launches(&invocation(&["pr", "list"])));
+        assert!(launches(&invocation(&["pr", "list", "--json", "number"])));
+        assert!(!launches(&invocation(&["issue", "list"])));
         assert!(!launches(&invocation(&["issue", "view", "3"])));
-        assert!(!launches(&invocation(&["pr", "view", "12", "--web"])));
-        assert!(!launches(&invocation(&["pr", "view", "12", "-w"])));
+        assert!(
+            launches(&invocation(&["pr", "view", "12", "--web"])),
+            "the browser helper"
+        );
+        assert!(!launches(&invocation(&["pr", "checks", "12", "--web"])));
         assert!(!launches(&invocation(&["pr", "view", "--help"])));
         assert!(!launches(&invocation(&[
             "pr",

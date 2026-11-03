@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
+use crate::doctor;
 use crate::external;
 use crate::gui_path;
 use crate::repo::{self, RepoRef};
@@ -132,12 +133,20 @@ impl BootstrapOptions {
 }
 
 pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
-    let repo = repo::detect_from_git(options.cwd.as_deref());
     let config_path = options
         .config_path
         .clone()
         .unwrap_or_else(|| config::config_path(options.home.as_deref()));
     let mut config = config::load_config_with_env(Some(&config_path), &options.env)?;
+    let plan = plan_repo(options.cwd.as_deref(), &options.env, &config);
+    let left_to_gh = matches!(
+        plan,
+        Some(RepoPlan::LeaveToGh { .. } | RepoPlan::NotResolved { .. })
+    );
+    let github_allowlisted = matches!(plan, Some(RepoPlan::GitHubAllowlisted { .. }));
+    // Auth advice names a repository's host only when bootstrap allowlists it; any other host
+    // here may be GitHub's, and `auth login` would send it the Forgejo token to validate.
+    let allowlisting = matches!(plan, Some(RepoPlan::Allowlist { .. }));
     let setup_model = setup::inspect(SetupInspectOptions {
         env: options.env.clone(),
         home: options.home.clone(),
@@ -149,23 +158,154 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     })?;
     let target_bin_dir = setup_model.target_bin_dir.clone();
     let target_shim = setup_model.target_shim_path.clone();
-    let repo_is_github = repo
-        .as_ref()
-        .is_some_and(|repo| config::is_known_github_host(Some(&repo.host)));
     let mut checks = Vec::new();
 
-    if let Some(repo) = repo.as_ref() {
-        if repo_is_github {
+    let repo = match plan {
+        Some(RepoPlan::Allowlist { repo, entry }) => {
+            if options.dry_run {
+                checks.push(BootstrapCheck::plan(
+                    "repository",
+                    format!("would allowlist {entry} for {}/{}", repo.owner, repo.name),
+                ));
+            } else {
+                config = config::add_host(&entry, Some(&config_path))?;
+                let mut message = format!(
+                    "detected {}/{}/{} and allowlisted {entry}",
+                    repo.host, repo.owner, repo.name
+                );
+                // FJ_SHIM_HOSTS replaces the file's hosts, so the entry written there doesn't
+                // apply in a shell that sets it.
+                if options.env.contains_key("FJ_SHIM_HOSTS") {
+                    message.push_str(
+                        "; FJ_SHIM_HOSTS is set, and replaces the config file's hosts until you \
+                         unset it or add this host to it",
+                    );
+                }
+                checks.push(BootstrapCheck::new(
+                    "repository",
+                    true,
+                    message,
+                    Vec::<String>::new(),
+                ));
+            }
+            Some(repo)
+        }
+        Some(RepoPlan::LeaveToGh { repo, notes }) => {
+            let mut message = if doctor::is_github_host(&options.env, &repo.host) {
+                format!(
+                    "detected GitHub repository {}/{}/{}",
+                    repo.host, repo.owner, repo.name
+                )
+            } else {
+                format!(
+                    "detected {}/{}/{}, which gh keeps",
+                    repo.host, repo.owner, repo.name
+                )
+            };
+            message.push_str("; ");
+            message.push_str(&allowlist_clause(&config, &repo.host));
+            for note in notes {
+                message.push_str("; ");
+                message.push_str(&note);
+            }
             checks.push(BootstrapCheck::new(
                 "repository",
                 true,
-                format!(
-                    "detected GitHub repository {}/{}/{}; leaving {} out of the Forgejo allowlist",
-                    repo.host, repo.owner, repo.name, repo.host
-                ),
+                message,
                 Vec::<String>::new(),
             ));
-        } else if config::normalized_forgejo_host(&repo.host).is_none() {
+            Some(repo)
+        }
+        Some(RepoPlan::NotResolved { first, notes }) => {
+            let pinned = ["GH_HOST", "GH_REPO"]
+                .iter()
+                .find_map(|name| {
+                    options
+                        .env
+                        .get(*name)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| format!(" ({name} is {value})"))
+                })
+                .unwrap_or_default();
+            let mut message = format!(
+                "gh resolves no repository here{pinned}, so the wrapper hands this checkout to \
+                 real gh; {}",
+                allowlist_clause(&config, &first.host)
+            );
+            for note in notes {
+                message.push_str("; ");
+                message.push_str(&note);
+            }
+            checks.push(BootstrapCheck::new(
+                "repository",
+                true,
+                message,
+                Vec::<String>::new(),
+            ));
+            Some(first)
+        }
+        Some(RepoPlan::Conflict {
+            repo,
+            hostname,
+            entries,
+        }) => {
+            let message = if entries.len() > 1 {
+                format!(
+                    "the allowlist has more than one entry for {hostname}, so the wrapper routes \
+                     none of them; keep one with gh-forgejo-shim config remove-host"
+                )
+            } else {
+                format!(
+                    "the allowlist's entry {} doesn't serve {}: a host with a port needs an entry \
+                     with that port, and a second entry for {hostname} would leave both \
+                     unrouted; replace it with gh-forgejo-shim config remove-host and config \
+                     add-host",
+                    entries.join(", "),
+                    repo.host
+                )
+            };
+            checks.push(BootstrapCheck::new(
+                "repository",
+                false,
+                message,
+                Vec::<String>::new(),
+            ));
+            Some(repo)
+        }
+        Some(RepoPlan::GitHubAllowlisted { repo, entry }) => {
+            // The repair has to remove the entry that routes it, as written: `remove-host` with
+            // gh's spelling would leave `host:port` in place. FJ_SHIM_HOSTS replaces the file's
+            // hosts, so with it set the entry comes from there.
+            let (repair, command) = if options.env.contains_key("FJ_SHIM_HOSTS") {
+                (
+                    format!(
+                        "remove {entry} from FJ_SHIM_HOSTS, which replaces the config file's hosts"
+                    ),
+                    None,
+                )
+            } else {
+                // Quoted: `[::1]:8443` is a glob pattern to the shell, and a matching file name
+                // would make the command succeed while removing nothing.
+                let command = format!(
+                    "gh-forgejo-shim config remove-host {}",
+                    setup::shell_quote(&entry)
+                );
+                (format!("run {command}"), Some(command))
+            };
+            checks.push(BootstrapCheck::new(
+                "repository",
+                false,
+                format!(
+                    "{} is in your gh hosts.yml and in the Forgejo allowlist as {entry}, so the \
+                     wrapper sends {}/{} to Forgejo; bootstrap adds nothing and gives no auth \
+                     advice for it; if it's GitHub Enterprise, {repair}",
+                    repo.host, repo.owner, repo.name
+                ),
+                command.into_iter().collect::<Vec<_>>(),
+            ));
+            Some(repo)
+        }
+        Some(RepoPlan::Unusable { repo }) => {
             checks.push(BootstrapCheck::new(
                 "repository",
                 false,
@@ -175,39 +315,23 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                 ),
                 Vec::<String>::new(),
             ));
-        } else if options.dry_run {
-            checks.push(BootstrapCheck::plan(
-                "repository",
-                format!(
-                    "would allowlist {} for {}/{}",
-                    repo.host, repo.owner, repo.name
-                ),
-            ));
-        } else {
-            config = config::add_host(&repo.host, Some(&config_path))?;
+            Some(repo)
+        }
+        None => {
             checks.push(BootstrapCheck::new(
                 "repository",
-                true,
-                format!(
-                    "detected {}/{}/{} and allowlisted {}",
-                    repo.host, repo.owner, repo.name, repo.host
-                ),
-                Vec::<String>::new(),
+                false,
+                "could not detect a Forgejo repository from git remotes",
+                [
+                    "git remote add origin https://git.example.com/owner/repo.git",
+                    "git fetch origin",
+                    "git remote set-head origin -a",
+                    "gh-forgejo-shim config add-host git.example.com",
+                ],
             ));
+            None
         }
-    } else {
-        checks.push(BootstrapCheck::new(
-            "repository",
-            false,
-            "could not detect a Forgejo repository from git remotes",
-            [
-                "git remote add origin https://git.example.com/owner/repo.git",
-                "git fetch origin",
-                "git remote set-head origin -a",
-                "gh-forgejo-shim config add-host git.example.com",
-            ],
-        ));
-    }
+    };
 
     checks.push(real_gh_check(&setup_model, &options.platform));
 
@@ -266,16 +390,23 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
 
     let gui_path_apply = gui_path_action(&setup_model, &options, &mut checks)?;
 
-    if repo_is_github {
+    if left_to_gh {
         checks.push(BootstrapCheck::new(
             "auth",
             true,
             "Forgejo auth is not needed for GitHub delegation",
             Vec::<String>::new(),
         ));
+    } else if github_allowlisted {
+        checks.push(BootstrapCheck::new(
+            "auth",
+            true,
+            "no auth advice for a host your gh hosts.yml lists",
+            Vec::<String>::new(),
+        ));
     } else {
         checks.push(auth_check(
-            repo.as_ref(),
+            repo.as_ref().filter(|_| allowlisting),
             &config,
             &options.env,
             options.home.as_deref(),
@@ -292,6 +423,188 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         dry_run: options.dry_run,
         gui_path_apply,
     })
+}
+
+/// What bootstrap does with the checkout's repository.
+enum RepoPlan {
+    /// Allowlist `entry`: the wrapper routes `repo` to it, or will once it's allowlisted.
+    Allowlist { repo: RepoRef, entry: String },
+    /// gh resolves `repo` and real gh keeps it. `notes` say what was passed over and why, each a
+    /// clause of the message.
+    LeaveToGh { repo: RepoRef, notes: Vec<String> },
+    /// gh resolves no repository here, so the wrapper hands every command to real gh: `GH_HOST`
+    /// or `GH_REPO` points elsewhere, or gh can't read `first`, the first remote.
+    NotResolved { first: RepoRef, notes: Vec<String> },
+    /// `entries` share `hostname` and don't serve this checkout: two or more route none of
+    /// them, and one has another port. Adding an entry wouldn't help.
+    Conflict {
+        repo: RepoRef,
+        hostname: String,
+        entries: Vec<String>,
+    },
+    /// `repo`'s host is GitHub's (in the user's gh hosts.yml, say) yet the allowlist routes it:
+    /// bootstrap adds nothing and gives no auth advice, which would send it the Forgejo token.
+    /// `entry` is the allowlist entry that routes it, as written there (`host:port`, say).
+    GitHubAllowlisted { repo: RepoRef, entry: String },
+    /// `repo`'s host isn't a host name the shim can use.
+    Unusable { repo: RepoRef },
+}
+
+/// Asks the resolver itself which host, if any, to allowlist. The candidate is the repository gh
+/// resolves, or else the first remote, whichever isn't GitHub's (`doctor::is_github_host`, which
+/// counts GitHub Enterprise hosts from the user's hosts.yml). Bootstrap allowlists it only if
+/// the wrapper would then route this checkout to it: whether it does depends on what else gh
+/// knows, such as a hosts.yml that names github.com.
+fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPlan> {
+    let found = doctor::current_repo(cwd, env, config);
+    let first_remote = repo::detect_from_git(cwd);
+    // What gh acts on here, if it resolves anything itself; doctor's first-remote fallback is
+    // not that, and with GH_HOST or GH_REPO pointing elsewhere there's nothing at all.
+    let resolved = found
+        .as_ref()
+        .filter(|found| found.resolved_by_gh)
+        .map(|found| found.repo.clone());
+    let first = found.map(|found| found.repo).or(first_remote.clone())?;
+    let leave = |notes: Vec<String>| match resolved.clone() {
+        Some(repo) => RepoPlan::LeaveToGh { repo, notes },
+        None => RepoPlan::NotResolved {
+            first: first.clone(),
+            notes,
+        },
+    };
+    // Already routed: write the entry that routes it. gh drops a remote's port, and its spelling
+    // beside an entry with one would leave two entries for one hostname, which routes neither.
+    if let Some(repo) = resolved.as_ref() {
+        if let Some(entry) = doctor::allowlist_entry(config, &repo.host) {
+            // A GitHub host stays out of bootstrap's hands even when the user allowlisted it.
+            if doctor::is_github_host(env, &repo.host) {
+                return Some(RepoPlan::GitHubAllowlisted {
+                    repo: repo.clone(),
+                    entry,
+                });
+            }
+            return Some(RepoPlan::Allowlist {
+                repo: repo.clone(),
+                entry,
+            });
+        }
+    }
+    let candidates = [resolved.clone(), first_remote]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut notes = Vec::new();
+    // Nothing tells a GitHub Enterprise server in hosts.yml from a Forgejo one listed there, so
+    // such a host is passed over, and bootstrap says so. No ready command: for GHES, it would
+    // send the Forgejo token there.
+    if let Some(listed) = candidates.iter().find(|repo| {
+        !config::is_known_github_host(Some(&repo.host)) && doctor::in_gh_hosts_yml(env, &repo.host)
+    }) {
+        notes.push(format!(
+            "{} is in your gh hosts.yml, so bootstrap takes it for GitHub Enterprise and leaves \
+             it out; if it's a Forgejo server, allowlist it with gh-forgejo-shim config add-host \
+             HOST",
+            listed.host
+        ));
+    }
+    let Some(candidate) = candidates
+        .into_iter()
+        .find(|repo| !doctor::is_github_host(env, &repo.host))
+    else {
+        return Some(leave(notes));
+    };
+    let Some(entry) = config::normalized_forgejo_host(&candidate.host) else {
+        return Some(if candidate.host == first.host && resolved.is_none() {
+            RepoPlan::Unusable { repo: candidate }
+        } else {
+            leave(notes)
+        });
+    };
+    let hostname = repo::gh_hostname(&candidate.host);
+    let allowlisted = doctor::allowlist_entry(config, &candidate.host);
+    let sharing = config
+        .hosts
+        .iter()
+        .filter(|listed| repo::gh_hostname(listed) == hostname)
+        .cloned()
+        .collect::<Vec<_>>();
+    if allowlisted.is_none() && !sharing.is_empty() {
+        return Some(RepoPlan::Conflict {
+            repo: candidate,
+            hostname,
+            entries: sharing,
+        });
+    }
+    let mut trial = config.clone();
+    if allowlisted.is_none() {
+        trial.hosts.push(entry.clone());
+    }
+    // Only a repository gh itself resolves counts: the wrapper never routes doctor's fallback to
+    // the first remote.
+    let routed = doctor::current_repo(cwd, env, &trial)
+        .filter(|trial| trial.resolved_by_gh)
+        .map(|trial| trial.repo)
+        .filter(|repo| {
+            doctor::routes_to_forgejo(&trial, &repo.host)
+                && repo::gh_hostname(&repo.host) == hostname
+        });
+    if let Some(repo) = routed {
+        return Some(RepoPlan::Allowlist {
+            repo,
+            entry: allowlisted.unwrap_or(entry),
+        });
+    }
+    // An allowlisted host needs no hint: there's nothing to add.
+    if allowlisted.is_none() {
+        if gh_reads_a_remote_on(cwd, env, config, &hostname) {
+            if let Some(repo) = resolved.as_ref().filter(|repo| repo.host != candidate.host) {
+                notes.push(format!(
+                    "{} was left out too, because gh, and so the wrapper, acts on {}/{}/{} here",
+                    candidate.host, repo.host, repo.owner, repo.name
+                ));
+            }
+            notes.push(format!(
+                "to allowlist it for other checkouts, run gh-forgejo-shim config add-host {}",
+                setup::shell_quote(&entry)
+            ));
+        } else {
+            // The first remote as git spells it, which gh may not: an SSH alias, `www.`, or a
+            // path gh can't read. A command naming it could name a host gh never uses.
+            notes.push(format!(
+                "{} isn't a host gh reads from this checkout's remotes (an SSH alias, `www.` or a \
+                 path gh can't parse, say), so bootstrap leaves it out; to allowlist a Forgejo \
+                 server, run gh-forgejo-shim config add-host HOST with the host gh uses",
+                candidate.host
+            ));
+        }
+    }
+    Some(leave(notes))
+}
+
+/// Whether gh reads a remote on `hostname` in this checkout, as it spells remotes: `GH_HOST`
+/// makes gh keep only the remotes on that host, so a hit means gh sees a remote spelled so.
+fn gh_reads_a_remote_on(cwd: Option<&Path>, env: &EnvMap, config: &Config, hostname: &str) -> bool {
+    // GH_REPO would win over the remotes, so it goes.
+    let mut env = env.clone();
+    env.remove("GH_REPO");
+    env.insert("GH_HOST".to_string(), hostname.to_string());
+    doctor::current_repo(cwd, &env, config)
+        .is_some_and(|found| repo::gh_hostname(&found.repo.host) == hostname)
+}
+
+/// What bootstrap says about `host` and the allowlist when it adds nothing: an entry for that
+/// hostname may already be there, from the config file or `FJ_SHIM_HOSTS`.
+fn allowlist_clause(config: &Config, host: &str) -> String {
+    let hostname = repo::gh_hostname(host);
+    if config
+        .hosts
+        .iter()
+        .any(|listed| repo::gh_hostname(listed) == hostname)
+    {
+        format!("{host} is already in the Forgejo allowlist, and bootstrap leaves it as it is")
+    } else {
+        format!("leaving {host} out of the Forgejo allowlist")
+    }
 }
 
 pub fn format_bootstrap(result: &BootstrapResult) -> String {
@@ -604,14 +917,19 @@ fn auth_check(
     }
     let login_command = repo.map_or_else(
         || "gh-forgejo-shim auth login HOST".to_string(),
-        |repo| format!("gh-forgejo-shim auth login {}", repo.host),
+        |repo| {
+            format!(
+                "gh-forgejo-shim auth login {}",
+                setup::shell_quote(&repo.host)
+            )
+        },
     );
     let import_command = repo.map_or_else(
         || "gh-forgejo-shim auth import --from fj --hostname HOST".to_string(),
         |repo| {
             format!(
                 "gh-forgejo-shim auth import --from fj --hostname {}",
-                repo.host
+                setup::shell_quote(&repo.host)
             )
         },
     );

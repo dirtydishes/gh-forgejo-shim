@@ -108,6 +108,23 @@ pub(super) async fn viewer_can_write(
         .map_err(error)?;
     Ok(repository.permissions.is_some_and(|p| p.admin || p.push))
 }
+/// Whether the viewer may change something in the repository: its author, or a writer, and no one
+/// in an archived repository, where GitHub reports every write flag false and Forgejo's web UI
+/// refuses these writes. Forgejo v15's API guards only comment create and edit there.
+pub(super) async fn viewer_may_change(
+    ctx: &Context<'_>,
+    owner: &str,
+    repo: &str,
+    author: bool,
+) -> async_graphql::Result<bool> {
+    let repository = ctx
+        .data_unchecked::<Session>()
+        .repository(owner, repo)
+        .await
+        .map_err(error)?;
+    Ok(!repository.archived
+        && (author || repository.permissions.is_some_and(|p| p.admin || p.push)))
+}
 #[derive(Clone)]
 pub struct Organization {
     pub id: i64,
@@ -265,8 +282,12 @@ impl PullRequestReview {
             CommentAuthorAssociation::None
         }
     }
+    /// Forgejo sends every review's creation time as `submitted_at`, pending ones included; GitHub
+    /// gives a pending review none.
     async fn submitted_at(&self) -> Option<DateTime> {
-        self.source.submitted_at.clone().map(DateTime)
+        (self.source.state != "PENDING")
+            .then(|| self.source.submitted_at.clone().map(DateTime))
+            .flatten()
     }
     /// Forgejo's `submitted_at` is the review's creation time (`services/convert/pull_review.go:35`).
     async fn created_at(&self) -> DateTime {
@@ -282,11 +303,12 @@ impl PullRequestReview {
     /// `models/issues/review.go:1009-1021`); it falls back to the PR's page as Forgejo gives it, so
     /// every review URL shares Forgejo's root.
     async fn url(&self) -> Uri {
-        if self.source.html_url.is_empty() {
-            Uri(self.source.pull_request_url.clone())
+        let url = if self.source.html_url.is_empty() {
+            &self.source.pull_request_url
         } else {
-            Uri(self.source.html_url.clone())
-        }
+            &self.source.html_url
+        };
+        Uri(crate::map::pull_web_url(url))
     }
     async fn is_minimized(&self) -> bool {
         false
@@ -294,12 +316,12 @@ impl PullRequestReview {
     /// The body is a comment the poster or a repository writer may edit (`issue_comment.go:611`).
     async fn viewer_can_update(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
-        Ok(self
+        let author = self
             .source
             .user
             .as_ref()
-            .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer))
-            || viewer_can_write(ctx, &self.owner, &self.repo).await?)
+            .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer));
+        viewer_may_change(ctx, &self.owner, &self.repo, author).await
     }
     async fn body(&self) -> &str {
         &self.source.body
@@ -339,8 +361,8 @@ pub struct IssueComment {
 impl IssueComment {
     /// Forgejo lets the poster or a repository writer edit and delete a comment.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        Ok(self.source.user.login.eq_ignore_ascii_case(&self.viewer)
-            || viewer_can_write(ctx, &self.owner, &self.repo).await?)
+        let author = self.source.user.login.eq_ignore_ascii_case(&self.viewer);
+        viewer_may_change(ctx, &self.owner, &self.repo, author).await
     }
 }
 #[Object]

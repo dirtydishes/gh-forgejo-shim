@@ -11,13 +11,14 @@ use url::Url;
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::external::find_program;
+use crate::invocation::Invocation;
 use crate::launcher::credentials::git_config_parameters;
 use crate::launcher::env::Edit;
 use crate::launcher::gateway::GatewayHost;
 use crate::launcher::ghconfig::{self, ServedHost, ServedToken};
 use crate::launcher::run::{self, Edits, Files, Launch};
 use crate::launcher::rundir;
-use crate::repo;
+use crate::repo::{self, gh_hostname};
 
 /// The token variables gh would prefer over `hosts.yml` (spec fact 3). A launched gh never sees
 /// them: `GH_ENTERPRISE_TOKEN` would otherwise reach the forge.
@@ -33,10 +34,19 @@ const TOKEN_VARIABLES: [&str; 4] = [
 /// config bridge (L4) gives the gateway those settings.
 pub fn launch(
     host: &str,
+    routed: &Invocation,
+    reason: &str,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
 ) -> Option<i32> {
+    let Plan {
+        real_token,
+        expect_real,
+        all_hosts,
+        look_up_logins,
+        mut extra_edits,
+    } = Plan::for_invocation(routed, host, env);
     let env_map: EnvMap = env
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -51,38 +61,6 @@ pub fn launch(
             Ok(config) => config,
             Err(error) => return Some(fail(1, &error.to_string())),
         };
-    let forgejo_url = upstream_url(host, &config, env)?;
-
-    let Some(gh) = find_program("gh", real_gh, env) else {
-        // Discovery skips what it can't run; a configured path that exists anyway, a directory
-        // or a file without execute bits, is 126, not 127 (§6). `~` expands as discovery does.
-        if let Some(path) = real_gh.map(|path| expand_home(path, env)) {
-            if path.exists() && !is_executable_file(&path) {
-                return Some(fail(
-                    126,
-                    &format!("the real gh at {} is not executable", path.display()),
-                ));
-            }
-        }
-        return Some(fail(
-            127,
-            "could not find the real gh executable; set FJ_SHIM_REAL_GH",
-        ));
-    };
-    let Some(token) =
-        auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()))
-    else {
-        return Some(fail(
-            4,
-            &format!("no token for {host}; run: gfj auth login {host}"),
-        ));
-    };
-
-    let (parent, source) = rundir::parent(env);
-    if let Err(message) = rundir::check_parent(&parent, source) {
-        return Some(fail(1, &message));
-    }
-
     // The user's gh files, read once and never written (§3).
     let user_dir = repo::user_gh_config_dir(env);
     let read = |name: &str| -> Result<Option<String>, String> {
@@ -122,26 +100,141 @@ pub fn launch(
         Err(message) => return Some(fail(1, &message)),
     };
 
+    // A forge the user's own gh is logged in to serves gh itself (server mode): plain gh (§2).
+    if logged_in(&user_hosts, host) {
+        let gh = match find_real_gh(real_gh, env) {
+            Ok(gh) => gh,
+            Err(code) => return Some(code),
+        };
+        return Some(step_aside(
+            &gh,
+            args,
+            extra_edits,
+            crate::trace::tracing_enabled(env),
+        ));
+    }
+    // A host-less `auth status` leaves such a routed host out of S and serves the rest (§3).
+    let forgejo_url = upstream_url(host, &config, env);
+    if forgejo_url.is_none() && !all_hosts {
+        return None;
+    }
+    let token = auth::resolve_token(host, &config, &env_map, home.as_deref(), Some(platform()));
+    // `auth status` keeps its current answer for a host with no token (§2), the built-in path's
+    // "Not logged in", unless it's host-less and other hosts have tokens: S is every allowlist
+    // host that has one (§3).
+    if token.is_none() && routed.command == "auth status" && !all_hosts {
+        return None;
+    }
+
+    let gh = match find_real_gh(real_gh, env) {
+        Ok(gh) => gh,
+        Err(code) => return Some(code),
+    };
+    // Plain gh's default host is this forge, but its entry holds no login gh can use (§3).
+    if reason.ends_with("user's gh hosts") {
+        let key = user_hosts
+            .keys()
+            .filter_map(serde_yaml::Value::as_str)
+            .next()
+            .unwrap_or(host);
+        let file = user_dir
+            .as_ref()
+            .map(|dir| dir.join("hosts.yml"))
+            .unwrap_or_default();
+        return Some(fail(
+            1,
+            &format!(
+                "{} makes {key} gh's default host, but gh has no login it can use there; delete the {key} entry from that file to use gh-forgejo-shim there",
+                file.display()
+            ),
+        ));
+    }
+
+    if token.is_none() && routed.command != "auth status" {
+        return Some(fail(
+            4,
+            &format!("no token for {host}; run: gfj auth login {host}"),
+        ));
+    }
+
+    let (parent, source) = rundir::parent(env);
+    if let Err(message) = rundir::check_parent(&parent, source) {
+        return Some(fail(1, &message));
+    }
+
     let per_call = match rundir::random_hex(32) {
         Ok(token) => token,
         Err(error) => return Some(fail(1, &format!("could not make a call token: {error}"))),
     };
-    let served = vec![ServedHost {
-        entry: config::normalize_host(host),
-        real_token: token.token.clone(),
-        login: None,
-    }];
+    // S, the served hosts (§3): the routed host, or for a host-less `auth status` every
+    // allowlist entry with a token, except entries sharing a hostname, forges the user's gh is
+    // logged in to, and settings the gateway can't honour yet.
+    let routed_entry = config::normalize_host(host);
+    let mut served_hosts = Vec::new();
+    if let (Some(token), Some(url)) = (&token, forgejo_url) {
+        served_hosts.push((routed_entry.clone(), token.token.clone(), url));
+    }
+    if all_hosts {
+        for entry in config
+            .hosts
+            .iter()
+            .map(|entry| config::normalize_host(entry))
+        {
+            let shared = config
+                .hosts
+                .iter()
+                .filter(|other| gh_hostname(other) == gh_hostname(&entry))
+                .count()
+                > 1;
+            if entry == routed_entry || shared || logged_in(&user_hosts, &entry) {
+                continue;
+            }
+            let (Some(url), Some(found)) = (
+                upstream_url(&entry, &config, env),
+                auth::resolve_token(&entry, &config, &env_map, home.as_deref(), Some(platform())),
+            ) else {
+                continue;
+            };
+            served_hosts.push((entry, found.token, url));
+        }
+    }
+    // A host-less `auth status` whose hosts all lack tokens keeps the built-in answer.
+    if served_hosts.is_empty() {
+        return None;
+    }
+    let served: Vec<ServedHost> = served_hosts
+        .iter()
+        .map(|(entry, real, _)| ServedHost {
+            entry: entry.clone(),
+            real_token: real.clone(),
+            login: None,
+        })
+        .collect();
+    let gateway: Vec<GatewayHost> = served_hosts
+        .into_iter()
+        .map(|(entry, real, forgejo_url)| GatewayHost {
+            entry,
+            forgejo_url,
+            // `auth status --show-token` presents the real token, which it prints (§3, §5).
+            expected: if expect_real {
+                real.clone()
+            } else {
+                per_call.clone()
+            },
+            upstream: real,
+            answer_portless: true,
+            wip_prefixes: WipPrefixes::default(),
+        })
+        .collect();
     let allowlist = config.hosts.clone();
     let shim = std::env::current_exe().unwrap_or_default();
-
-    let gateway = vec![GatewayHost {
-        entry: config::normalize_host(host),
-        forgejo_url,
-        expected: per_call.clone(),
-        upstream: token.token,
-        answer_portless: true,
-        wip_prefixes: WipPrefixes::default(),
-    }];
+    // Every `--web` open and `gh browse` goes through the browser helper (§9).
+    let served_entries: Vec<String> = served.iter().map(|host| host.entry.clone()).collect();
+    extra_edits.push((
+        "GH_BROWSER",
+        Edit::Set(crate::launcher::browser::gh_browser(&shim, &served_entries)),
+    ));
+    let credentials = ghconfig::credentials(&served);
 
     Some(run::run(Launch {
         gh,
@@ -152,14 +245,8 @@ pub fn launch(
         files: Box::new(move |run_dir| {
             let socket = run_dir.join("s");
             Files {
-                hosts_yml: ghconfig::hosts_yml(
-                    &user_hosts,
-                    &allowlist,
-                    &served,
-                    ServedToken::PerCall(&per_call),
-                ),
                 // Git's credentials: the launcher's own helper answers every git in the call (§3).
-                credentials: ghconfig::credentials(&served),
+                credentials,
                 gh_script: ghconfig::gh_script(run_dir, &shim),
                 // Checked above, so this only fails on a non-UTF-8 socket path, which §4's
                 // path check rules out.
@@ -167,8 +254,53 @@ pub fn launch(
                     .unwrap_or_default(),
             }
         }),
-        edits: Box::new(launched_edits),
+        hosts_yml: Box::new(move |logins| {
+            let served: Vec<ServedHost> = served
+                .into_iter()
+                .zip(logins)
+                .map(|(host, login)| ServedHost {
+                    login: login.clone(),
+                    ..host
+                })
+                .collect();
+            ghconfig::hosts_yml(
+                &user_hosts,
+                &allowlist,
+                &served,
+                if real_token {
+                    ServedToken::Real
+                } else {
+                    ServedToken::PerCall(&per_call)
+                },
+            )
+        }),
+        look_up_logins,
+        edits: Box::new(move |run_dir| {
+            let mut edits = launched_edits(run_dir);
+            edits.extend(extra_edits);
+            edits
+        }),
     }))
+}
+
+/// Real gh, or §6's exit code: 126 for a configured path that exists but can't run (`~` expanded
+/// as discovery does), 127 when there is none.
+fn find_real_gh(real_gh: Option<&Path>, env: &HashMap<String, String>) -> Result<PathBuf, i32> {
+    if let Some(gh) = find_program("gh", real_gh, env) {
+        return Ok(gh);
+    }
+    if let Some(path) = real_gh.map(|path| expand_home(path, env)) {
+        if path.exists() && !is_executable_file(&path) {
+            return Err(fail(
+                126,
+                &format!("the real gh at {} is not executable", path.display()),
+            ));
+        }
+    }
+    Err(fail(
+        127,
+        "could not find the real gh executable; set FJ_SHIM_REAL_GH",
+    ))
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -207,6 +339,98 @@ fn upstream_url(host: &str, config: &Config, env: &HashMap<String, String>) -> O
     let url = Url::parse(&format!("{}/", base.trim_end_matches('/'))).ok()?;
     // fga-core joins absolute `/api/v1/...` paths, which would drop a path prefix.
     (url.path() == "/").then_some(url)
+}
+
+/// Whether the user's own gh is logged in to `host`: an `oauth_token` or a `user` under the key
+/// gh's API client looks up, the hostname without its port, spelled exactly (§2). A login stored
+/// only under `host:port` doesn't count, since plain gh's requests would never find it.
+fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
+    let has = |entry: &serde_yaml::Value, field: &str| {
+        entry
+            .get(field)
+            .and_then(serde_yaml::Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    };
+    user_hosts
+        .get(gh_hostname(host).as_str())
+        .is_some_and(|entry| has(entry, "oauth_token") || has(entry, "user"))
+}
+
+/// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but for a
+/// host-less `api` or `auth token` the forge as `GH_HOST`, without the token variables, which
+/// would otherwise beat the user's login there: the enterprise ones for most forges, `GH_TOKEN`
+/// and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). Recorded for nested calls
+/// (§7), with no `FJ_SHIM_LAUNCHER`. As on the delegate path, gh replaces this process, unless
+/// tracing is on, when the wrapper waits so it can write the trace record.
+fn step_aside(gh: &Path, args: &[OsString], mut edits: Edits, trace_enabled: bool) -> i32 {
+    if edits.iter().any(|(name, _)| *name == "GH_HOST") {
+        edits.extend(TOKEN_VARIABLES.iter().map(|name| (*name, Edit::Remove)));
+    }
+    // Still single-threaded: nothing in the wrapper has started a thread yet.
+    crate::launcher::env::apply(&edits);
+    let mut command = std::process::Command::new(gh);
+    command.args(args);
+    let error = if trace_enabled {
+        match command.status() {
+            Ok(status) => return crate::external::inherited_exit_code(status),
+            Err(error) => error,
+        }
+    } else {
+        use std::os::unix::process::CommandExt;
+        command.exec()
+    };
+    let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
+        126
+    } else {
+        127
+    };
+    fail(code, &format!("could not run {}: {error}", gh.display()))
+}
+
+/// What one invocation needs beyond every launch's settings.
+struct Plan {
+    /// `gh auth token` and `gh auth status --show-token` print the token from `hosts.yml`, so
+    /// it holds the real one (§3).
+    real_token: bool,
+    /// `--show-token`, which also calls the API: the gateway expects the real token (§5).
+    expect_real: bool,
+    /// A host-less `auth status`: every eligible allowlist host is served (§3).
+    all_hosts: bool,
+    /// `auth status` shows each account, from `user` in `hosts.yml`, and `auth token --user`
+    /// finds its token under `users.<login>` (§3).
+    look_up_logins: bool,
+    extra_edits: Edits,
+}
+
+impl Plan {
+    fn for_invocation(routed: &Invocation, host: &str, env: &HashMap<String, String>) -> Self {
+        let command = routed.command.as_str();
+        // gh's auth commands read an empty `--hostname` as none (gh `auth/token/token.go:71`,
+        // `auth/status/status.go:291`); `gh api` rejects it before any request.
+        let hostname = routed.flag("hostname").filter(|value| !value.is_empty());
+        let mut extra_edits = Edits::new();
+        // Decision 4 (§2): host-less `gh api` and `gh auth token` use gh's default host, so the
+        // forge becomes it. Portless, because gh drops the port from remotes before comparing
+        // them with GH_HOST. A user GH_HOST with that value already stays as it is.
+        if matches!(command, "api" | "auth token") && hostname.is_none() {
+            let hostname = gh_hostname(host);
+            if env.get("GH_HOST") != Some(&hostname) {
+                extra_edits.push(("GH_HOST", Edit::Set(hostname.into())));
+            }
+        }
+        let status = command == "auth status";
+        // pflag's ParseBool, last occurrence, after alias expansion (§3).
+        let show_token = status && routed.flag("show-token") == Some("true");
+        Self {
+            real_token: command == "auth token" || show_token,
+            expect_real: show_token,
+            all_hosts: status && hostname.is_none(),
+            look_up_logins: status
+                || (command == "auth token"
+                    && routed.flag("user").is_some_and(|user| !user.is_empty())),
+            extra_edits,
+        }
+    }
 }
 
 /// What a launch changes in gh's environment (§7). Everything else passes through untouched.
@@ -285,6 +509,96 @@ mod tests {
         let plain = config("hosts = [\"forge.test\"]\n");
         let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), "/etc/ca.pem".to_string())]);
         assert_eq!(upstream_url("forge.test", &plain, &env), None);
+    }
+
+    fn plan(args: &[&str], env: &[(&str, &str)]) -> Plan {
+        let argv: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        let env: HashMap<String, String> = env
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        Plan::for_invocation(&Invocation::parse(&argv), "forge.test:3443", &env)
+    }
+
+    #[test]
+    fn host_less_api_and_auth_token_get_the_forges_portless_gh_host() {
+        let gh_host = Edit::Set("forge.test".into());
+        for args in [&["api", "user"][..], &["auth", "token"][..]] {
+            assert_eq!(
+                plan(args, &[]).extra_edits,
+                vec![("GH_HOST", gh_host.clone())],
+                "{args:?}"
+            );
+            assert!(
+                plan(args, &[("GH_HOST", "forge.test")])
+                    .extra_edits
+                    .is_empty(),
+                "kept"
+            );
+            assert_eq!(
+                plan(args, &[("GH_HOST", "other.test")]).extra_edits,
+                vec![("GH_HOST", gh_host.clone())]
+            );
+        }
+        assert!(plan(&["api", "user", "--hostname", "forge.test"], &[])
+            .extra_edits
+            .is_empty());
+        assert!(plan(&["auth", "token", "-h", "forge.test"], &[])
+            .extra_edits
+            .is_empty());
+        assert_eq!(
+            plan(&["auth", "token", "--hostname="], &[]).extra_edits,
+            vec![("GH_HOST", gh_host.clone())],
+            "an empty hostname is none"
+        );
+        assert!(plan(&["pr", "view", "1"], &[]).extra_edits.is_empty());
+    }
+
+    #[test]
+    fn only_auth_token_and_show_token_put_the_real_token_in_hosts_yml() {
+        assert!(plan(&["auth", "token"], &[]).real_token);
+        assert!(!plan(&["api", "user"], &[]).real_token);
+        assert!(!plan(&["pr", "view", "1"], &[]).real_token);
+        assert!(!plan(&["auth", "status"], &[]).real_token);
+    }
+
+    #[test]
+    fn show_token_is_read_as_pflag_reads_it() {
+        for shown in [
+            &["auth", "status", "-t"][..],
+            &["auth", "status", "-at"][..],
+            &["auth", "status", "-ta"][..],
+            &["auth", "status", "--show-token"][..],
+            &["auth", "status", "--show-token=1"][..],
+            &["auth", "status", "--show-token=t"][..],
+        ] {
+            let plan = plan(shown, &[]);
+            assert!(plan.real_token && plan.expect_real, "{shown:?}");
+        }
+        for hidden in [
+            &["auth", "status"][..],
+            &["auth", "status", "--show-token=false"][..],
+            &["auth", "status", "--show-token=0"][..],
+            &["auth", "status", "-t", "--show-token=false"][..],
+        ] {
+            let plan = plan(hidden, &[]);
+            assert!(!plan.real_token && !plan.expect_real, "{hidden:?}");
+        }
+    }
+
+    #[test]
+    fn host_less_auth_status_serves_every_host_and_looks_up_logins() {
+        let host_less = plan(&["auth", "status"], &[]);
+        assert!(host_less.all_hosts && host_less.look_up_logins);
+        let one = plan(&["auth", "status", "--hostname", "forge.test"], &[]);
+        assert!(!one.all_hosts && one.look_up_logins);
+        assert!(
+            plan(&["auth", "status", "--hostname="], &[]).all_hosts,
+            "an empty hostname is none"
+        );
+        assert!(!plan(&["pr", "view", "1"], &[]).look_up_logins);
+        assert!(plan(&["auth", "token", "-u", "kell"], &[]).look_up_logins);
+        assert!(!plan(&["auth", "token"], &[]).look_up_logins);
     }
 
     #[test]

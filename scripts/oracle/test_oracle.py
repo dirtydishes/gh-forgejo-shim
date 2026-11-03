@@ -22,6 +22,9 @@ spec.loader.exec_module(compare_writes)
 spec = importlib.util.spec_from_file_location('compare_viewers', Path(__file__).with_name('compare-viewers.py'))
 compare_viewers = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compare_viewers)
+spec = importlib.util.spec_from_file_location('twin_seed', Path(__file__).with_name('twin-seed.py'))
+twin_seed = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(twin_seed)
 
 
 class OracleTests(unittest.TestCase):
@@ -247,6 +250,140 @@ class OracleTests(unittest.TestCase):
             (reader / 'probe-2.stdout').write_text('{"number": 1, "mergeStateStatus": "BLOCKED"}\n')
             (reader / 'probe-1.stdout').write_text('{"number": 2, "mergeStateStatus": "UNKNOWN"}\n')
             self.assertEqual(check(), 1, 'only the merge state may differ')
+    def test_twin_seed_refuses_writes_outside_its_fence_before_the_network(self):
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', 'disposable')
+        repo = 'repos/' + twin_seed.REPO
+        # Twin.api sends through OPENER, so that is what must never be called.
+        with patch.object(twin_seed.OPENER, 'open') as send:
+            for method, route, body, sudo in [
+                ('POST', 'repos/dirtydishes/other/pulls', {}, None),
+                ('DELETE', repo + '/issues/1', None, None),
+                ('PATCH', repo + '/pulls/1', {'state': 'open'}, None),
+                ('PATCH', repo + '/pulls/1', {'title': 'x'}, None),
+                ('POST', repo + '/pulls/14/reviews', {}, 'dirtydishes'),
+                ('POST', repo + '/pulls/14/reviews', {}, None),
+                ('POST', 'admin/users', {'username': 'someone-else'}, None),
+                ('POST', 'admin/users', {'username': twin_seed.REVIEWER}, twin_seed.REVIEWER),
+                ('GET', 'users/someone-else', None, None),
+                ('GET', repo, None, twin_seed.REVIEWER),
+                ('POST', repo + '/pulls/6/merge', {'Do': 'merge', 'delete_branch_after_merge': True}, None),
+                ('POST', repo + '/pulls/6/merge', {'Do': 'squash', 'delete_branch_after_merge': False}, None),
+                ('POST', repo + '/pulls', {'base': 'main', 'head': 'not-planned', 'title': 't', 'body': ''}, None),
+                ('POST', repo + '/pulls', {'base': 'other', 'head': 's/pass', 'title': 't', 'body': ''}, None),
+                ('POST', repo + '/issues', {'title': 't', 'body': '', 'assignees': ['x']}, None),
+            ]:
+                with self.assertRaises(SystemExit, msg=f'{method} {route} {body} {sudo}'):
+                    twin.api(method, route, body, sudo=sudo)
+            send.assert_not_called()
+        # The plan's own writes pass the fence.
+        for method, route, body, sudo in [
+            ('POST', repo + '/pulls', {'base': 'main', 'head': 's/pass', 'title': 't', 'body': ''}, None),
+            ('POST', repo + '/issues', {'title': 't', 'body': ''}, None),
+            ('POST', repo + '/pulls/6/merge', {'Do': 'merge', 'delete_branch_after_merge': False}, None),
+            ('PATCH', repo + '/issues/12', {'state': 'closed'}, None),
+            ('POST', repo + '/pulls/14/reviews', {'event': 'APPROVED'}, twin_seed.REVIEWER),
+            ('POST', 'admin/users', {'username': twin_seed.REVIEWER}, None),
+        ]:
+            self.assertTrue(twin.allowed(method, route, body, sudo), f'{method} {route}')
+
+    def test_twin_seed_errors_never_carry_the_token(self):
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', 'sekret-token')
+        echo = io.BytesIO(b'{"message":"bad","received":"Authorization: token sekret-token"}')
+        failure = twin_seed.urllib.error.HTTPError('u', 500, 'Internal sekret-token', {}, echo)
+        with patch.object(twin_seed.OPENER, 'open', side_effect=failure):
+            with self.assertRaises(twin_seed.TwinError) as raised:
+                twin.api('GET', 'repos/' + twin_seed.REPO)
+        self.assertEqual(raised.exception.code, 500)
+        self.assertNotIn('sekret-token', str(raised.exception))
+        # The original HTTPError, which holds the unredacted message, never reaches a traceback.
+        self.assertTrue(raised.exception.__suppress_context__)
+        # A malformed status line quoting the token is redacted too.
+        bad = twin_seed.http.client.BadStatusLine('HTTP/1.1 sekret-token')
+        with patch.object(twin_seed.OPENER, 'open', side_effect=bad):
+            with self.assertRaises(twin_seed.TwinError) as raised:
+                twin.api('GET', 'repos/' + twin_seed.REPO)
+        self.assertNotIn('sekret-token', str(raised.exception))
+        self.assertTrue(raised.exception.__suppress_context__)
+
+    def test_twin_seed_opens_a_pr_only_on_a_branch_holding_the_plan(self):
+        """An existing branch is the plan's only if its tree is the plan's commits on its merge-base:
+        the plan's messages on other contents are not enough."""
+        item = next(i for i in twin_seed.PLAN if i['number'] == 6)
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            twin = twin_seed.Twin('http://127.0.0.1:9', 'disposable')
+            run = lambda *a, cwd: twin.git(*a, cwd=cwd)
+            run('init', '-q', '--bare', '-b', 'main', str(temp / 'origin.git'), cwd=temp)
+            run('clone', '-q', str(temp / 'origin.git'), str(temp / 'seed'), cwd=temp)
+            seed = temp / 'seed'
+            for key, value in (('user.name', 't'), ('user.email', 't@example.invalid')):
+                run('config', key, value, cwd=seed)
+            (seed / 'README.md').write_text('main\n')
+            run('add', 'README.md', cwd=seed); run('commit', '-q', '-m', 'main', cwd=seed)
+            run('push', '-q', 'origin', 'main', cwd=seed)
+            # The plan's branch, then main moving on: still the plan's.
+            twin_seed.push_branch(twin, seed, item)
+            run('switch', '-q', 'main', cwd=seed)
+            (seed / 'later.txt').write_text('later\n')
+            run('add', 'later.txt', cwd=seed); run('commit', '-q', '-m', 'later', cwd=seed)
+            run('push', '-q', 'origin', 'main', cwd=seed)
+            run('fetch', '-q', 'origin', cwd=seed)
+            self.assertTrue(twin_seed.owned(twin, seed, item))
+            # The plan's message on other contents.
+            run('switch', '-q', item['branch'], cwd=seed)
+            (seed / 'notes' / 'merged.txt').write_text('something else\n')
+            run('commit', '-q', '-a', '--amend', '--no-edit', cwd=seed)
+            run('push', '-q', '-f', 'origin', item['branch'], cwd=seed)
+            self.assertFalse(twin_seed.owned(twin, seed, item))
+
+    def test_twin_seed_resumes_only_onto_its_own_plan(self):
+        repo = twin_seed.REPO
+        planned = {item['number']: (item['title'], item['branch'], repo, 'main') if item['kind'] == 'pr'
+                   else (item['title'], None, None, None) for item in twin_seed.PLAN}
+        self.assertEqual(sorted(planned), list(range(1, 16)))
+        self.assertEqual(planned[4], ('WIP: scenario: draft', 's/draft', repo, 'main'))
+        twin_seed.check_resumable({})
+        twin_seed.check_resumable({n: planned[n] for n in (1, 2, 3)})
+        title = planned[6][0]
+        for found in ({1: ('someone else', 's/pass', repo, 'main')}, {1: (planned[1][0], 'other-branch', repo, 'main')},
+                      # The plan's title and branch, but from a fork, or into another base.
+                      {n: planned[n] for n in range(1, 6)} | {6: (title, 's/merged', 'outsider/fork', 'main')},
+                      {n: planned[n] for n in range(1, 6)} | {6: (title, 's/merged', repo, 'other-base')},
+                      {16: ('beyond the plan', None, None, None)}, {1: planned[1], 3: planned[3]}):
+            with self.assertRaises(SystemExit, msg=str(found)): twin_seed.check_resumable(found)
+
+    def test_twin_seed_never_follows_a_redirect_with_its_token(self):
+        request = twin_seed.urllib.request.Request('https://git.dirtydishes.dev/api/v1/user',
+                                                   headers={'Authorization': 'token secret'})
+        with self.assertRaises(twin_seed.urllib.error.HTTPError):
+            twin_seed.NoRedirects().redirect_request(request, None, 302, 'Found', {}, 'https://elsewhere.invalid/')
+        handlers = [type(h) for h in twin_seed.OPENER.handlers]
+        self.assertIn(twin_seed.NoRedirects, handlers)
+        self.assertNotIn(twin_seed.urllib.request.HTTPRedirectHandler, handlers)
+
+    def test_twin_seed_rehearses_only_on_loopback(self):
+        with patch.dict(twin_seed.os.environ, {'TWIN_TOKEN': 'disposable'}), \
+                patch.object(twin_seed.subprocess, 'run', side_effect=AssertionError('no git')), \
+                patch.object(twin_seed.urllib.request, 'urlopen', side_effect=AssertionError('no network')):
+            with self.assertRaisesRegex(SystemExit, 'loopback'):
+                twin_seed.main(['--rehearse', 'https://git.dirtydishes.dev'])
+
+    def test_twin_seed_keeps_the_token_out_of_argv_errors_and_user_git_config(self):
+        token = 'SECRET-TOKEN-123'
+        twin = twin_seed.Twin('https://git.dirtydishes.dev', token)
+        failure = subprocess.CompletedProcess([], 128, '', f'fatal: rejected for {token}\n')
+        with patch.object(twin_seed.subprocess, 'run', return_value=failure) as run:
+            with self.assertRaises(SystemExit) as raised:
+                twin.git('push', '-q', 'origin', 'refs/heads/s/pass:refs/heads/s/pass', cwd='.')
+        argv, env = run.call_args.args[0], run.call_args.kwargs['env']
+        self.assertFalse(any(token in arg or 'Authorization' in arg for arg in argv), argv)
+        self.assertNotIn(token, str(raised.exception))
+        self.assertIn('<token>', str(raised.exception))
+        self.assertEqual(env['GIT_CONFIG_GLOBAL'], twin_seed.os.devnull)
+        self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')
+        self.assertEqual(env['GIT_CONFIG_KEY_0'], 'http.extraHeader')
+        self.assertEqual((env['GIT_CONFIG_COUNT'], env['GIT_CONFIG_KEY_1'], env['GIT_CONFIG_VALUE_1']),
+                         ('2', 'http.followRedirects', 'false'))
 
 
 if __name__ == '__main__':

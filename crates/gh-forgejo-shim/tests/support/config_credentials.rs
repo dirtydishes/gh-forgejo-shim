@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::support::{CliFixture, TestResult};
 
 #[test]
-fn multiline_and_table_hosts_route_pr_list_to_configured_http_api() -> TestResult {
+fn multiline_and_table_hosts_route_to_configured_http_api() -> TestResult {
     for hosts in ["hosts = [\n  \"git.example.com\", # comment\n]\n", ""] {
         let fixture = CliFixture::new()?;
         fixture.init_git_repo()?;
@@ -51,7 +51,8 @@ gh = '{}'
             .env_remove("FJ_SHIM_HOSTS")
             .env_remove("FJ_SHIM_REAL_GH")
             .env("HOST_TOKEN", "host-secret")
-            .args(["gh", "pr", "list", "--json", "number"])
+            // A command the built-in path still serves: `pr list` now launches real gh (L3).
+            .args(["gh", "issue", "list", "--json", "number"])
             .output()?;
 
         assert!(output.status.success(), "{output:?}");
@@ -59,7 +60,7 @@ gh = '{}'
         assert_eq!(String::from_utf8(output.stdout)?.trim(), "[]");
         let request = server.join().expect("HTTP server")?;
         assert!(
-            request.starts_with("GET /api/v1/repos/owner/repo/pulls?state=open HTTP/1.1\r\n"),
+            request.starts_with("GET /api/v1/repos/owner/repo/issues?"),
             "{request}"
         );
         assert!(
@@ -391,7 +392,8 @@ fn serve_json_once(body: &'static str) -> io::Result<(String, JoinHandle<io::Res
     let base_url = format!("http://{}", listener.local_addr()?);
     listener.set_nonblocking(true)?;
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Generous: under a loaded parallel suite the shim can take seconds to start.
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut stream = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -403,7 +405,11 @@ fn serve_json_once(body: &'static str) -> io::Result<(String, JoinHandle<io::Res
                 Err(error) => return Err(error),
             }
         };
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        // On macOS an accepted socket keeps the listener's non-blocking mode, so a read before
+        // the request arrives failed at once and dropped the connection: "error sending
+        // request" in the shim (855). Blocking with a timeout waits for it instead.
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         let mut reader = BufReader::new(&mut stream);
         let mut request = String::new();
         loop {
