@@ -537,13 +537,14 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   `ca_file`, then in `FJ_SHIM_CA_FILE`; they join the built-in trust store, and verification stays
   on. The launcher checks both as the built-in client does: a CA file it couldn't read, one with no
   PEM certificate, or one the HTTP client refuses, leaves the call to the built-in path, which
-  reports it. `wip_prefixes` is the host's `[host.<entry>].wip_prefixes` from the shim config, or
-  the gateway's default (`WIP:`, `[WIP]`) when unset. Forgejo decides what is a draft, from its own
-  WIP setting, which the list should match. The gateway strips these prefixes from a draft's title,
-  and adds the first one when it makes a draft or turns a pull request into one, so order matters.
-  `public_url` is `https://<entry>`, the allowlist entry with its port if it has one, so the
-  gateway's PR, repo and check links point at the forge's web UI. Per D2, PR links end in
-  `/pull/N`.
+  reports it when the command calls the forge; the built-in `auth status` and `auth token` don't
+  read CA settings, so they answer as before. `wip_prefixes` is the host's
+  `[host.<entry>].wip_prefixes` from the shim config, or the gateway's default (`WIP:`, `[WIP]`)
+  when unset. Forgejo decides what is a draft, from its own WIP setting, which the list should
+  match. The gateway strips these prefixes from a draft's title, and adds the first one when it
+  makes a draft or turns a pull request into one, so order matters. `public_url` is
+  `https://<entry>`, the allowlist entry with its port if it has one, so the gateway's PR, repo and
+  check links point at the forge's web UI. Per D2, PR links end in `/pull/N`.
 - `.expecting(per_call).upstream_token(real)` (gateway PR #66), for every served host. gh
   presents §3's per-call token; Forgejo receives only the real one. In a
   `gh auth status --show-token` call, where §3 puts the real token in `hosts.yml`, it is
