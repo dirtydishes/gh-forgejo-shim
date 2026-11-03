@@ -272,4 +272,19 @@ impl Session {
         }
         Ok(self.pull_request(owner, repo, number).await?)
     }
+
+    /// Delete a branch, for GitHub's `DELETE git/refs/heads/{branch}`. Forgejo checks the token's
+    /// write access and refuses the default and protected branches (`Forbidden`); a missing
+    /// branch is `NotFound`. A branch name with slashes goes out as several segments.
+    pub async fn delete_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<(), WriteError> {
+        let mut segments = vec!["repos", owner, repo, "branches"];
+        segments.extend(branch.split('/'));
+        written(self.write::<()>(Method::DELETE, &segments, None).await?)?;
+        Ok(())
+    }
 }

@@ -16,7 +16,7 @@ use axum::{
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use fga_core::{
     forgejo::{Error, Forgejo, Session},
@@ -166,6 +166,10 @@ pub fn app(state: AppState) -> Router {
             get(rest::pull),
         )
         .route("/api/v3/repos/{owner}/{repo}/readme", get(rest::readme))
+        .route(
+            "/api/v3/repos/{owner}/{repo}/git/refs/heads/{*branch}",
+            delete(rest::delete_branch),
+        )
         .route(
             "/api/v3/repos/{owner}/{repo}/commits/{sha}/pulls",
             get(rest::commit_pulls),
