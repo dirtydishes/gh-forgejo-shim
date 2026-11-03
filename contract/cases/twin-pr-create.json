@@ -1,0 +1,39 @@
+{
+  "id": "twin-pr-create",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-create"
+  },
+  "argv": [
+    "pr",
+    "create",
+    "--head",
+    "{branch}",
+    "--base",
+    "main",
+    "--title",
+    "twin: created",
+    "--body",
+    "made by gh"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/pull/(?P<pr>[0-9]+)\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "title": "twin: created",
+        "body": "made by gh",
+        "head.ref": "{branch}",
+        "base.ref": "main",
+        "state": "open",
+        "draft": false
+      }
+    }
+  ],
+  "normalize": []
+}

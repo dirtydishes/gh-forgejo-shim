@@ -32,10 +32,6 @@ fn forgejo_errors_and_unsupported_commands_never_delegate_or_need_auth() -> Test
         ),
         (vec!["pr", "merge", "1"], "\"gh pr merge\" is not supported"),
         (
-            vec!["pr", "edit", "1", "--title", "x"],
-            "\"gh pr edit\" is not supported",
-        ),
-        (
             vec!["api", "repos/owner/repo/pulls"],
             "\"gh api\" is not supported",
         ),

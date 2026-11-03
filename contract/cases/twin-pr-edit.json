@@ -1,0 +1,33 @@
+{
+  "id": "twin-pr-edit",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-edit",
+    "pr": true
+  },
+  "argv": [
+    "pr",
+    "edit",
+    "{pr}",
+    "--title",
+    "twin: edited",
+    "--body",
+    "edited by gh"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/pull/{pr}\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "title": "twin: edited",
+        "body": "edited by gh"
+      }
+    }
+  ],
+  "normalize": []
+}

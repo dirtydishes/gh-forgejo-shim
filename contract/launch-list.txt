@@ -7,3 +7,6 @@ pr list
 api
 auth token
 auth status
+pr create
+pr comment
+pr edit
