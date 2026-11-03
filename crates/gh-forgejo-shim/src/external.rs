@@ -348,22 +348,28 @@ static DISPATCHER_MARKER: [u8; 47] = *b"gh-forgejo-shim dispatcher, not real gh:
 
 /// Whether `path` may run this dispatcher: the running binary under any name (a symlink or a
 /// hardlink), or a binary within a tenth of its size that carries [`DISPATCHER_MARKER`], such as
-/// a copy of either entry point (`gfj` and `gh-forgejo-shim` differ in bytes). Some copies still
-/// pass, and the launcher's own recursion guards cover them: a build from before the marker, a
-/// marked build of another size (a debug `gfj` beside a release dispatcher), or a release whose
-/// size moved more than a tenth.
+/// a copy of either entry point (`gfj` and `gh-forgejo-shim` differ in bytes). When the running
+/// binary can't be found, any candidate that carries the marker or can't be read counts. Some
+/// copies still pass, and the launcher's own recursion guards cover them: a build from before the
+/// marker, a marked build of another size (a debug `gfj` beside a release dispatcher), or a
+/// release whose size moved more than a tenth.
 fn is_current_executable(path: &Path) -> bool {
-    // On Linux the running binary stays readable here even after its file is deleted.
-    let running = if cfg!(target_os = "linux") {
-        PathBuf::from("/proc/self/exe")
-    } else {
-        match std::env::current_exe() {
-            Ok(current) => current,
-            Err(_) => return false,
-        }
-    };
-    let (Ok(candidate_meta), Ok(running_meta)) = (path.metadata(), running.metadata()) else {
+    let Ok(candidate_meta) = path.metadata() else {
         return false;
+    };
+    // On Linux the running binary stays readable here even after its file is deleted. Elsewhere
+    // `current_exe` names the path it was started from, which is gone if the binary was moved
+    // or replaced since; then only the marker can tell.
+    let running = if cfg!(target_os = "linux") {
+        Ok(PathBuf::from("/proc/self/exe"))
+    } else {
+        std::env::current_exe()
+    };
+    let Some((running, running_meta)) = running
+        .ok()
+        .and_then(|running| running.metadata().ok().map(|meta| (running, meta)))
+    else {
+        return carries_marker(path).unwrap_or(true);
     };
     same_file(path, &candidate_meta, &running, &running_meta)
         || is_copy(path, &candidate_meta, &running_meta)
@@ -377,12 +383,36 @@ fn is_copy(candidate: &Path, candidate_meta: &fs::Metadata, running_meta: &fs::M
     if len.abs_diff(running_len) > running_len / 10 {
         return false;
     }
-    let Ok(bytes) = fs::read(candidate) else {
-        return true;
-    };
-    bytes
-        .windows(DISPATCHER_MARKER.len())
-        .any(|window| window == DISPATCHER_MARKER)
+    carries_marker(candidate).unwrap_or(true)
+}
+
+/// Whether the file at `path` carries [`DISPATCHER_MARKER`], read in pieces so a large binary
+/// such as real gh is never held whole; `None` when it can't be read to the end.
+fn carries_marker(path: &Path) -> Option<bool> {
+    use std::io::Read;
+
+    let marker = DISPATCHER_MARKER.as_slice();
+    let mut file = fs::File::open(path).ok()?;
+    let mut buffer = vec![0; 64 * 1024 + marker.len()];
+    // Bytes kept from the last piece, so a marker split across two reads is still seen.
+    let mut kept = 0;
+    loop {
+        let read = match file.read(&mut buffer[kept..]) {
+            Ok(0) => return Some(false),
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        let filled = kept + read;
+        if buffer[..filled]
+            .windows(marker.len())
+            .any(|window| window == marker)
+        {
+            return Some(true);
+        }
+        kept = filled.min(marker.len() - 1);
+        buffer.copy_within(filled - kept..filled, 0);
+    }
 }
 
 /// Whether both paths reach one file, through symlinks or as hardlinks.
