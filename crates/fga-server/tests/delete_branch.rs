@@ -127,13 +127,39 @@ fn message(body: &str) -> Value {
         .clone()
 }
 
+/// gh's request: `safeurl.JoinPath(..., "git", "refs", "heads/"+branch)` escapes `heads/{branch}`
+/// as one segment, as Go's `url.PathEscape` does (`api.BranchDeleteRemote` in gh 2.103.3).
+fn gh_ref(repo: &str, branch: &str) -> String {
+    let escaped: String = format!("heads/{branch}")
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => (byte as char).to_string(),
+            b'-' | b'.' | b'_' | b'~' | b'$' | b'&' | b'+' | b',' | b';' | b'=' | b':' | b'@' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect();
+    format!("/api/v3/repos/o/{repo}/git/refs/{escaped}")
+}
+
 #[tokio::test]
 async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
     let (addr, deleted) = gateway().await;
-    let heads = |path: &str| format!("/api/v3/repos/o/r/git/refs/heads/{path}");
-    // gh escapes the branch name as one path segment.
-    assert_eq!(delete_ref(addr, &heads("feature%2Fx")).await.0, 204);
+    let heads = |branch: &str| gh_ref("r", branch);
+    assert_eq!(
+        heads("feature/x"),
+        "/api/v3/repos/o/r/git/refs/heads%2Ffeature%2Fx"
+    );
+    assert_eq!(delete_ref(addr, &heads("feature/x")).await.0, 204);
     assert_eq!(delete_ref(addr, &heads("topic")).await.0, 204);
+    // The same ref with its slashes unescaped reaches the same branch.
+    assert_eq!(
+        delete_ref(addr, "/api/v3/repos/o/r/git/refs/heads/feature/x")
+            .await
+            .0,
+        204
+    );
     // A branch Forgejo says doesn't exist gets GitHub's answer, which gh reads as already
     // deleted; nothing is sent.
     let (code, body) = delete_ref(addr, &heads("gone")).await;
@@ -141,12 +167,14 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
         (code, message(&body)),
         (422, json!("Reference does not exist"))
     );
-    // A repository the token can't see proves nothing about the branch: a refusal, not "gone".
     // A 404 that doesn't name the branch proves nothing about it: a hidden repository, or a
     // readable one whose Code unit is off. A refusal, not "gone".
     for repo in ["hidden", "nocode"] {
-        let path = format!("/api/v3/repos/o/{repo}/git/refs/heads/topic");
-        assert_eq!(delete_ref(addr, &path).await.0, 403, "{repo}");
+        assert_eq!(
+            delete_ref(addr, &gh_ref(repo, "topic")).await.0,
+            403,
+            "{repo}"
+        );
     }
     // A refusal stays a refusal, so gh reports it instead of claiming the branch is gone.
     for branch in ["main", "kept"] {
@@ -157,21 +185,36 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
         assert_eq!(delete_ref(addr, &heads(branch)).await.0, 502, "{branch}");
     }
     // No branch has an empty part; Forgejo would merge the slashes and delete another branch.
-    for path in ["a//b", "feature%2Fx%2F", "feature/x/", "%2Ffeature%2Fx"] {
-        let (code, body) = delete_ref(addr, &heads(path)).await;
+    for branch in ["a//b", "feature/x/", "/feature/x"] {
+        let (code, body) = delete_ref(addr, &heads(branch)).await;
         assert_eq!(
             (code, message(&body)),
             (422, json!("Reference does not exist")),
-            "{path}"
+            "{branch}"
         );
     }
     // Valid git names the path guard won't send: refused as a failure, never "already deleted".
-    for path in ["a%252Fb", "%252e%252e"] {
-        assert_eq!(delete_ref(addr, &heads(path)).await.0, 400, "{path}");
+    for branch in ["a%2Fb", "%2e%2e"] {
+        assert_eq!(delete_ref(addr, &heads(branch)).await.0, 400, "{branch}");
     }
+    // Only branches: any other ref is not served, and nothing is sent.
+    assert_eq!(
+        delete_ref(addr, "/api/v3/repos/o/r/git/refs/tags%2Fv1")
+            .await
+            .0,
+        404
+    );
     assert_eq!(
         *deleted.lock().unwrap(),
-        ["feature/x", "topic", "main", "kept", "busy", "lazy"]
-            .map(|branch| format!("/api/v1/repos/o/r/branches/{branch}"))
+        [
+            "feature/x",
+            "topic",
+            "feature/x",
+            "main",
+            "kept",
+            "busy",
+            "lazy"
+        ]
+        .map(|branch| format!("/api/v1/repos/o/r/branches/{branch}"))
     );
 }

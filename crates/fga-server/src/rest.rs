@@ -66,9 +66,14 @@ pub async fn user(
 /// name the gateway won't send is a 400, and anything but Forgejo's 204 is a 502.
 pub async fn delete_branch(
     Extension(session): Extension<Session>,
-    Path((owner, repo, branch)): Path<(String, String, String)>,
+    Path((owner, repo, reference)): Path<(String, String, String)>,
 ) -> Response {
-    match session.delete_branch(&owner, &repo, &branch).await {
+    // gh escapes `heads/{branch}` as one segment (`safeurl.JoinPath` in `api.BranchDeleteRemote`),
+    // so the route takes the whole ref, decoded. Only branches are served.
+    let Some(branch) = reference.strip_prefix("heads/") else {
+        return rest_error(Error::NotFound);
+    };
+    match session.delete_branch(&owner, &repo, branch).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(WriteError::Transport(Error::NotFound)) => (
             StatusCode::UNPROCESSABLE_ENTITY,
