@@ -9,6 +9,7 @@ request, of its own, so cases don't depend on their order.
 
 import json
 import re
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -19,9 +20,17 @@ TWIN_COMMANDS = {
     ("pr", "create"): {"--head", "--base", "--title", "--body", "--draft"},
     ("pr", "comment"): {"--body"},
     ("pr", "edit"): {"--title", "--body"},
+    ("pr", "merge"): {"--merge", "--squash", "--rebase", "--auto", "--match-head-commit"},
+    ("pr", "ready"): {"--undo"},
+    ("pr", "close"): set(),
+    ("pr", "reopen"): set(),
 }
+BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo"}
 PLACEHOLDERS = {"{pr}", "{branch}"}
-STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments)?")
+STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?")
+SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status"}
+# The twin's own draft prefix (seed.py), which Forgejo reads to mark a pull request a draft.
+DRAFT_PREFIX = "scenario: draft"
 BRANCH = re.compile(r"twin/[a-z0-9-]+")
 
 
@@ -42,7 +51,7 @@ def validate(case):
         if arg.startswith("-"):
             if arg not in flags:
                 raise ValueError(f"twin flag is not allowed: {arg}")
-            if arg != "--draft":
+            if arg not in BOOL_FLAGS:
                 index += 1
                 if index == len(argv):
                     raise ValueError(f"missing value for {arg}")
@@ -50,6 +59,8 @@ def validate(case):
                     heads.append(argv[index])
                 if arg == "--base" and argv[index] != "main":
                     raise ValueError("--base must be main")
+                if arg == "--match-head-commit" and not re.fullmatch(r"\{head\}|[0-9a-f]{40}", argv[index]):
+                    raise ValueError("--match-head-commit takes {head} or a full sha")
         elif arg in PLACEHOLDERS:
             selectors.append(arg)
         else:
@@ -64,10 +75,24 @@ def validate(case):
     setup = case.get("setup")
     if not isinstance(setup, dict) or not BRANCH.fullmatch(setup.get("branch", "")):
         raise ValueError("twin setup needs a branch named twin/<name>")
-    if set(setup) - {"branch", "pr"}:
-        raise ValueError("twin setup takes only branch and pr")
+    if set(setup) - SETUP:
+        raise ValueError(f"twin setup takes only {sorted(SETUP)}")
     if "{pr}" in argv and not setup.get("pr"):
         raise ValueError("{pr} needs setup.pr")
+    # A merge goes into the case's own base branch, never main, which other cases read.
+    if command == ("pr", "merge") and not setup.get("base"):
+        raise ValueError("a twin merge needs setup.base, its own base branch")
+    if setup.get("protect") is not None and (
+        not setup.get("base") or not isinstance(setup["protect"], list)
+        or not all(isinstance(context, str) for context in setup["protect"])
+    ):
+        raise ValueError("setup.protect lists required checks on the case's own base")
+    status = setup.get("status")
+    if status is not None and (
+        not isinstance(status, dict) or set(status) != {"context", "state"}
+        or status["state"] not in {"success", "failure", "pending"}
+    ):
+        raise ValueError("setup.status is a context and a state")
     if set(case.get("shim_config", {})) - {"wip_prefixes"}:
         raise ValueError("twin shim_config may only name wip_prefixes")
     expect = case.get("expect")
@@ -86,8 +111,8 @@ def validate(case):
             raise ValueError("twin state checks read the case's own pull request")
         if "fields" in check and not isinstance(check["fields"], dict):
             raise ValueError("twin state fields must be an object")
-        if "any" in check and (not path.endswith("/comments") or not isinstance(check["any"], dict)):
-            raise ValueError("twin state any is an object, on a comments list")
+        if "any" in check and (not path.endswith(("/comments", "/timeline")) or not isinstance(check["any"], dict)):
+            raise ValueError("twin state any is an object, on a comments or timeline list")
     if set(case) & {"oracle", "expected", "xfail"}:
         raise ValueError("twin cases expect only their own expect and state")
 
@@ -117,13 +142,28 @@ def prepare(case, home, token):
         with open(Path(home) / ".config/gh-forgejo-shim/config.toml", "a") as config:
             config.write(lines)
     base = api_base(home)
-    branch = case["setup"]["branch"]
+    setup = case["setup"]
+    branch = setup["branch"]
+    # A merge case's own base branch, so nothing it merges reaches main.
+    target = f"{branch}-base" if setup.get("base") else "main"
+    if target != "main":
+        request(base, token, "POST", f"contents/{target}.txt",
+                {"content": "dHdpbgo=", "branch": "main", "new_branch": target, "message": target})
     request(base, token, "POST", f"contents/{branch}.txt",
-            {"content": "dHdpbgo=", "branch": "main", "new_branch": branch, "message": branch})
-    subs = {"branch": branch}
-    if case["setup"].get("pr"):
-        pr = request(base, token, "POST", "pulls", {"head": branch, "base": "main", "title": f"twin: {branch}"})
+            {"content": "dHdpbgo=", "branch": target, "new_branch": branch, "message": branch})
+    head = request(base, token, "GET", f"branches/{urllib.parse.quote(branch, safe='')}")["commit"]["id"]
+    subs = {"branch": branch, "head": head}
+    if setup.get("status"):
+        request(base, token, "POST", f"statuses/{head}", setup["status"] | {"description": "twin"})
+    if setup.get("protect"):
+        request(base, token, "POST", "branch_protections",
+                {"rule_name": target, "enable_status_check": True, "status_check_contexts": setup["protect"]})
+    if setup.get("pr"):
+        title = f"{DRAFT_PREFIX} twin: {branch}" if setup.get("draft") else f"twin: {branch}"
+        pr = request(base, token, "POST", "pulls", {"head": branch, "base": target, "title": title})
         subs["pr"] = str(pr["number"])
+        if setup.get("closed"):
+            request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "closed"})
     return subs
 
 

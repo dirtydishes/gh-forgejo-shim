@@ -111,7 +111,15 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only oracle cases are captured"):
             oracle_argv(good)
         for change, message in [
-            ({"argv": ["pr", "merge", "{pr}"]}, "twin allowlist"),
+            ({"argv": ["pr", "checkout", "{pr}"]}, "twin allowlist"),
+            # A merge goes into its own base, never main.
+            ({"argv": ["pr", "merge", "{pr}", "--merge"]}, "setup.base"),
+            ({"argv": ["pr", "merge", "{pr}", "--merge", "--match-head-commit", "main"],
+              "setup": {"branch": "twin/x", "pr": True, "base": True}}, "full sha"),
+            ({"argv": ["pr", "merge", "{pr}", "--merge", "--delete-branch"],
+              "setup": {"branch": "twin/x", "pr": True, "base": True}}, "flag is not allowed"),
+            ({"setup": {"branch": "twin/x", "pr": True, "protect": ["c"]}}, "own base"),
+            ({"setup": {"branch": "twin/x", "pr": True, "status": {"context": "c"}}}, "context and a state"),
             ({"argv": ["pr", "edit", "7", "--title", "t"]}, "selector"),
             ({"argv": ["pr", "edit", "{pr}", "-R", "github.com/o/r"]}, "flag is not allowed"),
             ({"argv": ["pr", "create", "--head", "main", "--title", "t"]}, "own branch"),
@@ -129,7 +137,7 @@ class ContractTests(unittest.TestCase):
             ({"setup": {"branch": "twin/x"}}, "needs setup.pr"),
             ({"expect": {"exit": 0, "stdout": "(", "stderr": ""}}, "isn't a pattern"),
             ({"expect": {"exit": "0", "stdout": "", "stderr": ""}}, "integer"),
-            ({"state": [{"path": "pulls/{pr}", "any": {"title": "t"}}]}, "comments list"),
+            ({"state": [{"path": "pulls/{pr}", "any": {"title": "t"}}]}, "comments or timeline list"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
