@@ -32,15 +32,62 @@ const SENSITIVE_KEY_PARTS: &[&str] = &[
     "passcode",
     "passkey",
 ];
-/// Matched as a whole word of a key (`key_words`): `db_pass`, `smtpPass` and `Authorization`
-/// are secrets, `authorizations_url` isn't. A word ending in `pass` is one too (`ftppass`),
-/// unless it's one of `ORDINARY_PASS_WORDS`.
+/// Matched as a whole word of a key (`is_sensitive_key`): `db_pass`, `smtpPass` and
+/// `HTTPAuthorization` are secrets, `authorizations_url` isn't.
 const SENSITIVE_KEY_WORDS: &[&str] = &["authorization", "pass"];
-/// Ordinary words that end in `pass`, so `bypass_pull_request_allowances` stays readable.
+/// A one-word key part that ends in `pass` is a secret when what comes before is one of these
+/// (`ftppass`, `dbpass`); an ordinary word that ends in `pass` (`bypass`, `lowpass`) has none.
+const PASS_WORD_PREFIXES: &[&str] = &[
+    "account",
+    "acct",
+    "admin",
+    "api",
+    "app",
+    "auth",
+    "bind",
+    "client",
+    "db",
+    "email",
+    "ftp",
+    "http",
+    "https",
+    "imap",
+    "key",
+    "keystore",
+    "ldap",
+    "login",
+    "mail",
+    "master",
+    "mysql",
+    "pg",
+    "pop",
+    "proxy",
+    "redis",
+    "root",
+    "server",
+    "service",
+    "smtp",
+    "sql",
+    "ssh",
+    "sudo",
+    "svc",
+    "sys",
+    "system",
+    "truststore",
+    "user",
+    "vnc",
+    "web",
+    "wifi",
+];
+/// Ordinary words that end in `pass`: a camelCase `Pass` inside one (`byPass`) isn't a secret.
 const ORDINARY_PASS_WORDS: &[&str] = &[
+    "allpass",
+    "bandpass",
     "bypass",
     "compass",
     "encompass",
+    "highpass",
+    "lowpass",
     "overpass",
     "surpass",
     "trespass",
@@ -282,36 +329,22 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
     };
     if let Some((quoted_start, quoted_end, quote_len)) = quoted {
         let after = (quoted_end + quote_len).min(value.len());
-        // A quoted scheme, or nothing, with the credential after it on the line
-        // (`"token" secret`): the rest of the line is the credential, as unquoted. A delimiter
-        // after the quote instead (`"",`) ends the value there.
+        // A quoted scheme, or nothing, with the credential after it (`"token" secret`): that
+        // credential is hidden too, scheme and all.
         if authorization {
             let quoted_text = value[quoted_start..quoted_end].trim().to_ascii_lowercase();
-            let rest = value[after..]
-                .split(['\n', '\r'])
-                .next()
-                .unwrap_or_default();
-            let follows = rest.starts_with(char::is_whitespace)
-                && rest
-                    .trim_start()
-                    .chars()
-                    .next()
-                    .is_some_and(|next| !matches!(next, ',' | ';' | '}' | ']' | ')' | '&'));
-            if follows && (quoted_text.is_empty() || AUTH_SCHEMES.contains(&quoted_text.as_str())) {
-                return Some(authorization_credential_range(value, value_start));
+            if quoted_text.is_empty() || AUTH_SCHEMES.contains(&quoted_text.as_str()) {
+                if let Some(end) = credential_after_scheme(value, after) {
+                    return Some((quoted_start, end));
+                }
             }
         }
         // A secret doesn't end at a quote with more of it glued on, as in `"first"tail` or the
-        // shell's `'it'\''s'`. Whitespace or a delimiter ends it, so the next field stays.
+        // shell's `'it'\''s'`.
         if quoted_end < value.len() {
-            let glued_end = value[after..]
-                .find(|character: char| {
-                    character.is_whitespace()
-                        || matches!(character, ',' | ';' | '}' | ']' | ')' | '&')
-                })
-                .map_or(value.len(), |offset| after + offset);
-            if glued_end > after {
-                return Some((quoted_start, glued_end));
+            let end = glued_end(value, after);
+            if end > after {
+                return Some((quoted_start, end));
             }
         }
         return Some((quoted_start, quoted_end));
@@ -327,6 +360,54 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
         .find(|character: char| character.is_whitespace() || (query && character == '&'))
         .map_or(value.len(), |offset| value_start + offset);
     Some((value_start, value_end))
+}
+
+/// Where a word glued on at `start` ends: at whitespace or a delimiter, but a quoted part inside
+/// it runs to its closing quote, spaces and line breaks too, as the shell reads
+/// `password="a b"`, so a secret further along the word is hidden with it.
+fn glued_end(value: &str, start: usize) -> usize {
+    let mut index = start;
+    while let Some(character) = value[index..].chars().next() {
+        if character.is_whitespace() || matches!(character, ',' | ';' | '}' | ']' | ')' | '&') {
+            break;
+        }
+        if matches!(character, '"' | '\'') {
+            let close = closing_quote(value, index + 1, character);
+            index = (close + 1).min(value.len());
+            continue;
+        }
+        index += character.len_utf8();
+    }
+    index
+}
+
+/// The end of a credential after a quoted Authorization scheme or empty quote (`"token" x`), or
+/// `None` when none follows: the line ends, a delimiter comes first, or the next word is another
+/// field (`status=200`). A quoted credential runs to its closing quote, across lines; an unquoted
+/// one to the end of its line.
+fn credential_after_scheme(value: &str, after: usize) -> Option<usize> {
+    let gap = value[after..].chars().next()?;
+    if !gap.is_whitespace() || matches!(gap, '\n' | '\r') {
+        return None;
+    }
+    let start = skip_whitespace(value, after);
+    let next = value[start..].chars().next()?;
+    if matches!(next, ',' | ';' | '}' | ']' | ')' | '&' | '\n' | '\r') {
+        return None;
+    }
+    if matches!(next, '"' | '\'') {
+        return Some(glued_end(value, start));
+    }
+    let word_end = value[start..]
+        .find(char::is_whitespace)
+        .map_or(value.len(), |offset| start + offset);
+    let word = &value[start..word_end];
+    if let Some(split) = word.find(['=', ':']) {
+        if split > 0 && word[..split].chars().all(is_key_character) {
+            return None;
+        }
+    }
+    Some(authorization_credential_range(value, start).1)
 }
 
 /// The index of the quote that ends a string starting at `start`, past any backslash-escaped
@@ -395,36 +476,58 @@ fn key_before_delimiter(value: &str, delimiter_index: usize) -> Option<&str> {
 
 pub(crate) fn is_sensitive_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase();
-    SENSITIVE_KEY_PARTS
+    if SENSITIVE_KEY_PARTS
         .iter()
         .any(|part| normalized.contains(part))
-        || key_words(key).any(|word| {
-            SENSITIVE_KEY_WORDS.contains(&word.as_str())
-                || (word.ends_with("pass") && !ORDINARY_PASS_WORDS.contains(&word.as_str()))
-        })
+    {
+        return true;
+    }
+    key.split(['-', '_', '.']).any(|part| {
+        let whole = key_word(part);
+        if SENSITIVE_KEY_WORDS.contains(&whole.as_str())
+            || whole
+                .strip_suffix("pass")
+                .is_some_and(|prefix| PASS_WORD_PREFIXES.contains(&prefix))
+        {
+            return true;
+        }
+        // camelCase words, unless the part is an ordinary word (`byPass`).
+        !ORDINARY_PASS_WORDS.contains(&whole.as_str())
+            && camel_words(part)
+                .into_iter()
+                .any(|word| SENSITIVE_KEY_WORDS.contains(&key_word(word).as_str()))
+    })
 }
 
-/// A key's words, lowercased, with trailing digits dropped (`authorization2`): each part between
-/// `-`, `_` and `.` whole, and also split at camelCase boundaries (git's `sendemail.smtpPass` has
-/// `smtp` and `pass`). Whole parts too, so mixed case such as `aUtHoRiZaTiOn` still counts.
-fn key_words(key: &str) -> impl Iterator<Item = String> + '_ {
-    key.split(['-', '_', '.']).flat_map(|part| {
-        let mut words = vec![part];
-        let mut start = 0;
-        let mut previous_lower = false;
-        for (index, character) in part.char_indices() {
-            if character.is_ascii_uppercase() && previous_lower {
-                words.push(&part[start..index]);
-                start = index;
-            }
-            previous_lower = character.is_ascii_lowercase() || character.is_ascii_digit();
+/// A key word as it's compared: lowercase, trailing digits dropped (`authorization2`).
+fn key_word(word: &str) -> String {
+    word.trim_end_matches(|character: char| character.is_ascii_digit())
+        .to_ascii_lowercase()
+}
+
+/// A key part split at camelCase boundaries, acronyms included: `smtpPass` is `smtp` `Pass`,
+/// `HTTPAuthorization` is `HTTP` `Authorization`, `dbPASSHash` is `db` `PASS` `Hash`.
+fn camel_words(part: &str) -> Vec<&str> {
+    let characters = part.char_indices().collect::<Vec<_>>();
+    let mut words = Vec::new();
+    let mut start = 0;
+    for position in 1..characters.len() {
+        let (index, character) = characters[position];
+        let previous = characters[position - 1].1;
+        let next_lower = characters
+            .get(position + 1)
+            .is_some_and(|(_, next)| next.is_ascii_lowercase());
+        if character.is_ascii_uppercase()
+            && (previous.is_ascii_lowercase()
+                || previous.is_ascii_digit()
+                || (previous.is_ascii_uppercase() && next_lower))
+        {
+            words.push(&part[start..index]);
+            start = index;
         }
-        words.push(&part[start..]);
-        words.into_iter().map(|word| {
-            word.trim_end_matches(|character: char| character.is_ascii_digit())
-                .to_ascii_lowercase()
-        })
-    })
+    }
+    words.push(&part[start..]);
+    words
 }
 
 fn is_key_character(character: char) -> bool {
@@ -759,6 +862,17 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_pass_words_and_fields_after_an_empty_quote_stay() {
+        for text in [
+            r#"{"lowpass":"8kHz","highpass":"120Hz"}"#,
+            "byPass_pull_request_allowances=1",
+            r#"authorization="" status=200"#,
+        ] {
+            assert_eq!(redact_text(text), text);
+        }
+    }
+
+    #[test]
     fn a_glued_tail_stops_at_a_query_separator() {
         assert_eq!(
             redact_text(r#"authorization="x"&state=1 next"#),
@@ -820,6 +934,16 @@ mod tests {
             (r#"--config=password='it'\''s-audit-tail'"#, "audit-tail"),
             (r#""{\"token\":\"first\"audit-tail\"}""#, "audit-tail"),
             (r#"token="a"audit-b"#, "audit-b"),
+            // A quoted part later in a glued word, spaces and all (Sol r3#1).
+            (r#"token="a"password="first audit-tail""#, "audit-tail"),
+            // A quoted credential after a quoted scheme, across a line break (Sol r3#2).
+            (
+                "Authorization: \"Bearer\" \"first\naudit-tail\"",
+                "audit-tail",
+            ),
+            // Acronym boundaries in a key (Sol r3#3).
+            (r#"{"HTTPAuthorization":"audit-http"}"#, "audit-http"),
+            (r#"{"dbPASSHash":"audit-hash"}"#, "audit-hash"),
         ] {
             for replacement in [REDACTED, "[REDACTED]"] {
                 let redacted = redact_text_with(text, replacement);
