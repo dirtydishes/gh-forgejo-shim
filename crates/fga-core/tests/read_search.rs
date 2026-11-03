@@ -204,8 +204,8 @@ async fn project_cards_are_an_empty_connection() {
 /// `refs/pull/N/head` from the base when there's none. The gateway reports a head repository only
 /// while the head branch exists and its tip is the PR's head, so gh never checks out a branch that
 /// isn't there, was recreated, or has moved since (a closed PR; a PR reopened through the API). The
-/// owner and `isCrossRepository` stay as GitHub reports them. A name starting with `refs/` counts as
-/// gone and loses its `refs/` prefixes, so gh's local branch is never a raw ref.
+/// owner and `isCrossRepository` stay as GitHub reports them. Only an AGit PR, which has no branch, is
+/// renamed (`pull/N/head`), so no two branches are reported alike.
 #[tokio::test]
 async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let repo = |owner: &str| json!({"name":"r","owner":{"id":1,"login":owner,"avatar_url":""}});
@@ -219,7 +219,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         bool,
         Option<&'static str>,
     );
-    let cases: [Case; 11] = [
+    let cases: [Case; 13] = [
         ("feature", "feature", "o", "aaa", "open", false, Some("aaa")),
         (
             "feature",
@@ -258,7 +258,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             false,
             Some("aaa"),
         ),
-        // Closed with its branch still at the PR's head: the branch is the PR's head.
+        // Merged with its branch still at the PR's head: the branch can still move before gh
+        // fetches it, and the PR's own ref can't, so only the ref is offered.
         (
             "feature",
             "feature",
@@ -291,6 +292,17 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         ),
         // The PR's ref can't be read: unknown counts as moved.
         ("feature", "feature", "o", "aaa", "open", false, None),
+        // A real branch named like a ref keeps its name, so it can't be taken for `topic`.
+        (
+            "refs/topic",
+            "refs/topic",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        ("topic", "topic", "o", "aaa", "open", false, Some("aaa")),
     ];
     let pulls: Vec<Value> = cases
         .iter()
@@ -341,7 +353,10 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let fields = "headRefName isCrossRepository headRepository{name} headRepositoryOwner{login}";
     let query = (1..=cases.len())
         .map(|n| format!("p{n}:pullRequest(number:{n}){{{fields}}}"))
-        .chain(["agit:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into()])
+        .chain([
+            "agit:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into(),
+            "topic:pullRequests(headRefName:\"topic\",first:5){nodes{number}}".into(),
+        ])
         .collect::<Vec<_>>()
         .join(" ");
     let response = graphql::schema()
@@ -364,14 +379,18 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "p3":head("pull/3/head", false, Value::Null, "o"),
             "p4":head("feature", true, r.clone(), "f"),
             "p5":head("feature", true, Value::Null, "f"),
-            "p6":head("pull/6/head", false, Value::Null, "o"),
-            "p7":head("feature", false, r, "o"),
+            // A known limit: a gone branch named `refs/…` keeps its name.
+            "p6":head("refs/pull/6/head", false, Value::Null, "o"),
+            "p7":head("feature", false, Value::Null, "o"),
             "p8":head("feature", false, Value::Null, "o"),
             "p9":head("feature", false, Value::Null, "o"),
-            "p10":head("topic", false, Value::Null, "o"),
+            "p10":head("refs/refs/topic", false, r.clone(), "o"),
             "p11":head("feature", false, Value::Null, "o"),
             // gh pr list --head takes the name gh was shown.
+            "p12":head("refs/topic", false, r.clone(), "o"),
+            "p13":head("topic", false, r, "o"),
             "agit":{"nodes":[{"number":3}]},
+            "topic":{"nodes":[{"number":13}]},
         })
     );
 }

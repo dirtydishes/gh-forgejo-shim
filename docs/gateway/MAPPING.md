@@ -281,31 +281,39 @@ need not be the PR's head: the PR's own ref `refs/pull/N/head` in the base repos
 
 | GitHub | Forgejo |
 |---|---|
-| `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit), with every leading `refs/` removed |
+| `headRefName` | `head.label`; for an AGit PR (empty label), `head.ref` without its `refs/` (`pull/N/head`) |
 | `headRepositoryOwner` | `head.repo.owner`; null only for a deleted fork |
-| `headRepository` | `head.repo`, but null unless `head.ref` equals a non-empty `head.label` that doesn't start with `refs/`, **and** `head.sha` equals the commit of `refs/pull/N/head` (`GET repos/{o}/{r}/git/refs/pull/{n}/head`; unreadable counts as different) |
+| `headRepository` | `head.repo`, but null unless the PR is open and unmerged, `head.ref` equals a non-empty `head.label` that doesn't start with `refs/pull/`, **and** `head.sha` equals the commit of `refs/pull/N/head` (`GET repos/{o}/{r}/git/refs/pull/{n}/head`; unreadable counts as different) |
 | `isCrossRepository` | whether `head.repo` differs from the base; true when `head.repo` is null (a deleted fork) |
 
 **A deliberate difference from GitHub.** GitHub keeps `headRepository` when the head branch is
 deleted and nulls it only for a deleted fork. `gh pr checkout` reads `headRepository` alone to
 choose what to fetch: with one it fetches `refs/heads/{headRefName}`, without one `refs/pull/N/head`
-from the base. So the gateway reports a head repository only when that branch is the PR's head.
-Otherwise gh would fetch nothing (AGit), or a branch that differs from the PR: deleted and created
-again at another commit, or moved after the PR closed. A PR reopened through Forgejo's API keeps its
-old `refs/pull/N/head` while the branch may have moved, so even an open PR is checked against its
-ref. The owner and `isCrossRepository` stay as GitHub reports them, which keeps gh's `owner:branch`
+from the base. So the gateway reports a head repository only when that branch is the PR's head and
+stays so. An open PR moves with its branch: a push to it updates the PR. A closed or merged PR's
+branch can move, or be deleted and created again, at any time, even between the gateway's answer
+and gh's fetch, so only its own ref is offered. A PR reopened through Forgejo's API keeps its old
+`refs/pull/N/head` while the branch may have moved, so even an open PR is checked against its ref.
+The owner and `isCrossRepository` stay as GitHub reports them, which keeps gh's `owner:branch`
 labels and current-branch matching.
 
-gh names the local branch after `headRefName` and fetches into it (`fetch {remote} {ref}:{name}`). A
-name starting with `refs/` would make git write a raw ref that an existing branch of the same name
-shadows. Such a head always counts as gone, so gh fetches the PR's own ref, and `headRefName` drops
-every leading `refs/` (an AGit PR's `refs/pull/N/head` becomes `pull/N/head`; `refs/refs/topic`
-becomes `topic`). The `headRefName` filter accepts that name as well as Forgejo's. REST `head.ref`,
-which Claude desktop reads, keeps Forgejo's value.
+gh names the local branch after `headRefName` and fetches into it (`fetch {remote} {ref}:{name}`). An
+AGit PR has no branch, only Forgejo's `refs/pull/N/head`, which as a local name would make git write
+a raw ref, so it's reported as `pull/N/head`, and the `headRefName` filter accepts that name too. A
+real branch always keeps its own name, so no two branches are reported alike. REST `head.ref`, which
+Claude desktop reads, keeps Forgejo's value.
 
 If the local branch already holds commits on top of the PR's head, gh keeps them: it merges the
 fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
 against GitHub, on either fetch path, so the gateway doesn't change it.
+
+**Known limits**, both for branch names that look like refs:
+
+- A real branch whose name starts with `refs/`, when the PR gets no head repository (the branch is
+  gone or moved, or the PR is closed), keeps that name. gh then fetches the PR's ref into
+  `refs/{…}`, a raw ref, and checks out a local branch of that literal name instead if one exists.
+- An AGit PR #N and a PR from a real branch named `pull/N/head` both match
+  `headRefName: "pull/N/head"`.
 
 ## Open items to verify against the live twin (G2/G3)
 

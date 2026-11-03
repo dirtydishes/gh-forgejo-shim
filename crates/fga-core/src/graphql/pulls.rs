@@ -185,17 +185,15 @@ impl PullRequest {
         // Deleted head repositories are represented by null upstream. GitHub keeps one for a
         // deleted branch, but gh pr checkout fetches `refs/heads/{headRefName}` from it and falls
         // back to the PR's own ref `refs/pull/N/head` only without one. So the gateway reports a
-        // head repository only while the head branch exists and its tip is the PR's head; a branch
-        // that's gone, recreated, or moved since (a closed PR, or one reopened through the API,
-        // which leaves the PR's ref where it was) would otherwise be checked out in its place.
+        // head repository only for an open PR whose head branch exists and whose tip is the PR's
+        // head; a branch that's gone, recreated or moved (a closed PR, or one reopened through the
+        // API, which leaves the PR's ref where it was) would otherwise be checked out in its place.
         // The owner stays, as on GitHub; gh's checkout reads only `headRepository` to choose.
-        let Some(head) = self
-            .source
-            .head
-            .repo
-            .as_ref()
-            .filter(|_| self.source.head.exists())
-        else {
+        let Some(head) = self.source.head.repo.as_ref().filter(|_| {
+            // A closed or merged PR's branch can move at any time after the check below, and
+            // gh would fetch it; the PR's own ref can't. An open PR moves with its branch.
+            self.source.head.exists() && self.source.state == "open" && !self.source.merged
+        }) else {
             return Ok(None);
         };
         let session = ctx.data_unchecked::<Session>();
