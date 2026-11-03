@@ -138,6 +138,10 @@ class ContractTests(unittest.TestCase):
             ({"expect": {"exit": 0, "stdout": "(", "stderr": ""}}, "isn't a pattern"),
             ({"expect": {"exit": "0", "stdout": "", "stderr": ""}}, "integer"),
             ({"state": [{"path": "pulls/{pr}", "any": {"title": "t"}}]}, "comments or timeline list"),
+            ({"state": [{"path": "pulls/{pr}", "none": {"title": "t"}}]}, "comments or timeline list"),
+            ({"setup": {"branch": "twin/x-base", "pr": True}}, "end in -base"),
+            ({"setup": {"branch": "twin/x", "pr": True, "base": "no"}}, "true or false"),
+            ({"setup": {"branch": "twin/x", "draft": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "need setup.pr"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
