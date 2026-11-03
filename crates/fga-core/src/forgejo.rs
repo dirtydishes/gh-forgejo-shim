@@ -119,7 +119,8 @@ impl Forgejo {
     }
 
     /// [`Forgejo::new`], also trusting `roots`, for a forge behind a private CA. The roots join the
-    /// built-in trust store; certificate checks stay on.
+    /// built-in trust store; certificate and hostname checks stay on. The caller checks `base`: an
+    /// HTTP or HTTPS URL without credentials, query or fragment, as fga-server's config does.
     pub fn new_with_roots(
         base: Url,
         roots: Vec<reqwest::Certificate>,
@@ -738,13 +739,85 @@ mod tests {
         server.abort();
     }
 
-    /// Extra CA roots build a client. Whether a CA file holds certificates is the caller's check
-    /// (the launcher reads and checks each file before this).
-    #[test]
-    fn extra_roots_build_a_client() {
-        const ROOT: &str = "-----BEGIN CERTIFICATE-----\nMIIBXzCCAQagAwIBAgIUTNP6z2knfOPj6US15ma5BfA2DX4wCgYIKoZIzj0EAwIw\nFTETMBEGA1UEAwwKZm9yZ2UudGVzdDAgFw0yNjExMDMwMjEzMDNaGA8yMTI2MTAx\nMDAyMTMwM1owFTETMBEGA1UEAwwKZm9yZ2UudGVzdDBZMBMGByqGSM49AgEGCCqG\nSM49AwEHA0IABPcQ77XIeK1OQLd0PgjXH1WHj5IFhAKfOlPTpFGuGRuebqRLfjWm\njL0E+VMxWD4gKhjyx18IhAVxfmEIlitOXXKjMjAwMB0GA1UdDgQWBBT0evzgdITL\nk2pgp7hoqbLwJJbtLjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQC\nICD8vb9VVPZUYbXTY1/N7y/FrA6uNqenRTylj8YijsoZAiB9bfMXIWC9eES7R9q/\nQuzkmObSkPWeq492gfUpF/twyg==\n-----END CERTIFICATE-----";
-        let root = reqwest::Certificate::from_pem(ROOT.as_bytes()).unwrap();
-        Forgejo::new_with_roots("https://forge.test".parse().unwrap(), vec![root]).unwrap();
+    /// A private CA's root is trusted only where passed, and hostname checks stay on: `new` refuses
+    /// the forge's certificate, `new_with_roots` with its CA reads the user, and the same client
+    /// refuses the certificate at a host it doesn't name. The fixtures are the shim's: a CA and a
+    /// leaf for `localhost`.
+    #[tokio::test]
+    async fn extra_roots_are_trusted_with_hostname_checks_on() {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        fn serve() -> (u16, std::thread::JoinHandle<()>) {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let cert =
+                CertificateDer::from(include_bytes!("../tests/fixtures/test-server.der").to_vec());
+            let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                include_bytes!("../tests/fixtures/test-server-key.der").to_vec(),
+            ));
+            let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .unwrap();
+            let handle = std::thread::spawn(move || {
+                let (socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let connection = rustls::ServerConnection::new(Arc::new(config)).unwrap();
+                let mut stream = rustls::StreamOwned::new(connection, socket);
+                let mut request = Vec::new();
+                let mut byte = [0; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    if stream.read(&mut byte).unwrap_or(0) == 0 {
+                        return; // the client refused the handshake
+                    }
+                    request.push(byte[0]);
+                }
+                let body = r#"{"id":1,"login":"t","avatar_url":""}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+            (port, handle)
+        }
+        let join = |handle: std::thread::JoinHandle<()>| {
+            tokio::task::spawn_blocking(move || handle.join().unwrap())
+        };
+        let ca = reqwest::Certificate::from_pem(include_bytes!("../tests/fixtures/test-ca.pem"))
+            .unwrap();
+        let (port, handle) = serve();
+        let base = |host: &str| format!("https://{host}:{port}").parse().unwrap();
+        assert!(
+            Forgejo::new(base("localhost"))
+                .unwrap()
+                .authenticate("token t")
+                .await
+                .is_err()
+        );
+        join(handle).await.unwrap();
+        let (port, handle) = serve();
+        let base = |host: &str| format!("https://{host}:{port}").parse().unwrap();
+        let session = Forgejo::new_with_roots(base("localhost"), vec![ca.clone()])
+            .unwrap()
+            .authenticate("token t")
+            .await
+            .unwrap();
+        assert_eq!(session.viewer.login, "t");
+        join(handle).await.unwrap();
+        let (port, handle) = serve();
+        let wrong_host = format!("https://127.0.0.1:{port}").parse().unwrap();
+        let result = Forgejo::new_with_roots(wrong_host, vec![ca])
+            .unwrap()
+            .authenticate("token t")
+            .await;
+        assert!(result.is_err());
+        join(handle).await.unwrap();
     }
 
     /// The identity lookup on a cache miss counts toward the request's budget (parallax r1#1).

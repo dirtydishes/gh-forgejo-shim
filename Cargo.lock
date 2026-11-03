@@ -522,6 +522,7 @@ dependencies = [
  "base64",
  "regex",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
