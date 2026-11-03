@@ -192,6 +192,16 @@ impl Forgejo {
         authorization: &str,
         budget: &AtomicUsize,
     ) -> Result<Reply, Error> {
+        // A segment holding `/` or `\`, or one that is `.` or `..`, would be percent-encoded here,
+        // but a proxy in front of Forgejo decodes and resolves it before choosing where to send
+        // the request (nginx does), so it could leave a base path such as `/forgejo/` and take the
+        // token to another service. Names never need one; multi-part paths are split into segments.
+        if segments
+            .iter()
+            .any(|segment| matches!(*segment, "." | "..") || segment.contains(['/', '\\']))
+        {
+            return Err(Error::NotFound);
+        }
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|_| Error::Upstream)?
@@ -736,6 +746,61 @@ mod tests {
             let session = forgejo.authenticate("token t").await.unwrap();
             assert_eq!(session.viewer.login, "t", "{base}");
         }
+        server.abort();
+    }
+
+    /// A name that a proxy would resolve out of the base path never leaves the gateway: behind
+    /// nginx, `..%2F..%2Foutside` under `/forgejo/` routes to `/outside`. A path with slashes
+    /// still reaches Forgejo as segments.
+    #[tokio::test]
+    async fn names_that_climb_out_of_the_base_path_never_leave() {
+        use std::sync::atomic::AtomicUsize;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = hits.clone();
+        let upstream = axum::Router::new()
+            .route(
+                "/forgejo/api/v1/user",
+                axum::routing::get(|| async { r#"{"id":1,"login":"t","avatar_url":""}"# }),
+            )
+            .route(
+                "/forgejo/api/v1/repos/o/r/contents/.forgejo/workflows",
+                axum::routing::get(|| async { "[]" }),
+            )
+            .fallback(move || {
+                seen.fetch_add(1, Ordering::SeqCst);
+                async { axum::http::StatusCode::NOT_FOUND }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let base = format!("http://{addr}/forgejo/").parse().unwrap();
+        let session = Forgejo::new(base)
+            .unwrap()
+            .authenticate("token t")
+            .await
+            .unwrap();
+        for owner in ["../../outside", "..", ".", "a/b", "a\\b"] {
+            let result = session
+                .get::<serde_json::Value>(&["repos", owner, "r"], &[])
+                .await;
+            assert!(
+                matches!(result, Err(Error::NotFound)),
+                "{owner}: {result:?}"
+            );
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "a refused name reached the upstream"
+        );
+        let entries = session
+            .get::<serde_json::Value>(
+                &["repos", "o", "r", "contents", ".forgejo", "workflows"],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(entries, serde_json::json!([]));
         server.abort();
     }
 
