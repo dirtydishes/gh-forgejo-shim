@@ -169,7 +169,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v3/repos/{owner}/{repo}/readme", get(rest::readme))
         .route(
             "/api/v3/repos/{owner}/{repo}/git/refs/{*reference}",
-            delete(rest::delete_branch),
+            delete(rest::delete_branch).fallback(|| async { rest_error(Error::NotFound) }),
         )
         .route(
             "/api/v3/repos/{owner}/{repo}/commits/{sha}/pulls",
