@@ -170,10 +170,12 @@ for the token: a user's own `hosts.yml` has the login under the portless key onl
 `GH_HOST=forge.test:3443` gives "no oauth token found for forge.test:3443". For a forge on a
 custom port, stepping aside therefore sends gh to the forge's default port 443, where the user's
 login was checked, while the launch path reaches the entry's own port through the gateway.
-Setting `GH_HOST` also makes gh use
-`GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`, if set, for the forge ahead of the user's
-login there (fact 3), which would send a GitHub Enterprise login to the forge. So when the wrapper
-sets `GH_HOST` here, it also removes those two variables. When the user's own `GH_HOST` already
+Setting `GH_HOST` also makes gh use a token
+variable, if set, for the forge ahead of the user's login there (fact 3): `GH_ENTERPRISE_TOKEN`
+or `GITHUB_ENTERPRISE_TOKEN` for most forges, and `GH_TOKEN` or `GITHUB_TOKEN` for a forge named
+`github.localhost` or `*.ghe.com`. Either would send another site's login to the forge, where
+plain gh would have sent it to github.com. So when the wrapper sets `GH_HOST` here, it also
+removes all four token variables, as a launch does. When the user's own `GH_HOST` already
 names the forge, the wrapper sets nothing and keeps those variables, as plain gh would: the user
 chose that host. It records both changes with §7's
 `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`, so a nested call, such as one
@@ -677,10 +679,9 @@ thread at the edit point. Building gh's environment by hand and spawning it with
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
 
-The table is the launch path. Stepping aside (§2) changes only `GH_HOST` and the two GitHub
-Enterprise token variables, and only for a host-less `gh api` or `gh auth token`, with
-`FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`. It never sets
-`FJ_SHIM_LAUNCHER`, and it doesn't remove `GH_TOKEN` or `GITHUB_TOKEN`.
+The table is the launch path. Stepping aside (§2) changes only `GH_HOST` and the four token
+variables, and only for a host-less `gh api` or `gh auth token`, with `FJ_SHIM_SAVED`,
+`FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`. It never sets `FJ_SHIM_LAUNCHER`.
 
 The launcher spawns gh by absolute path, so `argv[0]` is that path too.
 

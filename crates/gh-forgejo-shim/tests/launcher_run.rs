@@ -573,7 +573,7 @@ impl Fixture {
 /// A fake gh that reports what a step-aside or a launch changed.
 fn reporting_gh(fixture: &Fixture) -> PathBuf {
     fixture.fake_gh(
-        r#"for name in GH_CONFIG_DIR GH_HOST GH_ENTERPRISE_TOKEN FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN FJ_SHIM_LAUNCHER FJ_SHIM_SAVED; do
+        r#"for name in GH_CONFIG_DIR GH_HOST GH_TOKEN GH_ENTERPRISE_TOKEN FJ_SHIM_ORIG_GH_TOKEN FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN FJ_SHIM_LAUNCHER FJ_SHIM_SAVED; do
   eval "printf '%s=%s\n' $name \"\${$name-unset}\""
 done > "$REPORT""#,
     )
@@ -616,7 +616,7 @@ fn a_forge_the_users_gh_is_logged_in_to_steps_aside() {
 }
 
 #[test]
-fn stepping_aside_keeps_decision_4_and_drops_enterprise_tokens() {
+fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     let _serial = serial();
     let fixture = Fixture::new("http://127.0.0.1:9");
     fixture.allowlist(&["forge.test:3443"]);
@@ -628,11 +628,15 @@ fn stepping_aside_keeps_decision_4_and_drops_enterprise_tokens() {
         .command(&gh, &["api", "user"])
         .env("GH_REPO", "forge.test:3443/o/r")
         .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+        .env("GH_TOKEN", "ghp_github")
         .output()
         .expect("run wrapper");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = fixture.report();
     assert_eq!(reported(&report, "GH_CONFIG_DIR"), "unset", "{report}");
+    // gh would send GH_TOKEN to a forge named github.localhost or *.ghe.com (§2).
+    assert_eq!(reported(&report, "GH_TOKEN"), "unset", "{report}");
+    assert_eq!(reported(&report, "FJ_SHIM_ORIG_GH_TOKEN"), "ghp_github");
     assert_eq!(
         reported(&report, "GH_HOST"),
         "forge.test",
@@ -655,11 +659,13 @@ fn stepping_aside_keeps_decision_4_and_drops_enterprise_tokens() {
         .command(&gh, &["api", "user"])
         .env("GH_HOST", "forge.test")
         .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+        .env("GH_TOKEN", "ghp_github")
         .output()
         .expect("run wrapper");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = fixture.report();
     assert_eq!(reported(&report, "GH_HOST"), "forge.test");
+    assert_eq!(reported(&report, "GH_TOKEN"), "ghp_github", "{report}");
     assert_eq!(
         reported(&report, "GH_ENTERPRISE_TOKEN"),
         "ghe_corp",
