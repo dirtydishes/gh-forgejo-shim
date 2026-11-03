@@ -345,18 +345,34 @@ mod tests {
         Ok(path)
     }
 
-    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
-        fs::write(path, contents)?;
-        make_executable(path)
-    }
-
+    /// Written by a child `sh`, so this test process never holds the script open for writing.
+    /// Linux refuses to exec a file any process holds open for writing, and a sibling test's fork
+    /// keeps this process's descriptors until it execs, so a script written here could fail the
+    /// spawn under test with ETXTBSY (6tt).
     #[cfg(unix)]
-    fn make_executable(path: &Path) -> io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions)
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no stdin for the script writer"))?
+            .write_all(contents.as_bytes())?;
+        let status = child.wait()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "writing {} failed: {status}",
+                path.display()
+            )))
+        }
     }
 
     #[cfg(not(unix))]

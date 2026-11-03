@@ -391,7 +391,8 @@ fn serve_json_once(body: &'static str) -> io::Result<(String, JoinHandle<io::Res
     let base_url = format!("http://{}", listener.local_addr()?);
     listener.set_nonblocking(true)?;
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Generous: under a loaded parallel suite the shim can take seconds to start.
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut stream = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -403,7 +404,11 @@ fn serve_json_once(body: &'static str) -> io::Result<(String, JoinHandle<io::Res
                 Err(error) => return Err(error),
             }
         };
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        // On macOS an accepted socket keeps the listener's non-blocking mode, so a read before
+        // the request arrives failed at once and dropped the connection: "error sending
+        // request" in the shim (855). Blocking with a timeout waits for it instead.
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         let mut reader = BufReader::new(&mut stream);
         let mut request = String::new();
         loop {
