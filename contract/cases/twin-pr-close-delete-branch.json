@@ -15,7 +15,7 @@
   "expect": {
     "exit": 0,
     "stdout": "",
-    "stderr": "(?s)✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete\\)\\n.*Deleted.*branch twin/pr-close-delete.*"
+    "stderr": "✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete\\)\\n!\\ Skipped\\ deleting\\ the\\ local\\ branch\\ since\\ current\\ directory\\ is\\ not\\ a\\ git\\ repository\\n✓ Deleted branch twin/pr-close-delete\\n"
   },
   "state": [
     {

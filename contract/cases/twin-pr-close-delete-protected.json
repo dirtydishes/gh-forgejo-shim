@@ -16,7 +16,7 @@
   "expect": {
     "exit": 1,
     "stdout": "",
-    "stderr": "(?s)✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete-held\\)\\n.*failed to delete remote branch twin/pr-close-delete-held: HTTP 403.*"
+    "stderr": "✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete-held\\)\\n!\\ Skipped\\ deleting\\ the\\ local\\ branch\\ since\\ current\\ directory\\ is\\ not\\ a\\ git\\ repository\\nfailed to delete remote branch twin/pr\\-close\\-delete\\-held: HTTP 403: Resource not accessible by token \\(https://forge\\.test/api/v3/repos/dirtydishes/gfj\\-oracle/git/refs/heads%2Ftwin%2Fpr\\-close\\-delete\\-held\\)\\n"
   },
   "state": [
     {
