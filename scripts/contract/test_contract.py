@@ -161,6 +161,19 @@ class ContractTests(unittest.TestCase):
              "selector"),
             ({"argv": ["issue", "comment", "{issue}", "--edit-last", "--body", "b"],
               "setup": {"branch": "twin/x", "issue": True}}, "flag is not allowed"),
+            ({"argv": ["issue", "list", "--json", "number"], "setup": {"branch": "twin/x", "issue": True}},
+             "selects {issue}"),
+            ({"argv": ["issue", "list", "--jq", ".[0]"], "setup": {"branch": "twin/x", "issue": True}},
+             "selects {issue}"),
+            ({"argv": ["issue", "view", "{pr}"], "setup": {"branch": "twin/x", "pr": True, "issue": True}},
+             "selector"),
+            ({"argv": ["issue", "create", "--title", "t", "--body", "b"], "setup": {"branch": "twin/x"}},
+             "naming {branch}"),
+            ({"argv": ["issue", "create", "--title", "{branch}"], "setup": {"branch": "twin/x"}}, "a --body"),
+            ({"argv": ["issue", "create", "--title", "{branch}", "--body", "b"],
+              "setup": {"branch": "twin/x", "issue": True}}, "makes its own"),
+            ({"argv": ["issue", "create", "--title", "{branch}", "--body", "b", "--label", "bug"],
+              "setup": {"branch": "twin/x"}}, "flag is not allowed"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
@@ -183,7 +196,7 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(launched(self.case(["api", "user"]), ["pr view"]))
         self.assertTrue(launched(self.case(["pr", "view", "1"]), commands))
         self.assertTrue(launched(self.case(["pr", "checks", "1"]), commands))
-        self.assertFalse(launched(self.case(["issue", "list"]), commands))
+        self.assertFalse(launched(self.case(["repo", "list"]), commands))
         self.assertFalse(launched(self.case(["repo", "view"]), commands))
         local = self.case(["pr", "view", "1"]) | {"kind": "shim-local"}
         self.assertFalse(launched(local, commands))

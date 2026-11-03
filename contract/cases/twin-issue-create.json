@@ -1,0 +1,32 @@
+{
+  "id": "twin-issue-create",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-create"
+  },
+  "argv": [
+    "issue",
+    "create",
+    "--title",
+    "twin: {branch}",
+    "--body",
+    "twin body"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj\\-oracle/issues/(?P<issue>[0-9]+)\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "issues/{issue}",
+      "fields": {
+        "title": "twin: twin/issue-create",
+        "body": "twin body",
+        "state": "open"
+      }
+    }
+  ],
+  "normalize": []
+}
