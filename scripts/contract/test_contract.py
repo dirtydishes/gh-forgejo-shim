@@ -145,6 +145,9 @@ class ContractTests(unittest.TestCase):
             ({"state": [{"path": "pulls/{pr}", "gone": True}]}, "exactly {path, gone"),
             ({"state": [{"path": "branches/main", "gone": True}]}, "own pull request or branch"),
             ({"setup": {"branch": "twin/x", "draft": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "need setup.pr"),
+            ({"setup": {"branch": "twin/x", "fork": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "fork needs setup.pr"),
+            ({"setup": {"branch": "twin/x", "pr": True, "fork": True, "closed": True}}, "no closed or protect_head"),
+            ({"setup": {"branch": "twin/x", "pr": True, "fork": "yes"}}, "true or false"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
