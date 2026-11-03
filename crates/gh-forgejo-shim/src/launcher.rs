@@ -134,8 +134,11 @@ pub fn launches(invocation: &Invocation) -> bool {
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && served
-        // Without a run ID, gh prompts for one in a terminal, which no trace has covered.
-        && !(command == "run view" && invocation.positionals.is_empty())
+        // Without a run ID, gh prompts for one in a terminal, which no trace has covered. Without
+        // `--json`, gh prints the run's jobs, which the gateway can't list, and for a failed run
+        // with none blames the workflow file (o2#1).
+        && !(command == "run view"
+            && (invocation.positionals.is_empty() || invocation.json_fields.is_none()))
         // The gateway can't fill these yet: a run's jobs (Forgejo 15's API lists none) and its
         // attempt (it reads 0; GitHub's first is 1). gh would print them empty and exit 0.
         && !(matches!(command, "run list" | "run view")
@@ -231,7 +234,6 @@ mod tests {
             &[
                 "run", "list", "--status", "queued", "--event", "push", "--all",
             ][..],
-            &["run", "view", "7"][..],
             &[
                 "run",
                 "view",
@@ -302,6 +304,7 @@ mod tests {
             &["run", "view", "7", "--attempt", "1"][..],
             &["run", "view", "7", "--log"][..],
             // Only for a completed run, or the jobs the gateway can't list.
+            &["run", "view", "7"][..],
             &["run", "view", "7", "--exit-status"][..],
             &["run", "view", "7", "--verbose"][..],
             &["run", "view", "7", "--json", "status,jobs"][..],
