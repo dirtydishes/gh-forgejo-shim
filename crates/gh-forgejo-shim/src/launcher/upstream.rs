@@ -1,6 +1,7 @@
 //! The config bridge (L4, finding F10): one served host's shim settings, as the gateway's
 //! upstream client needs them. The built-in path reads the same settings in
-//! `forgejo::ForgejoClient::for_host`; this keeps the launched path to the same rules.
+//! `forgejo::ForgejoClient::for_host`; this keeps the launched path to the same rules. The
+//! result is shaped for fga-core's `Forgejo::new_with_roots(base, roots)`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,13 +13,13 @@ use crate::config::{self, Config};
 
 /// A served host's upstream: where its Forgejo lives, which extra CA roots to trust, and which
 /// title prefixes mark a draft there.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Upstream {
     /// The forge's base URL, ending in `/`: `api_url`, or `https://<host>`.
     pub base: Url,
-    /// CA files whose certificates join the normal trust store: the host's `ca_file`, then
-    /// `FJ_SHIM_CA_FILE`. Neither turns verification off.
-    pub ca_files: Vec<PathBuf>,
+    /// Extra CA roots, joining the normal trust store: the certificates in the host's `ca_file`,
+    /// then in `FJ_SHIM_CA_FILE`, each file read once. Neither turns verification off.
+    pub roots: Vec<reqwest::Certificate>,
     /// The host's `wip_prefixes`, or `None` for the gateway's default.
     pub wip_prefixes: Option<Vec<String>>,
 }
@@ -51,24 +52,16 @@ impl Upstream {
             }
             ca_files.push(path);
         }
+        let mut roots = Vec::new();
         for path in &ca_files {
-            certificates(path)?;
+            roots.extend(certificates(path)?);
         }
 
         Ok(Self {
             base,
-            ca_files,
+            roots,
             wip_prefixes: settings.and_then(|settings| settings.wip_prefixes.clone()),
         })
-    }
-
-    /// Every extra CA root, parsed.
-    pub fn roots(&self) -> Result<Vec<reqwest::Certificate>, String> {
-        let mut roots = Vec::new();
-        for path in &self.ca_files {
-            roots.extend(certificates(path)?);
-        }
-        Ok(roots)
     }
 
     /// The gateway's draft prefixes for this host.
@@ -80,10 +73,10 @@ impl Upstream {
     }
 
     /// Whether the gateway's client can honour these settings today: no extra CA roots, and a
-    /// base at the forge's root (fga-core joins absolute `/api/v1/...` paths). Until it can,
-    /// such a host keeps the built-in path.
+    /// base at the forge's root (fga-core joins absolute `/api/v1/...` paths). Until
+    /// `new_with_roots` and relative joins land, such a host keeps the built-in path.
     pub fn gateway_ready(&self) -> bool {
-        self.ca_files.is_empty() && self.base.path() == "/"
+        self.roots.is_empty() && self.base.path() == "/"
     }
 }
 
@@ -151,8 +144,12 @@ mod tests {
         ));
         let env = HashMap::from([("FJ_SHIM_CA_FILE".to_string(), ca.display().to_string())]);
         let upstream = Upstream::for_host("forge.test", &with_host_ca, &env).expect("ca");
-        assert_eq!(upstream.ca_files, vec![ca.clone(), ca.clone()]);
-        assert!(!upstream.roots().expect("roots").is_empty());
+        let one_file = certificates(&ca).expect("test CA").len();
+        assert!(one_file > 0);
+        assert_eq!(upstream.roots.len(), 2 * one_file, "both sources, in order");
+        let host_only =
+            Upstream::for_host("forge.test", &with_host_ca, &HashMap::new()).expect("host CA");
+        assert_eq!(host_only.roots.len(), one_file);
         assert!(!upstream.gateway_ready(), "extra roots wait for fga-core");
     }
 
