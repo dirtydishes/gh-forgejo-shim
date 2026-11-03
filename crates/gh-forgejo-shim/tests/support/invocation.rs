@@ -141,6 +141,98 @@ fn gh_state_commands_and_help_run_plain_gh_in_a_forgejo_context() -> TestResult 
 
 #[cfg(unix)]
 #[test]
+fn github_target_in_doubt_near_a_forge_is_refused() -> TestResult {
+    // Where the parse may not read the call as gh does (a flag before the command word, a command
+    // the grammar doesn't cover, a call it rejects), plain gh runs only with no Forgejo host in
+    // reach (Sol r3#1 on #114).
+    let fixture = CliFixture::new()?;
+    let decoy = fixture.write_executable("gh", "#!/bin/sh\necho ran\nexit 23\n")?;
+    let forge_repo = [("GH_REPO", "git.example.com/o/r")];
+    for (args, env) in [
+        // gh runs `release create` with notes `api`, in GH_REPO.
+        (
+            &["--notes", "api", "release", "create", "v1"][..],
+            &[
+                ("GH_REPO", "git.example.com/o/r"),
+                ("GH_HOST", "github.com"),
+            ][..],
+        ),
+        (
+            &[
+                "--notes",
+                "api",
+                "--title",
+                "https://github.com",
+                "release",
+                "create",
+                "v1",
+            ][..],
+            &forge_repo[..],
+        ),
+        // `-R=…` is `--notes`'s value to gh.
+        (
+            &["--notes", "-R=github.com/x/y", "release", "create", "v1"][..],
+            &forge_repo[..],
+        ),
+        // No grammar for `release create`: `--notes` takes `-R` as its value.
+        (
+            &["release", "create", "v1", "--notes", "-R", "github.com/x/y"][..],
+            &forge_repo[..],
+        ),
+        // The Forgejo host in an argument the parse may have misread.
+        (
+            &[
+                "release",
+                "create",
+                "v1",
+                "--notes",
+                "x",
+                "-R",
+                "git.example.com/o/r",
+            ][..],
+            &[][..],
+        ),
+        // A call the grammar rejects: a newer gh may have the flag.
+        (
+            &["pr", "view", "-Rgithub.com/owner/repo", "--invalid=x"][..],
+            &[("GH_HOST", "git.example.com")][..],
+        ),
+    ] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env("FJ_SHIM_REAL_GH", &decoy)
+            .envs(env.iter().copied())
+            .arg("gh")
+            .args(args)
+            .output()?;
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: plain gh ran");
+    }
+    // Read as gh reads it, or nothing Forgejo in reach: plain gh runs.
+    for (args, env) in [
+        (
+            &["pr", "view", "1", "-R", "github.com/x/y"][..],
+            &[("GH_HOST", "git.example.com")][..],
+        ),
+        (
+            &["release", "create", "v1", "--repo", "github.com/x/y"][..],
+            &[][..],
+        ),
+        (&["--notes", "api", "release", "create", "v1"][..], &[][..]),
+    ] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env("FJ_SHIM_REAL_GH", &decoy)
+            .envs(env.iter().copied())
+            .arg("gh")
+            .args(args)
+            .output()?;
+        assert_eq!(output.status.code(), Some(23), "{args:?}: {output:?}");
+    }
+    Ok(())
+}
+
+#[test]
 fn github_delegation_keeps_every_original_argument_byte() -> TestResult {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
@@ -155,10 +247,11 @@ fn github_delegation_keeps_every_original_argument_byte() -> TestResult {
         OsString::from("--"),
         OsString::from(""),
     ];
+    // No Forgejo host in reach: with one, a call the grammar rejects is refused instead, since a
+    // newer gh's flag might take `-R` as its value (`github_target_in_doubt_near_a_forge_is_refused`).
     let output = fixture
         .command("gh-forgejo-shim")?
         .env("FJ_SHIM_REAL_GH", decoy)
-        .env("GH_HOST", "git.example.com")
         .arg("gh")
         .args(&args)
         .output()?;
