@@ -15,12 +15,13 @@ use crate::repo::{gh_hostname, shell_split};
 pub const SUBCOMMAND: &str = "__gfj-browser";
 
 /// `GH_BROWSER` for a launched gh: the shim, single-quoted for gh's shlex split, the hidden
-/// subcommand, and the served entries. gh appends the URL.
+/// subcommand, and the served entries, each with its forge's path prefix if it has one
+/// (`forge.test/forgejo`), quoted the same way. gh appends the URL.
 pub fn gh_browser(shim: &Path, served: &[String]) -> OsString {
     let mut value = OsString::from(single_quote(&shim.to_string_lossy()));
     value.push(format!(" {SUBCOMMAND}"));
     for entry in served {
-        value.push(format!(" {entry}"));
+        value.push(format!(" {}", single_quote(entry)));
     }
     value
 }
@@ -88,47 +89,56 @@ pub fn is_self(command: &str, shim: Option<&Path>) -> bool {
         || OsStr::new(first) == shim.as_os_str()
 }
 
-/// The URL to open: `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a
-/// fragment, becomes `/pulls/<N>` when the host is a served one; anything else is unchanged.
-/// `served` holds allowlist entries; a ported entry matches its URL with or without the port,
-/// the two spellings the gateway admits (§5).
+/// The URL to open: `<prefix>/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or
+/// a fragment, becomes `.../pulls/<N>` when the host is a served one and `<prefix>` is its forge's
+/// path prefix (empty for a forge at the root); anything else is unchanged. `served` holds
+/// allowlist entries, each followed by that prefix (`forge.test/forgejo`); a ported entry matches
+/// its URL with or without the port, the two spellings the gateway admits (§5).
 pub fn rewrite(url: &str, served: &[String]) -> String {
     let Ok(mut parsed) = Url::parse(url) else {
         return url.to_string();
     };
-    if !matches!(parsed.scheme(), "https" | "http") || !served_host(&parsed, served) {
+    if !matches!(parsed.scheme(), "https" | "http") {
         return url.to_string();
     }
+    let Some(prefix) = served.iter().find_map(|entry| {
+        let (host, prefix) = entry.split_once('/').unwrap_or((entry, ""));
+        served_host(&parsed, host).then_some(prefix)
+    }) else {
+        return url.to_string();
+    };
+    let prefix: Vec<&str> = prefix.split('/').filter(|part| !part.is_empty()).collect();
     let segments: Vec<&str> = parsed.path().trim_start_matches('/').split('/').collect();
-    let is_pr = segments.len() >= 4
-        && !segments[0].is_empty()
-        && !segments[1].is_empty()
-        && segments[2] == "pull"
-        && !segments[3].is_empty()
-        && segments[3].bytes().all(|byte| byte.is_ascii_digit());
+    let Some(rest) = segments.strip_prefix(prefix.as_slice()) else {
+        return url.to_string();
+    };
+    let is_pr = rest.len() >= 4
+        && !rest[0].is_empty()
+        && !rest[1].is_empty()
+        && rest[2] == "pull"
+        && !rest[3].is_empty()
+        && rest[3].bytes().all(|byte| byte.is_ascii_digit());
     if !is_pr {
         return url.to_string();
     }
     let mut rewritten = segments.clone();
-    rewritten[2] = "pulls";
+    rewritten[prefix.len() + 2] = "pulls";
     parsed.set_path(&format!("/{}", rewritten.join("/")));
     parsed.to_string()
 }
 
-fn served_host(url: &Url, served: &[String]) -> bool {
+/// Whether `url`'s host is the allowlist `entry`.
+fn served_host(url: &Url, entry: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
     let host = host.to_ascii_lowercase();
-    let with_port = url.port().map(|port| format!("{host}:{port}"));
-    served.iter().any(|entry| {
-        let entry = entry.to_ascii_lowercase();
-        match &with_port {
-            Some(spelled) => *spelled == entry,
-            // No port in the URL: the entry's hostname, ported or not.
-            None => gh_hostname(&entry) == host,
-        }
-    })
+    let entry = entry.to_ascii_lowercase();
+    match url.port() {
+        Some(port) => format!("{host}:{port}") == entry,
+        // No port in the URL: the entry's hostname, ported or not.
+        None => gh_hostname(&entry) == host,
+    }
 }
 
 /// The browser command the user would have got, in gh's order: their own `GH_BROWSER` (saved by
@@ -195,6 +205,40 @@ mod tests {
     }
 
     #[test]
+    fn a_forge_under_a_path_is_rewritten_under_that_path_only() {
+        let served = vec!["forge.test/forgejo".to_string()];
+        for (url, expected) in [
+            (
+                "https://forge.test/forgejo/o/r/pull/1",
+                "https://forge.test/forgejo/o/r/pulls/1",
+            ),
+            (
+                "https://forge.test/forgejo/o/r/pull/1/files#c",
+                "https://forge.test/forgejo/o/r/pulls/1/files#c",
+            ),
+            // Not under the prefix, or a file path that happens to hold `pull/<N>`.
+            (
+                "https://forge.test/o/r/pull/1",
+                "https://forge.test/o/r/pull/1",
+            ),
+            (
+                "https://forge.test/forgejo/o/r/src/branch/pull/7",
+                "https://forge.test/forgejo/o/r/src/branch/pull/7",
+            ),
+        ] {
+            assert_eq!(rewrite(url, &served), expected, "{url}");
+        }
+        // At the root, a file path holding `pull/<N>` stays as it is too.
+        assert_eq!(
+            rewrite(
+                "https://forge.test/o/r/src/branch/pull/7",
+                &["forge.test".to_string()]
+            ),
+            "https://forge.test/o/r/src/branch/pull/7"
+        );
+    }
+
+    #[test]
     fn everything_else_passes_through() {
         for url in [
             "https://github.com/o/r/pull/7",
@@ -230,18 +274,23 @@ mod tests {
     fn gh_browser_names_the_shim_the_helper_and_the_served_hosts() {
         let value = gh_browser(
             Path::new("/opt/it's/gfj"),
-            &["forge.test".to_string(), "port.test:3443".to_string()],
+            &["forge.test".to_string(), "port.test:3443/it's".to_string()],
         );
         assert_eq!(
             value,
             OsString::from(format!(
-                "'/opt/it'\\''s/gfj' {SUBCOMMAND} forge.test port.test:3443"
+                "'/opt/it'\\''s/gfj' {SUBCOMMAND} 'forge.test' 'port.test:3443/it'\\''s'"
             ))
         );
         let words = shell_split(&value.to_string_lossy()).expect("split");
         assert_eq!(
             words,
-            ["/opt/it's/gfj", SUBCOMMAND, "forge.test", "port.test:3443"]
+            [
+                "/opt/it's/gfj",
+                SUBCOMMAND,
+                "forge.test",
+                "port.test:3443/it's"
+            ]
         );
     }
 

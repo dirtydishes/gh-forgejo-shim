@@ -208,6 +208,14 @@ pub fn launch(
             login: None,
         })
         .collect();
+    // The browser helper's entries: each served entry, then its forge's path prefix, if any
+    // (`forge.test/forgejo`), since the gateway's PR links keep that prefix (§9).
+    let browser_entries: Vec<String> = served_hosts
+        .iter()
+        .map(|(entry, _, upstream)| {
+            format!("{entry}{}", upstream.base.path().trim_end_matches('/'))
+        })
+        .collect();
     let gateway: Vec<GatewayHost> = served_hosts
         .into_iter()
         .map(|(entry, real, upstream)| GatewayHost {
@@ -228,10 +236,12 @@ pub fn launch(
     let allowlist = config.hosts.clone();
     let shim = std::env::current_exe().unwrap_or_default();
     // Every `--web` open and `gh browse` goes through the browser helper (§9).
-    let served_entries: Vec<String> = served.iter().map(|host| host.entry.clone()).collect();
     extra_edits.push((
         "GH_BROWSER",
-        Edit::Set(crate::launcher::browser::gh_browser(&shim, &served_entries)),
+        Edit::Set(crate::launcher::browser::gh_browser(
+            &shim,
+            &browser_entries,
+        )),
     ));
     let credentials = ghconfig::credentials(&served);
 

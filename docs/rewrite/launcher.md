@@ -769,10 +769,12 @@ PR URLs from the gateway end in `/pull/N` in every mode (D2, bead `65s`). Forgej
 `/pulls/N`. In client mode no proxy exists to redirect, so the launcher sets `GH_BROWSER` to a
 helper. Every gh `--web` open and every `gh browse` goes through it.
 
-- `GH_BROWSER` is the shim's absolute path, shell-quoted for shlex, plus a hidden subcommand. gh
-  appends the URL (fact 6).
-- The helper rewrites the URL only when its host names a host in *S*, and its path is
-  `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a fragment. For an
+- `GH_BROWSER` is the shim's absolute path, shell-quoted for shlex, plus a hidden subcommand and
+  the hosts in *S*, each quoted the same way and followed by its forge's path prefix, if any
+  (`forge.test/forgejo`, from the upstream base, §5). gh appends the URL (fact 6).
+- The helper rewrites the URL only when its host names a host in *S*, and its path is that
+  host's prefix, then `/<owner>/<repo>/pull/<N>`, optionally followed by `/…`, a query or a
+  fragment. The gateway's links keep a forge's path prefix. For an
   allowlist entry with a port, both spellings count, the same two the gateway admits (§5). The
   gateway's own links carry the port, from `public_url`, while URLs gh builds itself don't. It changes
   `/pull/` to `/pulls/` and leaves everything else as it was. Other URLs pass through unchanged.
