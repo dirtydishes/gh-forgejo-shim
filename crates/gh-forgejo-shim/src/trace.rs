@@ -191,7 +191,8 @@ fn redact_text(value: &str) -> String {
 
 /// Replaces each credential in free text with `replacement`: URL userinfo, the value of a
 /// sensitive `key=value`, `key: value` or `"key": "value"` (every Authorization header among
-/// them), and known token prefixes. The gh and git traces use different replacements.
+/// them), and known token prefixes. Outside JSON a sensitive value takes the rest of its line.
+/// The gh and git traces use different replacements.
 pub(crate) fn redact_text_with(value: &str, replacement: &str) -> String {
     let result = redact_url_credentials(value, replacement);
     let result = redact_sensitive_key_values(&result, replacement);
@@ -281,100 +282,54 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
     } else {
         None
     };
+    let line_end = rest_of_line(value, value_start);
     if let Some((quoted_start, quoted_end, quote_len)) = quoted {
         let after = (quoted_end + quote_len).min(value.len());
-        // A quoted scheme, or nothing, with the credential after it (`"token" secret`): that
-        // credential is hidden too, scheme and all.
-        if authorization {
-            let quoted_text = value[quoted_start..quoted_end].trim().to_ascii_lowercase();
-            if quoted_text.is_empty() || AUTH_SCHEMES.contains(&quoted_text.as_str()) {
-                if let Some(end) = credential_after_scheme(value, after) {
-                    return Some((quoted_start, end));
-                }
-            }
+        // JSON, where the key itself was quoted (`"token":`): the string is the value when a
+        // comma, a bracket or the line's end follows it, and the next field stays.
+        let json = value[..delimiter_index].trim_end().ends_with(['"', '\'']);
+        if (json && ends_json_value(value, after)) || line_end == after {
+            return Some((quoted_start, quoted_end));
         }
-        // A secret doesn't end at a quote with more of it glued on, as in `"first"tail` or the
-        // shell's `'it'\''s'`.
-        if quoted_end < value.len() {
-            // JSON when the key itself was quoted (`"token":`), a shell word otherwise.
-            let json = value[..delimiter_index].trim_end().ends_with(['"', '\'']);
-            let end = glued_end(value, after, json);
-            if end > after {
-                return Some((quoted_start, end));
-            }
-        }
-        return Some((quoted_start, quoted_end));
+        return Some((quoted_start, line_end));
     }
     if authorization {
-        return Some(authorization_credential_range(value, value_start));
+        return Some((after_scheme_word(value, value_start, line_end), line_end));
     }
-
-    // An unquoted value runs to whitespace, or to the next query parameter after `=`. Ending it
-    // at `,` or `;` would keep the rest of a password such as `p@ss;w,rd`.
-    let query = value[delimiter_index..].starts_with('=');
-    let value_end = value[value_start..]
-        .find(|character: char| character.is_whitespace() || (query && character == '&'))
-        .map_or(value.len(), |offset| value_start + offset);
-    Some((value_start, value_end))
+    Some((value_start, line_end))
 }
 
-/// Where a word glued on at `start` ends (`json`: the key was quoted, as in `"token":"a",`): at
-/// whitespace or a delimiter, but a quoted part inside
-/// it runs to its closing quote, spaces and line breaks too, as the shell reads
-/// `password="a b"`, so a secret further along the word is hidden with it.
-fn glued_end(value: &str, start: usize, json: bool) -> usize {
-    let mut index = start;
-    while let Some(character) = value[index..].chars().next() {
-        // In JSON a comma or bracket ends the value and the next field stays; in a shell word
-        // they're literal (`password="a",tail` is one word), and only the shell's own
-        // separators end it.
-        let boundary = if json {
-            matches!(character, ',' | ';' | '}' | ']' | ')' | '&')
-        } else {
-            matches!(character, ';' | '&' | '|' | '<' | '>' | ')')
-        };
-        if character.is_whitespace() || boundary {
-            break;
-        }
-        if character == '\\' {
-            index += 1;
-            if let Some(escaped) = value[index..].chars().next() {
-                index += escaped.len_utf8();
+/// Where a secret starting at `start` ends outside JSON: at the end of its line, or further while
+/// a quote opened on it is still open (`token="a` and `b"` on the next line). Anything after the
+/// secret on its line is hidden too: when in doubt, the trace hides it. An unclosed quote runs to
+/// the end of `value`, which is one argv element or one output excerpt, never the next.
+fn rest_of_line(value: &str, start: usize) -> usize {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut end = value.len();
+    for (offset, character) in value[start..].char_indices() {
+        match character {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '\n' | '\r' if quote.is_none() => {
+                end = start + offset;
+                break;
             }
-            continue;
+            '"' | '\'' if quote.is_none() => quote = Some(character),
+            _ if quote == Some(character) => quote = None,
+            _ => {}
         }
-        if matches!(character, '"' | '\'') {
-            let close = closing_quote(value, index + 1, character);
-            index = (close + 1).min(value.len());
-            continue;
-        }
-        index += character.len_utf8();
     }
-    index
+    start + value[start..end].trim_end().len()
 }
 
-/// The end of a credential after a quoted Authorization scheme or empty quote (`"token" x`), or
-/// `None` when none follows: the line ends or a delimiter comes first. A quoted credential runs to
-/// its closing quote, across lines; anything else to the end of its line.
-fn credential_after_scheme(value: &str, after: usize) -> Option<usize> {
-    let gap = value[after..].chars().next()?;
-    if !gap.is_whitespace() || matches!(gap, '\n' | '\r') {
-        return None;
-    }
-    let start = skip_whitespace(value, after);
-    let next = value[start..].chars().next()?;
-    if matches!(next, ',' | ';' | '}' | ']' | ')' | '&' | '\n' | '\r') {
-        return None;
-    }
-    let line_end = authorization_credential_range(value, start).1;
-    // A quoted credential can run past the line's end; anything after it on the line is hidden
-    // too (`"Bearer" "first" tail`).
-    if matches!(next, '"' | '\'') {
-        return Some(glued_end(value, start, false).max(line_end));
-    }
-    // The rest of the line, whatever it looks like: a credential such as base64 `…=` can look
-    // like a `key=value` field, and when in doubt the trace hides it.
-    Some(line_end)
+/// Whether a JSON string closed just before `after` ends its value: a comma, a closing bracket or
+/// the line's end follows it, spaces aside.
+fn ends_json_value(value: &str, after: usize) -> bool {
+    value[skip_whitespace(value, after)..]
+        .chars()
+        .next()
+        .is_none_or(|character| matches!(character, ',' | '}' | ']' | '\n' | '\r'))
 }
 
 /// The index of the quote that ends a string starting at `start`, past any backslash-escaped
@@ -562,20 +517,14 @@ fn replace_ranges(value: &str, ranges: &[(usize, usize)], replacement: &str) -> 
     redacted
 }
 
-/// An Authorization value runs to the end of its line. A leading scheme word (`token`,
-/// `Bearer`) stays readable when a credential follows it on that line; any other first word is
-/// part of the credential.
-fn authorization_credential_range(value: &str, start: usize) -> (usize, usize) {
-    let line = value[start..]
-        .split(['\n', '\r'])
-        .next()
-        .unwrap_or_default()
-        .trim_end();
-    let credential = line
-        .find(char::is_whitespace)
-        .filter(|&space| AUTH_SCHEMES.contains(&line[..space].to_ascii_lowercase().as_str()))
-        .map_or(0, |space| line.len() - line[space..].trim_start().len());
-    (start + credential, start + line.len())
+/// Where the credential starts in an unquoted Authorization value ending at `end`: after a
+/// leading scheme word (`token`, `Bearer`) when more follows it, so the scheme stays readable;
+/// at `start` for any other first word, which is part of the credential.
+fn after_scheme_word(value: &str, start: usize, end: usize) -> usize {
+    let text = &value[start..end];
+    text.find(char::is_whitespace)
+        .filter(|&space| AUTH_SCHEMES.contains(&text[..space].to_ascii_lowercase().as_str()))
+        .map_or(start, |space| end - text[space..].trim_start().len())
 }
 
 fn trace_path(env: &HashMap<String, String>) -> Option<PathBuf> {
@@ -838,18 +787,13 @@ mod tests {
             redact_text(r#"{"lowpass":"8kHz","highpass":"120Hz"}"#),
             r#"{"lowpass":"8kHz","highpass":"120Hz"}"#
         );
-        // A shell word that ends at its real closing quote keeps the field after it (Sol r4#4).
-        assert_eq!(
-            redact_text(r#"password='it'\''s' status=200"#),
-            "password='<redacted> status=200"
-        );
     }
 
     #[test]
     fn ambiguous_keys_are_redacted_by_decision() {
         // When in doubt, redact (coordinator, 2026-11-03): a key with `pass` in it that isn't an
-        // exact ordinary word, and the rest of a line after a quoted Authorization scheme or
-        // empty quote, are hidden even when they're harmless.
+        // exact ordinary word is a secret, and outside JSON a secret takes the rest of its line,
+        // so harmless text is hidden with it.
         for (text, redacted) in [
             ("byPassEnabled=true", "byPassEnabled=<redacted>"),
             ("byPASSOption=true", "byPASSOption=<redacted>"),
@@ -857,16 +801,40 @@ mod tests {
                 r#"authorization="" status=200"#,
                 r#"authorization="<redacted>"#,
             ),
+            ("password=x status=200", "password=<redacted>"),
+            (r#"password='it'\''s' status=200"#, "password='<redacted>"),
+            (
+                r#"authorization="x"&state=1 next"#,
+                r#"authorization="<redacted>"#,
+            ),
+            ("?token=abc&state=1", "?token=<redacted>"),
+            (
+                "password=x status=200\nnext line",
+                "password=<redacted>\nnext line",
+            ),
         ] {
             assert_eq!(redact_text(text), redacted, "{text}");
         }
     }
 
     #[test]
-    fn a_glued_tail_stops_at_a_query_separator() {
+    fn an_unclosed_quote_hides_the_rest_of_its_own_field_only() {
+        // It fails closed: the rest of the argv element or excerpt, never the next one.
+        let argv = [
+            "--field=password=\"open\nsecond line".to_string(),
+            "status=200".to_string(),
+        ];
         assert_eq!(
-            redact_text(r#"authorization="x"&state=1 next"#),
-            r#"authorization="<redacted>"&state=1 next"#
+            redact_argv(&argv),
+            ["--field=password=\"<redacted>", "status=200"]
+        );
+        assert_eq!(
+            redact_text("token='open\nsecond line\n"),
+            "token='<redacted>\n"
+        );
+        assert_eq!(
+            redact_text(r#"{"token":"open, "status":200}"#),
+            r#"{"token":"<redacted>"#
         );
     }
 
@@ -952,10 +920,34 @@ mod tests {
                 "audit-tail",
             ),
             (r#"password="a",audit-tail"#, "audit-tail"),
+            // A nested key's quoted value, inside the rest of a line or across its break (Sol r6#2).
+            (r#"bypass1=token="first audit-tail""#, "audit-tail"),
+            (
+                "Authorization: \"Bearer\" \"first\" token=\"head\naudit-tail\"",
+                "audit-tail",
+            ),
         ] {
             for replacement in [REDACTED, "[REDACTED]"] {
                 let redacted = redact_text_with(text, replacement);
                 assert!(!redacted.contains(secret), "{text} -> {redacted}");
+            }
+        }
+        // Text glued to a quoted secret, whatever character joins it: every boundary any round
+        // tried (Sol r4#4, r5#3, r6#1), in argv and in a git excerpt.
+        for joint in [
+            ',', ';', '}', ']', ')', '&', '|', '<', '>', '(', '\\', ':', '=',
+        ] {
+            for text in [
+                format!(r#"password="a"{joint}audit-tail"#),
+                format!(r#"--field=token='a'{joint}audit-tail"#),
+                format!("authorization: \"Bearer\" \"a\"{joint}audit-tail"),
+            ] {
+                for replacement in [REDACTED, "[REDACTED]"] {
+                    let redacted = redact_text_with(&text, replacement);
+                    assert!(!redacted.contains("audit-tail"), "{text} -> {redacted}");
+                }
+                let argv = redact_argv(std::slice::from_ref(&text)).join(" ");
+                assert!(!argv.contains("audit-tail"), "{text} -> {argv}");
             }
         }
     }
