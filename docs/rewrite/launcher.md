@@ -92,7 +92,7 @@ only to the commands on one list in code, `launcher::LAUNCH_LIST`, matched on th
 alias expansion (L2). Every other Forgejo route keeps the shim's built-in path, as before the
 launcher. So do usage errors, help, and a listed command's forms the built-in path refuses as
 unsupported, such as `pr checks --watch`: their answers need no token, and they stay as they are
-until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, then adds `pr list`, `api`, `auth token` and `auth status`. C3a adds `pr create`, `pr comment` and `pr edit`, each launching only with the flags a trace showed the gateway serves (`launcher::LAUNCH_FLAGS`); any other flag keeps the built-in path, which serves or refuses that form before writing. For these commands the flag list replaces the built-in path's own test for the forms it serves. C3b adds `pr merge` (`--merge`, `--squash`, `--rebase`, `--auto`, `--match-head-commit`), `pr ready` (with `--undo`), `pr close` and `pr reopen`, the same way. `--delete-branch` stays off the list until the gateway can delete a branch: gh treats the gateway's 404 as already deleted and reports success, with the branch still there. C3c adds `pr checkout`, with `--branch`, `--detach` and `--force`, all git-side, and checks it end to end in the e2e environment: a launched `gh pr checkout` fetches from the forge over TLS with only the launcher's credential helper (section 11's test 14, `cwe.17`). Each later gateway command adds its name to the list, with a test, in the change that
+until a test shows the gateway serves them. L3 starts the list with `pr view` and `pr checks`, then adds `pr list`, `api`, `auth token` and `auth status`. C3a adds `pr create`, `pr comment` and `pr edit`, each launching only with the flags a trace showed the gateway serves (`launcher::LAUNCH_FLAGS`); any other flag keeps the built-in path, which serves or refuses that form before writing. For these commands the flag list replaces the built-in path's own test for the forms it serves. C3b adds `pr merge` (`--merge`, `--squash`, `--rebase`, `--auto`, `--match-head-commit`), `pr ready` (with `--undo`), `pr close` and `pr reopen`, the same way. `--delete-branch` stays off the list until the gateway can delete a branch: gh treats the gateway's 404 as already deleted and reports success, with the branch still there. C3c adds `pr checkout`, with `--branch`, `--detach` and `--force`, all git-side (`cwe.17`). The e2e environment runs it end to end for a same-repository pull request, with each of those flags and `-R`: a launched `gh pr checkout` fetches from the forge over TLS with only the launcher's credential helper, even with other helpers configured. That is test 14's first clause, a default-port fetch; its other clauses run as process tests or wait for `cwe.43`. Each later gateway command adds its name to the list, with a test, in the change that
 makes the gateway serve it. Once the list covers everything, C5 (`cwe.19`) deletes the built-in
 path and the list with it, and this rule becomes the one above.
 
@@ -394,6 +394,17 @@ The cost:
   for every host (`-c credential.helper=`, `gh/git/client.go:153-155`;
   `gh/pkg/cmd/pr/checkout/checkout.go:369-370`). A private GitHub submodule fetched by
   `gh pr checkout` in a Forgejo repo therefore fails to authenticate.
+  `gh pr checkout` picks its fetch remote by owner and name across every host gh knows, which in
+  a launch includes the user's other hosts and github.com, ranked `upstream`, `github`, `origin`
+  (`gh/context/remote.go:28-35`): with a `github` remote mirroring the forge's repository, the
+  fetch goes to that mirror. A public mirror gives its own, possibly stale, branch; a private one
+  gets no credential, so nothing leaks. `--force` resets an existing local branch with `git reset
+  --hard` (`checkout.go:331-342`), as gh does, where the built-in path ran `git checkout -B`,
+  which kept uncommitted changes or refused. Two kinds of pull request check out worse launched
+  than on the built-in path until the gateway reports them as GitHub would, with no head
+  repository (`cwe.17.1`): an AGit pull request, whose head branch name is `refs/pull/N/head`,
+  fails to fetch; and one whose head branch was deleted fetches whatever branch now has that
+  name.
 - A git that a child of a launched gh starts, such as an alias shell or an editor, also gets a
   credential only for a served forge, and none for any other host over HTTPS: GitHub, GitHub
   Enterprise, GitLab, or a host the user's Keychain helper would answer. A shell alias that

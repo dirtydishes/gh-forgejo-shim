@@ -70,8 +70,9 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     ("pr ready", &["undo", "repo"]),
     ("pr close", &["repo"]),
     ("pr reopen", &["repo"]),
-    // Git-side flags only; the e2e run checks each (C3c, `cwe.17`). `--recurse-submodules` and
-    // `--worktree` stay off until traced.
+    // Git-side flags only; the e2e run checks `--branch`, `--detach`, `--force` and `-R` for a
+    // same-repository pull request (C3c, `cwe.17`). `--recurse-submodules` and `--worktree` stay
+    // off until traced.
     ("pr checkout", &["branch", "detach", "force", "repo"]),
 ];
 
