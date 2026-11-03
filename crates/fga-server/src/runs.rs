@@ -87,6 +87,24 @@ fn links(
     headers
 }
 
+/// gh follows a run's `jobs_url`, and builds the artifacts path itself; `artifacts_url` is there for
+/// GitHub's shape. Forgejo 15's API has neither per run, so both point under the gateway's API,
+/// where they answer empty lists.
+fn with_links(host: &Host, owner: &str, repo: &str, mut run: Value) -> Value {
+    let id = run["id"].to_string();
+    for (field, resource) in [("jobs_url", "jobs"), ("artifacts_url", "artifacts")] {
+        let mut url = host.public_url.clone();
+        url.path_segments_mut()
+            .expect("validated public URL")
+            .pop_if_empty()
+            .extend([
+                "api", "v3", "repos", owner, repo, "actions", "runs", &id, resource,
+            ]);
+        run[field] = json!(url.as_str());
+    }
+    run
+}
+
 pub async fn runs(
     Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
@@ -115,7 +133,7 @@ pub async fn runs(
     }
     if let Some(status) = q.status {
         let native: &[&str] = match status.as_str() {
-            "queued" => &["waiting", "blocked"],
+            "queued" => &["waiting", "blocked", "unknown"],
             "in_progress" => &["running"],
             "completed" => &["success", "failure", "cancelled", "skipped"],
             "success" => &["success"],
@@ -146,7 +164,12 @@ pub async fn runs(
             .iter()
             .map(|run| {
                 let workflow = workflows.get(&run.workflow_id).ok_or(Error::NotFound)?;
-                actions::run(run, workflow)
+                Ok(with_links(
+                    &host,
+                    &owner,
+                    &repo,
+                    actions::run(run, workflow)?,
+                ))
             })
             .collect();
         Ok((
@@ -205,24 +228,57 @@ pub async fn workflows(
     result.unwrap_or_else(rest_error)
 }
 
+async fn source(
+    session: &Session,
+    owner: &str,
+    repo: &str,
+    id: i64,
+) -> Result<actions::Run, Error> {
+    let value = session
+        .get::<serde_json::Value>(
+            &["repos", owner, repo, "actions", "runs", &id.to_string()],
+            &[],
+        )
+        .await?;
+    serde_json::from_value(value).map_err(|_| Error::Upstream)
+}
+
 pub async fn run(
+    Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo, id)): Path<(String, String, i64)>,
 ) -> Response {
     let result = async {
-        let value = session
-            .get::<serde_json::Value>(
-                &["repos", &owner, &repo, "actions", "runs", &id.to_string()],
-                &[],
-            )
-            .await?;
-        let run: actions::Run = serde_json::from_value(value).map_err(|_| Error::Upstream)?;
+        let run = source(&session, &owner, &repo, id).await?;
         let workflows = session.workflows(&owner, &repo).await?;
         let workflow = workflows.get(&run.workflow_id).ok_or(Error::NotFound)?;
-        Ok(Json(actions::run(&run, workflow)?).into_response())
+        let mapped = with_links(&host, &owner, &repo, actions::run(&run, workflow)?);
+        Ok(Json(mapped).into_response())
     }
     .await;
     result.unwrap_or_else(rest_error)
+}
+
+/// A run's jobs: none through Forgejo 15's API, for a run that exists.
+pub async fn jobs(
+    Extension(session): Extension<Session>,
+    Path((owner, repo, id)): Path<(String, String, i64)>,
+) -> Response {
+    match source(&session, &owner, &repo, id).await {
+        Ok(_) => Json(json!({"total_count": 0, "jobs": []})).into_response(),
+        Err(error) => rest_error(error),
+    }
+}
+
+/// A run's artifacts: none through Forgejo 15's API, for a run that exists.
+pub async fn artifacts(
+    Extension(session): Extension<Session>,
+    Path((owner, repo, id)): Path<(String, String, i64)>,
+) -> Response {
+    match source(&session, &owner, &repo, id).await {
+        Ok(_) => Json(json!({"total_count": 0, "artifacts": []})).into_response(),
+        Err(error) => rest_error(error),
+    }
 }
 
 pub async fn workflow(

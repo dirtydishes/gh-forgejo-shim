@@ -117,15 +117,24 @@ impl Mutation {
         ctx: &Context<'_>,
         input: AddCommentInput,
     ) -> async_graphql::Result<Option<AddCommentPayload>> {
-        let id = id(&input.subject_id, "PullRequest")?;
+        let id =
+            id(&input.subject_id, "PullRequest").or_else(|_| id(&input.subject_id, "Issue"))?;
         let session = ctx.data_unchecked::<Session>();
-        // The issues endpoint also accepts ordinary issues; confirm the typed ID targets a PR.
-        session
-            .pull_request(&id.owner, &id.repository, id.number)
-            .await
-            .map_err(error)?;
+        // Forgejo's issue comments endpoint takes issues and PRs alike; confirm the typed ID names
+        // what it says (`issue` refuses a PR's number).
+        if id.kind == "PullRequest" {
+            session
+                .pull_request(&id.owner, &id.repository, id.number)
+                .await
+                .map_err(error)?;
+        } else {
+            session
+                .issue(&id.owner, &id.repository, id.number)
+                .await
+                .map_err(error)?;
+        }
         let source = session
-            .add_pull_comment(&id.owner, &id.repository, id.number, &input.body)
+            .add_comment(&id.owner, &id.repository, id.number, &input.body)
             .await
             .map_err(write_error)?;
         Ok(Some(AddCommentPayload {

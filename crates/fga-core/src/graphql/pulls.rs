@@ -151,8 +151,12 @@ impl PullRequest {
     async fn base_ref_oid(&self) -> GitObjectId {
         GitObjectId(self.source.base.sha.clone())
     }
+    /// A same-repository PR always has its head repository; Forgejo sends none only once a PR's
+    /// fork is deleted. GitHub still calls that PR cross-repository, and gh relies on it:
+    /// `pr close --delete-branch` deletes the head branch in the base repository unless this is
+    /// true, which would delete the base's branch of the same name.
     async fn is_cross_repository(&self) -> bool {
-        self.source.head.repo.as_ref().is_some_and(|r| {
+        self.source.head.repo.as_ref().is_none_or(|r| {
             !r.owner.login.eq_ignore_ascii_case(&self.owner)
                 || r.name.as_ref().is_some_and(|name| name != &self.repo)
         })

@@ -67,14 +67,13 @@ request. Concurrent GraphQL fields share each upstream response, including error
 The GraphQL subset covers gh's PR read documents, introspection, PR node lookup, checks, reviews,
 review requests, and empty project connections: `projectItems`, and `projectCards` for classic
 projects, which Forgejo lacks. Its mutations cover `gh pr create`, `comment`, `edit`, `close`,
-`reopen`, `ready` (both ways) and `merge`, including auto-merge. `search`
-supports the repo-scoped author and review-request queries from `pr status`. Other search
-qualifiers return an error. The
-[trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the source commit and checksum. Its
-contract test checks type kinds, fields, nullability, arguments, defaults, enums, interfaces, and
-unions. [The schema example](../../crates/fga-core/examples/schema.rs) emits the implemented SDL,
-and [pin-schema.py](../../scripts/oracle/pin-schema.py) trims the independent GitHub reference to it.
-The full schema download remains ignored under `.local/`.
+`reopen`, `ready` (both ways) and `merge`, including auto-merge, and `gh issue comment`. `search`
+supports the repo-scoped author and review-request queries from `pr status`. Other search qualifiers
+return an error. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the source commit
+and checksum. Its contract test checks type kinds, fields, nullability, arguments, defaults, enums,
+interfaces, and unions. [The schema example](../../crates/fga-core/examples/schema.rs) emits the
+implemented SDL, and [pin-schema.py](../../scripts/oracle/pin-schema.py) trims the independent
+GitHub reference to it. The full schema download remains ignored under `.local/`.
 
 The pull-list route filters `head=owner:branch` after reading Forgejo's pages, then applies GitHub
 `page` and `per_page` pagination and emits `Link` headers. It compares owner names without case and
