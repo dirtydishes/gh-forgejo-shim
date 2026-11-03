@@ -156,9 +156,13 @@ impl Session {
         Ok(workflows)
     }
 
-    /// A run's workflow. `known` holds the default branch's; a run of a workflow that exists only on
-    /// its own branch (a PR adding one) is named from the file at the run's commit, and failing
-    /// that from its file name, so one such run never fails a list of runs.
+    /// A run's workflow. `known` holds the default branch's, and its name wins for a file it has, as
+    /// gh's WORKFLOW column shows it (GitHub would name the run from its own commit, which a PR
+    /// renaming its workflow makes differ). A run of a workflow that exists only on its own branch
+    /// (a PR adding one) is named from the file at the run's commit, looked for first in the
+    /// directory the default branch uses, and failing that from its file name. It never fails, so
+    /// one such run can't fail a list of runs. Forgejo's `workflow_id` is the bare file name
+    /// (`services/actions/notifier_helper.go:375`).
     pub async fn workflow_for(
         &self,
         owner: &str,
@@ -170,24 +174,40 @@ impl Session {
             return workflow.clone();
         }
         let filename = &run.workflow_id;
-        for directory in WORKFLOW_DIRECTORIES {
+        let used = known.values().find_map(|workflow| {
+            workflow
+                .path
+                .rsplit_once('/')
+                .map(|(directory, _)| directory)
+        });
+        let directories = used.into_iter().chain(
+            WORKFLOW_DIRECTORIES
+                .into_iter()
+                .filter(|d| Some(*d) != used),
+        );
+        for directory in directories {
             let path = format!("{directory}/{filename}");
-            if let Ok(content) = self
+            match self
                 .file_text_at(owner, repo, &path, Some(&run.commit_sha))
                 .await
             {
-                return Workflow {
-                    id: workflow_id(filename),
-                    name: workflow_name::from_content(&content, &path),
-                    path,
-                    state: "active",
-                };
+                Ok(content) => {
+                    return Workflow {
+                        id: workflow_id(filename),
+                        name: workflow_name::from_content(&content, &path),
+                        path,
+                        state: "active",
+                    };
+                }
+                // Only a missing file sends Forgejo on to the next directory.
+                Err(Error::NotFound) => continue,
+                Err(_) => break,
             }
         }
         Workflow {
             id: workflow_id(filename),
             name: filename.clone(),
-            path: format!("{}/{filename}", WORKFLOW_DIRECTORIES[0]),
+            path: format!("{}/{filename}", used.unwrap_or(WORKFLOW_DIRECTORIES[0])),
             state: "active",
         }
     }
