@@ -161,9 +161,20 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     let target_shim = setup_model.target_shim_path.clone();
     let mut checks = Vec::new();
 
-    // Nothing is written or installed for a gh the shim can't use (decision D3). A dry run goes
-    // on, to show the rest of the plan.
-    let gh_check = real_gh_check(&setup_model, &options.env, &options.platform);
+    // Nothing is written or installed for a gh the shim can't use (decision D3). The gh checked
+    // is the one the wrapper will run once the shim is in place, which isn't a gh the shim
+    // replaces. A dry run goes on, to show the rest of the plan.
+    let fallback_dirs = options
+        .fallback_dirs
+        .clone()
+        .unwrap_or_else(setup::default_fallback_dirs);
+    let real_gh = setup::find_real_gh_after_install(
+        Some(&config),
+        &options.env,
+        &fallback_dirs,
+        &target_shim,
+    );
+    let gh_check = real_gh_check(real_gh.as_ref(), &options.env, &options.platform);
     if gh_check.status == BootstrapCheckStatus::Fix && !options.dry_run {
         return Ok(BootstrapResult {
             repo: None,
@@ -709,8 +720,12 @@ impl BootstrapCheck {
 }
 
 /// Whether real gh is there and new enough ([`gh_version::MINIMUM`]).
-fn real_gh_check(model: &setup::SetupModel, env: &EnvMap, platform: &str) -> BootstrapCheck {
-    let check = gh_version::check(model.real_gh.as_ref(), env, platform);
+fn real_gh_check(
+    real_gh: Option<&setup::ToolPath>,
+    env: &EnvMap,
+    platform: &str,
+) -> BootstrapCheck {
+    let check = gh_version::check(real_gh, env, platform);
     match check.status {
         gh_version::Status::Supported => {
             BootstrapCheck::new("real gh", true, check.detail, Vec::<String>::new())

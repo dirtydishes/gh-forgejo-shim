@@ -166,10 +166,26 @@ pub fn find_tool(
     fallback_dirs: &[PathBuf],
     skip_managed_gh: bool,
 ) -> Option<ToolPath> {
+    find_tool_passing_over(name, configured, env, fallback_dirs, skip_managed_gh, None)
+}
+
+/// [`find_tool`], also passing over a `gh` at `replaced`, where the shim is about to go.
+fn find_tool_passing_over(
+    name: &str,
+    configured: Option<&Path>,
+    env: &EnvMap,
+    fallback_dirs: &[PathBuf],
+    skip_managed_gh: bool,
+    replaced: Option<&Path>,
+) -> Option<ToolPath> {
+    let should_skip = |path: &Path| {
+        external::should_skip_gh_candidate(path)
+            || replaced.is_some_and(|replaced| same_location(path, replaced))
+    };
     if let Some(configured) = configured.filter(|path| !path.as_os_str().is_empty()) {
         let path = expand_home(configured, env);
         if is_executable_file(&path) {
-            if skip_managed_gh && name == "gh" && external::should_skip_gh_candidate(&path) {
+            if skip_managed_gh && name == "gh" && should_skip(&path) {
                 // Keep looking for the real GitHub CLI.
             } else {
                 let source = if name == "gh" && env.contains_key("FJ_SHIM_REAL_GH") {
@@ -192,7 +208,7 @@ pub fn find_tool(
         if !is_executable_file(&candidate) {
             continue;
         }
-        if skip_managed_gh && name == "gh" && external::should_skip_gh_candidate(&candidate) {
+        if skip_managed_gh && name == "gh" && should_skip(&candidate) {
             continue;
         }
         return Some(ToolPath {
@@ -213,7 +229,7 @@ pub fn find_tool(
         if !is_executable_file(&candidate) {
             continue;
         }
-        if skip_managed_gh && name == "gh" && external::should_skip_gh_candidate(&candidate) {
+        if skip_managed_gh && name == "gh" && should_skip(&candidate) {
             continue;
         }
         return Some(ToolPath {
@@ -255,6 +271,30 @@ pub fn shell_quote(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// The gh the wrapper will delegate to once the shim is installed at `target`: as
+/// [`find_real_gh`], but a gh at `target` is passed over, since the shim will replace it.
+pub(crate) fn find_real_gh_after_install(
+    config: Option<&Config>,
+    env: &EnvMap,
+    fallback_dirs: &[PathBuf],
+    target: &Path,
+) -> Option<ToolPath> {
+    let configured = config.and_then(|config| config.paths.gh.as_deref().map(Path::new));
+    find_tool_passing_over("gh", configured, env, fallback_dirs, true, Some(target))
+}
+
+/// Whether `path` names the directory entry `target` does, even through a symlinked directory.
+/// A symlink at `target` counts as `target`, not as the file it points to: installing replaces
+/// the link and leaves that file alone.
+fn same_location(path: &Path, target: &Path) -> bool {
+    path == target
+        || (path.file_name() == target.file_name()
+            && match (path.parent(), target.parent()) {
+                (Some(left), Some(right)) => same_file(left, right),
+                _ => false,
+            })
 }
 
 /// The gh the wrapper delegates to: the configured one, else the first on PATH or in the

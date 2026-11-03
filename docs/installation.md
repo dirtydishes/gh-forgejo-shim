@@ -13,8 +13,12 @@ or a pre-release of 2.103.3. `gfj doctor` reports the same check.
 
 A `gh` you built yourself may report `DEV` or a `git describe` version that
 can't be compared. To go ahead with it, set `FJ_SHIM_ALLOW_UNKNOWN_GH=1`;
-`doctor` then shows a warning instead. A `gh` that reports an older version is
-refused even then.
+`doctor` then shows a warning instead. A `gh` that reports an older version,
+or that fails, hangs or floods its output instead of answering, is refused even
+then.
+
+The check runs `gh --version` with no token in its environment and with gh's
+update notices and telemetry turned off.
 
 ## Homebrew
 
