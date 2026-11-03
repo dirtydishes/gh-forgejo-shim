@@ -820,3 +820,72 @@ async fn comments_go_to_issues_and_pull_requests_by_their_own_ids() {
     }
     assert_eq!(*posted.lock().unwrap(), [2, 1]);
 }
+
+/// `gh pr close --delete-branch` deletes the head branch only when `isCrossRepository` is false
+/// (`close.go:150-157` in gh 2.103.3), and deletes it in the base repository. Forgejo sends
+/// `head.repo` null once a PR's fork is deleted; that PR is still cross-repository, as GitHub
+/// reports it, or gh would delete the base's branch of the same name. The query is gh's own, from
+/// the oracle capture of `pr close`.
+#[tokio::test]
+async fn a_pr_from_a_deleted_fork_stays_cross_repository() {
+    let captured: Value = serde_json::from_str(include_str!(
+        "../../../fixtures/oracle/writes/close.requests.json"
+    ))
+    .unwrap();
+    let query = captured[0]["query"].as_str().unwrap();
+    assert!(query.contains("isCrossRepository"), "{query}");
+    let with_head = |number: i32, head: Value| {
+        let mut source = pull();
+        source["number"] = json!(number);
+        source["head"] = head;
+        source
+    };
+    // A fork deleted after the PR was opened: no head repository, the branch name kept in `label`.
+    let deleted_fork = with_head(
+        5,
+        json!({"label":"feature","ref":"refs/pull/5/head","sha":"abc","repo":null}),
+    );
+    let same_repo = with_head(
+        6,
+        json!({"label":"feature","ref":"feature","sha":"abc",
+            "repo":{"name":"r","owner":{"id":1,"login":"o","avatar_url":""}}}),
+    );
+    let app = router()
+        .route(
+            "/api/v1/repos/o/r/pulls/5",
+            get(move || async move { Json(deleted_fork) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/6",
+            get(move || async move { Json(same_repo) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = Forgejo::new(base)
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    for (number, cross) in [(5, true), (6, false)] {
+        let variables = json!({"owner":"o","repo":"r","pr_number":number});
+        let response = graphql::schema()
+            .execute(
+                Request::new(query)
+                    .variables(async_graphql::Variables::from_json(variables))
+                    .data(session.clone()),
+            )
+            .await;
+        assert!(
+            response.errors.is_empty(),
+            "{number}: {:?}",
+            response.errors
+        );
+        let pull = &response.data.into_json().unwrap()["repository"]["pullRequest"];
+        assert_eq!(pull["isCrossRepository"], json!(cross), "{number}: {pull}");
+        assert_eq!(pull["headRefName"], json!("feature"), "{number}");
+    }
+    task.abort();
+}
