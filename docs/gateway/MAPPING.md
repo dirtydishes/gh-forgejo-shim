@@ -51,6 +51,13 @@ for *checking*, *conflict*, *error* and *WIP* alike, so the API can't prove a co
 Return that rejection as a GitHub-shaped error (G3).
 ## 3. Check contexts (`statusCheckRollup.contexts`)
 
+REST reuses this mapping: `GET commits/{ref}/check-runs` lists the Actions statuses as check runs,
+with the same status and conclusion, and `GET commits/{ref}/status` combines the other statuses as
+GitHub does (`failure` if any failed or errored, `pending` if any is pending or there are none).
+Both echo `{ref}` as the commit (`sha`, `head_sha`) rather than resolving a branch name or short SHA,
+and an unknown commit answers 200 with no statuses (pending, no check runs) where GitHub answers 422:
+Forgejo lists statuses for an unresolved ref as empty. Claude desktop sends full head SHAs.
+
 Forgejo has commit statuses only. Reads return the state in the field **`status`**, while POSTs send
 `state`. (`GET repos/{o}/{r}/commits/{sha}/statuses`; states `pending`,
 `success`, `error`, `failure`, `warning`). Forgejo Actions jobs report through them, with context
@@ -187,6 +194,43 @@ To clear it, run `gh pr merge --auto` again. The gateway tries the merge at once
 
 Node IDs are opaque base64 strings of `fga:<Type>:<owner>/<repo>:<number|id>`, per DESIGN.md.
 `databaseId` holds the Forgejo numeric ID. `fullDatabaseId` is the same value as a string.
+`PullRequestReviewThread` and `PullRequestReviewComment` IDs identify their node within a response,
+but `node(id:)` doesn't look them up; it returns null for them.
+A review thread's `viewerCanResolve` and `viewerCanUnresolve` follow Forgejo's `CanMarkConversation`:
+the PR's author or a repository writer. Forgejo also lets an official reviewer without write access
+resolve a conversation; the gateway reports `false` for them, since it can't tell cheaply.
+
+The `viewerCan*` flags are hints for a client's buttons; Forgejo enforces every action. Editing,
+closing and reopening a PR or a comment, and resolving a conversation, need write access to Forgejo's
+pull request or issue unit, but its API reports only code access (`permissions.push`). The gateway
+uses code access for both (Kell, 2026-11-02, rather than rebuilding Forgejo's team and collaborator
+rules from extra reads). That is exact for owners, admins, collaborators and personal repositories;
+in an organization repository where a team grants different access to code and pull requests, a flag
+can be wrong either way.
+
+Auto-merge flags follow Forgejo's merge check. They are false in an archived repository, need code
+write access as the request's token allows it, and ask the base branch's `user_can_merge`, which
+reflects a merge allowlist; only code writers can join one. If the base branch is deleted, write
+access decides. Two cases the gateway can't see, so a flag can be wrong (Kell, 2026-11-02):
+
+- A user on the allowlist who later lost write access may still merge, schedule a merge or cancel
+  one, but reads as a token limited to other repositories, which may not. Both report no code write and `user_can_merge: true`; the
+  gateway answers `false` for both.
+- After the base branch is deleted, a protection rule can still match its name. The gateway reads
+  no rules here, for any viewer, so it answers by write access alone.
+
+A review thread's `originalLine` is the line the reviewer commented on, read from the end of the
+comment's diff hunk. For a new-side comment, Forgejo's own `position` is the line in the commit that
+last changed it, which differs once later commits move the line; an old-side position is the line
+the reviewer chose. `line` is the same value while the PR's head is still the
+commit the thread's review was made on, and null after a push: Forgejo's API doesn't say whether the
+push moved or deleted the line. GitHub would still give a current line for a thread whose line
+survived the push. Without a hunk (Forgejo's `CODE_COMMENT_LINES = 0`), both are null.
+
+Forgejo sets a pending review's commit to the head at submit time and doesn't update its comments'
+hunks (`models/issues/review.go`). A review started before a push and submitted after it therefore
+reads as current, and its threads keep their old line; only Forgejo's unexposed `Invalidated` flag
+would tell (Kell, 2026-11-02).
 
 ## 8. Web URLs (v1.1)
 
@@ -209,6 +253,21 @@ emitted link opens.
 - Forgejo has no `/pull/{n}` route: Codeberg (Forgejo 16) returns 404 for it and 200 for `/pulls/{n}`.
 
 This replaces DESIGN.md's earlier "emit what Forgejo actually serves" rule for PR URLs.
+
+## 9. Bodies (`bodyHTML`)
+
+**Decision (2026-11-02):** `bodyHTML` on pull requests, issue comments and review comments is the body
+as escaped paragraphs: the source text, HTML-escaped, with blank lines as paragraph breaks and single
+newlines as `<br>`. Markdown isn't rendered.
+
+**Limitation:** ChatGPT's PR pane shows Markdown as written. A heading reads `## Heading`, and links
+and emphasis stay as source text.
+
+**Why:** Forgejo's API returns no rendered HTML. Rendering through Forgejo's markdown endpoint costs one
+request per body, and the timeline document can carry about 200 bodies. Rendering inside the gateway
+would pass raw HTML from a PR body to clients that trust `bodyHTML` as sanitized, as GitHub's is.
+Escaping costs nothing and can't inject markup. Optional sanitized rendering is
+`gh-forgejo-shim-xml`, if the pane turns out to need it.
 
 ## Open items to verify against the live twin (G2/G3)
 

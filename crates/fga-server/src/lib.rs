@@ -170,6 +170,14 @@ pub fn app(state: AppState) -> Router {
             "/api/v3/repos/{owner}/{repo}/commits/{sha}/pulls",
             get(rest::commit_pulls),
         )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/commits/{sha}/status",
+            get(rest::commit_status),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/commits/{sha}/check-runs",
+            get(rest::check_runs),
+        )
         .route("/api/v3/repos/{owner}/{repo}/actions/runs", get(runs::runs))
         .route(
             "/api/v3/repos/{owner}/{repo}/actions/runs/{id}",

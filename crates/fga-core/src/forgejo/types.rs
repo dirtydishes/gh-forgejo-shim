@@ -257,6 +257,41 @@ pub struct BranchSummary {
     pub enable_status_check: bool,
     #[serde(default, deserialize_with = "null_as_default")]
     pub status_check_contexts: Vec<String>,
+    /// Whether the caller may merge into the branch: code write access, or the rule's merge
+    /// allowlist when it has one, as Forgejo's own merge and auto-merge checks decide
+    /// (`IsUserAllowedToMerge`, Forgejo v15.0.0 `services/pull/merge.go`).
+    #[serde(default)]
+    pub user_can_merge: bool,
+}
+
+/// A code comment in a review (`modules/structs/pull_review.go` PullReviewComment).
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReviewComment {
+    pub id: i64,
+    pub body: String,
+    pub user: Option<User>,
+    pub resolver: Option<User>,
+    pub pull_request_review_id: i64,
+    pub created_at: String,
+    pub path: String,
+    /// The diff around the comment as the reviewer saw it, ending on the commented line.
+    pub diff_hunk: String,
+    /// The new-side line, or 0 when the comment is on the old side.
+    pub position: u64,
+    /// The old-side line, or 0 when the comment is on the new side.
+    pub original_position: u64,
+    pub html_url: String,
+}
+
+impl ReviewComment {
+    /// Forgejo's own signed line: negative on the old side (`services/convert/pull_review.go:99-103`).
+    pub fn line(&self) -> i64 {
+        if self.original_position > 0 {
+            -(self.original_position as i64)
+        } else {
+            self.position as i64
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -267,6 +302,16 @@ pub struct Review {
     pub body: String,
     pub state: String,
     pub submitted_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub html_url: String,
+    /// The PR's own page, under Forgejo's root URL (`HTMLPullURL`).
+    #[serde(default)]
+    pub pull_request_url: String,
+    /// Code comments in the review (`CodeCommentsCount`); absent from older fixtures.
+    #[serde(default)]
+    pub comments_count: Option<i64>,
     pub commit_id: String,
     #[serde(default)]
     pub dismissed: bool,

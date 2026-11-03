@@ -1,7 +1,7 @@
 //! From a routing decision to a running launch (launcher spec §2, §3, §6, §7).
 
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,9 +11,11 @@ use url::Url;
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
 use crate::external::find_program;
+use crate::launcher::credentials::git_config_parameters;
+use crate::launcher::env::Edit;
 use crate::launcher::gateway::GatewayHost;
 use crate::launcher::ghconfig::{self, ServedHost, ServedToken};
-use crate::launcher::run::{self, Environment, Files, Launch};
+use crate::launcher::run::{self, Edits, Files, Launch};
 use crate::launcher::rundir;
 use crate::repo;
 
@@ -52,12 +54,15 @@ pub fn launch(
     let forgejo_url = upstream_url(host, &config, env)?;
 
     let Some(gh) = find_program("gh", real_gh, env) else {
-        // Discovery skips a file it can't run; a configured one that exists is 126, not 127 (§6).
-        if let Some(path) = real_gh.filter(|path| path.is_file() && !is_executable(path)) {
-            return Some(fail(
-                126,
-                &format!("the real gh at {} is not executable", path.display()),
-            ));
+        // Discovery skips what it can't run; a configured path that exists anyway, a directory
+        // or a file without execute bits, is 126, not 127 (§6). `~` expands as discovery does.
+        if let Some(path) = real_gh.map(|path| expand_home(path, env)) {
+            if path.exists() && !is_executable_file(&path) {
+                return Some(fail(
+                    126,
+                    &format!("the real gh at {} is not executable", path.display()),
+                ));
+            }
         }
         return Some(fail(
             127,
@@ -127,9 +132,7 @@ pub fn launch(
         login: None,
     }];
     let allowlist = config.hosts.clone();
-    let base_env = env_os();
-    let launcher_pid = std::process::id().to_string();
-    let depth = (crate::launcher::depth(env) + 1).to_string();
+    let shim = std::env::current_exe().unwrap_or_default();
 
     let gateway = vec![GatewayHost {
         entry: config::normalize_host(host),
@@ -155,23 +158,33 @@ pub fn launch(
                     &served,
                     ServedToken::PerCall(&per_call),
                 ),
-                // Git's credentials come with the launcher's helper (L3's second change). Until
-                // then nothing reads these, so the real token isn't written at all.
-                credentials: String::new(),
-                gh_script: String::new(),
+                // Git's credentials: the launcher's own helper answers every git in the call (§3).
+                credentials: ghconfig::credentials(&served),
+                gh_script: ghconfig::gh_script(run_dir, &shim),
                 // Checked above, so this only fails on a non-UTF-8 socket path, which §4's
                 // path check rules out.
                 config_yml: ghconfig::config_yml(user_config.as_deref(), &socket)
                     .unwrap_or_default(),
             }
         }),
-        env: Box::new(move |run_dir| launched_env(base_env, run_dir, &launcher_pid, &depth)),
+        edits: Box::new(launched_edits),
     }))
 }
 
-fn is_executable(path: &Path) -> bool {
+fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+/// `~` and `~/…` against `HOME`, as `external::find_program` reads a configured path.
+fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
+    let value = path.to_string_lossy();
+    match (value.strip_prefix('~'), env.get("HOME")) {
+        (Some(""), Some(home)) => PathBuf::from(home),
+        (Some(rest), Some(home)) if rest.starts_with('/') => Path::new(home).join(&rest[1..]),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// The forge's own base URL, or `None` while the gateway can't honour this host's settings.
@@ -196,36 +209,24 @@ fn upstream_url(host: &str, config: &Config, env: &HashMap<String, String>) -> O
     (url.path() == "/").then_some(url)
 }
 
-/// This process's environment, byte for byte (R7).
-fn env_os() -> Environment {
-    std::env::vars_os().collect()
-}
-
-/// gh's environment for a launch: the wrapper's own, without the token variables, with the run
-/// directory as gh's config directory. The §7 bookkeeping for nested calls comes with the
-/// credential helper (L3's second change).
-fn launched_env(
-    mut env: Environment,
-    run_dir: &Path,
-    launcher_pid: &str,
-    depth: &str,
-) -> Environment {
-    let set: [(&str, &OsStr); 5] = [
-        ("GH_CONFIG_DIR", run_dir.as_os_str()),
-        ("GH_NO_UPDATE_NOTIFIER", OsStr::new("1")),
-        ("GH_NO_EXTENSION_UPDATE_NOTIFIER", OsStr::new("1")),
-        ("FJ_SHIM_LAUNCHER", OsStr::new(launcher_pid)),
-        ("FJ_SHIM_DEPTH", OsStr::new(depth)),
+/// What a launch changes in gh's environment (§7). Everything else passes through untouched.
+fn launched_edits(run_dir: &Path) -> Edits {
+    let inherited_git_config = std::env::var_os("GIT_CONFIG_PARAMETERS");
+    let mut edits: Edits = vec![
+        ("GH_CONFIG_DIR", Edit::Set(run_dir.as_os_str().to_owned())),
+        ("GH_PATH", Edit::Set(run_dir.join("gh").into_os_string())),
+        (
+            "GIT_CONFIG_PARAMETERS",
+            Edit::Set(git_config_parameters(
+                inherited_git_config.as_deref(),
+                run_dir,
+            )),
+        ),
+        ("GH_NO_UPDATE_NOTIFIER", Edit::Set("1".into())),
+        ("GH_NO_EXTENSION_UPDATE_NOTIFIER", Edit::Set("1".into())),
     ];
-    env.retain(|(name, _)| {
-        !TOKEN_VARIABLES.iter().any(|token| name == token)
-            && !set.iter().any(|(set_name, _)| name == set_name)
-    });
-    env.extend(
-        set.iter()
-            .map(|(name, value)| (OsString::from(name), value.to_os_string())),
-    );
-    env
+    edits.extend(TOKEN_VARIABLES.iter().map(|name| (*name, Edit::Remove)));
+    edits
 }
 
 fn platform() -> &'static str {
@@ -293,25 +294,23 @@ mod tests {
     }
 
     #[test]
-    fn launched_env_drops_token_variables_and_points_gh_at_the_run_directory() {
-        let env = vec![
-            (OsString::from("PATH"), OsString::from("/bin")),
-            (OsString::from("GH_ENTERPRISE_TOKEN"), OsString::from("ghe")),
-            (OsString::from("GH_TOKEN"), OsString::from("gh")),
-            (OsString::from("GH_CONFIG_DIR"), OsString::from("/user/gh")),
-        ];
-        let out = launched_env(env, Path::new("/t/gfj-x"), "42", "3");
-        let get = |name: &str| {
-            out.iter()
-                .filter(|(key, _)| key == name)
-                .map(|(_, value)| value.clone())
-                .collect::<Vec<_>>()
+    fn launched_edits_point_gh_at_the_run_directory_and_drop_token_variables() {
+        let edits = launched_edits(Path::new("/t/gfj-x"));
+        let edit = |name: &str| {
+            edits
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, edit)| edit.clone())
         };
-        assert_eq!(get("PATH"), [OsString::from("/bin")]);
-        assert!(get("GH_ENTERPRISE_TOKEN").is_empty());
-        assert!(get("GH_TOKEN").is_empty());
-        assert_eq!(get("GH_CONFIG_DIR"), [OsString::from("/t/gfj-x")]);
-        assert_eq!(get("FJ_SHIM_LAUNCHER"), [OsString::from("42")]);
-        assert_eq!(get("FJ_SHIM_DEPTH"), [OsString::from("3")]);
+        assert_eq!(edit("GH_CONFIG_DIR"), Some(Edit::Set("/t/gfj-x".into())));
+        assert_eq!(edit("GH_PATH"), Some(Edit::Set("/t/gfj-x/gh".into())));
+        for token in TOKEN_VARIABLES {
+            assert_eq!(edit(token), Some(Edit::Remove), "{token}");
+        }
+        assert!(
+            matches!(edit("GIT_CONFIG_PARAMETERS"), Some(Edit::Set(value))
+            if value.to_string_lossy().ends_with("'credential.helper=!/t/gfj-x/gh auth git-credential'"))
+        );
+        assert_eq!(edit("PATH"), None, "nothing else is touched");
     }
 }

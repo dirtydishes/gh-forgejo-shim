@@ -1,7 +1,7 @@
 use crate::{Host, rest_error};
 use axum::{
     Extension, Json,
-    extract::{Path, Query},
+    extract::{Path, Query, RawQuery},
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
@@ -23,6 +23,22 @@ pub struct RunQuery {
     status: Option<String>,
     head_sha: Option<String>,
     exclude_pull_requests: Option<bool>,
+}
+/// The query, with a repeated parameter taking its last value as GitHub does: Claude desktop sends
+/// `per_page=100&per_page=100`, which a plain `Query` refuses as a duplicate field.
+fn last_wins<T: serde::de::DeserializeOwned>(raw: Option<String>) -> Option<T> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+        pairs.retain(|(seen, _)| *seen != key);
+        pairs.push((key.into_owned(), value.into_owned()));
+    }
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(&pairs)
+        .finish();
+    let uri: axum::http::Uri = format!("/?{query}").parse().ok()?;
+    Query::<T>::try_from_uri(&uri)
+        .ok()
+        .map(|Query(query)| query)
 }
 fn invalid() -> Response {
     (
@@ -75,9 +91,9 @@ pub async fn runs(
     Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo)): Path<(String, String)>,
-    query: Result<Query<RunQuery>, axum::extract::rejection::QueryRejection>,
+    RawQuery(raw): RawQuery,
 ) -> Response {
-    let Ok(Query(q)) = query else {
+    let Some(q) = last_wins::<RunQuery>(raw) else {
         return invalid();
     };
     let page = q.page.unwrap_or(1);

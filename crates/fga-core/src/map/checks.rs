@@ -1,5 +1,6 @@
 use crate::forgejo::{CommitStatus, CommitStatusState, Protection};
 use async_graphql::Enum;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use url::Url;
 
@@ -268,5 +269,112 @@ pub fn rollup(checks: &[Check]) -> Option<StatusState> {
         Some(StatusState::Pending)
     } else {
         Some(StatusState::Success)
+    }
+}
+
+/// GitHub's combined status for a commit (`GET /repos/{o}/{r}/commits/{ref}/status`): the plain
+/// commit statuses, which Forgejo Actions jobs are not (they are check runs below). Its state is
+/// `failure` if any status failed or errored, `pending` if any is pending or there are none, and
+/// `success` otherwise, as GitHub's.
+pub fn combined_status(checks: &[Check], sha: &str) -> Value {
+    let statuses: Vec<Value> = checks
+        .iter()
+        .filter_map(|check| match check {
+            Check::Status {
+                source,
+                state,
+                target_url,
+            } => Some(json!({
+                "id": source.id,
+                "context": source.context,
+                "state": status_state(*state),
+                "description": source.description,
+                "target_url": target_url.as_ref().map(Url::as_str),
+                "created_at": source.created_at,
+                "updated_at": source.updated_at,
+            })),
+            Check::Action { .. } => None,
+        })
+        .collect();
+    let state = if statuses
+        .iter()
+        .any(|s| matches!(s["state"].as_str(), Some("failure" | "error")))
+    {
+        "failure"
+    } else if statuses.is_empty() || statuses.iter().any(|s| s["state"] == "pending") {
+        "pending"
+    } else {
+        "success"
+    };
+    json!({"state": state, "sha": sha, "total_count": statuses.len(), "statuses": statuses})
+}
+
+/// GitHub's check runs for a commit (`GET /repos/{o}/{r}/commits/{ref}/check-runs`): one per
+/// Forgejo Actions job, with the status and conclusion `statusCheckRollup` gives it.
+pub fn check_runs(checks: &[Check], sha: &str) -> Value {
+    let runs: Vec<Value> = checks
+        .iter()
+        .filter_map(|check| match check {
+            Check::Action {
+                source,
+                workflow,
+                job,
+                details_url,
+                status,
+                conclusion,
+                ..
+            } => Some(json!({
+                "id": source.id,
+                "name": job,
+                "head_sha": sha,
+                "status": check_status(*status),
+                "conclusion": conclusion.map(check_conclusion),
+                "started_at": source.created_at,
+                "completed_at": (*status == CheckStatusState::Completed).then_some(&source.updated_at),
+                "html_url": details_url.as_str(),
+                "details_url": details_url.as_str(),
+                "output": {"title": source.description, "summary": null},
+                // GitHub always sends these; a client may read them without checking.
+                "pull_requests": [],
+                "check_suite": {"id": source.id, "workflow_name": workflow},
+                "app": {"slug": "forgejo-actions", "name": "Forgejo Actions"},
+            })),
+            Check::Status { .. } => None,
+        })
+        .collect();
+    json!({"total_count": runs.len(), "check_runs": runs})
+}
+
+fn status_state(state: StatusState) -> &'static str {
+    match state {
+        StatusState::Expected | StatusState::Pending => "pending",
+        StatusState::Error => "error",
+        StatusState::Failure => "failure",
+        StatusState::Success => "success",
+    }
+}
+
+fn check_status(status: CheckStatusState) -> &'static str {
+    match status {
+        CheckStatusState::Completed => "completed",
+        CheckStatusState::InProgress => "in_progress",
+        CheckStatusState::Pending => "pending",
+        CheckStatusState::Queued => "queued",
+        CheckStatusState::Requested => "requested",
+        CheckStatusState::Waiting => "waiting",
+    }
+}
+
+fn check_conclusion(conclusion: CheckConclusionState) -> &'static str {
+    match conclusion {
+        CheckConclusionState::ActionRequired => "action_required",
+        CheckConclusionState::Cancelled => "cancelled",
+        CheckConclusionState::Failure => "failure",
+        CheckConclusionState::Neutral => "neutral",
+        CheckConclusionState::Skipped => "skipped",
+        CheckConclusionState::Stale => "stale",
+        CheckConclusionState::StartupFailure => "startup_failure",
+        CheckConclusionState::Success => "success",
+        CheckConclusionState::TimedOut => "timed_out",
     }
 }

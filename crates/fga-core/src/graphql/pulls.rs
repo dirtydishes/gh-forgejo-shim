@@ -22,6 +22,36 @@ impl PullRequest {
             repo: repo.into(),
         }
     }
+    /// Forgejo lets the poster or a repository writer edit, close and reopen a PR.
+    async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        let viewer = &ctx.data_unchecked::<Session>().viewer.login;
+        Ok(self.source.user.login.eq_ignore_ascii_case(viewer)
+            || viewer_can_write(ctx, &self.owner, &self.repo).await?)
+    }
+    async fn archived(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        let session = ctx.data_unchecked::<Session>();
+        let repository = session
+            .repository(&self.owner, &self.repo)
+            .await
+            .map_err(error)?;
+        Ok(repository.archived)
+    }
+    /// Whether the viewer may schedule or cancel a merge (`IsUserAllowedToMerge`). Forgejo refuses
+    /// both in an archived repository. It checks code write access as the request's token allows
+    /// it, which the repository's permissions report, and a merge allowlist, which only the base
+    /// branch's summary reflects; only code writers can join an allowlist. A deleted base branch
+    /// has no summary, and then write access decides.
+    async fn viewer_can_merge(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        if self.archived(ctx).await? || !viewer_can_write(ctx, &self.owner, &self.repo).await? {
+            return Ok(false);
+        }
+        Ok(ctx
+            .data_unchecked::<Session>()
+            .branch_summary(&self.owner, &self.repo, &self.source.base.ref_name)
+            .await
+            .map_err(error)?
+            .is_none_or(|summary| summary.user_can_merge))
+    }
     async fn checks(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<map::Check>> {
         let statuses = ctx
             .data_unchecked::<Session>()
@@ -59,6 +89,10 @@ impl PullRequest {
     }
     async fn body(&self) -> &str {
         &self.source.body
+    }
+    #[graphql(name = "bodyHTML")]
+    async fn body_html(&self) -> Html {
+        Html(map::body_html(&self.source.body))
     }
     async fn url(&self) -> Uri {
         Uri(map::pull_web_url(&self.source.html_url))
@@ -250,6 +284,49 @@ impl PullRequest {
             enabled_by: Some(Actor::User(User(event.user))),
         }))
     }
+    async fn viewer_can_update(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        self.viewer_can_change(ctx).await
+    }
+    /// GitHub answers by permission alone, even for a closed or merged PR.
+    async fn viewer_can_close(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        self.viewer_can_change(ctx).await
+    }
+    async fn viewer_can_reopen(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        Ok(self.source.state == "closed"
+            && !self.source.merged
+            && self.viewer_can_change(ctx).await?)
+    }
+    /// GitHub offers auto-merge only while the PR can't merge yet.
+    async fn viewer_can_enable_auto_merge(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        if self.source.state != "open"
+            || self.source.draft
+            || !self.viewer_can_merge(ctx).await?
+            || self.auto_merge_request(ctx).await?.is_some()
+        {
+            return Ok(false);
+        }
+        Ok(matches!(
+            self.merge_state_status(ctx).await?,
+            map::MergeStateStatus::Blocked | map::MergeStateStatus::Behind
+        ))
+    }
+    /// Forgejo lets whoever scheduled the merge, or anyone who may merge, cancel it, unless the
+    /// repository is archived (`RemoveScheduledAutoMerge`, Forgejo v15.0.0
+    /// `services/automerge/automerge.go`).
+    async fn viewer_can_disable_auto_merge(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<bool> {
+        let Some(request) = self.auto_merge_request(ctx).await? else {
+            return Ok(false);
+        };
+        let viewer = &ctx.data_unchecked::<Session>().viewer.login;
+        let scheduler = matches!(&request.enabled_by, Some(Actor::User(user)) if user.0.login.eq_ignore_ascii_case(viewer));
+        if scheduler {
+            return Ok(!self.archived(ctx).await?);
+        }
+        self.viewer_can_merge(ctx).await
+    }
     async fn is_merge_queue_enabled(&self) -> bool {
         false
     }
@@ -333,6 +410,7 @@ impl PullRequest {
             .collect();
         Ok(Some(page(reviewers, first, last, after, before)?.into()))
     }
+    #[allow(clippy::too_many_arguments)]
     async fn reviews(
         &self,
         ctx: &Context<'_>,
@@ -340,6 +418,8 @@ impl PullRequest {
         last: Option<i32>,
         after: Option<String>,
         before: Option<String>,
+        author: Option<String>,
+        states: Option<Vec<map::PullRequestReviewState>>,
     ) -> async_graphql::Result<Option<PullRequestReviewConnection>> {
         let reviews = ctx
             .data_unchecked::<Session>()
@@ -349,11 +429,25 @@ impl PullRequest {
         // Forgejo lists review requests as reviews; GitHub keeps them in reviewRequests.
         let nodes = reviews
             .into_iter()
-            .filter(|review| review.state != "REQUEST_REVIEW")
+            .filter(|review| listed(review, &ctx.data_unchecked::<Session>().viewer.login))
+            .filter(|review| {
+                author.as_ref().is_none_or(|author| {
+                    review
+                        .user
+                        .as_ref()
+                        .is_some_and(|user| user.login.eq_ignore_ascii_case(author))
+                })
+            })
+            .filter(|review| {
+                states
+                    .as_ref()
+                    .is_none_or(|states| states.contains(&map::review_state(review)))
+            })
             .map(|source| PullRequestReview {
                 source,
                 owner: self.owner.clone(),
                 repo: self.repo.clone(),
+                number: self.source.number,
             })
             .collect();
         Ok(Some(page(nodes, first, last, after, before)?.into()))
@@ -377,9 +471,29 @@ impl PullRequest {
                 source: source.clone(),
                 owner: self.owner.clone(),
                 repo: self.repo.clone(),
+                number: self.source.number,
             })
             .collect();
         Ok(Some(page(nodes, first, last, after, before)?.into()))
+    }
+    async fn review_threads(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<PullRequestReviewThreadConnection> {
+        let nodes = review_threads(
+            ctx,
+            &self.owner,
+            &self.repo,
+            self.source.number,
+            &self.source.user.login,
+            &self.source.head.sha,
+        )
+        .await?;
+        Ok(page(nodes, first, last, after, before)?.into())
     }
     async fn comments(
         &self,
@@ -398,6 +512,7 @@ impl PullRequest {
             .map(|source| IssueComment {
                 source,
                 owner: self.owner.clone(),
+                repo: self.repo.clone(),
                 viewer: session.viewer.login.clone(),
             })
             .collect();
@@ -468,6 +583,15 @@ impl Commit {
 impl Commit {
     async fn oid(&self) -> GitObjectId {
         GitObjectId(self.sha.clone())
+    }
+    /// Forgejo's commit page has GitHub's layout, under the forge's public base.
+    async fn url(&self, ctx: &Context<'_>) -> Uri {
+        let mut url = ctx.data_unchecked::<Url>().clone();
+        url.path_segments_mut()
+            .expect("validated HTTP URL")
+            .pop_if_empty()
+            .extend([&self.owner, &self.repo, "commit", &self.sha]);
+        Uri(url.to_string())
     }
     async fn status_check_rollup(
         &self,

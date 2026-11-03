@@ -167,6 +167,37 @@ pub async fn pull(
     }
 }
 
+/// GitHub's combined status for a commit, from Forgejo's statuses through the same mapping as
+/// GraphQL's `statusCheckRollup`. Pagination parameters are accepted; every status is returned.
+pub async fn commit_status(
+    Extension(host): Extension<Arc<Host>>,
+    Extension(session): Extension<Session>,
+    Path((owner, repo, sha)): Path<(String, String, String)>,
+) -> Response {
+    let result = async {
+        let statuses = session.statuses(&owner, &repo, &sha).await?;
+        let checks = map::checks(&statuses, &owner, &repo, &host.public_url);
+        Ok(Json(map::combined_status(&checks, &sha)).into_response())
+    }
+    .await;
+    result.unwrap_or_else(rest_error)
+}
+
+/// GitHub's check runs for a commit: Forgejo Actions jobs, from the same mapping.
+pub async fn check_runs(
+    Extension(host): Extension<Arc<Host>>,
+    Extension(session): Extension<Session>,
+    Path((owner, repo, sha)): Path<(String, String, String)>,
+) -> Response {
+    let result = async {
+        let statuses = session.statuses(&owner, &repo, &sha).await?;
+        let checks = map::checks(&statuses, &owner, &repo, &host.public_url);
+        Ok(Json(map::check_runs(&checks, &sha)).into_response())
+    }
+    .await;
+    result.unwrap_or_else(rest_error)
+}
+
 pub async fn commit_pulls(
     Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,

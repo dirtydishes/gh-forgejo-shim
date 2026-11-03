@@ -5,6 +5,7 @@
 
 interface Actor {
   login: String!
+  avatarUrl( size: Int ): URI!
 }
 
 input AddCommentInput {
@@ -31,6 +32,7 @@ scalar BigInt
 
 type Bot implements Actor & Node {
   login: String!
+  avatarUrl( size: Int ): URI!
 }
 
 type BranchProtectionRule implements Node {
@@ -120,6 +122,7 @@ enum CommentAuthorAssociation {
 
 type Commit implements Node {
   oid: GitObjectID!
+  url: URI!
   statusCheckRollup: StatusCheckRollup
   messageHeadline: String!
   messageBody: String!
@@ -155,6 +158,11 @@ type CreatePullRequestPayload {
 }
 
 scalar DateTime
+
+enum DiffSide {
+  LEFT
+  RIGHT
+}
 
 input DisablePullRequestAutoMergeInput {
   pullRequestId: ID!
@@ -196,6 +204,8 @@ scalar GitObjectID
 
 scalar GitSSHRemote
 
+scalar HTML
+
 type Issue implements Node {
   id: ID!
   number: Int!
@@ -230,6 +240,7 @@ type IssueComment implements Node {
   author: Actor
   authorAssociation: CommentAuthorAssociation!
   body: String!
+  bodyHTML: HTML!
   createdAt: DateTime!
   includesCreatedEdit: Boolean!
   isMinimized: Boolean!
@@ -237,6 +248,8 @@ type IssueComment implements Node {
   reactionGroups: [ReactionGroup!]
   url: URI!
   viewerDidAuthor: Boolean!
+  viewerCanUpdate: Boolean!
+  viewerCanDelete: Boolean!
 }
 
 type IssueCommentConnection {
@@ -431,6 +444,7 @@ type PullRequest implements Node {
   number: Int!
   title: String!
   body: String!
+  bodyHTML: HTML!
   url: URI!
   state: PullRequestState!
   isDraft: Boolean!
@@ -458,6 +472,11 @@ type PullRequest implements Node {
   reviewDecision: PullRequestReviewDecision
   mergeStateStatus: MergeStateStatus!
   autoMergeRequest: AutoMergeRequest
+  viewerCanUpdate: Boolean!
+  viewerCanClose: Boolean!
+  viewerCanReopen: Boolean!
+  viewerCanEnableAutoMerge: Boolean!
+  viewerCanDisableAutoMerge: Boolean!
   isMergeQueueEnabled: Boolean!
   isInMergeQueue: Boolean!
   reactionGroups: [ReactionGroup!]
@@ -467,6 +486,7 @@ type PullRequest implements Node {
   reviewRequests( after: String before: String first: Int last: Int ): ReviewRequestConnection
   reviews( after: String author: String before: String first: Int last: Int states: [PullRequestReviewState!] ): PullRequestReviewConnection
   latestReviews( after: String before: String first: Int last: Int ): PullRequestReviewConnection
+  reviewThreads( after: String before: String first: Int last: Int ): PullRequestReviewThreadConnection!
   comments( after: String before: String first: Int last: Int orderBy: IssueCommentOrder ): IssueCommentConnection!
   commits( after: String before: String first: Int last: Int ): PullRequestCommitConnection!
   projectItems( after: String before: String first: Int includeArchived: Boolean = true last: Int ): ProjectV2ItemConnection!
@@ -504,10 +524,40 @@ type PullRequestReview implements Node {
   author: Actor
   authorAssociation: CommentAuthorAssociation!
   submittedAt: DateTime
+  createdAt: DateTime!
+  url: URI!
+  isMinimized: Boolean!
+  viewerCanUpdate: Boolean!
   body: String!
   state: PullRequestReviewState!
   commit: Commit
+  comments( after: String before: String first: Int last: Int ): PullRequestReviewCommentConnection!
   reactionGroups: [ReactionGroup!]
+}
+
+type PullRequestReviewComment implements Node {
+  id: ID!
+  author: Actor
+  body: String!
+  bodyHTML: HTML!
+  createdAt: DateTime!
+  diffHunk: String!
+  state: PullRequestReviewCommentState!
+  pullRequestReview: PullRequestReview
+  url: URI!
+  viewerCanUpdate: Boolean!
+  viewerCanDelete: Boolean!
+}
+
+type PullRequestReviewCommentConnection {
+  nodes: [PullRequestReviewComment]
+  totalCount: Int!
+  pageInfo: PageInfo!
+}
+
+enum PullRequestReviewCommentState {
+  PENDING
+  SUBMITTED
 }
 
 type PullRequestReviewConnection {
@@ -528,6 +578,27 @@ enum PullRequestReviewState {
   COMMENTED
   DISMISSED
   PENDING
+}
+
+type PullRequestReviewThread implements Node {
+  id: ID!
+  comments( after: String before: String first: Int last: Int skip: Int ): PullRequestReviewCommentConnection!
+  path: String!
+  diffSide: DiffSide!
+  line: Int
+  originalLine: Int
+  startLine: Int
+  originalStartLine: Int
+  startDiffSide: DiffSide
+  isResolved: Boolean!
+  viewerCanResolve: Boolean!
+  viewerCanUnresolve: Boolean!
+}
+
+type PullRequestReviewThreadConnection {
+  nodes: [PullRequestReviewThread]
+  totalCount: Int!
+  pageInfo: PageInfo!
 }
 
 enum PullRequestState {
@@ -732,6 +803,7 @@ type User implements Actor & Node & RepositoryOwner {
   id: ID!
   name: String
   databaseId: Int
+  avatarUrl( size: Int ): URI!
 }
 
 type UserConnection {
