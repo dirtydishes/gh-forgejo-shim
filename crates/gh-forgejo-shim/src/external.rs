@@ -300,17 +300,40 @@ fn candidate_dirs(env: &HashMap<String, String>, fallback_dirs: &[PathBuf]) -> V
 }
 
 /// `~` and `~/…` under `HOME`; any other path, and any path when `HOME` is unset, as it is. Shared
-/// with the launcher, so a configured `~/gh` expands one way everywhere (n2e). It works on path
-/// components, so bytes after `~/` that aren't UTF-8 stay as they are.
+/// with the launcher, so a configured `~/gh` expands one way everywhere (n2e). It compares bytes,
+/// not path components: the rest after `~/` is joined exactly as written, so `~//gh` is still
+/// `/gh` and `~/gh/` keeps its slash, and bytes that aren't UTF-8 stay as they are.
+#[cfg(unix)]
 pub(crate) fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
-    let (Ok(rest), Some(home)) = (path.strip_prefix("~"), env.get("HOME")) else {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Some(home) = env.get("HOME") else {
         return path.to_path_buf();
     };
-    if rest.as_os_str().is_empty() {
-        PathBuf::from(home)
-    } else {
-        Path::new(home).join(rest)
+    let bytes = path.as_os_str().as_bytes();
+    if bytes == b"~" {
+        return PathBuf::from(home);
     }
+    match bytes.strip_prefix(b"~/") {
+        Some(rest) => Path::new(home).join(OsStr::from_bytes(rest)),
+        None => path.to_path_buf(),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
+    let value = path.as_os_str().to_string_lossy();
+    if value == "~" {
+        return env
+            .get("HOME")
+            .map_or_else(|| path.to_path_buf(), PathBuf::from);
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = env.get("HOME") {
+            return Path::new(home).join(rest);
+        }
+    }
+    path.to_path_buf()
 }
 
 fn should_skip_gh_candidate(path: &Path) -> bool {
@@ -411,17 +434,22 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
 
         let env = HashMap::from([("HOME".to_string(), "/home/me".to_string())]);
+        // Compared as bytes: `Path` equality would hide a dropped trailing `/` or `.`.
         for (path, expanded) in [
             ("~", "/home/me"),
-            ("~/", "/home/me"),
+            ("~/", "/home/me/"),
             ("~/bin/gh", "/home/me/bin/gh"),
+            ("~//gh", "/gh"),
+            ("~/gh/", "/home/me/gh/"),
+            ("~/./gh", "/home/me/./gh"),
+            ("~/gh/.", "/home/me/gh/."),
             ("~user/gh", "~user/gh"),
             ("/opt/~/gh", "/opt/~/gh"),
             ("bin/gh", "bin/gh"),
         ] {
             assert_eq!(
-                expand_home(Path::new(path), &env),
-                Path::new(expanded),
+                expand_home(Path::new(path), &env).as_os_str().as_bytes(),
+                expanded.as_bytes(),
                 "{path}"
             );
         }
