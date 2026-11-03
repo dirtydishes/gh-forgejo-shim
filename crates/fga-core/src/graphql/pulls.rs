@@ -139,9 +139,10 @@ impl PullRequest {
     async fn maintainer_can_modify(&self) -> bool {
         self.source.allow_maintainer_edit
     }
-    /// gh names the local branch after this; see [`forgejo::Branch::reported_name`].
+    /// Forgejo's own name, never one made up: a made-up name could equal a real branch's, and gh's
+    /// branch finder would then take one PR for the other. An AGit PR's is `refs/pull/N/head`.
     async fn head_ref_name(&self) -> &str {
-        self.source.head.reported_name()
+        self.source.head.name()
     }
     async fn base_ref_name(&self) -> &str {
         &self.source.base.ref_name
