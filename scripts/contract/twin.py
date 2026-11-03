@@ -43,7 +43,9 @@ ISSUE_SELECT = "select(.number == {issue})"
 SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
 STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}")
 SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label",
-         "protect_head"}
+         "protect_head", "fork"}
+# The organization a `fork` case forks into, then deletes its fork from.
+FORK_OWNER = "gfj-forks"
 # The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
 # default branch. It runs only for `twin/run-*` branches, so creating such a case's branch
 # queues that case's one run, which waits (the twin has no runner), and no other push queues any.
@@ -125,11 +127,13 @@ def validate(case):
     # prepare() names a case's own base <branch>-base; no case may claim such a name.
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
-    for flag in ("pr", "base", "draft", "closed", "protect_head", "workflow", "issue", "label"):
+    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label"):
         if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
         raise ValueError("setup.draft and setup.closed need setup.pr")
+    if setup.get("fork") and (not setup.get("pr") or setup.get("closed") or setup.get("protect_head")):
+        raise ValueError("setup.fork needs setup.pr, and takes no closed or protect_head")
     if "{pr}" in argv and not setup.get("pr"):
         raise ValueError("{pr} needs setup.pr")
     if command[0] == "run" and not setup.get("workflow"):
@@ -203,8 +207,12 @@ def api_base(home):
 
 
 def request(base, token, method, path, body=None):
+    return api(base, token, method, f"repos/{REPO}/{path}", body)
+
+
+def api(base, token, method, path, body=None):
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(f"{base}/api/v1/repos/{REPO}/{path}", data=data, method=method,
+    req = urllib.request.Request(f"{base}/api/v1/{path}", data=data, method=method,
                                  headers={"Authorization": f"token {token}", "Content-Type": "application/json"})
     # No proxy, as seed.py: the token must go to the local twin, not to a proxy that resolves it.
     with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=30) as response:
@@ -250,8 +258,14 @@ def prepare(case, home, token):
                 {"rule_name": target, "enable_status_check": True, "status_check_contexts": setup["protect"]})
     if setup.get("pr"):
         title = f"{DRAFT_PREFIX} twin: {branch}" if setup.get("draft") else f"twin: {branch}"
-        pr = request(base, token, "POST", "pulls", {"head": branch, "base": target, "title": title})
+        head_ref = fork_head(base, token, branch) if setup.get("fork") else branch
+        pr = request(base, token, "POST", "pulls", {"head": head_ref, "base": target, "title": title})
         subs["pr"] = str(pr["number"])
+        if setup.get("fork"):
+            # Forgejo closes a fork's pull requests when the fork is deleted, and reopens one on
+            # request: an open pull request whose head repository is gone (`head.repo` null).
+            api(base, token, "DELETE", f"repos/{FORK_OWNER}/{fork_name(branch)}")
+            request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "open"})
         if setup.get("closed"):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "closed"})
     if setup.get("issue"):
@@ -279,6 +293,34 @@ def own_run(base, token, branch):
             raise RuntimeError(f"{branch} has {len(runs)} runs, not its own one")
         time.sleep(1)
     raise RuntimeError(f"{branch}'s workflow push queued no run")
+
+
+def fork_name(branch):
+    return "fork-" + branch.removeprefix("twin/")
+
+
+def fork_head(base, token, branch):
+    """A fork of the twin repo with a commit of its own on `branch`, as a pull request's
+    `owner:branch` head. The base repo keeps its own `branch`, which a delete aimed at the base
+    would remove. Forgejo copies every branch into a fork, so the fork starts with that one."""
+    try:
+        api(base, token, "POST", "orgs", {"username": FORK_OWNER})
+    except urllib.error.HTTPError as error:
+        if error.code != 422:  # the organization already exists
+            raise
+    name = fork_name(branch)
+    request(base, token, "POST", "forks", {"organization": FORK_OWNER, "name": name})
+    # Forgejo makes the fork in the background.
+    for _ in range(30):
+        try:
+            api(base, token, "POST", f"repos/{FORK_OWNER}/{name}/contents/fork.txt",
+                {"content": "Zm9yawo=", "branch": branch, "message": "fork"})
+            return f"{FORK_OWNER}:{branch}"
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            time.sleep(1)
+    raise RuntimeError(f"the fork {FORK_OWNER}/{name} never took a branch")
 
 
 def fill(text, subs):

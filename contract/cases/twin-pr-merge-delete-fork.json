@@ -1,0 +1,37 @@
+{
+  "id": "twin-pr-merge-delete-fork",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-merge-fork",
+    "pr": true,
+    "base": true,
+    "fork": true
+  },
+  "argv": [
+    "pr",
+    "merge",
+    "{pr}",
+    "--squash",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "GraphQL: [^\\n]+ \\(mergePullRequest\\)\\n"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "open",
+        "merged": false
+      }
+    },
+    {
+      "path": "branches/{branch}",
+      "gone": false
+    }
+  ],
+  "normalize": []
+}
