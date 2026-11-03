@@ -539,7 +539,9 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   on. The launcher checks both as the built-in client does: a CA file it couldn't read, or one
   with no PEM certificate, leaves the call to the built-in path, which reports it. `wip_prefixes` is the host's
   `[host.<entry>].wip_prefixes` from the shim config, or the gateway's default (`WIP:`, `[WIP]`)
-  when unset; the gateway strips them from a draft's title. `public_url` is `https://<entry>`,
+  when unset. Forgejo decides what is a draft, from its own WIP setting, which the list should
+  match. The gateway strips these prefixes from a draft's title, and adds the first one when it
+  makes a draft or turns a pull request into one, so order matters. `public_url` is `https://<entry>`,
   the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
   at the forge's web UI. Per D2, PR links end in `/pull/N`.
 - `.expecting(per_call).upstream_token(real)` (gateway PR #66), for every served host. gh
