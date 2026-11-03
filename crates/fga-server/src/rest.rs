@@ -8,7 +8,10 @@ use axum::{
 use fga_core::{forgejo::Session, map};
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 pub async fn root(Extension(host): Extension<Arc<Host>>) -> impl IntoResponse {
     let public = host.public_url.as_str().trim_end_matches('/');
@@ -25,6 +28,27 @@ pub async fn root(Extension(host): Extension<Arc<Host>>) -> impl IntoResponse {
 
 pub async fn meta(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({"installed_version": state.ghes_version}))
+}
+
+/// Forgejo has no rate-limit API and the gateway sets no limits of its own, so `rate_limit`
+/// answers GitHub's overview with GitHub's per-user ceilings and nothing used, renewing an hour
+/// from now. A script that paces itself by `remaining` never waits.
+pub async fn rate_limit() -> impl IntoResponse {
+    let reset = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+        + 3600;
+    let budget =
+        |limit: u32| json!({"limit": limit, "used": 0, "remaining": limit, "reset": reset});
+    Json(json!({
+        "resources": {
+            "core": budget(5000),
+            "graphql": budget(5000),
+            "search": budget(30),
+            "code_search": budget(10),
+        },
+        "rate": budget(5000),
+    }))
 }
 
 pub async fn user(
