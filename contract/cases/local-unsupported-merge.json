@@ -4,7 +4,9 @@
   "argv": [
     "pr",
     "merge",
-    "1"
+    "1",
+    "--merge",
+    "--delete-branch"
   ],
   "repo": "dirtydishes/gfj-oracle",
   "normalize": [],

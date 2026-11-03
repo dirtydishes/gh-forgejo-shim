@@ -1,0 +1,33 @@
+{
+  "id": "twin-pr-merge-match-head",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-merge-match-head",
+    "pr": true,
+    "base": true
+  },
+  "argv": [
+    "pr",
+    "merge",
+    "{pr}",
+    "--merge",
+    "--match-head-commit",
+    "{head}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "closed",
+        "merged": true
+      }
+    }
+  ],
+  "normalize": []
+}

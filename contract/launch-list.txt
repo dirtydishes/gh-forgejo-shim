@@ -10,3 +10,7 @@ auth status
 pr create
 pr comment
 pr edit
+pr merge
+pr ready
+pr close
+pr reopen
