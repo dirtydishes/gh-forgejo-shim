@@ -22,6 +22,21 @@ impl PullRequest {
             repo: repo.into(),
         }
     }
+
+    /// Whether the head branch is the PR's head: an open, unmerged PR whose branch exists and isn't
+    /// named like a ref ([`forgejo::Branch::exists`]), and whose tip is the commit of the PR's own ref
+    /// `refs/pull/N/head`. gh decides on this both to fetch the branch (`headRepository`) and, for a
+    /// same-repository PR, to delete it (`isCrossRepository`). A closed or merged PR's branch, a
+    /// recreated or moved one, or an AGit PR's ref is not the PR's head; a failed read counts as not.
+    async fn head_is_pr_head(&self, session: &Session) -> bool {
+        self.source.head.exists()
+            && self.source.state == "open"
+            && !self.source.merged
+            && session
+                .pull_head(&self.owner, &self.repo, self.source.number)
+                .await
+                .is_ok_and(|sha| sha == self.source.head.sha)
+    }
     /// Forgejo lets the poster or a repository writer edit, close and reopen a PR.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
@@ -157,11 +172,19 @@ impl PullRequest {
     /// fork is deleted. GitHub still calls that PR cross-repository, and gh relies on it:
     /// `pr close --delete-branch` deletes the head branch in the base repository unless this is
     /// true, which would delete the base's branch of the same name.
-    async fn is_cross_repository(&self) -> bool {
-        self.source.head.repo.as_ref().is_none_or(|r| {
-            !r.owner.login.eq_ignore_ascii_case(&self.owner)
-                || r.name.as_ref().is_some_and(|name| name != &self.repo)
-        })
+    /// GitHub's meaning, with one safety turn. `gh pr close -d` and `gh pr merge -d` delete the head
+    /// branch in the base repository unless this is true (`close.go:150-157`, `merge.go:519,592`),
+    /// so a same-repository PR counts as cross-repository unless its branch is the PR's head:
+    /// otherwise gh would delete whatever branch now carries the name (an AGit PR's
+    /// `refs/pull/N/head`, or a branch recreated for other work). A deleted fork (`head.repo` null)
+    /// is cross-repository, as GitHub reports it.
+    async fn is_cross_repository(&self, ctx: &Context<'_>) -> bool {
+        let Some(head) = self.source.head.repo.as_ref() else {
+            return true;
+        };
+        let same_repository = head.owner.login.eq_ignore_ascii_case(&self.owner)
+            && head.name.as_ref().is_none_or(|name| name == &self.repo);
+        !same_repository || !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await
     }
     async fn head_repository_owner(&self) -> Option<RepositoryOwner> {
         self.source
@@ -190,21 +213,13 @@ impl PullRequest {
         // head; a branch that's gone, recreated or moved (a closed PR, or one reopened through the
         // API, which leaves the PR's ref where it was) would otherwise be checked out in its place.
         // The owner stays, as on GitHub; gh's checkout reads only `headRepository` to choose.
-        let Some(head) = self.source.head.repo.as_ref().filter(|_| {
-            // A closed or merged PR's branch can move at any time after the check below, and
-            // gh would fetch it; the PR's own ref can't. An open PR moves with its branch.
-            self.source.head.exists() && self.source.state == "open" && !self.source.merged
-        }) else {
+        // A closed or merged PR's branch can move at any time after the check, and gh would fetch
+        // it; the PR's own ref can't. An open PR moves with its branch. Unknown counts as moved.
+        let Some(head) = self.source.head.repo.as_ref() else {
             return Ok(None);
         };
-        let session = ctx.data_unchecked::<Session>();
-        // Unknown counts as moved: gh then fetches the PR's own ref, which is safe either way.
-        match session
-            .pull_head(&self.owner, &self.repo, self.source.number)
-            .await
-        {
-            Ok(sha) if sha == self.source.head.sha => {}
-            _ => return Ok(None),
+        if !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await {
+            return Ok(None);
         }
         let name = head.name.as_deref().unwrap_or(&self.repo);
         let source = ctx
