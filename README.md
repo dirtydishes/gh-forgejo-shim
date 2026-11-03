@@ -227,6 +227,8 @@ export FJ_SHIM_TRACE_BODY=1
 
 `FJ_SHIM_TRACE` is opt-in. With it unset, runtime behavior is unchanged. Trace records include timestamp, cwd, argv, route decision, host/repo, duration, exit code, stdout/stderr byte counts, relevant environment keys, and redacted excerpts when `FJ_SHIM_TRACE_BODY=1` is also set. Sensitive auth material is not logged; `gh auth token` stdout is always suppressed in trace excerpts. A new trace file is created owner-only (0600), and an existing one is narrowed to 0600 before records are added. If the file belongs to another user, so it can't be narrowed, no records are written to it.
 
+Redaction errs toward hiding. Any value under a key with `password`, `secret`, `token`, `credential`, `api_key` or `private_key` in its name is hidden, and so is any key with `pass` anywhere in it, unless the key part is exactly one of a few ordinary words such as `bypass`, `compass` or `lowpass`. Authorization headers are hidden to the end of the line, and so are URL passwords, quoted values (to their closing quote, plus anything glued to it), and tokens that start with a known prefix (`ghp_`, `github_pat_`, `glpat-`, `gitea_` and others). The cost: some harmless values show as `<redacted>` (`[REDACTED]` in git traces), such as `byPassEnabled=true`, or a field that follows an empty quoted Authorization value on the same line. A hidden value costs a little readability; a leaked one costs a credential.
+
 Summarize a trace file:
 
 ```sh

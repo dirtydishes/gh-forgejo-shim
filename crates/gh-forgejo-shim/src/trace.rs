@@ -29,57 +29,10 @@ const SENSITIVE_KEY_PARTS: &[&str] = &[
     "private_key",
     "secret",
     "token",
-    "passcode",
-    "passkey",
 ];
-/// Matched as a whole word of a key (`is_sensitive_key`): `db_pass`, `smtpPass` and
-/// `HTTPAuthorization` are secrets, `authorizations_url` isn't.
-const SENSITIVE_KEY_WORDS: &[&str] = &["authorization", "pass"];
-/// A one-word key part that ends in `pass` is a secret when what comes before is one of these
-/// (`ftppass`, `dbpass`); an ordinary word that ends in `pass` (`bypass`, `lowpass`) has none.
-const PASS_WORD_PREFIXES: &[&str] = &[
-    "account",
-    "acct",
-    "admin",
-    "api",
-    "app",
-    "auth",
-    "bind",
-    "client",
-    "db",
-    "email",
-    "ftp",
-    "http",
-    "https",
-    "imap",
-    "key",
-    "keystore",
-    "ldap",
-    "login",
-    "mail",
-    "master",
-    "mysql",
-    "pg",
-    "pop",
-    "proxy",
-    "redis",
-    "root",
-    "server",
-    "service",
-    "smtp",
-    "sql",
-    "ssh",
-    "sudo",
-    "svc",
-    "sys",
-    "system",
-    "truststore",
-    "user",
-    "vnc",
-    "web",
-    "wifi",
-];
-/// Ordinary words that end in `pass`: a camelCase `Pass` inside one (`byPass`) isn't a secret.
+/// The exceptions to "a key with `pass` anywhere in it is a secret": ordinary words, matched as
+/// a whole key part (`bypass_pull_request_allowances`). Redaction errs toward hiding: any other
+/// key with `pass` in it is a secret, `byPassEnabled` too (coordinator, 2026-11-03).
 const ORDINARY_PASS_WORDS: &[&str] = &[
     "allpass",
     "bandpass",
@@ -89,6 +42,7 @@ const ORDINARY_PASS_WORDS: &[&str] = &[
     "highpass",
     "lowpass",
     "overpass",
+    "passed",
     "surpass",
     "trespass",
     "underpass",
@@ -371,6 +325,14 @@ fn glued_end(value: &str, start: usize) -> usize {
         if character.is_whitespace() || matches!(character, ',' | ';' | '}' | ']' | ')' | '&') {
             break;
         }
+        // A backslash escapes the next character, as in the shell: `\;` is part of the word.
+        if character == '\\' {
+            index += 1;
+            if let Some(escaped) = value[index..].chars().next() {
+                index += escaped.len_utf8();
+            }
+            continue;
+        }
         if matches!(character, '"' | '\'') {
             let close = closing_quote(value, index + 1, character);
             index = (close + 1).min(value.len());
@@ -382,9 +344,8 @@ fn glued_end(value: &str, start: usize) -> usize {
 }
 
 /// The end of a credential after a quoted Authorization scheme or empty quote (`"token" x`), or
-/// `None` when none follows: the line ends, a delimiter comes first, or the next word is another
-/// field (`status=200`). A quoted credential runs to its closing quote, across lines; an unquoted
-/// one to the end of its line.
+/// `None` when none follows: the line ends or a delimiter comes first. A quoted credential runs to
+/// its closing quote, across lines; anything else to the end of its line.
 fn credential_after_scheme(value: &str, after: usize) -> Option<usize> {
     let gap = value[after..].chars().next()?;
     if !gap.is_whitespace() || matches!(gap, '\n' | '\r') {
@@ -398,15 +359,8 @@ fn credential_after_scheme(value: &str, after: usize) -> Option<usize> {
     if matches!(next, '"' | '\'') {
         return Some(glued_end(value, start));
     }
-    let word_end = value[start..]
-        .find(char::is_whitespace)
-        .map_or(value.len(), |offset| start + offset);
-    let word = &value[start..word_end];
-    if let Some(split) = word.find(['=', ':']) {
-        if split > 0 && word[..split].chars().all(is_key_character) {
-            return None;
-        }
-    }
+    // The rest of the line, whatever it looks like: a credential such as base64 `…=` can look
+    // like a `key=value` field, and when in doubt the trace hides it.
     Some(authorization_credential_range(value, start).1)
 }
 
@@ -484,18 +438,12 @@ pub(crate) fn is_sensitive_key(key: &str) -> bool {
     }
     key.split(['-', '_', '.']).any(|part| {
         let whole = key_word(part);
-        if SENSITIVE_KEY_WORDS.contains(&whole.as_str())
-            || whole
-                .strip_suffix("pass")
-                .is_some_and(|prefix| PASS_WORD_PREFIXES.contains(&prefix))
-        {
-            return true;
-        }
-        // camelCase words, unless the part is an ordinary word (`byPass`).
-        !ORDINARY_PASS_WORDS.contains(&whole.as_str())
-            && camel_words(part)
+        (whole.contains("pass") && !ORDINARY_PASS_WORDS.contains(&whole.as_str()))
+            || whole == "authorization"
+            // `HTTPAuthorization`, not `authorizations_url`.
+            || camel_words(part)
                 .into_iter()
-                .any(|word| SENSITIVE_KEY_WORDS.contains(&key_word(word).as_str()))
+                .any(|word| key_word(word) == "authorization")
     })
 }
 
@@ -862,13 +810,40 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_pass_words_and_fields_after_an_empty_quote_stay() {
-        for text in [
-            r#"{"lowpass":"8kHz","highpass":"120Hz"}"#,
-            "byPass_pull_request_allowances=1",
-            r#"authorization="" status=200"#,
+    fn each_ordinary_pass_word_stays_readable() {
+        for word in ORDINARY_PASS_WORDS {
+            let text = format!("{word}=1");
+            assert_eq!(redact_text(&text), text, "{word}");
+        }
+        assert_eq!(
+            redact_text("byPass_pull_request_allowances=1"),
+            "byPass_pull_request_allowances=1"
+        );
+        assert_eq!(
+            redact_text(r#"{"lowpass":"8kHz","highpass":"120Hz"}"#),
+            r#"{"lowpass":"8kHz","highpass":"120Hz"}"#
+        );
+        // A shell word that ends at its real closing quote keeps the field after it (Sol r4#4).
+        assert_eq!(
+            redact_text(r#"password='it'\''s' status=200"#),
+            "password='<redacted> status=200"
+        );
+    }
+
+    #[test]
+    fn ambiguous_keys_are_redacted_by_decision() {
+        // When in doubt, redact (coordinator, 2026-11-03): a key with `pass` in it that isn't an
+        // exact ordinary word, and the rest of a line after a quoted Authorization scheme or
+        // empty quote, are hidden even when they're harmless.
+        for (text, redacted) in [
+            ("byPassEnabled=true", "byPassEnabled=<redacted>"),
+            ("byPASSOption=true", "byPASSOption=<redacted>"),
+            (
+                r#"authorization="" status=200"#,
+                r#"authorization="<redacted>"#,
+            ),
         ] {
-            assert_eq!(redact_text(text), text);
+            assert_eq!(redact_text(text), redacted, "{text}");
         }
     }
 
@@ -944,6 +919,16 @@ mod tests {
             // Acronym boundaries in a key (Sol r3#3).
             (r#"{"HTTPAuthorization":"audit-http"}"#, "audit-http"),
             (r#"{"dbPASSHash":"audit-hash"}"#, "audit-hash"),
+            // A shell escape inside a glued word (Sol r4#4).
+            (r#"password="a"\;audit-tail"#, "audit-tail"),
+            // Base64 that ends in `=` after a quoted scheme; `pass` anywhere in a key (Sol r4).
+            (
+                r#"Authorization: "Basic" YWxpY2U6cGFzc3dvcmQ="#,
+                "YWxpY2U6cGFzc3dvcmQ",
+            ),
+            ("newpass=audit-secret", "audit-secret"),
+            ("postgrespass=audit-secret", "audit-secret"),
+            ("dbpassHash=audit-secret", "audit-secret"),
         ] {
             for replacement in [REDACTED, "[REDACTED]"] {
                 let redacted = redact_text_with(text, replacement);
