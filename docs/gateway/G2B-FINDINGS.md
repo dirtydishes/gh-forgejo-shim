@@ -68,6 +68,7 @@ the sign bit cleared. This choice needs a rule in MAPPING.md. It is not a GitHub
 
 Waiting and blocked runs map to queued; running maps to in_progress; success, failure, cancelled,
 and skipped map to completed with the same conclusion. Unknown states produce an upstream error.
+(Changed since: Forgejo's own `unknown`, a run with no jobs, maps to queued; see DESIGN.md's runs row.)
 The gateway preserves run IDs and metadata and paginates Forgejo pages into the requested GitHub page.
 Status sets use repeated query parameters, such as `status=waiting&status=blocked`. Forgejo returns
 HTTP 400 for a comma-separated set. Workflow lookup supports the extra read that `run view --json` sends.
