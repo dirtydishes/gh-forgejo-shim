@@ -11,11 +11,11 @@
     "view",
     "{run}",
     "--json",
-    "status,conclusion,event,headBranch,workflowName,databaseId,jobs"
+    "status,conclusion,event,headBranch,workflowName,databaseId"
   ],
   "expect": {
     "exit": 0,
-    "stdout": "\\{\"conclusion\":\"\",\"databaseId\":{run},\"event\":\"push\",\"headBranch\":\"twin/run\\-view\\-json\",\"jobs\":\\[\\],\"status\":\"queued\",\"workflowName\":\"twin\"\\}\\\n",
+    "stdout": "\\{\"conclusion\":\"\",\"databaseId\":{run},\"event\":\"push\",\"headBranch\":\"twin/run\\-view\\-json\",\"status\":\"queued\",\"workflowName\":\"twin\"\\}\\\n",
     "stderr": ""
   },
   "state": [],

@@ -147,6 +147,9 @@ class ContractTests(unittest.TestCase):
               "setup": {"branch": "twin/run-x", "workflow": True}}, "--branch {branch}"),
             ({"argv": ["run", "list", "--branch", "main"],
               "setup": {"branch": "twin/run-x", "workflow": True}}, "the case's own"),
+            # A value that only reads --branch isn't the flag (o1#6).
+            ({"argv": ["run", "list", "--jq", "--branch"],
+              "setup": {"branch": "twin/run-x", "workflow": True}}, "the case's own"),
             ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/run-x"}}, "setup.workflow"),
             ({"argv": ["run", "view", "{pr}"], "setup": {"branch": "twin/run-x", "pr": True, "workflow": True}},
              "selector"),

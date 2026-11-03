@@ -29,10 +29,10 @@ TWIN_COMMANDS = {
     ("pr", "reopen"): set(),
     # Reads of the case's own queued run, and a comment on its own issue (C4).
     ("run", "list"): {"--branch", "--json", "--jq", "--limit", "--status", "--event"},
-    ("run", "view"): {"--json", "--jq", "--exit-status", "--verbose"},
+    ("run", "view"): {"--json", "--jq"},
     ("issue", "comment"): {"--body"},
 }
-BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--exit-status", "--verbose"}
+BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo"}
 PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
 # The selector each command takes; `run list` takes `--branch {branch}` instead.
 SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}}
@@ -61,6 +61,7 @@ def validate(case):
         raise ValueError("twin command is outside the twin allowlist")
     selectors = []
     heads = []
+    branches = []
     index = 2
     while index < len(argv):
         arg = argv[index]
@@ -75,8 +76,8 @@ def validate(case):
                     heads.append(argv[index])
                 if arg == "--base" and argv[index] != "main":
                     raise ValueError("--base must be main")
-                if arg == "--branch" and argv[index] != "{branch}":
-                    raise ValueError("run list --branch takes {branch}, the case's own")
+                if arg == "--branch":
+                    branches.append(argv[index])
                 if arg == "--match-head-commit" and not re.fullmatch(r"\{head\}|[0-9a-f]{40}", argv[index]):
                     raise ValueError("--match-head-commit takes {head} or a full sha")
         elif arg in SELECTORS.get(command, {"{pr}", "{branch}"}):
@@ -90,8 +91,8 @@ def validate(case):
             raise ValueError("pr create needs one --head {branch}, its own branch")
     elif command == ("run", "list"):
         # Without --branch it would list every case's runs.
-        if "--branch" not in argv or selectors:
-            raise ValueError("run list needs --branch {branch} and no selector")
+        if branches != ["{branch}"] or selectors:
+            raise ValueError("run list needs one --branch {branch}, the case's own, and no selector")
     elif len(selectors) != 1:
         raise ValueError("a twin pr command needs one selector, {pr} or {branch}")
     setup = case.get("setup")
