@@ -251,19 +251,40 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
     let (first_offset, first) = value[value_start..].char_indices().next()?;
     value_start += first_offset;
 
-    // Before quotes: an Authorization value runs to the end of its line however it's quoted, so
-    // `"first"tail` can't keep its tail.
-    if key.to_ascii_lowercase().contains("authorization") {
-        return Some(authorization_credential_range(value, value_start));
-    }
-    // JSON inside a JSON string: the value runs to the escaped quote that closes it.
-    if value[value_start..].starts_with("\\\"") {
+    let authorization = key.to_ascii_lowercase().contains("authorization");
+    // A quoted value runs to its own closing quote, across lines if it spans them; JSON inside a
+    // JSON string to the escaped quote that closes it.
+    let quoted = if value[value_start..].starts_with("\\\"") {
         let quoted_start = value_start + 2;
-        return Some((quoted_start, closing_escaped_quote(value, quoted_start)));
-    }
-    if matches!(first, '"' | '\'') {
+        Some((quoted_start, closing_escaped_quote(value, quoted_start), 2))
+    } else if matches!(first, '"' | '\'') {
         let quoted_start = value_start + first.len_utf8();
-        return Some((quoted_start, closing_quote(value, quoted_start, first)));
+        Some((
+            quoted_start,
+            closing_quote(value, quoted_start, first),
+            first.len_utf8(),
+        ))
+    } else {
+        None
+    };
+    if let Some((quoted_start, quoted_end, quote_len)) = quoted {
+        // An Authorization value doesn't end at a quote with more of it glued on, as in
+        // `"first"tail`. Whitespace or a JSON delimiter ends it, so the next field stays.
+        if authorization && quoted_end < value.len() {
+            let after = quoted_end + quote_len;
+            let glued_end = value[after..]
+                .find(|character: char| {
+                    character.is_whitespace() || matches!(character, ',' | ';' | '}' | ']' | ')')
+                })
+                .map_or(value.len(), |offset| after + offset);
+            if glued_end > after {
+                return Some((quoted_start, glued_end));
+            }
+        }
+        return Some((quoted_start, quoted_end));
+    }
+    if authorization {
+        return Some(authorization_credential_range(value, value_start));
     }
 
     // An unquoted value runs to whitespace, or to the next query parameter after `=`. Ending it
@@ -681,6 +702,18 @@ mod tests {
     }
 
     #[test]
+    fn a_quoted_authorization_value_ends_at_its_quote_and_keeps_the_next_field() {
+        assert_eq!(
+            redact_text(r#"{"authorization":"","status":200}"#),
+            r#"{"authorization":"","status":200}"#
+        );
+        assert_eq!(
+            redact_text(r#"{"authorization":"Bearer x","status":200}"#),
+            r#"{"authorization":"<redacted>","status":200}"#
+        );
+    }
+
+    #[test]
     fn neither_trace_leaks_what_the_old_git_redactor_hid() {
         for (text, secret) in [
             // An Authorization value runs to the end of its line, quoted or not.
@@ -696,6 +729,16 @@ mod tests {
             ("ghp_abcdefg", "abcdefg"),
             ("glpat-audit-token", "audit-token"),
             ("ghp_abcdefgh/secret-tail", "secret-tail"),
+            // A quoted Authorization value runs to its closing quote, across a line break.
+            ("authorization: \"first\n  audit-tail\"", "audit-tail"),
+            (
+                "--field=authorization=\"first\n  audit-tail\"",
+                "audit-tail",
+            ),
+            (
+                r#""{\"authorization\":\"first\"audit-tail\"}""#,
+                "audit-tail",
+            ),
         ] {
             for replacement in [REDACTED, "[REDACTED]"] {
                 let redacted = redact_text_with(text, replacement);
