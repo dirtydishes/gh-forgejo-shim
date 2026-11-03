@@ -853,6 +853,7 @@ mod tests {
                     api_url,
                     ca_file,
                     token_env: None,
+                    ..Default::default()
                 },
             )]),
             paths: crate::config::PathsConfig { gh: None, fj: None },

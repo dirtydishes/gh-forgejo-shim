@@ -30,6 +30,9 @@ pub struct HostConfig {
     pub api_url: Option<String>,
     pub token_env: Option<String>,
     pub ca_file: Option<PathBuf>,
+    /// Title prefixes this forge marks drafts with, such as `WIP:`; the gateway reports a PR
+    /// whose title starts with one as a draft (F17). Unset keeps the gateway's default.
+    pub wip_prefixes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +138,25 @@ pub fn load_config_with_env(path: Option<&Path>, env: &EnvMap) -> Result<Config>
                 )));
             }
             settings.api_url = Some(base.trim_end_matches('/').to_string());
+        }
+        // As the gateway reads FGA_WIP_PREFIXES: trimmed, and an empty prefix, which would
+        // match every title, dropped.
+        settings.wip_prefixes = settings.wip_prefixes.map(|prefixes| {
+            prefixes
+                .iter()
+                .map(|prefix| prefix.trim().to_string())
+                .filter(|prefix| !prefix.is_empty())
+                .collect()
+        });
+        // The gateway takes the list as comma-separated text, so a prefix can't hold a comma.
+        if settings
+            .wip_prefixes
+            .as_ref()
+            .is_some_and(|prefixes| prefixes.iter().any(|prefix| prefix.contains(',')))
+        {
+            return Err(ShimError::new(format!(
+                "invalid wip_prefixes for {host}: a prefix can't contain a comma"
+            )));
         }
         // A relative path would resolve against whatever repo the shim runs in.
         if settings
@@ -543,6 +565,37 @@ mod tests {
     use super::*;
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn wip_prefixes_are_trimmed_and_empty_ones_dropped() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("gfj-wip-{}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "[host.\"a.example.com\"]\nwip_prefixes = [\" DRAFT: \", \"\", \"[WIP]\"]\n[host.\"b.example.com\"]\n",
+        )?;
+        let config = load_config_at(&path)?;
+        assert_eq!(
+            config.host["a.example.com"].wip_prefixes,
+            Some(vec!["DRAFT:".to_string(), "[WIP]".to_string()])
+        );
+        assert_eq!(
+            config.host["b.example.com"].wip_prefixes, None,
+            "unset keeps the default"
+        );
+        fs::write(
+            &path,
+            "[host.\"a.example.com\"]\nwip_prefixes = [\"a,b\"]\n",
+        )?;
+        let error = load_config_at(&path).expect_err("comma");
+        assert!(
+            error.to_string().contains("can't contain a comma"),
+            "{error}"
+        );
+        fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
 
     #[test]
     fn no_default_hosts() -> Result<()> {
