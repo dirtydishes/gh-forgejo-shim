@@ -879,4 +879,11 @@ fn commit_status_and_check_runs_split_like_github() {
     assert_eq!(combined_status(&[], "abc")["state"], "pending");
     let passing = mapped(&[status("lint", S::Success, "ok")]);
     assert_eq!(combined_status(&passing, "abc")["state"], "success");
+    // Any pending status keeps it pending; an error counts as a failure.
+    let mut waiting = status("deploy", S::Pending, "waiting");
+    waiting.id = 3;
+    let pending = mapped(&[status("lint", S::Success, "ok"), waiting]);
+    assert_eq!(combined_status(&pending, "abc")["state"], "pending");
+    let errored = mapped(&[status("lint", S::Error, "broke")]);
+    assert_eq!(combined_status(&errored, "abc")["state"], "failure");
 }
