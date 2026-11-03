@@ -158,6 +158,11 @@ client ──https──▶ reverse proxy (git.example.com)
 3. **Live acceptance**, run by hand: the twin repo `git.dirtydishes.dev/dirtydishes/gfj-oracle`, with
    Claude Code, Claude desktop and ChatGPT on a test Mac. The badges must match the GitHub twin's.
 
+Route tests send the client's exact request, taken from the client's source or a capture, never a
+shape written from memory. #112's branch-delete route matched no request gh sends (gh escapes
+`heads/{branch}` as one segment), and its own tests used the remembered shape, so four review rounds
+missed it; #118 fixed it after the launcher's twin cases sent real gh.
+
 ## Milestones
 
 - **G1, thin slice:** `/`, `/meta`, `/user`, `/repos/{o}/{r}`, `/pulls?head=`, GraphQL `UserCurrent`,

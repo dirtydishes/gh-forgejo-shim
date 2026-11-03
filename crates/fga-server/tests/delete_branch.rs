@@ -1,6 +1,7 @@
-//! `gh pr merge --delete-branch` deletes the head branch with GitHub's
-//! `DELETE git/refs/heads/{branch}`. gh counts 404 and 422 as "already deleted", so the gateway must
-//! really delete the branch, and must not answer either code for a refusal.
+//! `gh pr merge --delete-branch` and `gh pr close --delete-branch` delete the head branch with
+//! GitHub's `DELETE git/refs/heads%2F{branch}` (gh escapes `heads/{branch}` as one segment). gh
+//! counts 404 and 422 as "already deleted", so the gateway must really delete the branch, and must
+//! not answer either code for a refusal.
 use axum::{
     Json, Router,
     http::{StatusCode, Uri},
@@ -105,8 +106,13 @@ async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
 
 /// Send `DELETE path` as gh does and return the status code and body.
 async fn delete_ref(addr: SocketAddr, path: &str) -> (u16, String) {
+    send(addr, "DELETE", path).await
+}
+
+/// Send `method path` as gh does and return the status code and body.
+async fn send(addr: SocketAddr, method: &str, path: &str) -> (u16, String) {
     let request = format!(
-        "DELETE {path} HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token t\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token t\r\nConnection: close\r\n\r\n"
     );
     let response = tokio::task::spawn_blocking(move || {
         let mut stream = TcpStream::connect(addr).unwrap();
@@ -134,7 +140,7 @@ fn gh_ref(repo: &str, branch: &str) -> String {
         .bytes()
         .map(|byte| match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => (byte as char).to_string(),
-            b'-' | b'.' | b'_' | b'~' | b'$' | b'&' | b'+' | b',' | b';' | b'=' | b':' | b'@' => {
+            b'-' | b'.' | b'_' | b'~' | b'$' | b'&' | b'+' | b'=' | b':' | b'@' => {
                 (byte as char).to_string()
             }
             _ => format!("%{byte:02X}"),
@@ -197,6 +203,9 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
     for branch in ["a%2Fb", "%2e%2e"] {
         assert_eq!(delete_ref(addr, &heads(branch)).await.0, 400, "{branch}");
     }
+    // Other methods on a ref keep the gateway's JSON 404, as before the route took every ref.
+    let (code, body) = send(addr, "GET", &heads("main")).await;
+    assert_eq!((code, message(&body)), (404, json!("Not Found")));
     // Only branches: any other ref is not served, and nothing is sent.
     assert_eq!(
         delete_ref(addr, "/api/v3/repos/o/r/git/refs/tags%2Fv1")
