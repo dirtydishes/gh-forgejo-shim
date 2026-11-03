@@ -110,7 +110,8 @@ The delegate list holds commands that call no API, or that write gh's own state,
 gh would write to a throwaway copy (section 3):
 
 - `--version`, `version`, `completion`;
-- help for any command: `help …`, or a help flag as gh parses it. That means `--help`, or `-h`
+- help: `help …`, or a help flag as gh parses it, for a command group or a command in the
+  shim's grammar (a command outside both keeps the Forgejo path's refusal; see below). That means `--help`, or `-h`
   in a command that doesn't define its own `-h`, as a flag and not as another flag's value, before
   a `--`. Several `auth` commands define `-h` as `--hostname`, so `gh auth token -h forge.test`
   isn't help. The wrapper decides this with the invocation parser's flag grammar, not by
@@ -128,7 +129,8 @@ The list applies to the command gh will run: routing expands a plain alias first
 `gh sg` with alias `sg: auth setup-git` delegates too. Help delegates after routing has chosen a
 forge, so the route trace still names it, with a reason saying plain gh ran; plain gh then prints
 the help. Only a command in the shim's grammar knows its own `-h` and which flags take a value, so
-a help flag delegates only there: `repo edit -h URL` sets a homepage, and keeps the refusal.
+a help flag delegates only there, and for command groups, which have no `-h` of their own:
+`repo edit -h URL` sets a homepage, and keeps the refusal.
 
 **Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
 `--hostname`, don't use the checkout's repository to pick a host. They use gh's default host
