@@ -114,7 +114,8 @@ client ──https──▶ reverse proxy (git.example.com)
   `ConvertPullRequestToDraft`, `PullRequestReadyForReview`, `PullRequestMerge`, and `IssueCreate`
   for a non-interactive `gh issue create -t … -b …` (or `-F`). These fail before writing anything:
   labels, assignees, a milestone and projects (their fields aren't in `CreateIssueInput`), templates
-  and the interactive run (gh's `IssueTemplates` query isn't served), an archived repository, and
+  and the interactive run (gh's `IssueTemplates` query isn't served), `--attach` (nothing uploads,
+  and gh won't create an issue whose attachments all failed), an archived repository, and
   one whose issues live in an external tracker (`hasIssuesEnabled` is false). `--type`, `--parent`,
   `--blocked-by` and `--blocking` fail **after** the issue is created, because gh sets them with
   queries the gateway doesn't serve, so gh exits 1 without printing the new issue's URL.
