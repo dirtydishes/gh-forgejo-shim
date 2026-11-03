@@ -40,10 +40,13 @@ pub const LAUNCH_LIST: &[&str] = &[
     "pr close",
     "pr reopen",
     "pr checkout",
+    "run list",
+    "run view",
+    "issue comment",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
-/// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
+/// `cwe.15.1`; C3b, `cwe.16.1`; C4, `cwe.18.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
 /// which serves or refuses that form before anything is written: gh would write part of a
 /// `pr edit` and then fail on a reviewer the gateway can't set. `--delete-branch` stays off: the
 /// gateway can't delete a branch yet, and gh would report success with the branch still there.
@@ -74,7 +77,38 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     // same-repository pull request (C3c, `cwe.17`). `--recurse-submodules` and `--worktree` stay
     // off until traced.
     ("pr checkout", &["branch", "detach", "force", "repo"]),
+    // `--workflow`, `--user`, `--created` and `--attempt` fail on the gateway; `--log` and
+    // `--log-failed` stay off until a completed run is traced (C4, `cwe.18.1`).
+    (
+        "run list",
+        &[
+            "json", "jq", "limit", "status", "branch", "event", "commit", "all", "repo",
+        ],
+    ),
+    (
+        "run view",
+        &["json", "jq", "exit-status", "verbose", "repo"],
+    ),
+    // `--edit-last`, `--delete-last` and `--create-if-none` need mutations the gateway lacks.
+    ("issue comment", &["body", "body-file", "repo"]),
 ];
+
+/// `gh api` reads the gateway serves beyond the built-in path's `user`: the rate-limit overview
+/// (C1, `cwe.11`), a GET with the flags traced for it.
+fn reads_rate_limit(invocation: &Invocation) -> bool {
+    invocation.command == "api"
+        && matches!(
+            invocation.positionals.as_slice(),
+            [path] if path == "rate_limit" || path == "/rate_limit"
+        )
+        && invocation
+            .flags
+            .keys()
+            .all(|flag| ["jq", "include", "hostname", "method"].contains(&flag.as_str()))
+        && invocation
+            .flag("method")
+            .is_none_or(|method| method.eq_ignore_ascii_case("GET"))
+}
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
@@ -84,7 +118,7 @@ pub fn launches(invocation: &Invocation) -> bool {
             .flags
             .keys()
             .all(|flag| flags.contains(&flag.as_str())),
-        None => invocation.is_native(),
+        None => invocation.is_native() || reads_rate_limit(invocation),
     };
     // Without a method, gh's terminal prompts ask whether to delete the branch, and to edit the
     // commit message: the forms kept off above. One method skips both prompts (`merge.go:307-330`).
@@ -102,6 +136,8 @@ pub fn launches(invocation: &Invocation) -> bool {
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && served
+        // Without a run ID, gh prompts for one in a terminal, which no trace has covered.
+        && !(command == "run view" && invocation.positionals.is_empty())
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -179,6 +215,27 @@ mod tests {
             &["pr", "checkout", "12"][..],
             &["pr", "checkout", "12", "-b", "local", "--force"][..],
             &["pr", "checkout", "12", "--detach"][..],
+            &["run", "list"][..],
+            &[
+                "run", "list", "--json", "status", "--limit", "5", "-b", "main",
+            ][..],
+            &[
+                "run", "list", "--status", "queued", "--event", "push", "--all",
+            ][..],
+            &["run", "view", "7"][..],
+            &[
+                "run",
+                "view",
+                "7",
+                "--json",
+                "status,jobs",
+                "--exit-status",
+                "-v",
+            ][..],
+            &["issue", "comment", "3", "--body", "b"][..],
+            &["issue", "comment", "3", "-F", "notes.md"][..],
+            &["api", "rate_limit"][..],
+            &["api", "/rate_limit", "--jq", ".rate", "-i", "-X", "GET"][..],
         ] {
             assert!(launches(&invocation(args)), "{args:?}");
         }
@@ -230,6 +287,18 @@ mod tests {
             &["pr", "merge", "12", "--merge", "--merge=false"][..],
             &["pr", "checkout", "12", "--recurse-submodules"][..],
             &["pr", "checkout", "12", "--worktree", "../w"][..],
+            // Untraced or failing on the gateway.
+            &["run", "list", "--workflow", "ci.yml"][..],
+            &["run", "list", "--user", "alice"][..],
+            &["run", "view", "7", "--attempt", "1"][..],
+            &["run", "view", "7", "--log"][..],
+            // gh would prompt for a run in a terminal.
+            &["run", "view"][..],
+            &["issue", "comment", "3", "--edit-last", "--body", "b"][..],
+            &["issue", "comment", "3", "--delete-last", "--yes"][..],
+            &["api", "rate_limit", "-X", "POST"][..],
+            &["api", "rate_limit", "--paginate"][..],
+            &["api", "repos/o/r/pulls"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
