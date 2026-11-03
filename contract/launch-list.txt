@@ -14,3 +14,4 @@ pr merge
 pr ready
 pr close
 pr reopen
+pr checkout

@@ -39,6 +39,7 @@ pub const LAUNCH_LIST: &[&str] = &[
     "pr ready",
     "pr close",
     "pr reopen",
+    "pr checkout",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
@@ -69,6 +70,9 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     ("pr ready", &["undo", "repo"]),
     ("pr close", &["repo"]),
     ("pr reopen", &["repo"]),
+    // Git-side flags only; the e2e run checks each (C3c, `cwe.17`). `--recurse-submodules` and
+    // `--worktree` stay off until traced.
+    ("pr checkout", &["branch", "detach", "force", "repo"]),
 ];
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
@@ -171,6 +175,9 @@ mod tests {
             &["pr", "ready", "12", "--undo"][..],
             &["pr", "close", "12"][..],
             &["pr", "reopen", "12"][..],
+            &["pr", "checkout", "12"][..],
+            &["pr", "checkout", "12", "-b", "local", "--force"][..],
+            &["pr", "checkout", "12", "--detach"][..],
         ] {
             assert!(launches(&invocation(args)), "{args:?}");
         }
@@ -220,6 +227,8 @@ mod tests {
             &["pr", "merge", "12", "--merge=false"][..],
             &["pr", "merge", "12", "--auto", "--squash=false"][..],
             &["pr", "merge", "12", "--merge", "--merge=false"][..],
+            &["pr", "checkout", "12", "--recurse-submodules"][..],
+            &["pr", "checkout", "12", "--worktree", "../w"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
