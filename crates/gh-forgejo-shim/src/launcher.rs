@@ -37,18 +37,36 @@ pub const LAUNCH_LIST: &[&str] = &[
     "pr edit",
 ];
 
-/// Launch-listed commands the built-in path refuses in every form (`support = "planned"` in
-/// `contract/tiers.toml`): there is no built-in answer to keep, so the listing alone decides.
-const BUILT_IN_REFUSES: &[&str] = &["pr edit"];
+/// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
+/// `cwe.15.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path, which serves or
+/// refuses that form before anything is written: gh would write part of a `pr edit` and then
+/// fail on a reviewer the gateway can't set. For these commands the list replaces
+/// `is_native()`, which can't see the built-in path's per-flag refusals.
+const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
+    (
+        "pr create",
+        &["head", "base", "title", "body", "draft", "repo"],
+    ),
+    ("pr comment", &["body", "repo"]),
+    ("pr edit", &["title", "body", "repo"]),
+];
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
-    LAUNCH_LIST.contains(&invocation.command.as_str())
+    let command = invocation.command.as_str();
+    let served = match LAUNCH_FLAGS.iter().find(|(listed, _)| *listed == command) {
+        Some((_, flags)) => invocation
+            .flags
+            .keys()
+            .all(|flag| flags.contains(&flag.as_str())),
+        None => invocation.is_native(),
+    };
+    LAUNCH_LIST.contains(&command)
         // Usage errors, help and forms the built-in path refuses as unsupported keep its
         // answers, which need no token (spec §2, "Transition: the launch list").
         && invocation.validate().is_ok()
         && invocation.help().is_none()
-        && (invocation.is_native() || BUILT_IN_REFUSES.contains(&invocation.command.as_str()))
+        && served
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -116,10 +134,43 @@ mod tests {
         assert!(launches(&invocation(&[
             "pr", "comment", "12", "--body", "b"
         ])));
-        assert!(
-            launches(&invocation(&["pr", "edit", "12", "--title", "t"])),
-            "the built-in path refuses every pr edit"
-        );
+        assert!(launches(&invocation(&[
+            "pr", "edit", "12", "-t", "t", "-b", "b"
+        ])));
+        assert!(launches(&invocation(&[
+            "pr", "create", "-H", "x", "-B", "main", "-t", "t", "-b", "b", "-d"
+        ])));
+        // Flags the gateway doesn't serve keep the built-in path, which refuses them before
+        // writing: gh would write the title, then fail on the reviewer.
+        for refused in [
+            &[
+                "pr",
+                "edit",
+                "12",
+                "--title",
+                "t",
+                "--add-reviewer",
+                "alice",
+            ][..],
+            &["pr", "edit", "12", "--add-label", "bug"][..],
+            &[
+                "pr", "create", "--title", "t", "--body", "b", "--label", "bug",
+            ][..],
+            &[
+                "pr",
+                "create",
+                "--title",
+                "t",
+                "--body",
+                "b",
+                "--reviewer",
+                "alice",
+            ][..],
+            &["pr", "comment", "12", "--edit-last", "--body", "b"][..],
+            &["pr", "comment", "12", "--delete-last", "--yes"][..],
+        ] {
+            assert!(!launches(&invocation(refused)), "{refused:?}");
+        }
         assert!(!launches(&invocation(&["issue", "list"])));
         assert!(!launches(&invocation(&["issue", "view", "3"])));
         assert!(

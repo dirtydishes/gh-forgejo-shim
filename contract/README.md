@@ -24,7 +24,7 @@ scripts/contract/capture-oracle.sh
 
 Use repeated `--case <id>` options to capture selected cases and preserve the other captures and scenarios.
 Cases with `kind = "shim-local"` use `expected` instead of `oracle`. Capture skips these cases, and
-`oracle_argv` rejects them. The exact local allowlist covers unsupported merge and repository API calls.
+`oracle_argv` rejects them. The exact local allowlist covers unsupported merge, `pr edit` with a reviewer, and repository API calls.
 The runner still checks exit code, both streams, and the real-gh decoy for these cases.
 
 ## The launcher's commands
