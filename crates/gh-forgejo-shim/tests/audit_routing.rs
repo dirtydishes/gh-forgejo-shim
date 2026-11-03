@@ -546,10 +546,18 @@ fn audit_route_force_install_symlink() -> TestResult {
     let fixture = Fixture::new()?;
     let original = fs::read(&fixture.real_gh)?;
     symlink(&fixture.real_gh, fixture.bin.join("gh"))?;
+    // Install needs a real gh that reports a supported version; the fixture's prints `real-gh`.
+    let supported = fixture.root.join("supported");
+    fs::create_dir(&supported)?;
+    executable_from_child(
+        &supported.join("gh"),
+        "#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n",
+    )?;
     let mut command = fixture.command();
     command
         .args(["install-shim", "--force", "--bin-dir"])
-        .arg(&fixture.bin);
+        .arg(&fixture.bin)
+        .env("FJ_SHIM_REAL_GH", supported.join("gh"));
     let output = fixture.run(&mut command)?;
     assert!(output.status.success(), "install failed: {output:?}");
     assert_eq!(
