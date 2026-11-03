@@ -67,7 +67,7 @@ request. Concurrent GraphQL fields share each upstream response, including error
 The GraphQL subset covers gh's PR read documents, introspection, PR node lookup, checks, reviews,
 review requests, and empty project connections: `projectItems`, and `projectCards` for classic
 projects, which Forgejo lacks. Its mutations cover `gh pr create`, `comment`, `edit`, `close`,
-`reopen`, `ready` (both ways) and `merge`, including auto-merge. `search`
+`reopen`, `ready` (both ways) and `merge`, including auto-merge, and `gh issue comment`. `search`
 supports the repo-scoped author and review-request queries from `pr status`. Other search
 qualifiers return an error. The
 [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the source commit and checksum. Its

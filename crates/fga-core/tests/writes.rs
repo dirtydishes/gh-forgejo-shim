@@ -754,3 +754,52 @@ async fn auto_merge_merges_ready_prs_and_schedules_after_a_policy_refusal() {
         assert_eq!(*seen.lock().unwrap(), sent, "{mutation}");
     }
 }
+
+/// `gh issue comment` sends the issue's own ID and `gh pr comment` the PR's; each comments only on
+/// what its ID names. An issue ID whose number is a pull request writes nothing.
+#[tokio::test]
+async fn comments_go_to_issues_and_pull_requests_by_their_own_ids() {
+    use axum::{extract::Path, routing::post};
+    use std::sync::{Arc, Mutex};
+    let posted = Arc::new(Mutex::new(Vec::new()));
+    let record = posted.clone();
+    let issue = |number: i32, pull: bool| {
+        json!({"id":number,"number":number,"title":"T","body":"","state":"open",
+            "html_url":format!("https://forge.test/o/r/issues/{number}"),"user":user(),
+            "created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","labels":[],
+            "pull_request":if pull { json!({"merged":false}) } else { Value::Null }})
+    };
+    let router = router()
+        .route("/api/v1/repos/o/r/issues/1", get(move || async move { Json(issue(1, true)) }))
+        .route("/api/v1/repos/o/r/issues/2", get(move || async move { Json(issue(2, false)) }))
+        .route(
+            "/api/v1/repos/o/r/issues/{number}/comments",
+            post(move |Path(number): Path<i32>| {
+                record.lock().unwrap().push(number);
+                async move {
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({"id":9,"user":user(),"body":"hi","created_at":"2026-11-03T00:00:00Z",
+                            "html_url":format!("https://forge.test/o/r/issues/{number}#issuecomment-9")})),
+                    )
+                }
+            }),
+        );
+    let comment = |kind: &str, number: i32| {
+        format!(
+            r#"mutation{{addComment(input:{{subjectId:"{}",body:"hi"}}){{commentEdge{{node{{body}}}}}}}}"#,
+            node_id(kind, "o/r", number)
+        )
+    };
+    for (kind, number) in [("Issue", 2), ("PullRequest", 1)] {
+        let response = execute(router.clone(), comment(kind, number)).await;
+        assert!(response.errors.is_empty(), "{kind}: {:?}", response.errors);
+        assert_eq!(
+            response.data.into_json().unwrap(),
+            json!({"addComment":{"commentEdge":{"node":{"body":"hi"}}}})
+        );
+    }
+    let response = execute(router.clone(), comment("Issue", 1)).await;
+    assert_eq!(response.errors[0].message, "Not Found");
+    assert_eq!(*posted.lock().unwrap(), [2, 1]);
+}
