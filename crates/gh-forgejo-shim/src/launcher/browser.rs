@@ -107,7 +107,11 @@ pub fn rewrite(url: &str, served: &[String]) -> String {
     }) else {
         return url.to_string();
     };
-    let prefix: Vec<&str> = prefix.split('/').filter(|part| !part.is_empty()).collect();
+    // Segment by segment, keeping empty ones inside the prefix: `/forge//jo` isn't `/forge/jo`.
+    let prefix: Vec<&str> = match prefix.trim_matches('/') {
+        "" => Vec::new(),
+        inner => inner.split('/').collect(),
+    };
     let segments: Vec<&str> = parsed.path().trim_start_matches('/').split('/').collect();
     let Some(rest) = segments.strip_prefix(prefix.as_slice()) else {
         return url.to_string();
@@ -228,6 +232,16 @@ mod tests {
         ] {
             assert_eq!(rewrite(url, &served), expected, "{url}");
         }
+        // An empty segment inside the prefix is part of it.
+        let doubled = vec!["forge.test/forge//jo".to_string()];
+        assert_eq!(
+            rewrite("https://forge.test/forge//jo/o/r/pull/1", &doubled),
+            "https://forge.test/forge//jo/o/r/pulls/1"
+        );
+        assert_eq!(
+            rewrite("https://forge.test/forge/jo/o/r/pull/1", &doubled),
+            "https://forge.test/forge/jo/o/r/pull/1"
+        );
         // At the root, a file path holding `pull/<N>` stays as it is too.
         assert_eq!(
             rewrite(
