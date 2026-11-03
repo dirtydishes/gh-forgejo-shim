@@ -356,7 +356,8 @@ fn run_install_shim(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runti
 
     let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
     // The shim delegates to real gh, so it isn't installed without one new enough (decision D3):
-    // the one the wrapper will run once installed, so not a gh at the target it replaces.
+    // the one the wrapper will run once installed. With --force that isn't a gh at the target,
+    // which the shim replaces; without it, install leaves an unmanaged gh there alone.
     let config =
         config::load_config_with_env(Some(&config::config_path(runtime.home())), runtime.env())?;
     let target = shim::shim_path(bin_dir.as_deref(), runtime.home())?;
@@ -364,7 +365,7 @@ fn run_install_shim(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runti
         Some(&config),
         runtime.env(),
         &setup::default_fallback_dirs(),
-        &target,
+        force.then_some(target.as_path()),
     );
     let gh = gh_version::check(real_gh.as_ref(), runtime.env(), runtime.platform());
     match gh.status {

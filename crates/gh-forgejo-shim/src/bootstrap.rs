@@ -162,8 +162,8 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
     let mut checks = Vec::new();
 
     // Nothing is written or installed for a gh the shim can't use (decision D3). The gh checked
-    // is the one the wrapper will run once the shim is in place, which isn't a gh the shim
-    // replaces. A dry run goes on, to show the rest of the plan.
+    // is the one the wrapper will run once the shim is in place: with --force, not a gh at the
+    // target, which the shim replaces. A dry run goes on, to show the rest of the plan.
     let fallback_dirs = options
         .fallback_dirs
         .clone()
@@ -172,7 +172,7 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
         Some(&config),
         &options.env,
         &fallback_dirs,
-        &target_shim,
+        options.force.then_some(target_shim.as_path()),
     );
     let gh_check = real_gh_check(real_gh.as_ref(), &options.env, &options.platform);
     if gh_check.status == BootstrapCheckStatus::Fix && !options.dry_run {

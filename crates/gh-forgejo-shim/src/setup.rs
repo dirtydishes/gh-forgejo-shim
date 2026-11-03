@@ -273,29 +273,26 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// The gh the wrapper will delegate to once the shim is installed at `target`: as
-/// [`find_real_gh`], but a gh at `target` is passed over, since the shim will replace it.
+/// The gh the wrapper will delegate to once the shim is installed: as [`find_real_gh`], but a gh
+/// at `replaced`, which the shim will replace (`--force`), is passed over.
 pub(crate) fn find_real_gh_after_install(
     config: Option<&Config>,
     env: &EnvMap,
     fallback_dirs: &[PathBuf],
-    target: &Path,
+    replaced: Option<&Path>,
 ) -> Option<ToolPath> {
     let configured = config.and_then(|config| config.paths.gh.as_deref().map(Path::new));
-    find_tool_passing_over("gh", configured, env, fallback_dirs, true, Some(target))
+    find_tool_passing_over("gh", configured, env, fallback_dirs, true, replaced)
 }
 
 /// Whether `path` reaches the directory entry `target` names, which installing replaces with the
 /// shim: it is that entry (through any symlinked directory), or a symlink whose chain passes
 /// through it. A symlink at `target` is replaced itself, so the file it points to doesn't count.
 fn same_location(path: &Path, target: &Path) -> bool {
-    let Some(target) = entry_location(target) else {
-        return false;
-    };
     let mut current = path.to_path_buf();
     // Bounded like the system's own symlink limit, so a loop can't hold this up.
     for _ in 0..40 {
-        if entry_location(&current).as_ref() == Some(&target) {
+        if same_entry(&current, target) {
             return true;
         }
         let Ok(link) = fs::read_link(&current) else {
@@ -309,18 +306,30 @@ fn same_location(path: &Path, target: &Path) -> bool {
     false
 }
 
-/// The directory entry `path` names: its directory resolved through symlinks, then its file
-/// name, unresolved. A bare name (`gh`) is in the current directory.
-fn entry_location(path: &Path) -> Option<PathBuf> {
-    let name = path.file_name()?;
-    let directory = path
-        .parent()
+/// Whether two paths name one directory entry: the same file name in the same directory. The
+/// directories are compared as files (device and inode), so a symlinked directory, a bind mount
+/// or a macOS firmlink is the same one; a directory that doesn't exist yet compares by path.
+fn same_entry(left: &Path, right: &Path) -> bool {
+    left.file_name().is_some()
+        && left.file_name() == right.file_name()
+        && same_directory(directory_of(left), directory_of(right))
+}
+
+/// The directory `path` is in; a bare name (`gh`) is in the current directory.
+fn directory_of(path: &Path) -> &Path {
+    path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let directory = directory
-        .canonicalize()
-        .unwrap_or_else(|_| directory.to_path_buf());
-    Some(directory.join(name))
+        .unwrap_or(Path::new("."))
+}
+
+fn same_directory(left: &Path, right: &Path) -> bool {
+    #[cfg(unix)]
+    if let (Ok(left), Ok(right)) = (left.metadata(), right.metadata()) {
+        use std::os::unix::fs::MetadataExt;
+
+        return (left.dev(), left.ino()) == (right.dev(), right.ino());
+    }
+    same_file(left, right)
 }
 
 /// The gh the wrapper delegates to: the configured one, else the first on PATH or in the

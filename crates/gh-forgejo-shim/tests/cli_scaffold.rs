@@ -1876,3 +1876,46 @@ fn install_passes_over_a_link_to_the_gh_it_replaces() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn without_force_install_checks_the_gh_it_leaves_in_place() -> TestResult {
+    // Without --force, install won't replace an unmanaged gh at its target, so that gh is the
+    // one the wrapper runs: it's the one checked, and the refusal is about the file in the way,
+    // not about gh (Opus o2#1).
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    let target_dir = fixture.root().join("target");
+    gh_reporting(&fixture, "target", "gh version 2.104.0")?;
+    let path = std::env::join_paths([target_dir.as_path(), fixture.bin()])?;
+
+    let output = fixture
+        .command("gfj")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", &path)
+        .args(["install-shim", "--bin-dir"])
+        .arg(&target_dir)
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("is not managed by gh-forgejo-shim"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("real gh"), "{stderr}");
+
+    let output = fixture
+        .command("gfj")?
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", &path)
+        .env("FJ_SHIM_TOKEN", "bootstrap-token")
+        .args(["bootstrap", "--no-gui-path", "--bin-dir"])
+        .arg(&target_dir)
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[ok] real gh: found gh 2.104.0"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("[fix] shim:"), "{stdout}");
+    Ok(())
+}
