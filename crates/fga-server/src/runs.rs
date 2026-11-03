@@ -159,19 +159,18 @@ pub async fn runs(
             )
             .await?;
         let workflows = session.workflows(&owner, &repo).await?;
-        let mapped: Result<Vec<Value>, Error> = runs
-            .workflow_runs
-            .iter()
-            .map(|run| {
-                let workflow = workflows.get(&run.workflow_id).ok_or(Error::NotFound)?;
-                Ok(with_links(
-                    &host,
-                    &owner,
-                    &repo,
-                    actions::run(run, workflow)?,
-                ))
-            })
-            .collect();
+        // A run of a workflow that exists only on its own branch is named from there, so it never
+        // fails the page.
+        let mut mapped = Vec::new();
+        for run in &runs.workflow_runs {
+            let workflow = session.workflow_for(&owner, &repo, run, &workflows).await;
+            mapped.push(with_links(
+                &host,
+                &owner,
+                &repo,
+                actions::run(run, &workflow)?,
+            ));
+        }
         Ok((
             links(
                 &host,
@@ -182,7 +181,7 @@ pub async fn runs(
                 runs.total_count,
                 &public,
             ),
-            Json(json!({"total_count":runs.total_count,"workflow_runs":mapped?})),
+            Json(json!({"total_count":runs.total_count,"workflow_runs":mapped})),
         )
             .into_response())
     }
@@ -251,8 +250,8 @@ pub async fn run(
     let result = async {
         let run = source(&session, &owner, &repo, id).await?;
         let workflows = session.workflows(&owner, &repo).await?;
-        let workflow = workflows.get(&run.workflow_id).ok_or(Error::NotFound)?;
-        let mapped = with_links(&host, &owner, &repo, actions::run(&run, workflow)?);
+        let workflow = session.workflow_for(&owner, &repo, &run, &workflows).await;
+        let mapped = with_links(&host, &owner, &repo, actions::run(&run, &workflow)?);
         Ok(Json(mapped).into_response())
     }
     .await;

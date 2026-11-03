@@ -63,10 +63,25 @@ impl Session {
         Ok(issue)
     }
     pub async fn file_text(&self, owner: &str, repo: &str, path: &str) -> Result<String, Error> {
+        self.file_text_at(owner, repo, path, None).await
+    }
+
+    /// [`Session::file_text`] at a commit, branch or tag; `None` reads the default branch.
+    pub async fn file_text_at(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        reference: Option<&str>,
+    ) -> Result<String, Error> {
         // The route's `*` takes the path's slashes as segments; one segment may not hold a slash.
         let mut segments = vec!["repos", owner, repo, "contents"];
         segments.extend(path.split('/'));
-        let value: serde_json::Value = self.get(&segments, &[]).await?;
+        let query: Vec<(&str, String)> = reference
+            .map(|r| ("ref", r.to_owned()))
+            .into_iter()
+            .collect();
+        let value: serde_json::Value = self.get(&segments, &query).await?;
         let content = value["content"].as_str().ok_or(Error::Upstream)?;
         let bytes = STANDARD
             .decode(

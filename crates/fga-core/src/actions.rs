@@ -27,7 +27,7 @@ pub struct Run {
     pub updated: String,
     pub started: String,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Workflow {
     pub id: i64,
     pub name: String,
@@ -72,6 +72,13 @@ pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
     )
 }
 
+/// The directories Forgejo reads workflows from, in order (`modules/actions/workflows.go:62-102`).
+const WORKFLOW_DIRECTORIES: [&str; 3] = [
+    ".forgejo/workflows",
+    ".gitea/workflows",
+    ".github/workflows",
+];
+
 impl Session {
     pub async fn action_runs(
         &self,
@@ -115,11 +122,7 @@ impl Session {
         // Forgejo reads the first of these directories that exists, even if it holds no workflows
         // (`modules/actions/workflows.go:62-102`).
         let mut workflows = BTreeMap::new();
-        for directory in [
-            ".forgejo/workflows",
-            ".gitea/workflows",
-            ".github/workflows",
-        ] {
+        for directory in WORKFLOW_DIRECTORIES {
             let mut segments = vec!["repos", owner, repo, "contents"];
             segments.extend(directory.split('/'));
             let entries: serde_json::Value = match self.get(&segments, &[]).await {
@@ -151,6 +154,42 @@ impl Session {
             break;
         }
         Ok(workflows)
+    }
+
+    /// A run's workflow. `known` holds the default branch's; a run of a workflow that exists only on
+    /// its own branch (a PR adding one) is named from the file at the run's commit, and failing
+    /// that from its file name, so one such run never fails a list of runs.
+    pub async fn workflow_for(
+        &self,
+        owner: &str,
+        repo: &str,
+        run: &Run,
+        known: &BTreeMap<String, Workflow>,
+    ) -> Workflow {
+        if let Some(workflow) = known.get(&run.workflow_id) {
+            return workflow.clone();
+        }
+        let filename = &run.workflow_id;
+        for directory in WORKFLOW_DIRECTORIES {
+            let path = format!("{directory}/{filename}");
+            if let Ok(content) = self
+                .file_text_at(owner, repo, &path, Some(&run.commit_sha))
+                .await
+            {
+                return Workflow {
+                    id: workflow_id(filename),
+                    name: workflow_name::from_content(&content, &path),
+                    path,
+                    state: "active",
+                };
+            }
+        }
+        Workflow {
+            id: workflow_id(filename),
+            name: filename.clone(),
+            path: format!("{}/{filename}", WORKFLOW_DIRECTORIES[0]),
+            state: "active",
+        }
     }
 }
 
