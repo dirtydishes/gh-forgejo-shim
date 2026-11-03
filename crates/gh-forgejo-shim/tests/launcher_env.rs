@@ -83,6 +83,17 @@ fn edits_are_recorded_and_reverted() {
         Some("'a.b'='c' 'x.y'='z'".into())
     );
 
+    // Set but empty, as unset: git's appended entries come back alone, with no leading space
+    // (launcher spec §11, test 14).
+    env::set_var("GIT_CONFIG_PARAMETERS", "");
+    apply(&[(
+        "GIT_CONFIG_PARAMETERS",
+        Edit::Set("'credential.helper='".into()),
+    )]);
+    env::set_var("GIT_CONFIG_PARAMETERS", "'credential.helper=' 'x.y'='z'");
+    revert();
+    assert_eq!(get("GIT_CONFIG_PARAMETERS"), Some("'x.y'='z'".into()));
+
     // A name edited twice keeps the user's value from before the first edit.
     env::set_var("TWICE", "user");
     apply(&[
