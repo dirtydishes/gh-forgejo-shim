@@ -111,7 +111,8 @@ client ──https──▶ reverse proxy (git.example.com)
 - **Introspection:** `PullRequest_fields`, `PullRequest_fields2`, `Issue_fields` and
   `SearchType_enumValues`, which come for free from the server.
 - **Mutations:** `PullRequestCreate`, `CommentCreate`, `PullRequestUpdate`,
-  `ConvertPullRequestToDraft`, `PullRequestReadyForReview` and `PullRequestMerge`.
+  `ConvertPullRequestToDraft`, `PullRequestReadyForReview`, `PullRequestMerge`, and `IssueCreate`
+  with a title and body (labels, assignees, a milestone and projects aren't served yet).
 - **ChatGPT 22943's 6 documents** use fields on `PullRequest`, `Repository`, `Commit.statusCheckRollup`,
   reviews, review threads and `viewer*`.
 

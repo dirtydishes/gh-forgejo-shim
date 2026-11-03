@@ -141,6 +141,18 @@ type ConvertPullRequestToDraftPayload {
   pullRequest: PullRequest
 }
 
+input CreateIssueInput {
+  repositoryId: ID!
+  title: String!
+  body: String
+  clientMutationId: String
+}
+
+type CreateIssuePayload {
+  clientMutationId: String
+  issue: Issue
+}
+
 input CreatePullRequestInput {
   repositoryId: ID!
   baseRefName: String!
@@ -381,6 +393,7 @@ type Milestone implements Node {
 }
 
 type Mutation {
+  createIssue( input: CreateIssueInput! ): CreateIssuePayload
   createPullRequest( input: CreatePullRequestInput! ): CreatePullRequestPayload
   addComment( input: AddCommentInput! ): AddCommentPayload
   updatePullRequest( input: UpdatePullRequestInput! ): UpdatePullRequestPayload

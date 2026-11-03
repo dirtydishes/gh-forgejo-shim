@@ -45,6 +45,37 @@ async fn edit(
 
 #[Object]
 impl Mutation {
+    async fn create_issue(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateIssueInput,
+    ) -> async_graphql::Result<Option<CreateIssuePayload>> {
+        let id = id(&input.repository_id, "Repository")?;
+        let session = ctx.data_unchecked::<Session>();
+        // The ID carries the repository's Forgejo ID; one recreated under the same name is another.
+        let repository = session
+            .repository(&id.owner, &id.repository)
+            .await
+            .map_err(error)?;
+        if repository.id != i64::from(id.number) {
+            return Err(error(forgejo::Error::NotFound));
+        }
+        let source = session
+            .create_issue(
+                &id.owner,
+                &id.repository,
+                forgejo::CreateIssue {
+                    title: &input.title,
+                    body: input.body.as_deref().unwrap_or(""),
+                },
+            )
+            .await
+            .map_err(write_error)?;
+        Ok(Some(CreateIssuePayload {
+            client_mutation_id: input.client_mutation_id,
+            issue: Some(Issue::new(source, &id.owner, &id.repository)),
+        }))
+    }
     async fn create_pull_request(
         &self,
         ctx: &Context<'_>,
@@ -477,6 +508,11 @@ macro_rules! pull_payload {
             pub pull_request: Option<PullRequest>,
         }
     };
+}
+#[derive(SimpleObject)]
+pub struct CreateIssuePayload {
+    pub client_mutation_id: Option<String>,
+    pub issue: Option<Issue>,
 }
 pull_payload!(CreatePullRequestPayload);
 pull_payload!(UpdatePullRequestPayload);
