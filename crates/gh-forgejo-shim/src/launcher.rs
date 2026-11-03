@@ -97,8 +97,15 @@ pub fn launches(invocation: &Invocation) -> bool {
             .filter(|method| invocation.flag(method) == Some("true"))
             .count()
             == 1;
+    // gh skips the branch delete when it schedules an `--auto` merge (`merge.go:519`), and the
+    // gateway's scheduled merge keeps the branch: the pair keeps the built-in path, which
+    // refuses it, rather than exit 0 with the branch still there.
+    let keeps_branch = command == "pr merge"
+        && invocation.flag("auto") == Some("true")
+        && invocation.flag("delete-branch") == Some("true");
     LAUNCH_LIST.contains(&command)
         && one_method
+        && !keeps_branch
         // Usage errors, help and forms the built-in path refuses as unsupported keep its
         // answers, which need no token (spec §2, "Transition: the launch list").
         && invocation.validate().is_ok()
@@ -179,6 +186,14 @@ mod tests {
             &["pr", "close", "12"][..],
             &["pr", "close", "12", "--delete-branch"][..],
             &["pr", "merge", "12", "--squash", "--delete-branch"][..],
+            &[
+                "pr",
+                "merge",
+                "12",
+                "--squash",
+                "--auto",
+                "--delete-branch=false",
+            ][..],
             &["pr", "reopen", "12"][..],
             &["pr", "checkout", "12"][..],
             &["pr", "checkout", "12", "-b", "local", "--force"][..],
@@ -229,6 +244,9 @@ mod tests {
             &["pr", "merge", "12", "--merge=false"][..],
             &["pr", "merge", "12", "--auto", "--squash=false"][..],
             &["pr", "merge", "12", "--merge", "--merge=false"][..],
+            // A scheduled merge would keep the branch.
+            &["pr", "merge", "12", "--squash", "--auto", "--delete-branch"][..],
+            &["pr", "merge", "12", "-sd", "--auto"][..],
             &["pr", "checkout", "12", "--recurse-submodules"][..],
             &["pr", "checkout", "12", "--worktree", "../w"][..],
         ] {
