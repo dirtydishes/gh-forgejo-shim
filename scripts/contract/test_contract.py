@@ -72,7 +72,7 @@ class ContractTests(unittest.TestCase):
                 case["kind"] = "shim-local"
                 case["expected"] = case.pop("oracle")
                 validate_case(case)
-                with self.assertRaisesRegex(ValueError, "never reach real gh"):
+                with self.assertRaisesRegex(ValueError, "only oracle cases are captured"):
                     oracle_argv(case)
                 with self.assertRaises(ValueError):
                     validate_case(case | {"argv": ["pr", "create"]})
@@ -102,6 +102,27 @@ class ContractTests(unittest.TestCase):
         for key, value in (("exit", 97), ("stdout", "wrong"), ("stderr", "wrong")):
             self.assertEqual(runner.classify(case, case["expected"] | {key: value})[0], "unexpected")
 
+    def test_twin_cases_stay_on_their_own_branch(self):
+        good = {"id": "twin-x", "kind": "twin", "repo": REPO, "setup": {"branch": "twin/x", "pr": True},
+                "argv": ["pr", "edit", "{pr}", "--title", "t"], "expect": {"exit": 0, "stdout": "", "stderr": ""},
+                "state": [{"path": "pulls/{pr}", "fields": {"title": "t"}}], "normalize": []}
+        validate_case(good)
+        self.assertTrue(launched(good, ["pr edit"]))
+        with self.assertRaisesRegex(ValueError, "only oracle cases are captured"):
+            oracle_argv(good)
+        for change, message in [
+            ({"argv": ["pr", "merge", "{pr}"]}, "twin allowlist"),
+            ({"argv": ["pr", "edit", "7", "--title", "t"]}, "selector"),
+            ({"argv": ["pr", "edit", "{pr}", "-R", "github.com/o/r"]}, "flag is not allowed"),
+            ({"argv": ["pr", "create", "--head", "main", "--title", "t"]}, "own branch"),
+            ({"setup": {"branch": "main"}}, "twin/<name>"),
+            ({"shim_config": {"hosts": ["github.com"]}}, "wip_prefixes"),
+            ({"state": [{"path": "pulls/1", "fields": {}}]}, "own pull request"),
+            ({"oracle": {}}, "own expect"),
+        ]:
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
+                validate_case(good | change)
+
     def test_decoy_cases_are_exact_and_never_captured(self):
         case = {"id": "probe", "kind": "decoy", "repo": REPO, "argv": DECOY_PROBES[0], "normalize": []}
         validate_case(case)
@@ -109,7 +130,7 @@ class ContractTests(unittest.TestCase):
             validate_case(case | {"argv": ["pr", "view", "1"]})
         with self.assertRaisesRegex(ValueError, "expect only the decoy"):
             validate_case(case | {"oracle": {"exit": 0, "stdout": "", "stderr": ""}})
-        with self.assertRaisesRegex(ValueError, "never reach real gh"):
+        with self.assertRaisesRegex(ValueError, "only oracle cases are captured"):
             oracle_argv(case)
         self.assertEqual(runner.classify(case, {"exit": 97, "stdout": "", "stderr": ""}), ("pass", ""))
 
