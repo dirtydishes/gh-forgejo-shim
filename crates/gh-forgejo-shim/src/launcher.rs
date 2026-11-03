@@ -43,6 +43,9 @@ pub const LAUNCH_LIST: &[&str] = &[
     "run list",
     "run view",
     "issue comment",
+    "issue list",
+    "issue view",
+    "issue create",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
@@ -89,6 +92,18 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     ("run view", &["json", "jq", "repo"]),
     // `--edit-last`, `--delete-last` and `--create-if-none` need mutations the gateway lacks.
     ("issue comment", &["body", "body-file", "repo"]),
+    // `--milestone`, `--type` and `--app` fail on the gateway (C4).
+    (
+        "issue list",
+        &[
+            "state", "limit", "json", "jq", "author", "assignee", "label", "mention", "search",
+            "repo",
+        ],
+    ),
+    ("issue view", &["comments", "json", "jq", "repo"]),
+    // Title and body only. `--type`, `--parent`, `--blocked-by` and `--blocking` fail after the
+    // issue is made (bead `r0t`); labels, assignees, milestone, projects and templates fail first.
+    ("issue create", &["title", "body", "body-file", "repo"]),
 ];
 
 /// `gh api` reads the gateway serves beyond the built-in path's `user`: the rate-limit overview
@@ -150,6 +165,12 @@ pub fn launches(invocation: &Invocation) -> bool {
         && !(matches!(command, "pr comment" | "issue comment")
             && !invocation.flags.contains_key("body")
             && !invocation.flags.contains_key("body-file"))
+        // Without a title and a body gh prompts for them in a terminal (`create.go`'s
+        // interactive path), which no trace has covered.
+        && !(command == "issue create"
+            && !(invocation.flags.contains_key("title")
+                && (invocation.flags.contains_key("body")
+                    || invocation.flags.contains_key("body-file"))))
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -247,6 +268,28 @@ mod tests {
             &["issue", "comment", "3", "-F", "notes.md"][..],
             &["api", "rate_limit"][..],
             &["api", "/rate_limit", "--jq", ".rate", "-i", "-X", "GET"][..],
+            &["issue", "list"][..],
+            &[
+                "issue", "list", "-s", "all", "-L", "5", "-A", "me", "-l", "bug", "-S", "x",
+            ][..],
+            &[
+                "issue",
+                "list",
+                "--json",
+                "number",
+                "--jq",
+                ".[]",
+                "-a",
+                "me",
+                "--mention",
+                "me",
+            ][..],
+            &["issue", "view", "3"][..],
+            &["issue", "view", "3", "-c", "--json", "title"][..],
+            &["issue", "create", "-t", "t", "-b", "b"][..],
+            &[
+                "issue", "create", "--title", "t", "-F", "body.md", "-R", "o/r",
+            ][..],
         ] {
             assert!(launches(&invocation(args)), "{args:?}");
         }
@@ -320,11 +363,25 @@ mod tests {
             &["api", "rate_limit", "-X", "POST"][..],
             &["api", "rate_limit", "--paginate"][..],
             &["api", "repos/o/r/pulls"][..],
+            &["issue", "list", "--milestone", "m1"][..],
+            &["issue", "list", "--app", "x"][..],
+            &["issue", "view", "3", "--web"][..],
+            // gh would prompt for the title or the body in a terminal.
+            &["issue", "create"][..],
+            &["issue", "create", "-t", "t"][..],
+            &["issue", "create", "-b", "b"][..],
+            // Fails after the issue is made (`r0t`), or before it.
+            &["issue", "create", "-t", "t", "-b", "b", "--parent", "1"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "--type", "Bug"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-l", "bug"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-a", "me"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-T", "bug"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-w"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
-        assert!(!launches(&invocation(&["issue", "list"])));
-        assert!(!launches(&invocation(&["issue", "view", "3"])));
+        assert!(!launches(&invocation(&["repo", "list"])));
+        assert!(!launches(&invocation(&["release", "view", "v1"])));
         assert!(
             launches(&invocation(&["pr", "view", "12", "--web"])),
             "the browser helper"
