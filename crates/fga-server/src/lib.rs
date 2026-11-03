@@ -158,6 +158,7 @@ pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/v3/", get(rest::root))
         .route("/api/v3/meta", get(rest::meta))
+        .route("/api/v3/rate_limit", get(rest::rate_limit))
         .route("/api/v3/user", get(rest::user))
         .route("/api/v3/repos/{owner}/{repo}", get(rest::repository))
         .route("/api/v3/repos/{owner}/{repo}/pulls", get(rest::pulls))
