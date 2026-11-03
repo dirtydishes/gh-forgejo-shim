@@ -109,8 +109,8 @@ pub(super) async fn viewer_can_write(
     Ok(repository.permissions.is_some_and(|p| p.admin || p.push))
 }
 /// Whether the viewer may change something in the repository: its author, or a writer, and no one
-/// in an archived repository, where Forgejo's write routes answer 423 (`mustNotBeArchived`) and
-/// GitHub reports every write flag false.
+/// in an archived repository, where GitHub reports every write flag false and Forgejo's web UI
+/// refuses these writes. Forgejo v15's API guards only comment create and edit there.
 pub(super) async fn viewer_may_change(
     ctx: &Context<'_>,
     owner: &str,
