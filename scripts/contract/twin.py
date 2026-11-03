@@ -31,12 +31,16 @@ TWIN_COMMANDS = {
     ("run", "list"): {"--branch", "--json", "--jq", "--limit", "--status", "--event"},
     ("run", "view"): {"--json", "--jq"},
     ("issue", "comment"): {"--body"},
+    # The case's own issue: read back, listed, or made with a title naming the case (C4).
+    ("issue", "view"): {"--json", "--jq", "--comments"},
+    ("issue", "list"): {"--json", "--jq", "--state", "--author", "--search", "--limit"},
+    ("issue", "create"): {"--title", "--body"},
 }
-BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo"}
+BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--comments"}
 PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
 # The selector each command takes; `run list` takes `--branch {branch}` instead.
-SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}}
-STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}/comments")
+SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
+STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?")
 SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue"}
 # The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
 # default branch. It runs only for `twin/run-*` branches, so creating such a case's branch
@@ -62,6 +66,7 @@ def validate(case):
     selectors = []
     heads = []
     branches = []
+    values = {}
     index = 2
     while index < len(argv):
         arg = argv[index]
@@ -78,6 +83,7 @@ def validate(case):
                     raise ValueError("--base must be main")
                 if arg == "--branch":
                     branches.append(argv[index])
+                values.setdefault(arg, []).append(argv[index])
                 if arg == "--match-head-commit" and not re.fullmatch(r"\{head\}|[0-9a-f]{40}", argv[index]):
                     raise ValueError("--match-head-commit takes {head} or a full sha")
         elif arg in SELECTORS.get(command, {"{pr}", "{branch}"}):
@@ -93,6 +99,15 @@ def validate(case):
         # Without --branch it would list every case's runs.
         if branches != ["{branch}"] or selectors:
             raise ValueError("run list needs one --branch {branch}, the case's own, and no selector")
+    elif command == ("issue", "list"):
+        # Other cases make issues too: the case's --jq picks out its own.
+        if not any("{issue}" in jq for jq in values.get("--jq", [])) or selectors:
+            raise ValueError("issue list needs a --jq that selects {issue}, and no selector")
+    elif command == ("issue", "create"):
+        # The issue it makes names the case, and stdout gives its number as (?P<issue>...).
+        titles = values.get("--title", [])
+        if not titles or "{branch}" not in titles[-1] or "--body" not in values or selectors:
+            raise ValueError("issue create needs --title naming {branch}, a --body, and no selector")
     elif len(selectors) != 1:
         raise ValueError("a twin pr command needs one selector, {pr} or {branch}")
     setup = case.get("setup")
@@ -114,8 +129,8 @@ def validate(case):
         raise ValueError("a twin run command needs setup.workflow, its own run")
     if setup.get("workflow") and (not RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
         raise ValueError("setup.workflow needs a twin/run-<name> branch made from main")
-    if command[0] == "issue" and not setup.get("issue"):
-        raise ValueError("a twin issue command needs setup.issue, its own issue")
+    if command[0] == "issue" and (not setup.get("issue")) != (command == ("issue", "create")):
+        raise ValueError("a twin issue command needs setup.issue, its own issue (issue create makes its own)")
     # A merge goes into the case's own base branch, never main, which other cases read.
     if command == ("pr", "merge") and not setup.get("base"):
         raise ValueError("a twin merge needs setup.base, its own base branch")
