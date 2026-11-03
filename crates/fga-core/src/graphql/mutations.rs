@@ -21,6 +21,23 @@ fn id(value: &ID, kind: &str) -> async_graphql::Result<ids::NodeId> {
         .filter(|id| id.kind == kind)
         .ok_or_else(|| super::error(forgejo::Error::NotFound))
 }
+/// The repository a `Repository` ID names. The ID carries the repository's Forgejo ID, so one
+/// deleted and recreated under the same name is another repository and answers `Not Found`.
+async fn named_repository(
+    ctx: &Context<'_>,
+    value: &ID,
+) -> async_graphql::Result<(ids::NodeId, forgejo::Repository)> {
+    let id = id(value, "Repository")?;
+    let repository = ctx
+        .data_unchecked::<Session>()
+        .repository(&id.owner, &id.repository)
+        .await
+        .map_err(error)?;
+    if repository.id != i64::from(id.number) {
+        return Err(error(forgejo::Error::NotFound));
+    }
+    Ok((id, repository))
+}
 fn draft_title(ctx: &Context<'_>, title: &str) -> async_graphql::Result<String> {
     ctx.data_unchecked::<map::WipPrefixes>()
         .draft_title(title)
@@ -50,16 +67,16 @@ impl Mutation {
         ctx: &Context<'_>,
         input: CreateIssueInput,
     ) -> async_graphql::Result<Option<CreateIssuePayload>> {
-        let id = id(&input.repository_id, "Repository")?;
-        let session = ctx.data_unchecked::<Session>();
-        // The ID carries the repository's Forgejo ID; one recreated under the same name is another.
-        let repository = session
-            .repository(&id.owner, &id.repository)
-            .await
-            .map_err(error)?;
-        if repository.id != i64::from(id.number) {
-            return Err(error(forgejo::Error::NotFound));
+        let (id, repository) = named_repository(ctx, &input.repository_id).await?;
+        // Forgejo answers an archived repository's create with 423, which reads as a server fault;
+        // gh doesn't check first, so say what GitHub says.
+        if repository.archived {
+            return Err(
+                async_graphql::Error::new("Repository was archived so is read-only.")
+                    .extend_with(|_, e| e.set("type", "UNPROCESSABLE")),
+            );
         }
+        let session = ctx.data_unchecked::<Session>();
         let source = session
             .create_issue(
                 &id.owner,
@@ -81,15 +98,8 @@ impl Mutation {
         ctx: &Context<'_>,
         input: CreatePullRequestInput,
     ) -> async_graphql::Result<Option<CreatePullRequestPayload>> {
-        let id = id(&input.repository_id, "Repository")?;
+        let (id, _) = named_repository(ctx, &input.repository_id).await?;
         let session = ctx.data_unchecked::<Session>();
-        let repository = session
-            .repository(&id.owner, &id.repository)
-            .await
-            .map_err(error)?;
-        if repository.id != i64::from(id.number) {
-            return Err(error(forgejo::Error::NotFound));
-        }
         let title = if input.draft.unwrap_or(false) {
             draft_title(ctx, &input.title)?
         } else {

@@ -35,6 +35,10 @@ pub struct Repository {
     pub description: String,
     #[serde(default)]
     pub ssh_url: String,
+    /// Set when the repository's issues live in an external tracker; Forgejo then also reports
+    /// `has_issues` (`services/convert/repository.go:60-80`).
+    #[serde(default)]
+    pub external_tracker: Option<serde_json::Value>,
     #[serde(default)]
     pub has_issues: bool,
     #[serde(default)]
