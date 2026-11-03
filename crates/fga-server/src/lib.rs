@@ -184,6 +184,14 @@ pub fn app(state: AppState) -> Router {
             get(runs::run),
         )
         .route(
+            "/api/v3/repos/{owner}/{repo}/actions/runs/{id}/jobs",
+            get(runs::jobs),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/actions/runs/{id}/artifacts",
+            get(runs::artifacts),
+        )
+        .route(
             "/api/v3/repos/{owner}/{repo}/actions/workflows",
             get(runs::workflows),
         )
