@@ -112,7 +112,12 @@ client ──https──▶ reverse proxy (git.example.com)
   `SearchType_enumValues`, which come for free from the server.
 - **Mutations:** `PullRequestCreate`, `CommentCreate`, `PullRequestUpdate`,
   `ConvertPullRequestToDraft`, `PullRequestReadyForReview`, `PullRequestMerge`, and `IssueCreate`
-  with a title and body (labels, assignees, a milestone and projects aren't served yet).
+  for a non-interactive `gh issue create -t … -b …` (or `-F`). These fail before writing anything:
+  labels, assignees, a milestone and projects (their fields aren't in `CreateIssueInput`), templates
+  and the interactive run (gh's `IssueTemplates` query isn't served), an archived repository, and
+  one whose issues live in an external tracker (`hasIssuesEnabled` is false). `--type`, `--parent`,
+  `--blocked-by` and `--blocking` fail **after** the issue is created, because gh sets them with
+  queries the gateway doesn't serve, so gh exits 1 without printing the new issue's URL.
 - **ChatGPT 22943's 6 documents** use fields on `PullRequest`, `Repository`, `Commit.statusCheckRollup`,
   reviews, review threads and `viewer*`.
 

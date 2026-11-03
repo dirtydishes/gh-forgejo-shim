@@ -154,8 +154,10 @@ impl Repository {
     async fn squash_merge_allowed(&self) -> bool {
         self.source.allow_squash_merge
     }
+    /// Forgejo's own issues: an external tracker also sets `has_issues`, but the gateway can't create
+    /// or read its issues, and gh checks this before `issue create`.
     async fn has_issues_enabled(&self) -> bool {
-        self.source.has_issues
+        self.source.has_issues && self.source.external_tracker.is_none()
     }
     async fn has_wiki_enabled(&self) -> bool {
         self.source.has_wiki
