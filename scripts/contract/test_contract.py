@@ -142,6 +142,22 @@ class ContractTests(unittest.TestCase):
             ({"setup": {"branch": "twin/x-base", "pr": True}}, "end in -base"),
             ({"setup": {"branch": "twin/x", "pr": True, "base": "no"}}, "true or false"),
             ({"setup": {"branch": "twin/x", "draft": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "need setup.pr"),
+            # C4: a run case reads only its own run; an issue case comments only on its own issue.
+            ({"argv": ["run", "list", "--json", "status"],
+              "setup": {"branch": "twin/run-x", "workflow": True}}, "--branch {branch}"),
+            ({"argv": ["run", "list", "--branch", "main"],
+              "setup": {"branch": "twin/run-x", "workflow": True}}, "the case's own"),
+            ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/run-x"}}, "setup.workflow"),
+            ({"argv": ["run", "view", "{pr}"], "setup": {"branch": "twin/run-x", "pr": True, "workflow": True}},
+             "selector"),
+            ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/x", "workflow": True}}, "twin/run-<name>"),
+            ({"argv": ["run", "view", "{run}", "--log"], "setup": {"branch": "twin/run-x", "workflow": True}},
+             "flag is not allowed"),
+            ({"argv": ["issue", "comment", "{issue}", "--body", "b"], "setup": {"branch": "twin/x"}}, "setup.issue"),
+            ({"argv": ["issue", "comment", "{pr}", "--body", "b"], "setup": {"branch": "twin/x", "pr": True, "issue": True}},
+             "selector"),
+            ({"argv": ["issue", "comment", "{issue}", "--edit-last", "--body", "b"],
+              "setup": {"branch": "twin/x", "issue": True}}, "flag is not allowed"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)

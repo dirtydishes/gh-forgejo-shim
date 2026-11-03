@@ -1,0 +1,22 @@
+{
+  "id": "twin-run-view-exit-status",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/run-view-exit",
+    "workflow": true
+  },
+  "argv": [
+    "run",
+    "view",
+    "{run}",
+    "--exit-status"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "\\\n\\*\\ twin/run\\-view\\-exit\\ twin\\ \u00b7\\ {run}\\\nTriggered\\ via\\ push\\ [^\\n]+\\\n\\\nJOBS\\\n\\\n\\\nFor\\ more\\ information\\ about\\ a\\ job,\\ try:\\ gh\\ run\\ view\\ \\-\\-job=<job\\-id>\\\nView\\ this\\ run\\ on\\ GitHub:\\ https://forge\\.test/dirtydishes/gfj\\-oracle/actions/runs/{run}\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

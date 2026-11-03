@@ -1,0 +1,22 @@
+{
+  "id": "api-rate-limit-shape",
+  "argv": [
+    "api",
+    "rate_limit",
+    "--jq",
+    "[.rate, .resources.core, .resources.graphql, .resources.search, .resources.code_search] | map({limit, keys: keys})"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": null,
+  "normalize": [
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "[{\"keys\":[\"limit\",\"remaining\",\"reset\",\"used\"],\"limit\":5000},{\"keys\":[\"limit\",\"remaining\",\"reset\",\"used\"],\"limit\":5000},{\"keys\":[\"limit\",\"remaining\",\"reset\",\"used\"],\"limit\":5000},{\"keys\":[\"limit\",\"remaining\",\"reset\",\"used\"],\"limit\":30},{\"keys\":[\"limit\",\"remaining\",\"reset\",\"used\"],\"limit\":10}]\n",
+    "stderr": ""
+  }
+}
