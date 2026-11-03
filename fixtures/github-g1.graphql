@@ -226,6 +226,8 @@ type Issue implements Node {
   reactionGroups: [ReactionGroup!]
   comments( after: String before: String first: Int last: Int orderBy: IssueCommentOrder ): IssueCommentConnection!
   projectItems( after: String before: String first: Int includeArchived: Boolean = true last: Int ): ProjectV2ItemConnection!
+  isPinned: Boolean
+  closedByPullRequestsReferences( after: String before: String first: Int includeClosedPrs: Boolean = false last: Int orderByState: Boolean = false userLinkedOnly: Boolean = false ): PullRequestConnection
   projectCards( after: String archivedStates: [ProjectCardArchivedState] = [ARCHIVED, NOT_ARCHIVED] before: String first: Int last: Int ): ProjectCardConnection!
   repository: Repository!
   issueType: IssueType
@@ -486,6 +488,7 @@ type PullRequest implements Node {
   baseRefOid: GitObjectID!
   isCrossRepository: Boolean!
   headRepositoryOwner: RepositoryOwner
+  repository: Repository!
   headRepository: Repository
   baseRef: Ref
   mergeable: MergeableState!
