@@ -149,22 +149,24 @@ async fn run_list_by_workflow_file_name_asks_forgejo_for_that_file() {
     );
 }
 
-/// A workflow's runs page links to its own next page, as GitHub's does, so gh's `--limit` above
-/// one page keeps to that workflow.
+/// A workflow's runs page links to its own next page, as GitHub's does, carrying gh's filters. gh
+/// follows it only for a `--limit` above 100, its largest `per_page`.
 #[tokio::test]
 async fn a_workflows_runs_link_to_their_next_page() {
     let (addr, _) = gateway().await;
     let id = workflow_id("ci.yml");
     let (code, link, page) = get_json(
         addr,
-        &format!("/api/v3/repos/o/r/actions/workflows/{id}/runs?per_page=1&page=1"),
+        &format!(
+            "/api/v3/repos/o/r/actions/workflows/{id}/runs?per_page=1&exclude_pull_requests=true"
+        ),
     )
     .await;
     assert_eq!(code, 200, "{page}");
     assert_eq!(page["total_count"], 2);
     assert!(
         link.contains(&format!(
-            "<https://forge.test/api/v3/repos/o/r/actions/workflows/{id}/runs?page=2&per_page=1>; rel=\"next\""
+            "<https://forge.test/api/v3/repos/o/r/actions/workflows/{id}/runs?exclude_pull_requests=true&page=2&per_page=1>; rel=\"next\""
         )),
         "{link}"
     );
@@ -218,13 +220,15 @@ async fn run_list_by_name_or_branch_only_id_filters_by_file() {
 }
 
 /// GitHub answers 404 for a file name not on the default branch and an ID it doesn't know; gh
-/// then says the workflow wasn't found.
+/// then says the workflow wasn't found. A selector with a directory, which gh accepts as a file
+/// and sends as one escaped segment, names no workflow: GitHub's `{workflow_id}` is the file name.
 #[tokio::test]
 async fn an_unknown_workflow_is_not_found() {
     let (addr, _) = gateway().await;
     for path in [
         "/api/v3/repos/o/r/actions/workflows/new.yml",
         "/api/v3/repos/o/r/actions/workflows/nope.yml",
+        "/api/v3/repos/o/r/actions/workflows/.forgejo%2Fworkflows%2Fci.yml",
         "/api/v3/repos/o/r/actions/workflows/7/runs?per_page=20&exclude_pull_requests=true",
     ] {
         let (code, _, body) = get_json(addr, path).await;
