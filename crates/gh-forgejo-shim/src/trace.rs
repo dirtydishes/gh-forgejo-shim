@@ -296,7 +296,9 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
         // A secret doesn't end at a quote with more of it glued on, as in `"first"tail` or the
         // shell's `'it'\''s'`.
         if quoted_end < value.len() {
-            let end = glued_end(value, after);
+            // JSON when the key itself was quoted (`"token":`), a shell word otherwise.
+            let json = value[..delimiter_index].trim_end().ends_with(['"', '\'']);
+            let end = glued_end(value, after, json);
             if end > after {
                 return Some((quoted_start, end));
             }
@@ -316,16 +318,24 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
     Some((value_start, value_end))
 }
 
-/// Where a word glued on at `start` ends: at whitespace or a delimiter, but a quoted part inside
+/// Where a word glued on at `start` ends (`json`: the key was quoted, as in `"token":"a",`): at
+/// whitespace or a delimiter, but a quoted part inside
 /// it runs to its closing quote, spaces and line breaks too, as the shell reads
 /// `password="a b"`, so a secret further along the word is hidden with it.
-fn glued_end(value: &str, start: usize) -> usize {
+fn glued_end(value: &str, start: usize, json: bool) -> usize {
     let mut index = start;
     while let Some(character) = value[index..].chars().next() {
-        if character.is_whitespace() || matches!(character, ',' | ';' | '}' | ']' | ')' | '&') {
+        // In JSON a comma or bracket ends the value and the next field stays; in a shell word
+        // they're literal (`password="a",tail` is one word), and only the shell's own
+        // separators end it.
+        let boundary = if json {
+            matches!(character, ',' | ';' | '}' | ']' | ')' | '&')
+        } else {
+            matches!(character, ';' | '&' | '|' | '<' | '>' | ')')
+        };
+        if character.is_whitespace() || boundary {
             break;
         }
-        // A backslash escapes the next character, as in the shell: `\;` is part of the word.
         if character == '\\' {
             index += 1;
             if let Some(escaped) = value[index..].chars().next() {
@@ -356,12 +366,15 @@ fn credential_after_scheme(value: &str, after: usize) -> Option<usize> {
     if matches!(next, ',' | ';' | '}' | ']' | ')' | '&' | '\n' | '\r') {
         return None;
     }
+    let line_end = authorization_credential_range(value, start).1;
+    // A quoted credential can run past the line's end; anything after it on the line is hidden
+    // too (`"Bearer" "first" tail`).
     if matches!(next, '"' | '\'') {
-        return Some(glued_end(value, start));
+        return Some(glued_end(value, start, false).max(line_end));
     }
     // The rest of the line, whatever it looks like: a credential such as base64 `…=` can look
     // like a `key=value` field, and when in doubt the trace hides it.
-    Some(authorization_credential_range(value, start).1)
+    Some(line_end)
 }
 
 /// The index of the quote that ends a string starting at `start`, past any backslash-escaped
@@ -438,7 +451,9 @@ pub(crate) fn is_sensitive_key(key: &str) -> bool {
     }
     key.split(['-', '_', '.']).any(|part| {
         let whole = key_word(part);
-        (whole.contains("pass") && !ORDINARY_PASS_WORDS.contains(&whole.as_str()))
+        // The exceptions match exactly: `bypass1` isn't `bypass`.
+        let exact = part.to_ascii_lowercase();
+        (exact.contains("pass") && !ORDINARY_PASS_WORDS.contains(&exact.as_str()))
             || whole == "authorization"
             // `HTTPAuthorization`, not `authorizations_url`.
             || camel_words(part)
@@ -929,6 +944,14 @@ mod tests {
             ("newpass=audit-secret", "audit-secret"),
             ("postgrespass=audit-secret", "audit-secret"),
             ("dbpassHash=audit-secret", "audit-secret"),
+            // An exception is an exact word; after a quoted scheme the whole line; a comma in a
+            // shell word (Sol r5).
+            ("bypass1=audit-secret", "audit-secret"),
+            (
+                r#"Authorization: "Bearer" "first" audit-tail"#,
+                "audit-tail",
+            ),
+            (r#"password="a",audit-tail"#, "audit-tail"),
         ] {
             for replacement in [REDACTED, "[REDACTED]"] {
                 let redacted = redact_text_with(text, replacement);
