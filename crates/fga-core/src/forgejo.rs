@@ -115,11 +115,12 @@ fn ok(reply: Reply) -> Result<Reply, Error> {
 /// resolves it before choosing where to send the request, as nginx does: it is `.` or `..`, or
 /// holds `/` or `\`, as written or after up to three rounds of percent-decoding (each proxy in a
 /// chain may decode once). Such a segment would take the token to another service behind the same
-/// proxy, so it is never sent. Names never need one; multi-part paths are split into segments.
+/// proxy, so it is never sent. A tab, CR or LF counts too: the URL parser drops them, so `.\t.`
+/// would go out as `..`. Names never need one; multi-part paths are split into segments.
 fn climbs(segment: &str) -> bool {
     let mut text = segment.to_owned();
     for _ in 0..=3 {
-        if matches!(text.as_str(), "." | "..") || text.contains(['/', '\\']) {
+        if matches!(text.as_str(), "." | "..") || text.contains(['/', '\\', '\t', '\r', '\n']) {
             return true;
         }
         let decoded = percent_decode(&text);
@@ -831,6 +832,11 @@ mod tests {
             "a%5Cb",
             "%252e%252e%252foutside",
             "%25252e%25252e",
+            // The URL parser drops tabs and newlines, so these would go out as `..`.
+            ".\t.",
+            "\n..",
+            "..\r",
+            ".%09.",
         ] {
             let result = session
                 .get::<serde_json::Value>(&["repos", owner, "r"], &[])
@@ -880,6 +886,9 @@ mod tests {
             "%252F",
             "%25252F",
             "%2525252F",
+            ".\t.",
+            "a\nb",
+            "%0D",
         ] {
             assert!(climbs(name), "{name}");
         }
