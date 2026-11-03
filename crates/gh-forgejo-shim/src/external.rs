@@ -336,7 +336,10 @@ pub(crate) fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf
     path.to_path_buf()
 }
 
-fn should_skip_gh_candidate(path: &Path) -> bool {
+/// Whether a `gh` found on the way must be passed over: a managed wrapper, or this dispatcher
+/// under another name ([`is_current_executable`]). Setup and doctor use it too, so they report the
+/// gh the wrapper runs.
+pub(crate) fn should_skip_gh_candidate(path: &Path) -> bool {
     is_managed_shim(path) || is_current_executable(path)
 }
 

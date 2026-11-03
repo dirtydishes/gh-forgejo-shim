@@ -169,7 +169,7 @@ pub fn find_tool(
     if let Some(configured) = configured.filter(|path| !path.as_os_str().is_empty()) {
         let path = expand_home(configured, env);
         if is_executable_file(&path) {
-            if skip_managed_gh && name == "gh" && should_skip_gh_candidate(&path) {
+            if skip_managed_gh && name == "gh" && external::should_skip_gh_candidate(&path) {
                 // Keep looking for the real GitHub CLI.
             } else {
                 let source = if name == "gh" && env.contains_key("FJ_SHIM_REAL_GH") {
@@ -192,7 +192,7 @@ pub fn find_tool(
         if !is_executable_file(&candidate) {
             continue;
         }
-        if skip_managed_gh && name == "gh" && should_skip_gh_candidate(&candidate) {
+        if skip_managed_gh && name == "gh" && external::should_skip_gh_candidate(&candidate) {
             continue;
         }
         return Some(ToolPath {
@@ -213,7 +213,7 @@ pub fn find_tool(
         if !is_executable_file(&candidate) {
             continue;
         }
-        if skip_managed_gh && name == "gh" && should_skip_gh_candidate(&candidate) {
+        if skip_managed_gh && name == "gh" && external::should_skip_gh_candidate(&candidate) {
             continue;
         }
         return Some(ToolPath {
@@ -415,17 +415,6 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         }
     }
     result
-}
-
-fn should_skip_gh_candidate(path: &Path) -> bool {
-    shim::is_managed_shim(path) || is_current_executable(path)
-}
-
-fn is_current_executable(path: &Path) -> bool {
-    let Ok(current) = std::env::current_exe() else {
-        return false;
-    };
-    same_file(path, &current)
 }
 
 pub(crate) fn is_executable_file(path: &Path) -> bool {

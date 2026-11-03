@@ -552,6 +552,37 @@ fn audit_diag_doctor_checks_wrapper_target() -> TestResult {
 }
 
 #[test]
+fn audit_diag_doctor_passes_over_a_copied_dispatcher_as_real_gh() -> TestResult {
+    // FJ_SHIM_REAL_GH names a copy of the shim. The wrapper passes it over and uses the gh on
+    // PATH, so doctor must report that gh, not the copy (bead jko.32).
+    let f = Fixture::new()?;
+    let copy_dir = f.root.join("copy");
+    fs::create_dir(&copy_dir)?;
+    let copy = copy_dir.join("gh");
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), &copy)?;
+    let output = output_retrying_busy(
+        f.command()
+            .arg("doctor")
+            .env("FJ_SHIM_REAL_GH", &copy)
+            .env("FJ_SHIM_TOKEN", "audit-dummy-token"),
+    )?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let real_gh = stdout
+        .lines()
+        .find(|line| line.contains("real gh:"))
+        .ok_or_else(|| format!("no real gh check: {stdout}"))?;
+    assert!(
+        !real_gh.contains(&copy.display().to_string()),
+        "doctor reported the copied shim as real gh: {real_gh}"
+    );
+    assert!(
+        real_gh.contains(&format!("{} via current PATH", f.bin.join("gh").display())),
+        "doctor didn't fall through to the gh on PATH: {real_gh}"
+    );
+    Ok(())
+}
+
+#[test]
 // Linux only: on macOS the CLI reads the real launchd PATH through /bin/launchctl, even with
 // --no-gui-path, and the library call inherits the runner's own environment.
 #[cfg(target_os = "linux")]
