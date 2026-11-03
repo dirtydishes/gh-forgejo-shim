@@ -10,7 +10,9 @@ use crate::config::{self, normalize_host};
 use crate::external::{find_program, run_program_capture};
 use crate::invocation::Invocation;
 use crate::read_only;
-use crate::repo::{detect_repo, expand_alias, gh_hostname, Checkout, GhHosts, RepoRef};
+use crate::repo::{
+    command_word, detect_repo, expand_alias, gh_hostname, Checkout, GhHosts, RepoRef,
+};
 use crate::trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +51,7 @@ impl DispatcherConfig {
 pub enum RouteKind {
     Delegate,
     Forgejo,
+    Refuse,
 }
 
 impl RouteKind {
@@ -56,6 +59,7 @@ impl RouteKind {
         match self {
             Self::Delegate => "delegate",
             Self::Forgejo => "forgejo",
+            Self::Refuse => "refuse",
         }
     }
 }
@@ -74,6 +78,15 @@ impl RouteDecision {
             kind: RouteKind::Delegate,
             reason: reason.into(),
             repo,
+            host: None,
+        }
+    }
+
+    fn refuse(reason: impl Into<String>) -> Self {
+        Self {
+            kind: RouteKind::Refuse,
+            reason: reason.into(),
+            repo: None,
             host: None,
         }
     }
@@ -186,8 +199,8 @@ pub fn decide_route(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> RouteDecision {
-    let (invocation, leads) = routing_invocation(argv, env);
-    decide_invocation_route(&invocation, leads, config, env, cwd)
+    let (words, invocation, leads) = routing_invocation(argv, env);
+    decide_invocation_route(&words, &invocation, leads, config, env, cwd)
 }
 
 /// The invocation routing decides on: `argv` with a plain gh alias expanded as gh expands it, so
@@ -195,19 +208,22 @@ pub fn decide_route(
 /// whether that argv starts with the command's first word: a flag before it may take a value the
 /// parser doesn't know, so `gh --notes config release create v1` is `release create` to gh, not
 /// `config` (cobra reads `config` as `--notes`'s value).
-fn routing_invocation(argv: &[String], env: &HashMap<String, String>) -> (Invocation, bool) {
-    let expanded = expand_alias(argv, env);
-    let words = expanded.as_deref().unwrap_or(argv);
-    let invocation = Invocation::parse(words);
+fn routing_invocation(
+    argv: &[String],
+    env: &HashMap<String, String>,
+) -> (Vec<String>, Invocation, bool) {
+    let words = expand_alias(argv, env).unwrap_or_else(|| argv.to_vec());
+    let invocation = Invocation::parse(&words);
     let leads = invocation
         .command
         .split_whitespace()
         .next()
         .is_some_and(|first| words.first().map(String::as_str) == Some(first));
-    (invocation, leads)
+    (words, invocation, leads)
 }
 
 fn decide_invocation_route(
+    words: &[String],
     invocation: &Invocation,
     leads: bool,
     config: &DispatcherConfig,
@@ -216,10 +232,13 @@ fn decide_invocation_route(
 ) -> RouteDecision {
     // gh's root command (`gh`, `gh --version`, `gh --help`, or a stray flag it rejects) and
     // `gh version` answer from gh itself and send no request, so whatever repo the call is in,
-    // plain gh runs.
+    // plain gh runs. Root only when cobra finds no command word either: the parser may take one
+    // as a flag's value where cobra doesn't (`gh -xR release create v1`).
     // `version` only as the leading word: `gh --notes version release create v1` is
     // `release create` to gh (cobra reads `version` as `--notes`'s value).
-    if invocation.command.is_empty() || (leads && invocation.command == "version") {
+    if (invocation.command.is_empty() && command_word(words).is_none())
+        || (leads && invocation.command == "version")
+    {
         return RouteDecision::delegate("gh's root or version command", None);
     }
     // Only when the command word comes first: with a flag before it, the command gh runs may not
@@ -227,6 +246,76 @@ fn decide_invocation_route(
     if leads && runs_on_its_own(invocation) {
         return RouteDecision::delegate("a command gh runs on its own", None);
     }
+    let decision = route_by_target(invocation, config, env, cwd);
+    // The parse names gh's target only when it reads the call as gh does: the command word first,
+    // and a grammar for its flags. Otherwise a word it took for `-R`, `--hostname` or an `api` URL
+    // may be another flag's value to gh (`gh release create v1 --notes -R github.com/o/r` creates
+    // the release where the checkout points), or the reverse. So plain gh runs such a call only
+    // when nothing in reach names a Forgejo host.
+    let certain = leads && invocation.has_grammar() && invocation.validate().is_ok();
+    if decision.kind == RouteKind::Delegate
+        && !certain
+        && forgejo_in_reach(words, invocation, config, env, cwd)
+    {
+        return RouteDecision::refuse(format!(
+            "a Forgejo host is in reach (GH_REPO, GH_HOST, the checkout or an argument), and the \
+             wrapper can't parse this call well enough to tell that gh won't use it, so plain gh \
+             doesn't run it; run it where no Forgejo host is in reach{}",
+            if leads {
+                ""
+            } else {
+                ", or put the command word first"
+            },
+        ));
+    }
+    decision
+}
+
+/// Whether the call's words, `GH_HOST`, `GH_REPO` or the checkout name a Forgejo host.
+fn forgejo_in_reach(
+    words: &[String],
+    invocation: &Invocation,
+    config: &DispatcherConfig,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> bool {
+    let hosts = config
+        .hosts
+        .iter()
+        .map(|host| gh_hostname(&normalize_host(host)).to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let named = words.iter().any(|word| {
+        let word = word.to_ascii_lowercase();
+        hosts.iter().any(|host| word.contains(host.as_str()))
+    });
+    // Only the command: its flags and arguments are what's uncertain.
+    let bare = Invocation::parse(
+        &invocation
+            .command
+            .split_whitespace()
+            .map(String::from)
+            .collect::<Vec<_>>(),
+    );
+    let checkout = Checkout::new(cwd);
+    let detected = |hosts: &GhHosts| {
+        detect_repo(&bare, env, &checkout, hosts)
+            .repo
+            .is_some_and(|repo| config.forgejo_host(&repo.host).is_some())
+    };
+    named
+        || env
+            .get("GH_HOST")
+            .is_some_and(|host| config.forgejo_host(host).is_some())
+        || detected(&GhHosts::load(env, &config.hosts))
+        || detected(&GhHosts::user(env))
+}
+
+fn route_by_target(
+    invocation: &Invocation,
+    config: &DispatcherConfig,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> RouteDecision {
     // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
     // (`gh/pkg/cmd/api/http.go:19-21`).
     if invocation.command == "api" {
@@ -389,7 +478,7 @@ fn run_gh(
             return 1;
         }
     };
-    let (routed, leads) = routing_invocation(&argv, &env);
+    let (words, routed, leads) = routing_invocation(&argv, &env);
     // Inside a launched call, git's credentials come only from the launcher's helper (§3). A
     // form its exact match didn't take (`auth git-credential -- get`, an alias) is refused, never
     // handed to plain gh, which would answer from the user's own logins.
@@ -400,7 +489,7 @@ fn run_gh(
         );
         return 1;
     }
-    let mut decision = decide_invocation_route(&routed, leads, &config, &env, cwd);
+    let mut decision = decide_invocation_route(&words, &routed, leads, &config, &env, cwd);
     let trace_enabled = trace::tracing_enabled(&env);
     let help = decision.kind == RouteKind::Forgejo && leads && runs_help(&routed);
     if help {
@@ -410,6 +499,10 @@ fn run_gh(
     }
 
     let exit_code = match decision.kind {
+        RouteKind::Refuse => {
+            write_error(&mut mode, &format!("gh-forgejo-shim: {}", decision.reason));
+            1
+        }
         RouteKind::Delegate => {
             run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
         }
