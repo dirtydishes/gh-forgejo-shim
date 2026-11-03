@@ -203,7 +203,7 @@ impl Session {
         Ok(written(response)?.json()?)
     }
 
-    pub async fn add_pull_comment(
+    pub async fn add_comment(
         &self,
         owner: &str,
         repo: &str,
