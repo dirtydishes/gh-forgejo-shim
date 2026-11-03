@@ -824,7 +824,8 @@
       "route_reasons": [
         "unsupported command",
         "no repository detected",
-        "host <host> is not allowlisted"
+        "host <host> is not allowlisted",
+        "gh's root or version command"
       ],
       "tests": [
         "tests/test_routing.py::RoutingTests::test_delegates_non_pr_command",
