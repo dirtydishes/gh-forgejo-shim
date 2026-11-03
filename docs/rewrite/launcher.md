@@ -110,8 +110,10 @@ The delegate list holds commands that call no API, or that write gh's own state,
 gh would write to a throwaway copy (section 3):
 
 - `--version`, `version`, `completion`;
-- help: `help …`, or a help flag as gh parses it, for a command group or a command in the
-  shim's grammar (a command outside both keeps the Forgejo path's refusal; see below). That means `--help`, or `-h`
+- help: a help flag as gh parses it, for a command group or a command in the shim's grammar (a
+  command outside both keeps the Forgejo path's refusal; see below). Not the `help` command: an
+  alias can take that name, since cobra adds `help` after gh registers aliases, and gh reads alias
+  files the shim's reader rejects, so `gh help …` routes like any other call. That means `--help`, or `-h`
   in a command that doesn't define its own `-h`, as a flag and not as another flag's value, before
   a `--`. Several `auth` commands define `-h` as `--hostname`, so `gh auth token -h forge.test`
   isn't help. The wrapper decides this with the invocation parser's flag grammar, not by
@@ -140,19 +142,18 @@ the help. Only a command in the shim's grammar knows its own `-h` and which flag
 a help flag delegates only there, and for command groups, which have no `-h` of their own:
 `repo edit -h URL` sets a homepage, and keeps the refusal.
 
-**When the parse may differ from gh's.** Routing reads `-R`, `--hostname` and an `api` URL from
-its own parse. That parse matches gh's only when the command word comes first and either the
-call has no flags but `--help`, or the command is in the shim's grammar and the call passes its checks. Otherwise a word it took for `-R`
-may be another flag's value to gh, or the reverse: `gh release create v1 --notes -R
-github.com/o/r` creates the release where the checkout points. Such a call runs plain gh only when
-no Forgejo host is in reach: none in its words, `GH_HOST`, `GH_REPO` or any of the checkout's
-remotes, whichever one the command would pick.
-Otherwise the wrapper refuses it with exit 1, and says to run it where no Forgejo host is in reach
-(or to put the command word first, when a flag comes before it). A grammar check failing near a
-forge is refused too, since a newer gh may have the flag. The cost is calls that name another host
-plainly: `gh workflow list -R github.com/o/r` in a Forgejo checkout is refused until the grammar
-covers `workflow list`. gh's root (`gh`, `gh --version`) still delegates, but only when cobra finds no
-command word either.
+**Near a forge, only the delegate list runs plain gh.** Which host gh sends a call to depends on
+how it parses the call and on the command. The shim can't match gh on either everywhere. A word
+it takes for `-R` may be another flag's value to gh (`gh release create v1 --notes -R
+github.com/o/r` creates the release where the checkout points), and `gh gist create` ignores
+`GH_REPO` and posts to `GH_HOST`. So a call off the delegate list that routing would delegate
+runs plain gh only when no Forgejo host is in reach: none in its words, `GH_HOST`, `GH_REPO` or
+any of the checkout's remotes, whichever one the command would pick. Otherwise the wrapper refuses
+it with exit 1 and says to run it where no Forgejo host is in reach. The cost is every
+non-Forgejo call made from near a forge: `gh pr view 1 -R github.com/o/r` with a Forgejo
+`GH_HOST`, `gh variable list` in a checkout with both a Forgejo and a GitHub remote, `gh api
+https://api.github.com/…` in a Forgejo checkout. Grammar coverage doesn't change this. gh's root
+(`gh`, `gh --version`) still delegates, but only when cobra finds no command word either.
 
 **Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
 `--hostname`, don't use the checkout's repository to pick a host. They use gh's default host

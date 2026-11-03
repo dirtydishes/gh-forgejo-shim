@@ -141,10 +141,11 @@ fn gh_state_commands_and_help_run_plain_gh_in_a_forgejo_context() -> TestResult 
 
 #[cfg(unix)]
 #[test]
-fn github_target_in_doubt_near_a_forge_is_refused() -> TestResult {
-    // Where the parse may not read the call as gh does (a flag before the command word, a command
-    // the grammar doesn't cover, a call it rejects), plain gh runs only with no Forgejo host in
-    // reach (Sol r3#1 on #114).
+fn off_the_delegate_list_plain_gh_never_runs_near_a_forge() -> TestResult {
+    // The shim can't match gh's parse or its per-command choice of host everywhere (a flag before
+    // the command word, a command the grammar doesn't cover, a call it rejects, a command that
+    // ignores GH_REPO), so off the delegate list plain gh runs only with no Forgejo host in reach
+    // (Sol r3#1, r5#2 on #114).
     let fixture = CliFixture::new()?;
     let decoy = fixture.write_executable("gh", "#!/bin/sh\necho ran\nexit 23\n")?;
     let forge_repo = [("GH_REPO", "git.example.com/o/r")];
@@ -197,6 +198,19 @@ fn github_target_in_doubt_near_a_forge_is_refused() -> TestResult {
             &["pr", "view", "-Rgithub.com/owner/repo", "--invalid=x"][..],
             &[("GH_HOST", "git.example.com")][..],
         ),
+        // Read as gh reads it, but a Forgejo host is in reach.
+        (
+            &["pr", "view", "1", "-R", "github.com/x/y"][..],
+            &[("GH_HOST", "git.example.com")][..],
+        ),
+        // gh ignores GH_REPO for gists and posts to GH_HOST, the forge (Sol r5#2).
+        (
+            &["gist", "create", "-"][..],
+            &[
+                ("GH_HOST", "git.example.com"),
+                ("GH_REPO", "github.com/o/r"),
+            ][..],
+        ),
     ] {
         let output = fixture
             .command("gh-forgejo-shim")?
@@ -208,11 +222,11 @@ fn github_target_in_doubt_near_a_forge_is_refused() -> TestResult {
         assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{args:?}: plain gh ran");
     }
-    // Read as gh reads it, or nothing Forgejo in reach: plain gh runs.
+    // No Forgejo host in reach: plain gh runs.
     for (args, env) in [
         (
             &["pr", "view", "1", "-R", "github.com/x/y"][..],
-            &[("GH_HOST", "git.example.com")][..],
+            &[] as &[(&str, &str)],
         ),
         (
             &["release", "create", "v1", "--repo", "github.com/x/y"][..],
@@ -274,7 +288,7 @@ fn github_delegation_keeps_every_original_argument_byte() -> TestResult {
         OsString::from(""),
     ];
     // No Forgejo host in reach: with one, a call the grammar rejects is refused instead, since a
-    // newer gh's flag might take `-R` as its value (`github_target_in_doubt_near_a_forge_is_refused`).
+    // newer gh's flag might take `-R` as its value (`off_the_delegate_list_plain_gh_never_runs_near_a_forge`).
     let output = fixture
         .command("gh-forgejo-shim")?
         .env("FJ_SHIM_REAL_GH", decoy)

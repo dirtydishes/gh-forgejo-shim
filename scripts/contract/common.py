@@ -31,7 +31,6 @@ ERROR_PROBES = [
 ]
 # Off-list commands that must delegate, so the runner can prove they still reach the decoy.
 DECOY_PROBES = [
-    ["pr", "list", "-R", f"github.com/{REPO}"],
     # gh's own version, in a Forgejo checkout: real gh answers it without a request.
     ["--version"],
     ["version"],
@@ -41,6 +40,9 @@ DECOY_PROBES = [
     ["pr", "view", "--help"],
 ]
 LOCAL_PROBES = [
+    # Near a forge (the runner's checkout and GH_HOST), a call off the delegate list never runs
+    # plain gh, even one naming GitHub (launcher §2).
+    ["pr", "list", "-R", f"github.com/{REPO}"],
     # --delete-branch: the gateway can't delete a branch yet, and gh would report success.
     ["pr", "merge", "1", "--merge", "--delete-branch"],
     # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
