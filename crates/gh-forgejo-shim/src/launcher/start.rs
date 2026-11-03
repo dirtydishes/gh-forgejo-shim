@@ -353,14 +353,14 @@ fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
 }
 
 /// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but for a
-/// host-less `api` or `auth token` the forge as `GH_HOST`, without the GitHub Enterprise token
-/// variables, which would otherwise beat the user's login there. Recorded for nested calls
+/// host-less `api` or `auth token` the forge as `GH_HOST`, without the token variables, which
+/// would otherwise beat the user's login there: the enterprise ones for most forges, `GH_TOKEN`
+/// and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). Recorded for nested calls
 /// (§7), with no `FJ_SHIM_LAUNCHER`. As on the delegate path, gh replaces this process, unless
 /// tracing is on, when the wrapper waits so it can write the trace record.
 fn step_aside(gh: &Path, args: &[OsString], mut edits: Edits, trace_enabled: bool) -> i32 {
     if edits.iter().any(|(name, _)| *name == "GH_HOST") {
-        edits.push(("GH_ENTERPRISE_TOKEN", Edit::Remove));
-        edits.push(("GITHUB_ENTERPRISE_TOKEN", Edit::Remove));
+        edits.extend(TOKEN_VARIABLES.iter().map(|name| (*name, Edit::Remove)));
     }
     // Still single-threaded: nothing in the wrapper has started a thread yet.
     crate::launcher::env::apply(&edits);
