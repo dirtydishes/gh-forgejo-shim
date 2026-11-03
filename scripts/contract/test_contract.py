@@ -116,7 +116,7 @@ class ContractTests(unittest.TestCase):
             ({"argv": ["pr", "merge", "{pr}", "--merge"]}, "setup.base"),
             ({"argv": ["pr", "merge", "{pr}", "--merge", "--match-head-commit", "main"],
               "setup": {"branch": "twin/x", "pr": True, "base": True}}, "full sha"),
-            ({"argv": ["pr", "merge", "{pr}", "--merge", "--delete-branch"],
+            ({"argv": ["pr", "merge", "{pr}", "--merge", "--subject", "s"],
               "setup": {"branch": "twin/x", "pr": True, "base": True}}, "flag is not allowed"),
             ({"setup": {"branch": "twin/x", "pr": True, "protect": ["c"]}}, "own base"),
             ({"setup": {"branch": "twin/x", "pr": True, "status": {"context": "c"}}}, "context and a state"),
@@ -141,6 +141,9 @@ class ContractTests(unittest.TestCase):
             ({"state": [{"path": "pulls/{pr}", "none": {"title": "t"}}]}, "comments or timeline list"),
             ({"setup": {"branch": "twin/x-base", "pr": True}}, "end in -base"),
             ({"setup": {"branch": "twin/x", "pr": True, "base": "no"}}, "true or false"),
+            ({"state": [{"path": "branches/{branch}", "fields": {}}]}, "exactly {path, gone"),
+            ({"state": [{"path": "pulls/{pr}", "gone": True}]}, "exactly {path, gone"),
+            ({"state": [{"path": "branches/main", "gone": True}]}, "own pull request or branch"),
             ({"setup": {"branch": "twin/x", "draft": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "need setup.pr"),
             # C4: a run case reads only its own run; an issue case comments only on its own issue.
             ({"argv": ["run", "list", "--json", "status"],
