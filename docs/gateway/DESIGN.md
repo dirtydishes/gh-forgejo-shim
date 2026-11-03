@@ -98,7 +98,7 @@ client ──https──▶ reverse proxy (git.example.com)
 | `GET /api/v3/repos/{o}/{r}/pulls/{n}` | gh pr diff, pr status | With `Accept: application/vnd.github.v3.diff`, return the diff |
 | `GET /api/v3/repos/{o}/{r}/commits/{sha}/pulls` | Codex CLI | |
 | `GET /api/v3/repos/{o}/{r}/commits/{ref}/status`, `/commits/{ref}/check-runs` | Claude desktop | A PR head's CI state; the check mapping in MAPPING §3 |
-| `GET /api/v3/repos/{o}/{r}/actions/runs`, `/actions/workflows` | gh run list, Claude desktop (`head_sha`) | A repeated parameter takes its last value |
+| `GET /api/v3/repos/{o}/{r}/actions/runs`, `/actions/workflows` | gh run list, Claude desktop (`head_sha`) | A repeated parameter takes its last value. A run Forgejo never started (its Unix-0 start time) reports `created_at` as `run_started_at` |
 
 **GraphQL operations gh 2.103.3 sends** (named and fixed per gh version):
 

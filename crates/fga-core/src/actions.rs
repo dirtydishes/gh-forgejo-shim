@@ -53,12 +53,20 @@ pub fn status(native: &str) -> Result<(&'static str, Option<&'static str>), Erro
 
 pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
     let (status, conclusion) = status(&run.status)?;
+    // A run Forgejo never started carries Unix time 0 in its display timezone, which is
+    // 1969-12-31 west of UTC. GitHub reports the creation time, as gh does for a missing start.
+    let started = if run.started.starts_with("1970-01-01") || run.started.starts_with("1969-12-31")
+    {
+        &run.created
+    } else {
+        &run.started
+    };
     Ok(
         json!({"id":run.id,"workflow_id":workflow.id,"name":workflow.name,
         "display_title":run.title,"head_branch":run.prettyref.strip_prefix("refs/heads/").unwrap_or(&run.prettyref),
         "head_sha":run.commit_sha,"run_number":run.index_in_repo,"event":run.event,
         "status":status,"conclusion":conclusion,"html_url":run.html_url,"path":workflow.path,
-        "created_at":run.created,"updated_at":run.updated,"run_started_at":run.started}),
+        "created_at":run.created,"updated_at":run.updated,"run_started_at":started}),
     )
 }
 
@@ -164,5 +172,47 @@ mod tests {
         assert!(status("future-state").is_err());
         assert_eq!(workflow_id("ci.yml"), workflow_id("ci.yml"));
         assert_ne!(workflow_id("ci.yml"), workflow_id("other.yml"));
+    }
+
+    /// Forgejo sends a run it never started with Unix time 0 in its display timezone; GitHub's
+    /// `run_started_at` then takes the creation time, as gh itself does for a missing start.
+    #[test]
+    fn a_run_that_never_started_starts_when_it_was_created() {
+        let workflow = Workflow {
+            id: 1,
+            name: "ci".into(),
+            path: ".forgejo/workflows/ci.yml".into(),
+            state: "active",
+        };
+        let created = "2026-11-03T00:00:00Z";
+        let mapped = |status: &str, started: &str| {
+            let source = Run {
+                id: 5,
+                workflow_id: "ci.yml".into(),
+                index_in_repo: 1,
+                title: "t".into(),
+                prettyref: "refs/heads/main".into(),
+                commit_sha: "abc".into(),
+                status: status.into(),
+                event: "push".into(),
+                html_url: "https://forge.test/o/r/actions/runs/1".into(),
+                created: created.into(),
+                updated: "2026-11-03T00:00:09Z".into(),
+                started: started.into(),
+            };
+            run(&source, &workflow).unwrap()["run_started_at"].clone()
+        };
+        for unset in [
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T01:00:00+01:00",
+            "1969-12-31T19:00:00-05:00",
+        ] {
+            assert_eq!(mapped("waiting", unset), created, "{unset}");
+            assert_eq!(mapped("failure", unset), created, "{unset}");
+        }
+        assert_eq!(
+            mapped("running", "2026-11-03T00:00:03Z"),
+            "2026-11-03T00:00:03Z"
+        );
     }
 }
