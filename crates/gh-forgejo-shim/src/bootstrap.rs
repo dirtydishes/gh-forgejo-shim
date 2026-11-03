@@ -284,7 +284,12 @@ pub fn run_bootstrap(options: BootstrapOptions) -> Result<BootstrapResult> {
                     None,
                 )
             } else {
-                let command = format!("gh-forgejo-shim config remove-host {entry}");
+                // Quoted: `[::1]:8443` is a glob pattern to the shell, and a matching file name
+                // would make the command succeed while removing nothing.
+                let command = format!(
+                    "gh-forgejo-shim config remove-host {}",
+                    setup::shell_quote(&entry)
+                );
                 (format!("run {command}"), Some(command))
             };
             checks.push(BootstrapCheck::new(
@@ -559,7 +564,8 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
                 ));
             }
             notes.push(format!(
-                "to allowlist it for other checkouts, run gh-forgejo-shim config add-host {entry}"
+                "to allowlist it for other checkouts, run gh-forgejo-shim config add-host {}",
+                setup::shell_quote(&entry)
             ));
         } else {
             // The first remote as git spells it, which gh may not: an SSH alias, `www.`, or a
@@ -911,14 +917,19 @@ fn auth_check(
     }
     let login_command = repo.map_or_else(
         || "gh-forgejo-shim auth login HOST".to_string(),
-        |repo| format!("gh-forgejo-shim auth login {}", repo.host),
+        |repo| {
+            format!(
+                "gh-forgejo-shim auth login {}",
+                setup::shell_quote(&repo.host)
+            )
+        },
     );
     let import_command = repo.map_or_else(
         || "gh-forgejo-shim auth import --from fj --hostname HOST".to_string(),
         |repo| {
             format!(
                 "gh-forgejo-shim auth import --from fj --hostname {}",
-                repo.host
+                setup::shell_quote(&repo.host)
             )
         },
     );

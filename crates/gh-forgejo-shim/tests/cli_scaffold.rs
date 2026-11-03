@@ -708,6 +708,30 @@ fn bootstrap_suggests_removing_the_exact_entry_that_routes_github_enterprise() -
 }
 
 #[test]
+fn bootstrap_quotes_an_ipv6_entry_in_its_repair_command() -> TestResult {
+    // `[::1]:8443` is a glob pattern to the shell: unquoted, a file named `1:8443` in the
+    // current directory would replace it, and remove-host would remove nothing.
+    let fixture = checkout_with_origin("https://[::1]:8443/me/proj.git", "unused")?;
+    write_gh_hosts(&fixture, &["::1"])?;
+    write_shim_config(&fixture, "hosts = [\"[::1]:8443\"]\n")?;
+    fs::write(fixture.repo().join("1:8443"), "")?;
+
+    let stdout = bootstrap(&fixture, &[])?;
+
+    let quoted = "'[::1]:8443'";
+    assert!(
+        stdout.contains(&format!("run gh-forgejo-shim config remove-host {quoted}")),
+        "{stdout}"
+    );
+    let echoed = Command::new("/bin/sh")
+        .args(["-c", &format!("printf '%s' {quoted}")])
+        .current_dir(fixture.repo())
+        .output()?;
+    assert_eq!(String::from_utf8(echoed.stdout)?, "[::1]:8443");
+    Ok(())
+}
+
+#[test]
 fn bootstrap_reads_the_remote_spelling_even_with_gh_repo_set() -> TestResult {
     // GH_REPO wins over the remotes; the spelling check must look past it.
     let fixture = checkout_with_origin("https://forge.example.com/me/proj.git", "unused")?;
