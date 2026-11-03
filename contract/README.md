@@ -60,8 +60,11 @@ expressions for stdout and stderr; a stdout pattern can name the pull request gh
 `(?P<pr>[0-9]+)`. Each `state` entry then reads the case's own pull request, or its comments, back
 from Forgejo and compares `fields` (dotted keys) or looks for `any` matching item. `shim_config`
 may add `wip_prefixes`, for the twin's draft prefix. The validator allows only the launched write
-commands and their listed flags, never another branch, repository or host, and the runner writes
-only to a twin on `127.0.0.1`.
+commands and their listed flags. `pr edit` and `pr comment` take exactly one selector, `{pr}` or
+`{branch}`, and `pr create` exactly one `--head {branch}` with `--base main`; without them gh would
+pick the checkout's branch, `s/pass`, and so scenario PR 1. A twin case's id starts with `twin-`,
+and the runner runs twin cases after every other case, so their new pull requests never reach a
+read. The runner writes only to a twin on `127.0.0.1`, without any proxy.
 
 The limit: a twin case doesn't compare output with GitHub's for the same write. That would need
 writes to GitHub, which these tests never make.
