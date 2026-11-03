@@ -39,7 +39,8 @@ pub async fn user(
 
 /// `gh pr merge --delete-branch` deletes the head branch through Forgejo. gh reads 404 and 422 as
 /// "already deleted", so only a missing branch gets GitHub's 422; a refusal (default or protected
-/// branch, no write access) keeps its own code, and anything Forgejo shouldn't have said is a 502.
+/// branch, no write access) keeps its own code, a name the gateway won't send is a 400, and
+/// anything Forgejo shouldn't have said is a 502.
 pub async fn delete_branch(
     Extension(session): Extension<Session>,
     Path((owner, repo, branch)): Path<(String, String, String)>,
@@ -53,6 +54,11 @@ pub async fn delete_branch(
         )
             .into_response(),
         Err(WriteError::Transport(error)) => rest_error(error),
+        Err(error @ WriteError::UnsendableBranch) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message": error.to_string()})),
+        )
+            .into_response(),
         Err(_) => rest_error(Error::Upstream),
     }
 }

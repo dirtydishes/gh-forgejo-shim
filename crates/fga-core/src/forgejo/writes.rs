@@ -33,6 +33,8 @@ pub enum WriteError {
     DependenciesLeft,
     #[error("Validation failed")]
     Validation,
+    #[error("The gateway can't send this branch name to Forgejo")]
+    UnsendableBranch,
 }
 
 /// Forgejo v15 pull.go:940-1033 uses both ctx.Error messages and raw Go structs.
@@ -275,15 +277,27 @@ impl Session {
 
     /// Delete a branch, for GitHub's `DELETE git/refs/heads/{branch}`. Forgejo checks the token's
     /// write access and refuses the default and protected branches (`Forbidden`); a missing
-    /// branch is `NotFound`. A branch name with slashes goes out as several segments.
+    /// branch, or a name with an empty part, is `NotFound`. A branch name with slashes goes out as
+    /// several segments.
     pub async fn delete_branch(
         &self,
         owner: &str,
         repo: &str,
         branch: &str,
     ) -> Result<(), WriteError> {
+        let parts: Vec<&str> = branch.split('/').collect();
+        // Git allows no empty part in a branch name, so no such branch exists; sent on, Forgejo
+        // would merge the slashes and delete a different branch.
+        if parts.iter().any(|part| part.is_empty()) {
+            return Err(Error::NotFound.into());
+        }
+        // `send` would refuse a part a proxy could resolve out of the path, and its "not found"
+        // would read to gh as "already deleted". Say the delete didn't happen.
+        if parts.iter().any(|part| climbs(part)) {
+            return Err(WriteError::UnsendableBranch);
+        }
         let mut segments = vec!["repos", owner, repo, "branches"];
-        segments.extend(branch.split('/'));
+        segments.extend(parts);
         written(self.write::<()>(Method::DELETE, &segments, None).await?)?;
         Ok(())
     }

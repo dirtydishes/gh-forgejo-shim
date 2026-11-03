@@ -45,6 +45,8 @@ async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
                             Json(json!({"message":"branch protected"})),
                         )
                             .into_response(),
+                        "busy" => (StatusCode::CONFLICT, Json(json!({"message":"conflict"})))
+                            .into_response(),
                         _ => (StatusCode::NOT_FOUND, Json(json!({"message":"not found"})))
                             .into_response(),
                     }
@@ -110,6 +112,24 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
             delete_ref(addr, &format!("/api/v3/repos/o/r/git/refs/heads/{branch}")).await;
         assert_eq!(code, 403, "{branch}");
     }
+    // Forgejo saying something this route shouldn't is a failure gh reports.
+    let (code, _) = delete_ref(addr, "/api/v3/repos/o/r/git/refs/heads/busy").await;
+    assert_eq!(code, 502);
+    // No branch has an empty part; Forgejo would merge the slashes and delete another branch.
+    for path in ["a//b", "feature%2Fx%2F", "feature/x/", "%2Ffeature%2Fx"] {
+        let (code, body) =
+            delete_ref(addr, &format!("/api/v3/repos/o/r/git/refs/heads/{path}")).await;
+        assert_eq!(
+            (code, message(&body)),
+            (422, json!("Reference does not exist")),
+            "{path}"
+        );
+    }
+    // Valid git names the path guard won't send: refused as a failure, never "already deleted".
+    for path in ["a%252Fb", "%252e%252e"] {
+        let (code, _) = delete_ref(addr, &format!("/api/v3/repos/o/r/git/refs/heads/{path}")).await;
+        assert_eq!(code, 400, "{path}");
+    }
     assert_eq!(
         *deleted.lock().unwrap(),
         [
@@ -118,6 +138,7 @@ async fn deleting_a_head_ref_deletes_the_forgejo_branch() {
             "/api/v1/repos/o/r/branches/gone",
             "/api/v1/repos/o/r/branches/main",
             "/api/v1/repos/o/r/branches/kept",
+            "/api/v1/repos/o/r/branches/busy",
         ]
     );
 }
