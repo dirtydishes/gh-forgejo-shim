@@ -91,6 +91,8 @@ print('PASS native Forgejo Actions runs through real gh run list: queued, workfl
 actual = gh('run', 'view', str(runs[0]['id']), '--json', 'status,headBranch,displayTitle')
 assert actual['status'] == 'queued' and actual['headBranch'] in ('main', 'probe'), actual
 print('PASS real gh run view with mapped JSON fields', flush=True)
+# The default view follows the run's jobs_url and reads its artifacts; both answer empty lists,
+# since Forgejo 15's API has neither per run.
 result = subprocess.run(['gh', 'run', 'view', str(runs[0]['id']), '-R', 'forge.test/' + REPO], capture_output=True, text=True)
-assert result.returncode == 1 and 'HTTP 404: Not Found' in result.stderr, result.stderr
-print('PASS default run view reports a GitHub-shaped 404 for unsupported jobs', flush=True)
+assert result.returncode == 0 and 'HTTP' not in result.stderr, (result.returncode, result.stdout, result.stderr)
+print('PASS default run view shows a run with no jobs', flush=True)
