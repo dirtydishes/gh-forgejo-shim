@@ -212,16 +212,15 @@ The launcher sets `GH_CONFIG_DIR` to its run directory (section 4), which holds:
   warms the session cache, so gh's own requests repeat nothing. It writes that login as `user`,
   and the entry's token again under `users.<login>.oauth_token`, as gh's own plain-text login
   writes it. gh then prints the token for that login and refuses any other, as it would. One
-  exception is gh's own: a named-user lookup reads the system keyring (`gh:<host>`, keyed by
-  login) before any config file (`gh/internal/config/config.go:693-705`), whatever
-  `GH_CONFIG_DIR` says. A keyring login for that host, left by another gh config, therefore wins,
-  for that login or another. It is the user's own credential for the same host, which plain gh
-  would print too. For a plain keyring token, `auth token` sends nothing anywhere; a refreshable
-  credential near expiry (`gh:_refreshable:<host>`) makes gh refresh it with that host's OAuth
-  endpoint first (`gh/pkg/cmd/auth/token/token.go:198`), as plain gh would. The launcher can't hide it without
-  answering `auth token --user` itself. If the
-  lookup fails, the entry has neither, and gh reports the failure itself. Other commands never
-  show the account, so they get no `user` and no lookup.
+  exception is gh's own: a named-user lookup reads the system keyring (`gh:<host>`, keyed by login)
+  before any config file (`gh/internal/config/config.go:693-705`), whatever `GH_CONFIG_DIR` says. A
+  keyring login for that host, left by another gh config, therefore wins, for that login or
+  another. It is the user's own credential for the same host, which plain gh would print too. For a
+  plain keyring token, `auth token` sends nothing anywhere; a refreshable credential near expiry
+  (`gh:_refreshable:<host>`) makes gh refresh it with that host's OAuth endpoint first
+  (`gh/pkg/cmd/auth/token/token.go:198`), as plain gh would. The launcher can't hide it without
+  answering `auth token --user` itself. If the lookup fails, the entry has neither, and gh reports
+  the failure itself. Other commands never show the account, so they get no `user` and no lookup.
   - A served host (the set *S*, below) gets a per-call token: 32 random bytes from the OS RNG as
     hex, made for this call. The gateway accepts it for that host and authenticates upstream
     with the real token (§5). Outside the gateway it opens nothing, so no gh credential helper,
@@ -536,14 +535,15 @@ L1 (`cwe.26`, gateway PR #46) provides the router. The launcher builds it as
   `Forgejo::new_with_roots(base, roots)` (L4, `launcher::upstream`). `base` is the host's
   `api_url`, path included, or `https://<entry>`. `roots` are the certificates in the host's
   `ca_file`, then in `FJ_SHIM_CA_FILE`; they join the built-in trust store, and verification stays
-  on. The launcher checks both as the built-in client does: a CA file it couldn't read, or one
-  with no PEM certificate, leaves the call to the built-in path, which reports it. `wip_prefixes` is the host's
-  `[host.<entry>].wip_prefixes` from the shim config, or the gateway's default (`WIP:`, `[WIP]`)
-  when unset. Forgejo decides what is a draft, from its own WIP setting, which the list should
-  match. The gateway strips these prefixes from a draft's title, and adds the first one when it
-  makes a draft or turns a pull request into one, so order matters. `public_url` is `https://<entry>`,
-  the allowlist entry with its port if it has one, so the gateway's PR, repo and check links point
-  at the forge's web UI. Per D2, PR links end in `/pull/N`.
+  on. The launcher checks both as the built-in client does: a CA file it couldn't read, one with no
+  PEM certificate, or one the HTTP client refuses, leaves the call to the built-in path, which
+  reports it. `wip_prefixes` is the host's `[host.<entry>].wip_prefixes` from the shim config, or
+  the gateway's default (`WIP:`, `[WIP]`) when unset. Forgejo decides what is a draft, from its own
+  WIP setting, which the list should match. The gateway strips these prefixes from a draft's title,
+  and adds the first one when it makes a draft or turns a pull request into one, so order matters.
+  `public_url` is `https://<entry>`, the allowlist entry with its port if it has one, so the
+  gateway's PR, repo and check links point at the forge's web UI. Per D2, PR links end in
+  `/pull/N`.
 - `.expecting(per_call).upstream_token(real)` (gateway PR #66), for every served host. gh
   presents §3's per-call token; Forgejo receives only the real one. In a
   `gh auth status --show-token` call, where §3 puts the real token in `hosts.yml`, it is
