@@ -161,19 +161,30 @@ impl PullRequest {
                 || r.name.as_ref().is_some_and(|name| name != &self.repo)
         })
     }
+    /// Null, like `headRepository`, once the head branch is gone.
     async fn head_repository_owner(&self) -> Option<RepositoryOwner> {
         self.source
             .head
             .repo
             .as_ref()
+            .filter(|_| self.source.head.exists())
             .map(|r| User(r.owner.clone()).into())
     }
     async fn head_repository(
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<Repository>> {
-        // Deleted head repositories are represented by null upstream.
-        let Some(head) = self.source.head.repo.as_ref() else {
+        // Deleted head repositories are represented by null upstream. A head branch that's gone
+        // (AGit, deleted) gets null too, as GitHub reports it: gh pr checkout then fetches
+        // `refs/pull/N/head` from the base instead of `refs/heads/{headRefName}`, which would be
+        // nothing, or a branch recreated under the old name.
+        let Some(head) = self
+            .source
+            .head
+            .repo
+            .as_ref()
+            .filter(|_| self.source.head.exists())
+        else {
             return Ok(None);
         };
         let name = head.name.as_deref().unwrap_or(&self.repo);
