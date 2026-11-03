@@ -62,6 +62,35 @@ impl Session {
         }
         Ok(issue)
     }
+    /// The commit a PR's own ref `refs/pull/N/head` points to, in the base repository. Forgejo's
+    /// refs API answers an exact match as one object (`routers/api/v1/repo/git_ref.go:101-104`).
+    pub async fn pull_head(&self, owner: &str, repo: &str, number: i32) -> Result<String, Error> {
+        let value: serde_json::Value = self
+            .get(
+                &[
+                    "repos",
+                    owner,
+                    repo,
+                    "git",
+                    "refs",
+                    "pull",
+                    &number.to_string(),
+                    "head",
+                ],
+                &[],
+            )
+            .await?;
+        let wanted = format!("refs/pull/{number}/head");
+        let reference = match &value {
+            serde_json::Value::Array(refs) => refs.iter().find(|r| r["ref"] == wanted.as_str()),
+            single if single["ref"] == wanted.as_str() => Some(single),
+            _ => None,
+        };
+        reference
+            .and_then(|r| r["object"]["sha"].as_str())
+            .map(str::to_owned)
+            .ok_or(Error::NotFound)
+    }
     pub async fn file_text(&self, owner: &str, repo: &str, path: &str) -> Result<String, Error> {
         // The route's `*` takes the path's slashes as segments; one segment may not hold a slash.
         let mut segments = vec!["repos", owner, repo, "contents"];

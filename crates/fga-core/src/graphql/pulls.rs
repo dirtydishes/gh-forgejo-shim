@@ -139,12 +139,9 @@ impl PullRequest {
     async fn maintainer_can_modify(&self) -> bool {
         self.source.allow_maintainer_edit
     }
-    /// gh names the local branch after this and fetches into it (`fetch …:{headRefName}`), so a
-    /// name starting with `refs/` (an AGit PR's `refs/pull/N/head`) would write a raw ref that an
-    /// existing branch of the same name shadows. Drop that prefix; Forgejo's REST `head.ref` keeps it.
+    /// gh names the local branch after this; see [`forgejo::Branch::reported_name`].
     async fn head_ref_name(&self) -> &str {
-        let name = self.source.head.name();
-        name.strip_prefix("refs/").unwrap_or(name)
+        self.source.head.reported_name()
     }
     async fn base_ref_name(&self) -> &str {
         &self.source.base.ref_name
@@ -172,20 +169,31 @@ impl PullRequest {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<Repository>> {
-        // Deleted head repositories are represented by null upstream. A head branch that's gone
-        // (AGit, deleted) gets null too. GitHub nulls it only for a deleted fork, but this is what
-        // sends gh pr checkout to `refs/pull/N/head` on the base instead of
-        // `refs/heads/{headRefName}`: nothing for AGit, and for a deleted branch either nothing or
-        // a branch recreated under the old name, checked out with exit 0. The same goes for a closed
-        // or merged PR, whose branch no longer follows it. The owner stays, as on GitHub; gh's
-        // checkout reads only `headRepository` to choose.
-        let Some(head) = self.source.head.repo.as_ref().filter(|_| {
-            // Forgejo moves an open PR's head with its branch; once the PR is closed or merged
-            // the branch can be recreated anywhere, so only the PR's own ref is its head.
-            self.source.head.exists() && self.source.state == "open" && !self.source.merged
-        }) else {
+        // Deleted head repositories are represented by null upstream. GitHub keeps one for a
+        // deleted branch, but gh pr checkout fetches `refs/heads/{headRefName}` from it and falls
+        // back to the PR's own ref `refs/pull/N/head` only without one. So the gateway reports a
+        // head repository only while the head branch exists and its tip is the PR's head; a branch
+        // that's gone, recreated, or moved since (a closed PR, or one reopened through the API,
+        // which leaves the PR's ref where it was) would otherwise be checked out in its place.
+        // The owner stays, as on GitHub; gh's checkout reads only `headRepository` to choose.
+        let Some(head) = self
+            .source
+            .head
+            .repo
+            .as_ref()
+            .filter(|_| self.source.head.exists())
+        else {
             return Ok(None);
         };
+        let session = ctx.data_unchecked::<Session>();
+        // Unknown counts as moved: gh then fetches the PR's own ref, which is safe either way.
+        match session
+            .pull_head(&self.owner, &self.repo, self.source.number)
+            .await
+        {
+            Ok(sha) if sha == self.source.head.sha => {}
+            _ => return Ok(None),
+        }
         let name = head.name.as_deref().unwrap_or(&self.repo);
         let source = ctx
             .data_unchecked::<Session>()
