@@ -137,6 +137,19 @@ the help. Only a command in the shim's grammar knows its own `-h` and which flag
 a help flag delegates only there, and for command groups, which have no `-h` of their own:
 `repo edit -h URL` sets a homepage, and keeps the refusal.
 
+**When the parse may differ from gh's.** Routing reads `-R`, `--hostname` and an `api` URL from
+its own parse. That parse matches gh's only when the command word comes first, the command is in
+the shim's grammar, and the call passes the grammar's checks. Otherwise a word it took for `-R`
+may be another flag's value to gh, or the reverse: `gh release create v1 --notes -R
+github.com/o/r` creates the release where the checkout points. Such a call runs plain gh only when
+no Forgejo host is in reach: none in its words, `GH_HOST`, `GH_REPO` or the checkout's remotes.
+Otherwise the wrapper refuses it with exit 1, and says to run it where no Forgejo host is in reach
+(or to put the command word first, when a flag comes before it). A grammar check failing near a
+forge is refused too, since a newer gh may have the flag. The cost is calls that name another host
+plainly: `gh workflow list -R github.com/o/r` in a Forgejo checkout is refused until the grammar
+covers `workflow list`. gh's root (`gh`, `gh --version`) still delegates, but only when cobra finds no
+command word either.
+
 **Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
 `--hostname`, don't use the checkout's repository to pick a host. They use gh's default host
 (`gh/pkg/cmd/api/api.go:417-420`, `gh/pkg/cmd/auth/token/token.go:71-73`). A launched gh's
