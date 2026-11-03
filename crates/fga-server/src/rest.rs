@@ -34,23 +34,22 @@ pub async fn meta(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Forgejo has no rate-limit API and the gateway sets no limits of its own, so `rate_limit`
-/// answers GitHub's overview with GitHub's per-user ceilings and nothing used, renewing an hour
-/// from now. A script that paces itself by `remaining` never waits.
+/// answers GitHub's overview with GitHub's per-user ceilings and nothing used: `core` and `graphql`
+/// per hour, `search` and `code_search` per minute, each renewing when its window would.
+/// A script that paces itself by `remaining` never waits.
 pub async fn rate_limit() -> impl IntoResponse {
-    let reset = SystemTime::now()
+    let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-        + 3600;
-    let budget =
-        |limit: u32| json!({"limit": limit, "used": 0, "remaining": limit, "reset": reset});
+        .map_or(0, |since| since.as_secs());
+    let budget = |limit: u32, window: u64| json!({"limit": limit, "used": 0, "remaining": limit, "reset": now + window});
     Json(json!({
         "resources": {
-            "core": budget(5000),
-            "graphql": budget(5000),
-            "search": budget(30),
-            "code_search": budget(10),
+            "core": budget(5000, 3600),
+            "graphql": budget(5000, 3600),
+            "search": budget(30, 60),
+            "code_search": budget(10, 60),
         },
-        "rate": budget(5000),
+        "rate": budget(5000, 3600),
     }))
 }
 

@@ -44,16 +44,22 @@ async fn rate_limit_reports_a_full_budget_in_githubs_shape() {
     let body = response.split_once("\r\n\r\n").unwrap().1;
     let body: Value =
         serde_json::from_str(&body[body.find('{').unwrap()..=body.rfind('}').unwrap()]).unwrap();
+    // Hourly families renew an hour from the request, per-minute ones a minute from it.
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let reset = body["rate"]["reset"].as_u64().unwrap();
-    assert!(reset > now && reset <= now + 3600, "{reset} vs {now}");
-    let budget = |limit: u64| json!({"limit":limit,"used":0,"remaining":limit,"reset":reset});
+    let hour = body["rate"]["reset"].as_u64().unwrap();
+    assert!(
+        hour >= now + 3600 - 5 && hour <= now + 3600,
+        "{hour} vs {now}"
+    );
+    let minute = hour - 3600 + 60;
+    let budget =
+        |limit: u64, reset: u64| json!({"limit":limit,"used":0,"remaining":limit,"reset":reset});
     assert_eq!(
         body,
-        json!({"resources":{"core":budget(5000),"graphql":budget(5000),"search":budget(30),
-            "code_search":budget(10)},"rate":budget(5000)})
+        json!({"resources":{"core":budget(5000, hour),"graphql":budget(5000, hour),
+            "search":budget(30, minute),"code_search":budget(10, minute)},"rate":budget(5000, hour)})
     );
 }
