@@ -272,6 +272,22 @@ would pass raw HTML from a PR body to clients that trust `bodyHTML` as sanitized
 Escaping costs nothing and can't inject markup. Optional sanitized rendering is
 `gh-forgejo-shim-xml`, if the pane turns out to need it.
 
+## 10. Head branch (`headRefName`, `headRepository`)
+
+Forgejo's `head.label` holds the head branch's name, and `head.ref` holds it too only while the
+branch exists. For an AGit PR, a deleted branch or a deleted fork, `head.ref` is `refs/pull/N/head`
+(`services/convert/pull.go:106-110,165-231`).
+
+| GitHub | Forgejo |
+|---|---|
+| `headRefName` | `head.label`, or `head.ref` when the label is empty (AGit) |
+| `headRepository`, `headRepositoryOwner` | `head.repo`, but null unless `head.ref` equals a non-empty `head.label` |
+
+GitHub reports no head repository once the head is gone, and `gh pr checkout` then fetches
+`refs/pull/N/head` from the base repository. A head repository for a gone branch would send gh to
+`refs/heads/{headRefName}` instead: nothing for an AGit PR, and for a deleted branch either nothing
+or a branch created since under the old name, which gh would check out without an error.
+
 ## Open items to verify against the live twin (G2/G3)
 
 1. ~~Forgejo "checking" vs "conflict"~~: **resolved v1**. Not distinguishable; see §2.

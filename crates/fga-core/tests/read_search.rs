@@ -199,3 +199,70 @@ async fn project_cards_are_an_empty_connection() {
         json!({"repository":{"pullRequest":empty,"issue":empty}})
     );
 }
+
+/// gh pr checkout fetches `refs/heads/{headRefName}` from the head repository, or `refs/pull/N/head`
+/// from the base when there's none. Forgejo names the head branch in `ref` only while it exists
+/// (`services/convert/pull.go`); an AGit PR or a deleted branch reports `refs/pull/N/head`, so the
+/// gateway reports no head repository, as GitHub does for a head that's gone. Otherwise gh would
+/// fetch a branch that isn't the PR's, or one recreated since under the old name.
+#[tokio::test]
+async fn a_head_branch_that_is_gone_has_no_head_repository() {
+    let base_repo = json!({"name":"r","owner":{"id":1,"login":"o","avatar_url":""}});
+    let pull_with = move |number: i32, label: &str, reference: &str| {
+        let mut source = pull(number, false);
+        source["state"] = json!("open");
+        source["head"] =
+            json!({"label":label,"ref":reference,"sha":"abc","repo":base_repo.clone()});
+        source
+    };
+    let live = pull_with(1, "feature", "feature");
+    let deleted = pull_with(2, "feature", "refs/pull/2/head");
+    let agit = pull_with(3, "", "refs/pull/3/head");
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r",
+            get(|| async {
+                Json(json!({"id":1,"name":"r","full_name":"o/r","private":false,
+                    "owner":{"id":1,"login":"o","avatar_url":"https://forge.test/avatar"},
+                    "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,
+                    "archived":false,"permissions":{"admin":false,"push":true,"pull":true}}))
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/1",
+            get(move || async move { Json(live) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/2",
+            get(move || async move { Json(deleted) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/3",
+            get(move || async move { Json(agit) }),
+        );
+    let (session, task) = session(upstream).await;
+    let fields = "headRefName headRepository{name} headRepositoryOwner{login}";
+    let response = graphql::schema()
+        .execute(
+            Request::new(format!(
+                r#"{{repository(owner:"o",name:"r"){{live:pullRequest(number:1){{{fields}}}
+                    deleted:pullRequest(number:2){{{fields}}} agit:pullRequest(number:3){{{fields}}}}}}}"#
+            ))
+            .data(session),
+        )
+        .await;
+    task.abort();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let gone =
+        |name: &str| json!({"headRefName":name,"headRepository":null,"headRepositoryOwner":null});
+    assert_eq!(
+        response.data.into_json().unwrap()["repository"],
+        json!({
+            "live":{"headRefName":"feature","headRepository":{"name":"r"},
+                "headRepositoryOwner":{"login":"o"}},
+            "deleted":gone("feature"),
+            "agit":gone("refs/pull/3/head"),
+        })
+    );
+}
