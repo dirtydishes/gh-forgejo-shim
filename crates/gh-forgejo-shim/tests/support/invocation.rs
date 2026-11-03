@@ -44,6 +44,15 @@ fn forgejo_errors_and_unsupported_commands_never_delegate_or_need_auth() -> Test
             vec!["pr", "lock", "1", "--reason", "off-topic"],
             "\"gh pr lock\" is not supported",
         ),
+        // -h is --homepage, and --help a value of --notes: writes, not help, so not plain gh.
+        (
+            vec!["repo", "edit", "-h", "https://x.test"],
+            "\"gh repo edit\" is not supported",
+        ),
+        (
+            vec!["release", "create", "v1", "--notes", "--help"],
+            "\"gh release\" is not supported",
+        ),
         (
             vec!["pr", "view", "1", "--gfjs-unknown"],
             "unknown flag: --gfjs-unknown",
