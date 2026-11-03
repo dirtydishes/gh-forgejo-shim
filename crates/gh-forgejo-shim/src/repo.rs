@@ -234,7 +234,8 @@ pub fn detect_repo(
 }
 
 /// gh's top-level commands in v2.103.3, with cobra's short names and the help topics: the names
-/// an alias can't take (`gh/pkg/cmd/root/root.go:134-185`).
+/// an alias can't take (`gh/pkg/cmd/root/root.go:134-185`), except `help`. cobra adds its help
+/// command only when it runs, after gh has registered the aliases, so an alias named `help` wins.
 const GH_COMMANDS: &[&str] = &[
     "version",
     "accessibility",
@@ -373,9 +374,9 @@ pub fn command_word(words: &[String]) -> Option<&str> {
 }
 
 /// The command word cobra's `Find` reaches in `words`, when it's one of gh's own commands rather
-/// than an alias or an extension.
+/// than an alias or an extension. Not `help`, which an alias can replace.
 pub fn gh_command_word(words: &[String]) -> Option<&str> {
-    command_word(words).filter(|word| GH_COMMANDS.contains(word))
+    command_word(words).filter(|word| *word != "help" && GH_COMMANDS.contains(word))
 }
 
 /// `argv` as gh runs it when its command word, found past any flags before it, is a plain alias
@@ -388,7 +389,7 @@ pub fn gh_command_word(words: &[String]) -> Option<&str> {
 pub fn expand_alias(argv: &[String], env: &HashMap<String, String>) -> Option<Vec<String>> {
     let position = command_position(argv)?;
     let name = &argv[position];
-    if GH_COMMANDS.contains(&name.as_str()) {
+    if name != "help" && GH_COMMANDS.contains(&name.as_str()) {
         return None;
     }
     let aliases = user_gh_aliases(env);

@@ -906,6 +906,30 @@ mod tests {
     }
 
     #[test]
+    fn an_alias_named_help_replaces_gh_s_help() {
+        // cobra adds its help command after gh registers aliases, so `help` here is
+        // `release create`, a write (Sol r4#2).
+        let dir = std::env::temp_dir().join(format!("gfj-help-alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            dir.join("config.yml"),
+            "aliases:\n    help: release create v1\n",
+        )
+        .expect("config");
+        let decision = decide_route(
+            &argv(&["help"]),
+            &config(&["git.example.com"]),
+            &env(&[
+                ("GH_REPO", "git.example.com/owner/repo"),
+                ("GH_CONFIG_DIR", dir.to_str().expect("utf-8")),
+            ]),
+            Some(Path::new("/nonexistent-gfjs-repo")),
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(decision.kind, RouteKind::Forgejo, "{decision:?}");
+    }
+
+    #[test]
     fn an_alias_to_a_delegated_command_delegates() {
         // Launcher spec §11, test 14: `gh sg` with `sg: auth setup-git`.
         let dir = std::env::temp_dir().join(format!("gfj-alias-{}", std::process::id()));
