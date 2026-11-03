@@ -83,11 +83,12 @@ impl RouteDecision {
         }
     }
 
-    fn refuse(reason: impl Into<String>) -> Self {
+    /// A refusal keeps the repository routing detected, so the trace still says what it found.
+    fn refuse(reason: impl Into<String>, repo: Option<RepoRef>) -> Self {
         Self {
             kind: RouteKind::Refuse,
             reason: reason.into(),
-            repo: None,
+            repo,
             host: None,
         }
     }
@@ -248,29 +249,17 @@ fn decide_invocation_route(
         return RouteDecision::delegate("a command gh runs on its own", None);
     }
     let decision = route_by_target(invocation, config, env, cwd);
-    // The parse names gh's target only when it reads the call as gh does: the command word first,
-    // and either no flags but `--help` (cobra's own, which takes no value; `-h` may, as in
-    // `auth token -h HOST`) or a grammar for them. Otherwise a word it took for `-R`,
-    // `--hostname` or an `api` URL may be another flag's value to gh (`gh release create v1
-    // --notes -R github.com/o/r` creates the release where the checkout points), or the reverse.
-    // So plain gh runs such a call only when nothing in reach names a Forgejo host.
-    let flagless = words
-        .iter()
-        .all(|word| !word.starts_with('-') || word == "-" || word == "--help");
-    let certain =
-        leads && (flagless || (invocation.has_grammar() && invocation.validate().is_ok()));
-    if decision.kind == RouteKind::Delegate && !certain && forgejo_in_reach(words, config, env, cwd)
-    {
-        return RouteDecision::refuse(format!(
-            "a Forgejo host is in reach (GH_REPO, GH_HOST, the checkout or an argument), and the \
-             wrapper can't parse this call well enough to tell that gh won't use it, so plain gh \
-             doesn't run it; run it where no Forgejo host is in reach{}",
-            if leads {
-                ""
-            } else {
-                ", or put the command word first"
-            },
-        ));
+    // Which host gh sends a call to depends on how it parses the call (a word the shim takes for
+    // `-R` may be another flag's value: `gh release create v1 --notes -R github.com/o/r` creates
+    // the release where the checkout points) and on the command (`gh gist create` ignores
+    // `GH_REPO` for `GH_HOST`). The shim can't match gh on either everywhere, so off the delegate
+    // list plain gh runs only when nothing in reach names a Forgejo host.
+    if decision.kind == RouteKind::Delegate && forgejo_in_reach(words, config, env, cwd) {
+        return RouteDecision::refuse(
+            "a Forgejo host is in reach (GH_REPO, GH_HOST, the checkout or an argument), and only \
+             the delegate list runs plain gh there; run this where no Forgejo host is in reach",
+            decision.repo,
+        );
     }
     decision
 }
@@ -283,9 +272,11 @@ fn forgejo_in_reach(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
 ) -> bool {
+    // Only entries that count as forges: a GitHub host allowlisted by mistake stays GitHub's.
     let hosts = config
         .hosts
         .iter()
+        .filter(|host| config.is_forgejo_host(Some(host)))
         .map(|host| gh_hostname(&normalize_host(host)).to_ascii_lowercase())
         .collect::<Vec<_>>();
     let named = words.iter().any(|word| {
@@ -393,7 +384,9 @@ fn route_by_target(
 /// The spec's delegate list (launcher §2): commands that call no API, or that write gh's own
 /// state, which a launched gh would write to a throwaway copy. Matched on the command after alias
 /// expansion, so `gh sg` with `sg: auth setup-git` delegates too. Help, the list's other entry,
-/// delegates in `run_gh`, after routing has recorded the forge.
+/// delegates in `run_gh`, after routing has recorded the forge. The `help` command isn't here: an
+/// alias can take that name (cobra adds `help` after gh's aliases), and gh reads alias files the
+/// shim can't, so `gh help …` routes like any other call.
 fn runs_on_its_own(invocation: &Invocation) -> bool {
     let command = invocation.command.as_str();
     let group = command.split_whitespace().next().unwrap_or_default();
@@ -414,7 +407,6 @@ fn runs_on_its_own(invocation: &Invocation) -> bool {
             | "agent-tasks"
             | "agent"
             | "agents"
-            | "help"
     ) || matches!(
         command,
         "auth login"
@@ -769,7 +761,6 @@ mod tests {
             &["agent-tasks", "list"][..],
             &["agent", "list"][..],
             &["agents", "list"][..],
-            &["help", "pr"][..],
         ] {
             let decision = decide_route(
                 &argv(args),
@@ -798,6 +789,30 @@ mod tests {
             );
             assert_eq!(decision.kind, RouteKind::Forgejo, "{args:?}");
         }
+        // `help` routes like any call: an alias can take its name (Sol r5#1). A Forgejo repo keeps
+        // the Forgejo path, which refuses it; with a forge only in reach it's refused outright.
+        // Plain gh runs it only with no forge in reach.
+        let help = |env_pairs: &[(&str, &str)]| {
+            decide_route(
+                &argv(&["help", "pr"]),
+                &config(&["git.example.com"]),
+                &env(env_pairs),
+                Some(Path::new("/nonexistent-gfjs-repo")),
+            )
+            .kind
+        };
+        assert_eq!(
+            help(&[("GH_REPO", "git.example.com/owner/repo")]),
+            RouteKind::Forgejo
+        );
+        assert_eq!(
+            help(&[
+                ("GH_REPO", "github.com/o/r"),
+                ("GH_HOST", "git.example.com")
+            ]),
+            RouteKind::Refuse
+        );
+        assert_eq!(help(&[]), RouteKind::Delegate);
     }
 
     #[test]

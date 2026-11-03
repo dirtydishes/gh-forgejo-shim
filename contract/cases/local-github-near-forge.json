@@ -1,0 +1,17 @@
+{
+  "id": "local-github-near-forge",
+  "kind": "shim-local",
+  "argv": [
+    "pr",
+    "list",
+    "-R",
+    "github.com/dirtydishes/gfj-oracle"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "gh-forgejo-shim: a Forgejo host is in reach (GH_REPO, GH_HOST, the checkout or an argument), and only the delegate list runs plain gh there; run this where no Forgejo host is in reach\n"
+  }
+}
