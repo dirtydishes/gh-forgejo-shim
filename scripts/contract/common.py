@@ -35,6 +35,10 @@ DECOY_PROBES = [
     # gh's own version, in a Forgejo checkout: real gh answers it without a request.
     ["--version"],
     ["version"],
+    # The spec's delegate list (launcher §2): gh's own state, and help, in a Forgejo checkout.
+    ["auth", "setup-git"],
+    ["config", "get", "editor"],
+    ["pr", "view", "--help"],
 ]
 LOCAL_PROBES = [
     # gh sends the workflow's file name, which the gateway can't take yet (C4, cwe.18.1).

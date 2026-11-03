@@ -1,0 +1,11 @@
+{
+  "id": "decoy-pr-view-help",
+  "kind": "decoy",
+  "argv": [
+    "pr",
+    "view",
+    "--help"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": []
+}
