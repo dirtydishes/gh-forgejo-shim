@@ -77,18 +77,16 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     // same-repository pull request (C3c, `cwe.17`). `--recurse-submodules` and `--worktree` stay
     // off until traced.
     ("pr checkout", &["branch", "detach", "force", "repo"]),
-    // `--workflow`, `--user`, `--created` and `--attempt` fail on the gateway; `--log` and
-    // `--log-failed` stay off until a completed run is traced (C4, `cwe.18.1`).
+    // `--workflow`, `--user`, `--created` and `--attempt` fail on the gateway. `--log`,
+    // `--log-failed` and `--exit-status` matter only for a completed run, which no trace has
+    // covered; `--verbose` shows jobs, which the gateway can't list (C4, `cwe.18.1`).
     (
         "run list",
         &[
             "json", "jq", "limit", "status", "branch", "event", "commit", "all", "repo",
         ],
     ),
-    (
-        "run view",
-        &["json", "jq", "exit-status", "verbose", "repo"],
-    ),
+    ("run view", &["json", "jq", "repo"]),
     // `--edit-last`, `--delete-last` and `--create-if-none` need mutations the gateway lacks.
     ("issue comment", &["body", "body-file", "repo"]),
 ];
@@ -138,6 +136,17 @@ pub fn launches(invocation: &Invocation) -> bool {
         && served
         // Without a run ID, gh prompts for one in a terminal, which no trace has covered.
         && !(command == "run view" && invocation.positionals.is_empty())
+        // The gateway can't fill these yet: a run's jobs (Forgejo 15's API lists none) and its
+        // attempt (it reads 0; GitHub's first is 1). gh would print them empty and exit 0.
+        && !(matches!(command, "run list" | "run view")
+            && invocation.json_fields.as_ref().is_some_and(|fields| {
+                fields.iter().any(|field| field == "jobs" || field == "attempt")
+            }))
+        // Without a body, gh asks in a terminal whether to write the comment in an editor or a
+        // browser, the forms kept off above (`pr/shared/commentable.go`).
+        && !(matches!(command, "pr comment" | "issue comment")
+            && !invocation.flags.contains_key("body")
+            && !invocation.flags.contains_key("body-file"))
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -228,9 +237,9 @@ mod tests {
                 "view",
                 "7",
                 "--json",
-                "status,jobs",
-                "--exit-status",
-                "-v",
+                "status,conclusion",
+                "--jq",
+                ".status",
             ][..],
             &["issue", "comment", "3", "--body", "b"][..],
             &["issue", "comment", "3", "-F", "notes.md"][..],
@@ -292,6 +301,15 @@ mod tests {
             &["run", "list", "--user", "alice"][..],
             &["run", "view", "7", "--attempt", "1"][..],
             &["run", "view", "7", "--log"][..],
+            // Only for a completed run, or the jobs the gateway can't list.
+            &["run", "view", "7", "--exit-status"][..],
+            &["run", "view", "7", "--verbose"][..],
+            &["run", "view", "7", "--json", "status,jobs"][..],
+            &["run", "view", "7", "--json", "attempt"][..],
+            &["run", "list", "--json", "databaseId,attempt"][..],
+            // gh would ask for an editor or a browser in a terminal.
+            &["issue", "comment", "3"][..],
+            &["pr", "comment", "12"][..],
             // gh would prompt for a run in a terminal.
             &["run", "view"][..],
             &["issue", "comment", "3", "--edit-last", "--body", "b"][..],
