@@ -21,6 +21,20 @@ const GH_ISSUE_CREATE: &str = "
 		}
 	}";
 
+/// gh's `IssueRepoInfo` in `api/queries_repo.go`, which `gh issue create` runs first and stops on when
+/// `hasIssuesEnabled` is false.
+const GH_ISSUE_REPOSITORY_INFO: &str = "
+	query IssueRepositoryInfo($owner: String!, $name: String!) {
+		repository(owner: $owner, name: $name) {
+			id
+			databaseId
+			name
+			owner { login }
+			hasIssuesEnabled
+			viewerPermission
+		}
+	}";
+
 fn user() -> Value {
     json!({"id":1,"login":"o","full_name":"","avatar_url":""})
 }
@@ -119,6 +133,8 @@ async fn issue_create_refuses_what_it_cant_do_and_writes_nothing() {
     );
     let upstream = Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
+        // `o` is a user, which Forgejo reports by having no organization of that name.
+        .route("/api/v1/orgs/o", get(|| async { StatusCode::NOT_FOUND }))
         .route("/api/v1/repos/o/r", get(move || async move { Json(plain) }))
         .route(
             "/api/v1/repos/o/arch",
@@ -150,9 +166,10 @@ async fn issue_create_refuses_what_it_cant_do_and_writes_nothing() {
                 .data(session.clone()),
         )
     };
-    // gh's input after resolving a label: it also sends empty assignee and project lists.
+    // gh's input after resolving a label (`AddMetadataToIssueParams`): the assignee and project
+    // lists it found nothing for are nil slices, which Go encodes as null.
     let metadata = json!({"input":{"repositoryId":node_id("Repository", "o/r", 1),"title":"Bug",
-        "body":"Steps","labelIds":["L"],"assigneeIds":[],"projectIds":[]}});
+        "body":"Steps","assigneeIds":null,"labelIds":["L"],"projectIds":null}});
     let response = run(GH_ISSUE_CREATE, metadata).await;
     let refusal = &response.errors[0].message;
     assert!(
@@ -166,17 +183,12 @@ async fn issue_create_refuses_what_it_cant_do_and_writes_nothing() {
         response.errors[0].message,
         "Repository was archived so is read-only."
     );
-    let response = run(
-        r#"{plain:repository(owner:"o",name:"r"){hasIssuesEnabled}
-            ext:repository(owner:"o",name:"ext"){hasIssuesEnabled}}"#,
-        json!({}),
-    )
-    .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(
-        response.data.into_json().unwrap(),
-        json!({"plain":{"hasIssuesEnabled":true},"ext":{"hasIssuesEnabled":false}})
-    );
+    for (name, enabled) in [("r", true), ("ext", false)] {
+        let response = run(GH_ISSUE_REPOSITORY_INFO, json!({"owner":"o","name":name})).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["repository"]["hasIssuesEnabled"], enabled, "{data}");
+    }
     task.abort();
     assert_eq!(*posted.lock().unwrap(), 0, "something was written");
 }
