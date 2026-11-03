@@ -2,10 +2,13 @@ use crate::{AppState, Host, rest_error};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use fga_core::{forgejo::Session, map};
+use fga_core::{
+    forgejo::{Error, Session, WriteError},
+    map,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -32,6 +35,26 @@ pub async fn user(
     Extension(session): Extension<Session>,
 ) -> impl IntoResponse {
     Json(map::user(&session.viewer, &host.public_url))
+}
+
+/// `gh pr merge --delete-branch` deletes the head branch through Forgejo. gh reads 404 and 422 as
+/// "already deleted", so only a missing branch gets GitHub's 422; a refusal (default or protected
+/// branch, no write access) keeps its own code, and anything Forgejo shouldn't have said is a 502.
+pub async fn delete_branch(
+    Extension(session): Extension<Session>,
+    Path((owner, repo, branch)): Path<(String, String, String)>,
+) -> Response {
+    match session.delete_branch(&owner, &repo, &branch).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(WriteError::Transport(Error::NotFound)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"message": "Reference does not exist",
+                "documentation_url": "https://docs.github.com/rest/git/refs#delete-a-reference"})),
+        )
+            .into_response(),
+        Err(WriteError::Transport(error)) => rest_error(error),
+        Err(_) => rest_error(Error::Upstream),
+    }
 }
 
 pub async fn repository(
