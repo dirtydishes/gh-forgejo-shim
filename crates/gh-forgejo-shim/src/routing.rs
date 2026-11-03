@@ -196,6 +196,9 @@ fn decide_invocation_route(
     if invocation.command.is_empty() || invocation.command == "version" {
         return RouteDecision::delegate("gh's root or version command", None);
     }
+    if runs_on_its_own(invocation) {
+        return RouteDecision::delegate("a command gh runs on its own", None);
+    }
     // gh sends `gh api https://host/...` to that URL as it is, whatever --hostname says
     // (`gh/pkg/cmd/api/http.go:19-21`).
     if invocation.command == "api" {
@@ -269,6 +272,38 @@ fn decide_invocation_route(
     RouteDecision::forgejo(detection.source, Some(repo), Some(host))
 }
 
+/// The spec's delegate list (launcher §2): commands that call no API, or that write gh's own
+/// state, which a launched gh would write to a throwaway copy. Matched on the command after alias
+/// expansion, so `gh sg` with `sg: auth setup-git` delegates too. Help, the list's other entry,
+/// delegates in `run_gh`, after routing has recorded the forge.
+fn runs_on_its_own(invocation: &Invocation) -> bool {
+    let command = invocation.command.as_str();
+    let group = command.split_whitespace().next().unwrap_or_default();
+    matches!(
+        group,
+        "completion"
+            | "config"
+            | "alias"
+            | "extension"
+            | "extensions"
+            | "ext"
+            | "codespace"
+            | "cs"
+            | "copilot"
+            | "skills"
+            | "agent-task"
+            | "help"
+    ) || matches!(
+        command,
+        "auth login"
+            | "auth logout"
+            | "auth switch"
+            | "auth refresh"
+            | "auth setup-git"
+            | "auth git-credential"
+    )
+}
+
 fn host_route(host: &str, config: &DispatcherConfig) -> RouteDecision {
     match config.forgejo_host(host) {
         Some(host) => RouteDecision::forgejo("host", None, Some(host)),
@@ -316,6 +351,11 @@ fn run_gh(
 
     let exit_code = match decision.kind {
         RouteKind::Delegate => {
+            run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
+        }
+        // Help for any command is plain gh's (launcher spec §2), as the parser reads gh's help
+        // flag: routing still records the forge it would have used, and real gh prints the help.
+        RouteKind::Forgejo if routed.flag("help") == Some("true") => {
             run_delegate(&original_argv, &env, cwd, &config, &mut mode, trace_enabled)
         }
         RouteKind::Forgejo => {
@@ -558,6 +598,76 @@ mod tests {
                 assert_eq!(decision.reason, "gh's root or version command", "{args:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_delegate_list_runs_plain_gh_even_for_a_forgejo_repo() {
+        for args in [
+            &["completion", "-s", "bash"][..],
+            &["config", "get", "editor"][..],
+            &["config", "set", "editor", "vim"][..],
+            &["alias", "list"][..],
+            &["alias", "set", "co", "pr checkout"][..],
+            &["auth", "login"][..],
+            &["auth", "login", "--hostname", "git.example.com"][..],
+            &["auth", "logout"][..],
+            &["auth", "switch"][..],
+            &["auth", "refresh"][..],
+            &["auth", "setup-git"][..],
+            &["extension", "list"][..],
+            &["ext", "install", "o/gh-x"][..],
+            &["codespace", "list"][..],
+            &["copilot", "suggest", "x"][..],
+            &["help", "pr"][..],
+        ] {
+            let decision = decide_route(
+                &argv(args),
+                &config(&["git.example.com"]),
+                &env(&[("GH_REPO", "git.example.com/owner/repo")]),
+                Some(Path::new("/nonexistent-gfjs-repo")),
+            );
+            assert_eq!(decision.kind, RouteKind::Delegate, "{args:?}");
+            assert_eq!(decision.reason, "a command gh runs on its own", "{args:?}");
+        }
+        // Ordinary commands keep routing, and so does a help flag, which run_gh hands to plain gh
+        // after the route is recorded.
+        for args in [
+            &["pr", "view", "--help"][..],
+            &["pr", "view", "1", "-h"][..],
+            &["auth", "token", "-h", "git.example.com"][..],
+            &["auth", "status", "-h", "git.example.com"][..],
+            &["pr", "view", "1"][..],
+            &["issue", "list"][..],
+        ] {
+            let decision = decide_route(
+                &argv(args),
+                &config(&["git.example.com"]),
+                &env(&[("GH_REPO", "git.example.com/owner/repo")]),
+                Some(Path::new("/nonexistent-gfjs-repo")),
+            );
+            assert_eq!(decision.kind, RouteKind::Forgejo, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn an_alias_to_a_delegated_command_delegates() {
+        // Launcher spec §11, test 14: `gh sg` with `sg: auth setup-git`.
+        let dir = std::env::temp_dir().join(format!("gfj-alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("config.yml"), "aliases:\n    sg: auth setup-git\n")
+            .expect("config");
+        let decision = decide_route(
+            &argv(&["sg"]),
+            &config(&["git.example.com"]),
+            &env(&[
+                ("GH_REPO", "git.example.com/owner/repo"),
+                ("GH_CONFIG_DIR", dir.to_str().expect("utf-8")),
+            ]),
+            Some(Path::new("/nonexistent-gfjs-repo")),
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(decision.kind, RouteKind::Delegate);
+        assert_eq!(decision.reason, "a command gh runs on its own");
     }
 
     #[test]

@@ -124,7 +124,8 @@ gh would write to a throwaway copy (section 3):
 - `auth git-credential`, except from the launcher's own helper (§3, "Git's credentials").
 
 The list applies to the command gh will run: routing expands a plain alias first (L2), so
-`gh sg` with alias `sg: auth setup-git` delegates too.
+`gh sg` with alias `sg: auth setup-git` delegates too. Help delegates after routing has chosen a
+forge, so the route trace still names it; plain gh then prints the help.
 
 **Commands with no repository.** `gh api` without `--hostname`, and `gh auth token` without
 `--hostname`, don't use the checkout's repository to pick a host. They use gh's default host
