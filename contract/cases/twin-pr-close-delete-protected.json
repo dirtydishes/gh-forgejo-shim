@@ -1,0 +1,34 @@
+{
+  "id": "twin-pr-close-delete-protected",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-close-delete-held",
+    "pr": true,
+    "protect_head": true
+  },
+  "argv": [
+    "pr",
+    "close",
+    "{pr}",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "(?s)✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete-held\\)\\n.*failed to delete remote branch twin/pr-close-delete-held: HTTP 403.*"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "closed"
+      }
+    },
+    {
+      "path": "branches/{branch}",
+      "gone": false
+    }
+  ],
+  "normalize": []
+}

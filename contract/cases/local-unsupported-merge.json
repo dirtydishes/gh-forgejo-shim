@@ -6,7 +6,8 @@
     "merge",
     "1",
     "--merge",
-    "--delete-branch"
+    "--subject",
+    "s"
   ],
   "repo": "dirtydishes/gfj-oracle",
   "normalize": [],
