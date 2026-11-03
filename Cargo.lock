@@ -698,6 +698,7 @@ version = "0.1.2"
 dependencies = [
  "fga-core",
  "glob",
+ "memchr",
  "reqwest",
  "rpassword",
  "rustls",
