@@ -299,7 +299,29 @@ fn candidate_dirs(env: &HashMap<String, String>, fallback_dirs: &[PathBuf]) -> V
     result
 }
 
-fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
+/// `~` and `~/…` under `HOME`; any other path, and any path when `HOME` is unset, as it is. For
+/// the launcher to share, so a configured `~/gh` expands one way everywhere (n2e). It compares bytes,
+/// not path components: the rest after `~/` is joined exactly as written, so `~//gh` is still
+/// `/gh` and `~/gh/` keeps its slash, and bytes that aren't UTF-8 stay as they are.
+#[cfg(unix)]
+pub(crate) fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Some(home) = env.get("HOME") else {
+        return path.to_path_buf();
+    };
+    let bytes = path.as_os_str().as_bytes();
+    if bytes == b"~" {
+        return PathBuf::from(home);
+    }
+    match bytes.strip_prefix(b"~/") {
+        Some(rest) => Path::new(home).join(OsStr::from_bytes(rest)),
+        None => path.to_path_buf(),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn expand_home(path: &Path, env: &HashMap<String, String>) -> PathBuf {
     let value = path.as_os_str().to_string_lossy();
     if value == "~" {
         return env
@@ -405,6 +427,44 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_home_takes_tilde_and_tilde_slash_only_and_keeps_every_byte() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let env = HashMap::from([("HOME".to_string(), "/home/me".to_string())]);
+        // Compared as bytes: `Path` equality would hide a dropped trailing `/` or `.`.
+        for (path, expanded) in [
+            ("~", "/home/me"),
+            ("~/", "/home/me/"),
+            ("~/bin/gh", "/home/me/bin/gh"),
+            ("~//gh", "/gh"),
+            ("~/gh/", "/home/me/gh/"),
+            ("~/./gh", "/home/me/./gh"),
+            ("~/gh/.", "/home/me/gh/."),
+            ("~user/gh", "~user/gh"),
+            ("/opt/~/gh", "/opt/~/gh"),
+            ("bin/gh", "bin/gh"),
+        ] {
+            assert_eq!(
+                expand_home(Path::new(path), &env).as_os_str().as_bytes(),
+                expanded.as_bytes(),
+                "{path}"
+            );
+        }
+        // Not UTF-8 after `~/`: kept byte for byte, not replaced with U+FFFD.
+        let odd = Path::new(OsStr::from_bytes(b"~/caf\xff/gh"));
+        assert_eq!(
+            expand_home(odd, &env).as_os_str().as_bytes(),
+            b"/home/me/caf\xff/gh"
+        );
+        assert_eq!(
+            expand_home(Path::new("~/gh"), &HashMap::new()),
+            Path::new("~/gh"),
+            "HOME unset"
+        );
+    }
 
     static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
