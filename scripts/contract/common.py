@@ -37,6 +37,8 @@ DECOY_PROBES = [
     ["version"],
 ]
 LOCAL_PROBES = [
+    # gh sends the workflow's file name, which the gateway can't take yet (C4, cwe.18.1).
+    ["run", "list", "--workflow", "ci.yml"],
     # --delete-branch: the gateway can't delete a branch yet, and gh would report success.
     ["pr", "merge", "1", "--merge", "--delete-branch"],
     # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
@@ -88,7 +90,7 @@ def validate_case(case):
     if argv == ["--version"]:
         return
     allowed = {("pr", verb) for verb in ("view", "list", "checks", "diff", "status")}
-    allowed |= {("repo", "view"), ("api", "user"), ("auth", "status")}
+    allowed |= {("repo", "view"), ("api", "user"), ("api", "rate_limit"), ("auth", "status")}
     if command not in allowed:
         raise ValueError("command is outside the read-only allowlist")
     # --show-token is deliberately excluded even though auth status is read-only.
