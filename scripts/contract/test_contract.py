@@ -193,6 +193,8 @@ class ContractTests(unittest.TestCase):
             ({"setup": {"branch": "twin/x", "fork": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "fork needs setup.pr"),
             ({"setup": {"branch": "twin/x", "pr": True, "fork": True, "closed": True}}, "no closed or protect_head"),
             ({"setup": {"branch": "twin/x", "pr": True, "fork": "yes"}}, "true or false"),
+            ({"setup": {"branch": "twin/x", "agit": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "agit needs setup.pr"),
+            ({"setup": {"branch": "twin/x", "pr": True, "agit": True, "fork": True}}, "no fork"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
