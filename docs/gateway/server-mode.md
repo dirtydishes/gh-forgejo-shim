@@ -45,7 +45,10 @@ docker run -d --name fga-server --restart unless-stopped \
 - `FGA_WIP_PREFIXES` must match Forgejo's `[repository.pull-request] WORK_IN_PROGRESS_PREFIXES` if you
   changed them (default `WIP:,[WIP]`).
 
-The [gateway README](README.md) lists every setting.
+The [gateway README](README.md) lists every setting. For Docker Compose, start from the example
+[compose file](../../packaging/gateway/compose.yaml): it runs the gateway on a network it shares with
+Forgejo and the proxy. Tag each image with its release, so the README's
+[upgrade and rollback](../../README.md#upgrade-and-roll-back) is a switch between tags.
 
 ## 2. Mount it on the forge's hostname
 
@@ -135,7 +138,10 @@ shows the route reaches it. A `/pull/1` link on any repository should open Forge
 
 - **gh:** `gh auth login --hostname forge.example.com` with a Forgejo token. Plain `gh` then works in
   the forge's repositories, with no wrapper. Grant the token `read:user`, `write:repository`,
-  `write:issue` and `read:organization`.
+  `write:issue` and `read:organization`. Create it in Forgejo under **Settings → Applications**, and
+  choose **Paste an authentication token** (or pipe it to `gh auth login --with-token`). gh's browser
+  login can't work: its OAuth app isn't registered on the forge, and Forgejo answers "Client ID not
+  registered".
 - **Claude Code and Claude desktop:** log `gh` in as above. Both get their token from `gh`, then look up
   the branch's pull request on the forge directly.
 - **ChatGPT desktop:** it drives `gh`, so the same login serves it.
