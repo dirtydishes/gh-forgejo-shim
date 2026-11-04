@@ -537,6 +537,9 @@ fn run_gh(
         }
         RouteKind::Forgejo => {
             launch_listed(&routed, &decision, &original_argv, &env, &config, &mode)
+                .or_else(|| {
+                    step_aside_logged_in(&routed, &decision, &original_argv, &env, &config, &mode)
+                })
                 .unwrap_or_else(|| run_forgejo(&invocation, &env, cwd, &decision, &mut mode))
         }
     };
@@ -636,6 +639,33 @@ fn launch_listed(
             host,
             routed,
             &decision.reason,
+            argv,
+            env,
+            config.real_gh.as_deref(),
+        );
+    }
+    let _ = (routed, decision, argv, env, config, mode);
+    None
+}
+
+/// Plain gh for a forge the user's own gh is logged in to (server mode, spec §2), when the call
+/// didn't launch: the built-in path would answer with the shim's own token, or refuse a form
+/// plain gh serves there, such as ChatGPT's `gh api graphql --hostname <forge>`. Only on the
+/// terminal path, as a launch.
+fn step_aside_logged_in(
+    routed: &Invocation,
+    decision: &RouteDecision,
+    argv: &[OsString],
+    env: &HashMap<String, String>,
+    config: &DispatcherConfig,
+    mode: &DelegateMode<'_>,
+) -> Option<i32> {
+    #[cfg(unix)]
+    if matches!(mode, DelegateMode::Inherit) {
+        let host = decision.trace_host()?;
+        return crate::launcher::start::step_aside_if_logged_in(
+            host,
+            routed,
             argv,
             env,
             config.real_gh.as_deref(),
