@@ -30,8 +30,9 @@ can't be compared. To go ahead with it, set `FJ_SHIM_ALLOW_UNKNOWN_GH=1`;
 or that fails, hangs or floods its output instead of answering, is refused even
 then.
 
-The check runs `gh --version` with no token in its environment and with gh's
-update notices and telemetry turned off.
+The check runs `gh --version` without `GH_TOKEN`, `GITHUB_TOKEN`,
+`GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`, and with gh's update
+notices and telemetry turned off.
 
 ## Homebrew
 
@@ -147,9 +148,10 @@ gfj uninstall-gui-path
 
 To roll back the binary version:
 
-1. With more than one Forgejo host, unset `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`,
-   `GITEA_TOKEN` and `FJ_TOKEN` first, and check that `gfj auth status HOST`
-   finds a stored token for each host. Releases before this one use those
+1. With more than one Forgejo host, remove `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`,
+   `GITEA_TOKEN` and `FJ_TOKEN` from your shell profile and unset them in the
+   shell you're using, check that `env` shows none of them, and check that
+   `gfj auth status HOST` finds a stored token for each host. Releases before this one use those
    variables before a host's stored token, for every host, so a token meant for
    one forge would go to another.
 2. Install an earlier Homebrew formula revision, or replace the two binaries in

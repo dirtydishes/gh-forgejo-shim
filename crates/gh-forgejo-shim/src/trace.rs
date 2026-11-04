@@ -147,11 +147,10 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
     let mut redacted = Vec::with_capacity(argv.len());
     let mut redact_next = false;
     let mut redact_header_next = false;
-    // `gh secret set NAME --body VALUE`: there the body is the secret (jko.38).
-    let secret_command = argv
-        .iter()
-        .find(|arg| !arg.starts_with('-'))
-        .is_some_and(|command| command == "secret");
+    // `gh secret set NAME --body VALUE`: there the body is the secret (jko.38). gh's own flags,
+    // such as `-R OWNER/REPO`, can come before the command, so any word `secret` counts, and when
+    // in doubt `--body` is hidden.
+    let secret_command = argv.iter().any(|arg| arg == "secret");
     let is_secret_flag = |flag: &str| {
         flag.starts_with("--") && is_sensitive_key(flag) && !VALUELESS_FLAGS.contains(&flag)
             || (secret_command && matches!(flag, "--body" | "-b"))
@@ -776,6 +775,17 @@ mod tests {
                 "-----BEGIN OPENSSH PRIVATE KEY-----\naudit-secret\n",
             ],
             &["secret", "set", "K", "-b", "-audit-secret"],
+            // A repository before the command (Sol s1#2 on #210).
+            &[
+                "-R",
+                "github.com/o/r",
+                "secret",
+                "set",
+                "NAME",
+                "--body",
+                "audit-secret",
+            ],
+            &["--repo", "o/r", "secret", "set", "NAME", "-baudit-secret"],
             &["api", "x", "--client-secret", "-audit-secret"],
             &["api", "x", "--token", "-audit-secret"],
             &[
