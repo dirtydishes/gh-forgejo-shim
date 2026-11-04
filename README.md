@@ -158,7 +158,8 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://forge.example.c
 **Log in.** gh's browser login doesn't work with Forgejo. Create a token in Forgejo under **Settings →
 Applications** with `read:user`, `write:repository`, `write:issue` and `read:organization`, then run
 `gh auth login --hostname forge.example.com` and paste it. Claude and ChatGPT desktop take their token
-from `gh`.
+from `gh`. For full ChatGPT and Claude PR views (comments, labels), give the token `read:issue`;
+without it the gateway shows PRs and hides what Forgejo won't let the token read.
 
 ### Upgrade and roll back
 

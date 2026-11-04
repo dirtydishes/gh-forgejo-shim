@@ -1,0 +1,11 @@
+{
+  "owner": "dirtydishes",
+  "repo": "gfj-oracle",
+  "number": 1,
+  "login": "dirtydishes",
+  "includeSummary": true,
+  "includeComments": true,
+  "includeReviews": true,
+  "includeThreads": true,
+  "includeCommits": true
+}

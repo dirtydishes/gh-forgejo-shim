@@ -1,0 +1,9 @@
+query($owner:String!,$repo:String!,$number:Int!,$login:String!,$commentsAfter:String,$reviewsAfter:String,$threadsAfter:String,$commitsBefore:String,$includeComments:Boolean!,$includeReviews:Boolean!,$includeThreads:Boolean!,$includeCommits:Boolean!,$includeSummary:Boolean!){viewer{login} repository(owner:$owner,name:$repo){pullRequest(number:$number){
+createdAt @include(if:$includeSummary) author @include(if:$includeSummary){login} number url headRefOid baseRefOid
+mergedAt @include(if:$includeSummary) mergedBy @include(if:$includeSummary){login}
+pendingReviews:reviews(first:1,author:$login,states:PENDING)@include(if:$includeSummary){nodes{id body state author{login} commit{oid} comments{totalCount}}}
+commits(last:100,before:$commitsBefore)@include(if:$includeCommits){nodes{commit{oid committedDate messageHeadline url authors(first:1){nodes{name user{login}}}}} pageInfo{hasPreviousPage startCursor}}
+comments(first:100,after:$commentsAfter)@include(if:$includeComments){nodes{author{__typename login avatarUrl(size:48)} body bodyHTML createdAt id url isMinimized viewerCanDelete viewerCanUpdate} pageInfo{hasNextPage endCursor}}
+reviews(first:100,after:$reviewsAfter)@include(if:$includeReviews){nodes{author{__typename login avatarUrl(size:48)} body createdAt state submittedAt id url isMinimized viewerCanUpdate} pageInfo{hasNextPage endCursor}}
+reviewThreads(first:100,after:$threadsAfter)@include(if:$includeThreads){nodes{id comments(first:100){nodes{author{__typename login avatarUrl(size:48)} body bodyHTML createdAt diffHunk id state pullRequestReview{id} url viewerCanDelete viewerCanUpdate} pageInfo{hasNextPage}} diffSide isResolved line originalLine originalStartLine path startDiffSide startLine viewerCanResolve viewerCanUnresolve} pageInfo{hasNextPage endCursor}}
+}}}

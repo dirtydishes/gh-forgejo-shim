@@ -1,5 +1,5 @@
 //! Fields ChatGPT 22943's documents read beyond gh's own (plan review F7, G4).
-use axum::{Json, Router, routing::get};
+use axum::{Json, Router, response::IntoResponse, routing::get};
 use fga_core::forgejo::Forgejo;
 use serde_json::{Value, json};
 
@@ -460,4 +460,239 @@ async fn an_archived_repository_offers_no_writes() {
     collect(&pull, &mut flags);
     assert!(flags.len() > 8, "{flags:?}");
     assert!(flags.iter().all(|(_, v)| v == false), "{flags:?}");
+}
+
+/// Forgejo's answers to a token with repository and user scope only, as Forgejo 15 gives them:
+/// every `/issues/…` route, `/labels` and `/milestones` need `read:issue`, and `/orgs/…` needs
+/// `read:organization` (403 even for a user, where a full token gets 404).
+fn without_issue_scope(forge: Router, status: axum::http::StatusCode) -> Router {
+    forge.layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+            let path = request.uri().path().to_owned();
+            let scope = if path.starts_with("/api/v1/orgs/") {
+                Some("read:organization")
+            } else if path.contains("/issues") || path.ends_with("/labels") || path.ends_with("/milestones") {
+                Some("read:issue")
+            } else {
+                None
+            };
+            match scope {
+                Some(scope) if status == axum::http::StatusCode::FORBIDDEN => (
+                    status,
+                    Json(json!({"message":format!("token does not have at least one of required scope(s): [{scope}]"),
+                        "url":"https://forge.test/api/swagger"})),
+                )
+                    .into_response(),
+                Some(_) if path.contains("/issues") => status.into_response(),
+                _ => next.run(request).await,
+            }
+        },
+    ))
+}
+
+async fn run(app: Router, document: &str) -> async_graphql::Response {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = Forgejo::new(base.parse().unwrap())
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    let response = fga_core::graphql::schema()
+        .execute(
+            async_graphql::Request::new(document)
+                .data(session)
+                .data("https://forge.test".parse::<url::Url>().unwrap()),
+        )
+        .await;
+    server.abort();
+    response
+}
+
+/// The fields of ChatGPT's PR documents that Forgejo serves only under `read:issue` or
+/// `read:organization`.
+const SCOPED: &str = r#"{repository(owner:"e2e",name:"oracle"){owner{__typename login}
+    pullRequest(number:1){number viewerCanEnableAutoMerge viewerCanDisableAutoMerge
+    autoMergeRequest{enabledAt} comments(first:10){totalCount nodes{body}} reviews(first:10){totalCount}}}}"#;
+
+/// A token without issue or organization scope still reads the PR. GitHub answers a reader who
+/// can't act `false` and `null` rather than an error, so the gateway does too where Forgejo won't
+/// let the token look: no schedule it can see, so none to offer or cancel; no conversation; and
+/// the owner read as a user. A server fault on those routes stays an error.
+#[tokio::test]
+async fn a_token_without_issue_scope_still_reads_the_pr() {
+    use axum::http::StatusCode;
+    // A writer's PR with a merge the viewer scheduled, so a full token sees all of it.
+    let full = run(forge_with(true, pull("other", "open"), true), SCOPED).await;
+    assert!(full.errors.is_empty(), "{:?}", full.errors);
+    assert_eq!(
+        full.data.into_json().unwrap()["repository"],
+        json!({"owner":{"__typename":"User","login":"e2e"},"pullRequest":{"number":1,
+            "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":true,
+            "autoMergeRequest":{"enabledAt":"2026-11-01T00:00:00Z"},
+            "comments":{"totalCount":2,"nodes":[{"body":"hi"},{"body":"hi"}]},"reviews":{"totalCount":3}}})
+    );
+    let limited = run(
+        without_issue_scope(
+            forge_with(true, pull("other", "open"), true),
+            StatusCode::FORBIDDEN,
+        ),
+        SCOPED,
+    )
+    .await;
+    assert!(limited.errors.is_empty(), "{:?}", limited.errors);
+    assert_eq!(
+        limited.data.into_json().unwrap()["repository"],
+        json!({"owner":{"__typename":"User","login":"e2e"},"pullRequest":{"number":1,
+            "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":false,"autoMergeRequest":null,
+            "comments":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":3}}})
+    );
+    let broken = run(
+        without_issue_scope(
+            forge_with(true, pull("other", "open"), true),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        SCOPED,
+    )
+    .await;
+    assert!(
+        !broken.errors.is_empty(),
+        "a server fault must stay an error"
+    );
+}
+
+/// ChatGPT desktop's six PR documents, as its gh sent them (redacted from a trace: the public
+/// oracle repository, PR 1 and field names only), pointed at this file's forge.
+fn chatgpt_document(n: u32) -> (String, Value) {
+    let read = |ext: &str| {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/chatgpt/doc{n}.{ext}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+        .replace("dirtydishes", "e2e")
+        .replace("gfj-oracle", "oracle")
+    };
+    (
+        read("graphql"),
+        serde_json::from_str(&read("json")).unwrap(),
+    )
+}
+
+async fn run_with(app: Router, document: &str, variables: Value) -> async_graphql::Response {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = Forgejo::new(base.parse().unwrap())
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    let response = fga_core::graphql::schema()
+        .execute(
+            async_graphql::Request::new(document)
+                .variables(async_graphql::Variables::from_json(variables))
+                .data(session)
+                .data("https://forge.test".parse::<url::Url>().unwrap()),
+        )
+        .await;
+    server.abort();
+    response
+}
+
+/// Every one of ChatGPT's documents answers a token without issue scope, where two failed before
+/// (doc2's auto-merge fields, doc4's conversation). Those fields read as nothing to act on and no
+/// comments; every other field matches a full token's answer.
+#[tokio::test]
+async fn chatgpt_documents_answer_a_token_without_issue_scope() {
+    use axum::http::StatusCode;
+    // A writer's open PR with a merge the viewer scheduled, a comment thread, reviews and a commit.
+    let forge = || {
+        forge_with(true, pull("other", "open"), true).route(
+            "/api/v1/repos/e2e/oracle/pulls/1/commits",
+            get(|| async {
+                let author = json!({"name":"T","email":"t@example.invalid","date":"2026-11-01T00:00:00Z"});
+                Json(json!([{"sha":"abc","author":user("e2e"),"commit":{"message":"m","author":author,"committer":author}}]))
+            }),
+        )
+    };
+    let pr = |data: &Value| {
+        let repository = &data["repository"];
+        if repository.is_null() {
+            data["p0"]["pullRequest"].clone()
+        } else {
+            repository["pullRequest"].clone()
+        }
+    };
+    for n in 1..=6 {
+        let (document, variables) = chatgpt_document(n);
+        let full = run_with(forge(), &document, variables.clone()).await;
+        assert!(
+            full.errors.is_empty(),
+            "doc{n} with full scope: {:?}",
+            full.errors
+        );
+        let limited = run_with(
+            without_issue_scope(forge(), StatusCode::FORBIDDEN),
+            &document,
+            variables,
+        )
+        .await;
+        assert!(
+            limited.errors.is_empty(),
+            "doc{n} without issue scope: {:?}",
+            limited.errors
+        );
+        let (mut full, mut limited) = (
+            full.data.into_json().unwrap(),
+            limited.data.into_json().unwrap(),
+        );
+        match n {
+            2 => {
+                assert_eq!(
+                    (
+                        pr(&full)["autoMergeRequest"].is_object(),
+                        &pr(&full)["viewerCanDisableAutoMerge"]
+                    ),
+                    (true, &json!(true)),
+                    "doc2 with full scope sees the schedule"
+                );
+                let scoped = pr(&limited);
+                assert_eq!(
+                    (
+                        &scoped["autoMergeRequest"],
+                        &scoped["viewerCanEnableAutoMerge"],
+                        &scoped["viewerCanDisableAutoMerge"]
+                    ),
+                    (&Value::Null, &json!(false), &json!(false))
+                );
+            }
+            4 => {
+                assert_eq!(pr(&full)["comments"]["nodes"].as_array().unwrap().len(), 2);
+                assert_eq!(
+                    pr(&limited)["comments"],
+                    json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}})
+                );
+            }
+            _ => {}
+        }
+        for data in [&mut full, &mut limited] {
+            let pull = &mut data["repository"]["pullRequest"];
+            if let Some(fields) = pull.as_object_mut() {
+                for field in [
+                    "autoMergeRequest",
+                    "viewerCanEnableAutoMerge",
+                    "viewerCanDisableAutoMerge",
+                    "comments",
+                ] {
+                    fields.remove(field);
+                }
+            }
+        }
+        assert_eq!(
+            limited, full,
+            "doc{n}: the rest of the answer matches a full token's"
+        );
+    }
 }

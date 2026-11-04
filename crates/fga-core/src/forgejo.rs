@@ -607,11 +607,13 @@ impl Session {
         self.get(&["repos", owner, name], &[]).await
     }
 
-    /// Forgejo's repository owner is a User-shaped object even for organizations.
+    /// Forgejo's repository owner is a User-shaped object even for organizations. A token without
+    /// `read:organization` gets 403 where an organization lookup would say 404, so the owner reads
+    /// as a user then: its login and repositories stay right, and only its type can be wrong.
     pub async fn owner_type(&self, owner: &str) -> Result<&'static str, Error> {
         match self.get::<serde_json::Value>(&["orgs", owner], &[]).await {
             Ok(_) => Ok("Organization"),
-            Err(Error::NotFound) => Ok("User"),
+            Err(Error::NotFound | Error::Forbidden | Error::Unauthorized) => Ok("User"),
             Err(error) => Err(error),
         }
     }

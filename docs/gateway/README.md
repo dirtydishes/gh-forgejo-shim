@@ -78,7 +78,11 @@ refuses).
 search qualifiers return an error. A pull request search that filters only by repository, state,
 head, base, author or review request reads Forgejo's pull list alone, so it works with a token that
 has no issue scope, such as ChatGPT's `pr list --head … --author @me`. Labels, keywords, assignee
-and other orders read the issue list, which needs `read:issue`. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the
+and other orders read the issue list, which needs `read:issue`. Without that scope a pull request
+still reads: its conversation `comments` read as none, and `autoMergeRequest` as null with both
+`viewerCan*AutoMerge` false, since Forgejo shows a scheduled merge only on the PR's timeline.
+Without `read:organization`, a repository's owner reads as a user. Forgejo's other errors stay
+errors. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the
 source commit and checksum. Its contract test checks type kinds, fields, nullability, arguments,
 defaults, enums, interfaces, and unions. [The schema
 example](../../crates/fga-core/examples/schema.rs) emits the implemented SDL, and
