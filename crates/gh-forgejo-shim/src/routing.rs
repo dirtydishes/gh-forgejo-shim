@@ -11,8 +11,8 @@ use crate::external::{find_program, run_program_capture};
 use crate::invocation::Invocation;
 use crate::read_only;
 use crate::repo::{
-    command_word, detect_repo, expand_alias, gh_command_word, gh_hostname, Checkout, GhHosts,
-    RepoRef,
+    command_word, detect_repo, expand_alias, gh_command_word, gh_hostname, user_gh_config_dir,
+    Checkout, GhHosts, RepoRef,
 };
 use crate::trace;
 
@@ -264,8 +264,8 @@ fn decide_invocation_route(
     decision
 }
 
-/// Whether the call's words, `GH_HOST`, `GH_REPO` or any of the checkout's remotes name a Forgejo
-/// host. Every remote: which one gh picks depends on the command, which is what's uncertain.
+/// Whether the call's words, `GH_HOST`, `GH_REPO`, gh's own `hosts.yml` or `config.yml`, or any of
+/// the checkout's remotes name a Forgejo host. Every remote: which one gh picks depends on the command, which is what's uncertain.
 fn forgejo_in_reach(
     words: &[String],
     config: &DispatcherConfig,
@@ -291,7 +291,19 @@ fn forgejo_in_reach(
             .repo
             .is_some_and(|repo| config.forgejo_host(&repo.host).is_some())
     };
+    // gh's own config, read as text so a file its YAML reader would reject still counts:
+    // hosts.yml can make the forge gh's default host (`gh gist create` then posts there), and an
+    // alias in config.yml can name it in an expansion the shim couldn't read (Sol r6#1, r6#2).
+    let gh_config = user_gh_config_dir(env).is_some_and(|dir| {
+        ["hosts.yml", "config.yml"].iter().any(|file| {
+            std::fs::read_to_string(dir.join(file)).is_ok_and(|text| {
+                let text = text.to_ascii_lowercase();
+                hosts.iter().any(|host| text.contains(host.as_str()))
+            })
+        })
+    });
     named
+        || gh_config
         || env
             .get("GH_HOST")
             .is_some_and(|host| config.forgejo_host(host).is_some())
@@ -918,6 +930,50 @@ mod tests {
             );
             assert_eq!(decision.kind, RouteKind::Forgejo, "{args:?}");
         }
+    }
+
+    #[test]
+    fn gh_s_own_config_naming_a_forge_puts_it_in_reach() {
+        // Sol r6#1: a sole hosts.yml entry for the forge makes it gh's default host, and
+        // `gist create` posts there though GH_REPO names GitHub. Sol r6#2: a repeated alias key
+        // makes the shim's YAML reader give up, while gh runs the first `help:` alias.
+        let dir = std::env::temp_dir().join(format!("gfj-r6-{}", std::process::id()));
+        let route = |argv_words: &[&str], file: &str, text: &str| {
+            std::fs::create_dir_all(&dir).expect("dir");
+            for name in ["hosts.yml", "config.yml"] {
+                let _ = std::fs::remove_file(dir.join(name));
+            }
+            if !file.is_empty() {
+                std::fs::write(dir.join(file), text).expect("write");
+            }
+            decide_route(
+                &argv(argv_words),
+                &config(&["git.example.com"]),
+                &env(&[
+                    ("GH_REPO", "github.com/o/r"),
+                    ("GH_CONFIG_DIR", dir.to_str().expect("utf-8")),
+                ]),
+                Some(Path::new("/nonexistent-gfjs-repo")),
+            )
+            .kind
+        };
+        let gist = ["gist", "create", "-"];
+        assert_eq!(route(&gist, "", ""), RouteKind::Delegate);
+        assert_eq!(
+            route(
+                &gist,
+                "hosts.yml",
+                "git.example.com:\n    git_protocol: https\n"
+            ),
+            RouteKind::Refuse
+        );
+        let aliases = "aliases:\n    help: release create v1 --notes x -R git.example.com/o/r\n    help: pr view\n";
+        assert_eq!(route(&["help"], "config.yml", aliases), RouteKind::Refuse);
+        assert_eq!(
+            route(&["help"], "config.yml", "aliases:\n    co: pr checkout\n"),
+            RouteKind::Delegate
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]
