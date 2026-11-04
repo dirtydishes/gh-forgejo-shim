@@ -197,8 +197,13 @@ token (`gh/api/http_client.go:284-290`). A login stored only under `host:port` d
 since plain gh's API requests would never find it. When routing picks such a forge, the
 wrapper steps aside and runs plain gh as on the delegate path, for every form, the built-in path's
 included: those would otherwise answer with the shim's own token, or refuse a form plain gh serves
-there, such as ChatGPT's `gh api graphql --hostname <forge>`. That is no run directory, no gateway, and
-the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and one case. A host-less
+there, such as ChatGPT's `gh api graphql --hostname <forge>`. A form that doesn't launch steps
+aside only when nothing in the call names another host: `GH_HOST` naming one, or a word or
+`GH_REPO` naming another allowlisted forge, or holding a URL, an SSH address or a
+`HOST/OWNER/REPO` whose host isn't the forge. Routing doesn't model every argument gh takes a
+host from (`gh repo clone forge-b/o/r` in forge-a's checkout routes to forge-a), so such a call
+keeps the built-in path. That is no run directory, no gateway, and
+the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and two cases. A host-less
 `gh api` or `gh auth token` gets `GH_HOST` set to the forge's portless hostname, exactly as on the
 launch path (above), so decision 4 holds in every Forgejo checkout, server mode or not. Without
 it, plain gh would send these to its default host, github.com whenever the user is also logged in
