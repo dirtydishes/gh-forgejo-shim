@@ -273,6 +273,36 @@ fn every_remote_counts_when_the_command_is_in_doubt() -> TestResult {
 }
 
 #[test]
+fn a_github_checkout_runs_plain_gh_for_a_user_logged_in_to_both() -> TestResult {
+    // A user who ran `gh auth login` for github.com and for the forge has both in hosts.yml, so
+    // gh's default host stays github.com: in a GitHub checkout plain gh runs, as before #114.
+    let fixture = CliFixture::new()?;
+    let decoy = fixture.write_executable("gh", "#!/bin/sh\necho ran\nexit 23\n")?;
+    fixture.git(["init", "-q"])?;
+    fixture.git(["remote", "add", "origin", "https://github.com/o/r.git"])?;
+    let gh_dir = fixture.home().join(".config/gh");
+    std::fs::create_dir_all(&gh_dir)?;
+    std::fs::write(
+        gh_dir.join("hosts.yml"),
+        "github.com:\n    user: u\ngit.example.com:\n    user: u\n",
+    )?;
+    for args in [
+        &["pr", "list"][..],
+        &["pr", "view", "1"][..],
+        &["issue", "list"][..],
+    ] {
+        let output = fixture
+            .command("gh-forgejo-shim")?
+            .env("FJ_SHIM_REAL_GH", &decoy)
+            .arg("gh")
+            .args(args)
+            .output()?;
+        assert_eq!(output.status.code(), Some(23), "{args:?}: {output:?}");
+    }
+    Ok(())
+}
+
+#[test]
 fn github_delegation_keeps_every_original_argument_byte() -> TestResult {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
