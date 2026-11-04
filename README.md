@@ -428,7 +428,7 @@ They assume the forge is served at the root of its hostname; under a subpath, ad
 the pattern and the target.
 Server mode's gateway does the same, and also redirects deeper paths under a PR.
 
-`gh pr list` supports JSON output, repo selection, state, limit, head, and base filters. It currently accepts but does not apply several GitHub search-style filters, including author, app, assignee, label, and search. Real filtering for those flags is tracked as follow-up work in Beads issue `gh-forgejo-shim-9r8`.
+`gh pr list` runs the real `gh`, and the gateway applies its filters, including state, limit, head, base, author, assignee and label. `--search` takes GitHub's query syntax, and qualifiers that Forgejo has no equivalent for aren't applied.
 
 `gh pr view` and `gh pr status` return successfully when the current branch has no open PR. For JSON output, `gh pr view --json ...` returns `{}`, and `gh pr status --json ...` returns the GitHub CLI status envelope with `"currentBranch": null`.
 

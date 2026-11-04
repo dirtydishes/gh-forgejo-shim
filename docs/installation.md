@@ -145,8 +145,21 @@ gfj uninstall-shim
 gfj uninstall-gui-path
 ```
 
-To roll back the binary version, install an earlier Homebrew formula revision or
-download an older GitHub release tarball and replace the two binaries in your
-install directory. Configuration and auth live outside the binary install path.
+To roll back the binary version:
+
+1. With more than one Forgejo host, unset `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`,
+   `GITEA_TOKEN` and `FJ_TOKEN` first, and check that `gfj auth status HOST`
+   finds a stored token for each host. Releases before this one use those
+   variables before a host's stored token, for every host, so a token meant for
+   one forge would go to another.
+2. Install an earlier Homebrew formula revision, or replace the two binaries in
+   your install directory with an older release's. Configuration and auth live
+   outside the binary install path.
+3. Recreate the managed wrapper from the rolled-back binary, since the wrapper
+   names the binary by its full path, which under Homebrew includes the
+   version: `gh-forgejo-shim install-shim --force --bin-dir DIR`, where `DIR`
+   holds your managed `gh`. Check that the wrapper's `exec` line names the
+   rolled-back binary.
+
 A release before this one doesn't read `[host."NAME"]` tables in `config.toml`,
 so a host set up only through one loses those settings after a rollback.
