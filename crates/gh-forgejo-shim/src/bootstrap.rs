@@ -546,8 +546,6 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
             leave(notes)
         });
     };
-    // gh drops a remote's port; the entry keeps the one the remote's web URL names (jko.41).
-    let entry = doctor::entry_with_web_port(cwd, &candidate).unwrap_or(entry);
     let hostname = repo::gh_hostname(&candidate.host);
     let allowlisted = doctor::allowlist_entry(config, &candidate.host);
     let sharing = config
@@ -577,10 +575,11 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
                 && repo::gh_hostname(&repo.host) == hostname
         });
     if let Some(repo) = routed {
-        return Some(RepoPlan::Allowlist {
-            repo,
-            entry: allowlisted.unwrap_or(entry),
-        });
+        // gh drops a remote's port; the entry keeps the one the routed repository's remotes
+        // name (jko.41).
+        let entry =
+            allowlisted.unwrap_or_else(|| doctor::entry_with_web_port(cwd, &repo).unwrap_or(entry));
+        return Some(RepoPlan::Allowlist { repo, entry });
     }
     // An allowlisted host needs no hint: there's nothing to add.
     if allowlisted.is_none() {
