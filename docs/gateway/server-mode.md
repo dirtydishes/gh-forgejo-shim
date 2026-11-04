@@ -5,7 +5,7 @@ own hostname. The forge then answers the GitHub Enterprise API at `https://<forg
 `https://<forge>/api/graphql`. Anything that speaks to GitHub Enterprise can use it directly, with no
 wrapper on the client machine.
 
-**Use server mode if you use Claude.** Claude Code and Claude desktop look up a branch's pull request
+**Use server mode if you use Claude Code or Claude desktop.** Both look up a branch's pull request
 by calling `https://<forge>/api/v3` themselves, outside of any `gh` process. Only a gateway on
 the forge's hostname can answer them. The client-only wrapper still serves Claude's agent when it runs
 `gh` in a shell.
@@ -19,12 +19,12 @@ Build the image from this repository's root, then run it where it can reach Forg
 below assume Forgejo listens on the host at `127.0.0.1:3000` and the proxy runs on the host:
 
 ```sh
-docker build -f packaging/gateway/Dockerfile -t fga-server .
+docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .
 docker run -d --name fga-server --restart unless-stopped --network host \
     -e FGA_LISTEN=127.0.0.1:8080 \
     -e FGA_FORGEJO_URL=http://127.0.0.1:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
-    fga-server
+    fga-server:<version>
 ```
 
 If Forgejo runs in a container instead, put the gateway on Forgejo's Docker network and publish it
@@ -36,7 +36,7 @@ docker run -d --name fga-server --restart unless-stopped \
     --network <forgejo's network> -p 127.0.0.1:8080:8080 \
     -e FGA_FORGEJO_URL=http://<forgejo container>:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
-    fga-server
+    fga-server:<version>
 ```
 
 - `FGA_FORGEJO_URL` is how the gateway reaches Forgejo, usually its internal address.
@@ -103,7 +103,7 @@ docker run -d --name fga-server --restart unless-stopped \
     --network <NPM's network> \
     -e FGA_FORGEJO_URL=http://<forgejo container>:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
-    fga-server
+    fga-server:<version>
 ```
 
 Start it before the next step: nginx looks up that name when NPM saves the host, and if it can't, NPM

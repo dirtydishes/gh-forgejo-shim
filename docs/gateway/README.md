@@ -24,8 +24,8 @@ gateway listens on `127.0.0.1:8080` by default. Set `FGA_LISTEN` to change it.
 The gateway answers only requests addressed to `FGA_PUBLIC_URL`'s host and port, so the proxy must pass
 the client's `Host` through. Traefik does by default. nginx needs `proxy_set_header Host $http_host`,
 because `$host` drops the port. Caddy rewrites `Host` for an HTTPS upstream, so set it explicitly, as
-the shipped [Caddyfile](../../packaging/gateway/caddy/Caddyfile) does (`header_up Host {hostport}`). Any other host, or a request without
-one, gets `421 Misdirected Request` before its token is used. gh can send every host's requests to one
+the shipped [Caddyfile](../../packaging/gateway/caddy/Caddyfile) does (`header_up Host {hostport}`).
+Any other host, or a request without one, gets `421 Misdirected Request` before its token is used. gh can send every host's requests to one
 gateway, each with that host's token, and this check keeps a GitHub or second forge's token from
 reaching Forgejo. `X-Forwarded-Host` is ignored.
 
