@@ -114,6 +114,13 @@ impl GhHosts {
         Self::load(env, &[])
     }
 
+    /// The default host when it comes from `hosts.yml`, its only host with no `GH_HOST`, as gh
+    /// takes it (`gh/internal/config/config.go:464-469` calls go-gh v2.17.0's
+    /// `pkg/auth/auth.go:146-157` `defaultHost`).
+    pub fn configured_default(&self) -> Option<&str> {
+        (self.default_source == DefaultSource::Config).then_some(self.default.as_str())
+    }
+
     /// `forgejo_hosts` are the shim's allowlist entries. gh keeps only the hostname of a remote
     /// URL, never its port, so the entries count without theirs.
     pub fn load(env: &HashMap<String, String>, forgejo_hosts: &[String]) -> Self {
@@ -883,6 +890,36 @@ pub(crate) fn user_gh_hosts(env: &HashMap<String, String>) -> Vec<String> {
         push_unique(&mut result, host.to_string());
     }
     result
+}
+
+/// Whether the user's gh `hosts.yml` exists but can't be read as a map of hosts.
+pub(crate) fn user_gh_hosts_unreadable(env: &HashMap<String, String>) -> bool {
+    let Some(path) = user_gh_config_dir(env).map(|dir| dir.join("hosts.yml")) else {
+        return false;
+    };
+    path.exists()
+        && !fs::read_to_string(&path).is_ok_and(|text| {
+            matches!(
+                serde_yaml::from_str(&text),
+                Ok(serde_yaml::Value::Mapping(_) | serde_yaml::Value::Null)
+            )
+        })
+}
+
+/// Whether the user's gh `config.yml` exists but its aliases can't be read: YAML the reader
+/// rejects (a repeated key among them), or `aliases` that aren't a map. gh may still run them.
+pub(crate) fn user_gh_aliases_unreadable(env: &HashMap<String, String>) -> bool {
+    let Some(path) = user_gh_config_dir(env).map(|dir| dir.join("config.yml")) else {
+        return false;
+    };
+    path.exists()
+        && !fs::read_to_string(&path).is_ok_and(|text| {
+            serde_yaml::from_str::<serde_yaml::Value>(&text).is_ok_and(|config| {
+                config
+                    .get("aliases")
+                    .is_none_or(|aliases| aliases.is_mapping() || aliases.is_null())
+            })
+        })
 }
 
 /// Plain (not `!` shell) aliases in the user's gh `config.yml`: name to expansion.
