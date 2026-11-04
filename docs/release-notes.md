@@ -139,9 +139,20 @@ and of this one, with gh 2.103.3:
 
 ## Rolling back
 
-Install the previous release's binaries in place of these; config and tokens live outside the
-install path. A host configured only through a `[host."NAME"]` table loses its settings under the
-previous release, which doesn't read those tables. To return to plain gh altogether, run
+1. **Clear the generic token variables first** if you have more than one Forgejo host. The
+   previous release uses `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`, `GITEA_TOKEN` and `FJ_TOKEN` before a
+   host's stored token, for every host, so a token meant for one forge would go to another. Unset
+   them in your shell profile, and check that `gfj auth status HOST` finds a stored token for each
+   host.
+2. Install the previous release's binaries in place of these: an earlier Homebrew formula, or
+   the previous release archive. Config and tokens live outside the install path.
+3. Recreate the managed wrapper from the rolled-back binary, because the wrapper names the
+   binary by its full path, which under Homebrew includes the version:
+   `gh-forgejo-shim install-shim --force --bin-dir DIR`, where `DIR` holds your managed `gh`.
+   Check that the wrapper's `exec` line names the rolled-back binary.
+
+A host configured only through a `[host."NAME"]` table loses its settings under the previous
+release, which doesn't read those tables. To return to plain gh altogether, run
 `gfj uninstall-shim`: it removes only the shim's own wrapper and never touches gh's own config.
 
 ## Known limits

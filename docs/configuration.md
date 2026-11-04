@@ -93,8 +93,8 @@ wrapped, or used for GitHub CLI routing.
 ## Private CA Certificates
 
 `FJ_SHIM_CA_FILE` points to a PEM-encoded CA certificate or bundle to trust for
-Forgejo API HTTPS connections, including token validation during `auth login`
-and `auth import`. It adds to the bundled public roots; certificate and hostname
+Forgejo API HTTPS connections, including token validation during `auth login`.
+It adds to the bundled public roots; certificate and hostname
 verification remain enabled. A missing or invalid file causes an error.
 
 ```sh
