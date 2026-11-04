@@ -425,3 +425,70 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         })
     );
 }
+
+/// ChatGPT desktop finds a branch's PR with `gh pr list --head <branch> --author @me --state all
+/// --json number,url,state,headRefName`, which gh 2.103.3 sends as a search: its query text is the
+/// oracle capture's, and the variables are those gh sent the gateway. A token without issue scope
+/// can't read Forgejo's issue list, which such a PR-only query doesn't need: it is answered from
+/// the pull list alone, newest first, as search orders by default.
+#[tokio::test]
+async fn a_pr_only_search_needs_no_issue_scope() {
+    let captured: Value = serde_json::from_str(include_str!(
+        "../../../fixtures/oracle/list-me-head.requests.json"
+    ))
+    .unwrap();
+    let query = captured[0]["query"].as_str().unwrap();
+    assert!(query.contains("query PullRequestSearch"), "{query}");
+    let variables =
+        json!({"limit":30,"q":"author:@me head:topic repo:o/r type:pr","type":"ISSUE_ADVANCED"});
+    let mine = |number: i32, head: &str, merged: bool| {
+        let mut pr = pull(number, merged);
+        pr["head"]["ref"] = json!(head);
+        pr["head"]["label"] = json!(head);
+        pr["html_url"] = json!(format!("https://forge.test/o/r/pulls/{number}"));
+        if !merged {
+            pr["state"] = json!("open");
+        }
+        pr
+    };
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/o/r/issues",
+            get(|| async {
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    Json(json!({"message":"token does not have at least one of required scope(s): [read:issue]"})),
+                )
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls",
+            get(move |Query(q): Query<HashMap<String, String>>| async move {
+                assert_eq!((q["state"].as_str(), q["poster"].as_str()), ("all", "viewer"));
+                let listed = if q.get("page").is_none_or(|p| p == "1") {
+                    json!([mine(9, "topic", false), mine(8, "other", false), mine(7, "topic", true)])
+                } else {
+                    json!([])
+                };
+                Json(listed)
+            }),
+        );
+    let (session, task) = session(upstream).await;
+    let response = graphql::schema()
+        .execute(
+            Request::new(query)
+                .variables(async_graphql::Variables::from_json(variables))
+                .data(session),
+        )
+        .await;
+    task.abort();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["search"],
+        json!({"issueCount":2,"nodes":[
+            {"number":9,"url":"https://forge.test/o/r/pull/9","state":"OPEN","headRefName":"topic"},
+            {"number":7,"url":"https://forge.test/o/r/pull/7","state":"MERGED","headRefName":"topic"}],
+            "pageInfo":{"hasNextPage":false,"endCursor":"ZmdhOmN1cnNvcjox"}})
+    );
+}
