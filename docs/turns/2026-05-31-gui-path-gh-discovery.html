@@ -72,7 +72,7 @@
     </div>
   </section>
 
-  <section><h2>Context</h2><p>Codex.app's main GUI process was observed with <code>PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</code>, while the shell and app-server process could see <code>~/.local/bin</code> and <code>/opt/homebrew/bin</code>. That explains why the Create Pull Request button could report the GitHub CLI as missing even though <code>/Users/kell/.local/bin/gh</code> and <code>/opt/homebrew/bin/gh</code> both existed.</p><p>The package fix covers both parts of that split: when the shim is invoked, it can now find real tools without a rich PATH; when a GUI app cannot find the shim, users can install a persistent launchd PATH with one package command.</p></section>
+  <section><h2>Context</h2><p>Codex.app's main GUI process was observed with <code>PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</code>, while the shell and app-server process could see <code>~/.local/bin</code> and <code>/opt/homebrew/bin</code>. That explains why the Create Pull Request button could report the GitHub CLI as missing even though <code>~/.local/bin/gh</code> and <code>/opt/homebrew/bin/gh</code> both existed.</p><p>The package fix covers both parts of that split: when the shim is invoked, it can now find real tools without a rich PATH; when a GUI app cannot find the shim, users can install a persistent launchd PATH with one package command.</p></section>
 
   <section>
     <h2>Important Implementation Details</h2>
