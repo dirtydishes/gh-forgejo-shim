@@ -150,10 +150,10 @@ github.com/o/r` creates the release where the checkout points), and `gh gist cre
 runs plain gh only when no Forgejo host is in reach: none in its words, `GH_HOST`, `GH_REPO`,
 any of the checkout's remotes, whichever one the command would pick, or gh's default host when it
 comes from the user's `hosts.yml` (the only host there, with `GH_HOST` unset: go-gh's
-`defaultHost`), or a `hosts.yml` the shim can't read. If the user's `config.yml` has aliases the
-shim can't read (a repeated name, or YAML it rejects), any command word that could be an alias,
-`help` included, is refused with a pointer to `config.yml`, near a forge or not. Otherwise the wrapper refuses
-it with exit 1 and says to run it where no Forgejo host is in reach. The cost is every
+`defaultHost`), or a `hosts.yml` the shim can't read. Otherwise the wrapper refuses it with exit
+1 and says to run it where no Forgejo host is in reach. Separately, if the user's `config.yml` has
+aliases the shim can't read (a repeated name, or YAML it rejects), any command word that could be
+an alias, `help` included, is refused with a pointer to `config.yml`, near a forge or not. The cost is every
 non-Forgejo call made from near a forge: `gh pr view 1 -R github.com/o/r` with a Forgejo
 `GH_HOST`, `gh variable list` in a checkout with both a Forgejo and a GitHub remote, `gh api
 https://api.github.com/…` in a Forgejo checkout. Grammar coverage doesn't change this. gh's root
