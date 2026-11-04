@@ -15,12 +15,12 @@ pub const TRACE_ENV: &str = "FJ_SHIM_TRACE";
 
 const FALSE_VALUES: &[&str] = &["", "0", "false", "no", "off"];
 const REDACTED: &str = "<redacted>";
-const SENSITIVE_FLAGS: &[&str] = &["--authorization", "--password", "--secret", "--token"];
 /// Shared with the git recorder, so either trace redacts what the other does. Matched anywhere in
 /// a key.
 const SENSITIVE_KEY_PARTS: &[&str] = &[
     "api-key",
     "api_key",
+    "apikey",
     "credential",
     "passphrase",
     "passwd",
@@ -143,12 +143,24 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
     let mut redacted = Vec::with_capacity(argv.len());
     let mut redact_next = false;
     let mut redact_header_next = false;
+    // `gh secret set NAME --body VALUE`: there the body is the secret (jko.38).
+    let secret_command = argv
+        .iter()
+        .find(|arg| !arg.starts_with('-'))
+        .is_some_and(|command| command == "secret");
+    let is_secret_flag = |flag: &str| {
+        flag.starts_with("--") && is_sensitive_key(flag)
+            || (secret_command && matches!(flag, "--body" | "-b"))
+    };
 
     for arg in argv {
         if redact_next {
-            redacted.push(REDACTED.to_string());
             redact_next = false;
-            continue;
+            // A flag that takes no value, such as `--with-token`, leaves the next flag alone.
+            if !arg.starts_with('-') {
+                redacted.push(REDACTED.to_string());
+                continue;
+            }
         }
         if redact_header_next {
             redacted.push(redact_text(arg));
@@ -156,14 +168,15 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
             continue;
         }
 
-        if SENSITIVE_FLAGS.contains(&arg.as_str()) {
+        // A flag on its own, with its value in the next argument; `--flag=value` is below.
+        if !arg.contains('=') && is_secret_flag(arg) {
             redacted.push(arg.clone());
             redact_next = true;
             continue;
         }
 
         if let Some((flag, value)) = arg.split_once('=') {
-            if SENSITIVE_FLAGS.contains(&flag) {
+            if is_secret_flag(flag) {
                 redacted.push(format!("{flag}={REDACTED}"));
                 continue;
             }
@@ -171,6 +184,11 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
                 redacted.push(format!("{flag}={}", redact_text(value)));
                 continue;
             }
+        }
+        // `-bVALUE`, the short flag with its value attached.
+        if secret_command && arg.len() > 2 && arg.starts_with("-b") && !arg.starts_with("--") {
+            redacted.push(format!("-b{REDACTED}"));
+            continue;
         }
 
         if matches!(arg.as_str(), "-H" | "--header") {
@@ -480,8 +498,10 @@ fn camel_words(part: &str) -> Vec<&str> {
     words
 }
 
+/// Brackets count, for gh's nested fields (`gh api -f 'config[secret]=…'`) and array query
+/// parameters (`tokens[]=…`).
 fn is_key_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-' | '[' | ']')
 }
 
 /// Skips whitespace other than line breaks (a no-break space too): a key with nothing after it
@@ -718,6 +738,64 @@ mod tests {
                 REDACTED,
                 "--header=Authorization: token <redacted>"
             ]
+        );
+    }
+
+    fn args(text: &[&str]) -> Vec<String> {
+        text.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    #[test]
+    fn gh_secret_bodies_and_secret_flags_are_hidden() {
+        // jko.38 (#136): ordinary gh commands whose argv carries a secret.
+        for argv in [
+            &["secret", "set", "NAME", "--body", "audit-secret"][..],
+            &["secret", "set", "NAME", "--body=audit-secret"],
+            &["secret", "set", "NAME", "-b", "audit-secret"],
+            &["secret", "set", "NAME", "-baudit-secret"],
+            &["api", "applications", "--client-secret", "audit-secret"],
+            &["api", "x", "--access-token=audit-secret"],
+            &[
+                "api",
+                "repos/o/r/hooks",
+                "-f",
+                "config[secret]=audit-secret",
+            ],
+            &["api", "x", "-f", "apikey=audit-secret"],
+            &["api", "/search?q=x&tokens[]=audit-secret"],
+        ] {
+            let redacted = redact_argv(&args(argv)).join(" ");
+            assert!(!redacted.contains("audit-secret"), "{argv:?} -> {redacted}");
+        }
+    }
+
+    #[test]
+    fn ordinary_flags_keep_their_values() {
+        // `--body` is a secret only for `gh secret`; a value-less flag leaves the next flag alone.
+        assert_eq!(
+            redact_argv(&args(&[
+                "pr",
+                "create",
+                "--body",
+                "release notes",
+                "-b",
+                "x"
+            ])),
+            args(&["pr", "create", "--body", "release notes", "-b", "x"])
+        );
+        assert_eq!(
+            redact_argv(&args(&[
+                "auth",
+                "login",
+                "--with-token",
+                "--hostname",
+                "h.example"
+            ])),
+            args(&["auth", "login", "--with-token", "--hostname", "h.example"])
+        );
+        assert_eq!(
+            redact_argv(&args(&["secret", "list", "--repo", "o/r"])),
+            args(&["secret", "list", "--repo", "o/r"])
         );
     }
 
@@ -964,6 +1042,14 @@ mod tests {
                 "audit-tail",
             ),
             (r#"password="a",audit-tail"#, "audit-tail"),
+            // `apikey`, and keys with brackets (jko.38, Opus o7#3 on #94).
+            ("apikey=audit-secret", "audit-secret"),
+            ("config[secret]=audit-secret", "audit-secret"),
+            (
+                "https://host.example/x?tokens[]=audit-secret",
+                "audit-secret",
+            ),
+            (r#"{"config[secret]": "audit-secret"}"#, "audit-secret"),
             // A URL right after another one's host (Opus o7#1), and compact JSON of two URLs.
             (
                 "-c http.https://example.com.proxy=http://alice:audit-pw@proxy:3128",
