@@ -1,24 +1,51 @@
-# Release notes: the rewrite
+# gh-forgejo-shim v0.2.0
 
-This release replaces most of the shim's own Forgejo code with real gh. It adds a second install
-path, server mode, for tools that call the GitHub API without gh. Existing config and stored
-tokens carry over.
+## What's new: a rewrite around real gh
 
-## Before you upgrade: gh 2.103.3 or newer
+Until now the shim imitated gh by hand. It reimplemented each `gh pr` and `gh issue` command
+against Forgejo's API and printed output shaped like gh's. Every flag and every field had to be
+copied, and anything not copied was missing.
 
-The `gh` wrapper now hands most Forgejo work to the real GitHub CLI, so it needs gh 2.103.3 or
-newer. `gfj bootstrap` and `gfj install-shim` check the gh they find, by running `gh --version`,
-and stop without changing anything when it is missing, older, or a pre-release of 2.103.3.
-`gfj doctor` reports the same check.
+This release runs the real GitHub CLI instead, and translates GitHub's API into Forgejo's. gh sends
+the same REST and GraphQL requests it sends to github.com; a gateway answers them from Forgejo. So
+gh's own flags, output, JSON fields, prompts and exit codes come with it, because they are gh's.
+
+The gateway runs in one of two places:
+
+```text
+client-only (the gh wrapper)              server mode (the gateway on the forge)
+
+  your tool                                 your tool
+     | gh pr view                              | gh pr view
+  gh wrapper                                real gh, logged in to the forge
+     | starts, for this call only              | HTTPS
+  real gh --private socket--> gateway       forge.example.com /api/v3, /api/graphql
+                                 |              |
+                             Forgejo API     gateway --> Forgejo API
+```
+
+- **Client-only.** The `gh` wrapper on your machine starts the gateway inside its own process, on a
+  private socket, points the real gh at it, and exits with gh's status. Nothing keeps running
+  afterwards, and nothing changes on the forge.
+- **Server mode.** The gateway, `fga-server`, runs beside Forgejo and answers on the forge's own
+  hostname. Any gh logged in to the forge works with no wrapper, and so do tools that call the
+  GitHub API without gh.
+
+## What you need: gh 2.103.3 or newer
+
+The wrapper runs the real gh, so it needs gh 2.103.3 or newer. `gfj bootstrap` and
+`gfj install-shim` check the gh they find, by running `gh --version`, and stop without changing
+anything when it is missing, older, or a pre-release of 2.103.3. `gfj doctor` reports the same
+check.
 
 Many distributions ship an older gh. Ubuntu's own package, for one, was 2.103.2 when this release
 was made. To get a current gh:
 
 - **Ubuntu and Debian:** add GitHub's own apt repository (`cli.github.com/packages`), as
-  [gh's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
-  shows, then `sudo apt install gh`.
-- **macOS and Linux with Homebrew:** `brew install gh`, or `brew upgrade gh`. The Homebrew formula
-  for this shim depends on gh, so `brew install dirtydishes/tap/gh-forgejo-shim` installs it too.
+  [gh's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) shows,
+  then `sudo apt install gh`.
+- **macOS and Linux with Homebrew:** `brew install gh`, or `brew upgrade gh`. The formula for this
+  shim depends on gh, so `brew install dirtydishes/tap/gh-forgejo-shim` installs it too.
 - **Anywhere else:** a release archive from
   [gh's releases page](https://github.com/cli/cli/releases).
 
@@ -26,22 +53,43 @@ Check with `gh --version`. A gh you built yourself may report `DEV` or a `git de
 that can't be compared. To go ahead with it, set `FJ_SHIM_ALLOW_UNKNOWN_GH=1`; `doctor` then
 shows a warning. A gh that reports an older version is refused even then.
 
-## Client-only: what changed
+## What runs real gh now
 
-**Forgejo commands run real gh.** In an allowlisted Forgejo checkout, the commands that coding
-tools use run the real gh. The wrapper starts a gateway inside its own process, on a private
-socket, and points gh at it. Nothing runs in the background afterwards. Those commands are:
+In an allowlisted Forgejo checkout, these commands run the real gh through the gateway, with the
+flags listed. `-R`/`--repo` works with all of them.
 
-- `gh pr view`, `checks`, `list`, `create`, `comment`, `edit`, `merge`, `ready`, `close`, `reopen`
-  and `checkout`;
-- `gh issue list`, `view`, `create` and `comment`;
-- `gh run list` and `view`;
-- `gh api`, `gh auth token` and `gh auth status`.
+| Command | Flags |
+|---|---|
+| `gh pr view`, `pr checks`, `pr list` | all |
+| `gh pr create` | `--head`, `--base`, `--title`, `--body`, `--draft` |
+| `gh pr comment`, `pr edit` | `--body`; `pr edit` also `--title` |
+| `gh pr merge` | `--merge`, `--squash`, `--rebase`, `--auto`, `--match-head-commit`, `--delete-branch` |
+| `gh pr ready` | `--undo` |
+| `gh pr close` | `--delete-branch` |
+| `gh pr reopen` | none |
+| `gh pr checkout` | `--branch`, `--detach`, `--force` |
+| `gh issue list` | `--state`, `--limit`, `--json`, `--jq`, `--author`, `--assignee`, `--label`, and `--mention` without `--label` |
+| `gh issue view` | `--json`, `--jq` |
+| `gh issue create` | `--title`, with `--body` or `--body-file` |
+| `gh issue comment` | `--body`, `--body-file` |
+| `gh run list` | `--json`, `--jq`, `--limit`, `--status`, `--branch`, `--event`, `--commit`, `--all` |
+| `gh run view` | a run ID, with `--json`, `--jq` |
+| `gh api` | `graphql` in the shape ChatGPT desktop sends (one read-only `query`), and `rate_limit` |
+| `gh auth token`, `gh auth status` | all |
 
-Each runs real gh only with the flags the gateway serves. With any other flag, and for every
-other Forgejo command (`pr status`, `pr diff`, `repo view` and others), the shim's built-in
-code answers, as before. GitHub repositories, and commands such as `gh --version`, `gh config`
-and `gh auth login`, go to real gh unchanged.
+A few forms stay on the shim's own code even within those commands: `gh pr merge --auto` with
+`--delete-branch`, `issue list --search`, a `--json` naming `jobs`, `attempt`, `blockedBy`,
+`blocking` or `reactionGroups`, and `run view`'s text form. Every other Forgejo command (`pr status`,
+`pr diff`, `repo view` and others) is also answered by the shim's own code, as before. GitHub
+repositories, and commands such as `gh --version`, `gh config` and `gh auth login`, go to real gh
+unchanged.
+
+**Stepping aside to a logged-in gh.** When your gh is itself logged in to the forge, as it is in
+server mode, the wrapper steps aside and runs plain gh, which talks to the forge's own gateway. It
+removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` first, so
+none of them reaches the forge, and a call naming another host never steps aside.
+
+## Other changes
 
 **Tokens.** For each host the shim reads, in order:
 
@@ -55,29 +103,73 @@ them, run `gfj auth import --from fj` or `--from tea` once. Without a token for 
 command exits 4 and says to run `gfj auth login HOST`.
 
 **Configuration.** A `[host."NAME"]` table in `config.toml` sets `api_url`, `token_env`, `ca_file`
-and `wip_prefixes` for one host. `gfj config add-host` refuses a GitHub host, and `bootstrap`
-allowlists a remote's web port with its host (`git.example.com:3000`).
+and `wip_prefixes` for one host. `gfj config add-host` refuses a GitHub host. `bootstrap`
+allowlists a remote's web port with its host (`git.example.com:3000`) when every web URL in the
+checkout for that host names the same one.
 
-**Pull request links** use GitHub's `/{owner}/{repo}/pull/{n}` layout, and `--web` and
-`gh browse` open Forgejo's `/pulls/{n}` page. The README has a redirect for the forge's reverse
-proxy, so that tools opening the `/pull/` link reach the page.
+**Pull request links** use GitHub's `/{owner}/{repo}/pull/{n}` layout, and `--web` and `gh browse`
+open Forgejo's `/pulls/{n}` page. The README has a redirect for the forge's reverse proxy, so that
+tools opening the `/pull/` link reach the page.
 
-**Traces.** Trace files are created owner-only (0600). Redaction errs toward hiding: some harmless
-values show as `<redacted>`, so that a secret never shows. `gfj trace smoke` redacts the stderr it
-reports.
+**Commands:**
 
-**Other changes:**
-
-- `gfj auth import` takes `--from fj|tea [--hostname HOST]`, and Gitea is no longer a source.
+- `gfj auth import` takes `--from fj|tea [--hostname HOST]`; Gitea is no longer a source.
 - `gfj uninstall-shim` also removes managed wrappers in `PATH` directories under `$HOME`.
 - A `gh` that leads back to the shim stops with exit 127 and names `FJ_SHIM_REAL_GH`.
+- Trace files are created owner-only (0600), and redaction errs toward hiding: some harmless
+  values show as `<redacted>` so that a secret never shows.
+
+## Upgrading
+
+The binary names, the config file (`~/.config/gh-forgejo-shim/config.toml`) and stored tokens
+(Keychain, or `~/.config/gh-forgejo-shim/auth.json`) stay where they were, and the managed `gh`
+wrapper keeps working.
+
+1. Make sure `gh --version` reports 2.103.3 or newer (above).
+2. Upgrade the shim: `brew upgrade gh-forgejo-shim`, or unpack the new release archive in place of
+   the old binaries.
+3. From inside your Forgejo checkout, run `gfj bootstrap`, then `gfj doctor`.
+4. If you relied on a token in an `fj`, `tea` or `gitea` config file, or on a generic token
+   variable with more than one host configured, run `gfj auth login HOST`, or
+   `gfj auth import --from fj|tea` once.
+
+**Tested.** Before this release, the upgrade and the rollback were rehearsed on macOS in a
+scratch home directory, against a local Forgejo 15, using a build of the previous version (0.1.2)
+and of this one, with gh 2.103.3:
+
+- The previous build installed the wrapper, listed the host and found its stored token.
+- Copying this release's binaries over it left `config.toml` and the token file byte for byte
+  unchanged. The wrapper kept working, `gfj bootstrap` kept the token, and `gfj doctor` passed
+  the gh version check.
+- `gh pr list`, `gh pr view`, `gh issue list` and `gh api user` then worked through the wrapper.
+  That Forgejo served plain HTTP, so it needed a `[host]` table with an `api_url`.
+- Putting the previous binaries back left the token file unchanged. The previous build still
+  listed the host and found the token, ignoring the `[host]` table, and the wrapper kept working.
+
+## Rolling back
+
+1. **Clear the generic token variables first** if you have more than one Forgejo host. The
+   previous version uses `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`, `GITEA_TOKEN` and `FJ_TOKEN` before a
+   host's stored token, for every host, so a token meant for one forge would go to another. Unset
+   them in your shell profile, and check that `gfj auth status HOST` finds a stored token for each
+   host.
+2. Install the previous version's binaries in place of these: an earlier Homebrew formula, or the
+   previous archive. Config and tokens live outside the install path.
+3. Recreate the managed wrapper from the rolled-back binary, because the wrapper names the
+   binary by its full path, which under Homebrew includes the version:
+   `gh-forgejo-shim install-shim --force --bin-dir DIR`, where `DIR` holds your managed `gh`.
+   Check that the wrapper's `exec` line names the rolled-back binary.
+
+A host configured only through a `[host."NAME"]` table loses its settings under the previous
+version, which doesn't read those tables. To return to plain gh altogether, run
+`gfj uninstall-shim`: it removes only the shim's own wrapper and never touches gh's own config.
 
 ## Server mode: the gateway on your forge
 
-This release adds a second install path. Server mode runs the gateway, `fga-server`, next to
-Forgejo and mounts the GitHub Enterprise API on the forge's own hostname. The forge then answers
-`https://forge.example.com/api/v3` and `/api/graphql`, and clients need no wrapper: a plain
-`gh auth login --hostname forge.example.com` with a Forgejo token is enough.
+Server mode runs the gateway, `fga-server`, next to Forgejo and mounts the GitHub Enterprise API on
+the forge's own hostname. The forge then answers `https://forge.example.com/api/v3` and
+`/api/graphql`, and clients need no wrapper: a plain `gh auth login --hostname forge.example.com`
+with a Forgejo token is enough.
 
 **Who needs it.** Use server mode if you use Claude Code or Claude desktop. Their pull request
 status calls the forge's GitHub API itself, outside any `gh` process, so only a gateway on the
@@ -105,55 +197,6 @@ snippet, which also works in Nginx Proxy Manager, and a Caddy site block. See th
 **Upgrading and rolling back.** The gateway keeps no state. Tag each image with its release and
 keep the previous image and compose file: an upgrade switches to the new tag, and a rollback
 switches back.
-
-**Security.** The gateway forwards each client's own Forgejo token and stores none. It answers
-only the forge's own host and port, and refuses any other host with `421` before a token is used,
-so a GitHub or second forge's token never reaches Forgejo. Every API route needs a token.
-
-## Upgrading the client
-
-The binary names, the config file (`~/.config/gh-forgejo-shim/config.toml`) and stored tokens
-(Keychain, or `~/.config/gh-forgejo-shim/auth.json`) stay where they were, and the managed `gh`
-wrapper keeps working.
-
-1. Make sure `gh --version` reports 2.103.3 or newer (above).
-2. Upgrade the shim: `brew upgrade gh-forgejo-shim`, or unpack the new release archive in place of
-   the old binaries.
-3. From inside your Forgejo checkout, run `gfj bootstrap`, then `gfj doctor`.
-4. If you relied on a token in an `fj`, `tea` or `gitea` config file, or on a generic token
-   variable with more than one host configured, run `gfj auth login HOST`, or
-   `gfj auth import --from fj|tea` once.
-
-**Tested.** Before this release, the upgrade and the rollback were rehearsed on macOS in a
-scratch home directory, against a local Forgejo 15, using a build of the previous release (0.1.2)
-and of this one, with gh 2.103.3:
-
-- The previous build installed the wrapper, listed the host and found its stored token.
-- Copying this release's binaries over it left `config.toml` and the token file byte for byte
-  unchanged. The wrapper kept working, `gfj bootstrap` kept the token, and `gfj doctor` passed
-  the gh version check.
-- `gh pr list`, `gh pr view`, `gh issue list` and `gh api user` then worked through the wrapper.
-  That Forgejo served plain HTTP, so it needed a `[host]` table with an `api_url`.
-- Putting the previous binaries back left the token file unchanged. The previous build still
-  listed the host and found the token, ignoring the `[host]` table, and the wrapper kept working.
-
-## Rolling back
-
-1. **Clear the generic token variables first** if you have more than one Forgejo host. The
-   previous release uses `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`, `GITEA_TOKEN` and `FJ_TOKEN` before a
-   host's stored token, for every host, so a token meant for one forge would go to another. Unset
-   them in your shell profile, and check that `gfj auth status HOST` finds a stored token for each
-   host.
-2. Install the previous release's binaries in place of these: an earlier Homebrew formula, or
-   the previous release archive. Config and tokens live outside the install path.
-3. Recreate the managed wrapper from the rolled-back binary, because the wrapper names the
-   binary by its full path, which under Homebrew includes the version:
-   `gh-forgejo-shim install-shim --force --bin-dir DIR`, where `DIR` holds your managed `gh`.
-   Check that the wrapper's `exec` line names the rolled-back binary.
-
-A host configured only through a `[host."NAME"]` table loses its settings under the previous
-release, which doesn't read those tables. To return to plain gh altogether, run
-`gfj uninstall-shim`: it removes only the shim's own wrapper and never touches gh's own config.
 
 ## Known limits
 
@@ -186,9 +229,27 @@ release, which doesn't read those tables. To return to plain gh altogether, run
 - One gateway serves one forge.
 
 Server mode's differences from GitHub are in `docs/gateway/MAPPING.md` and
-`docs/gateway/DESIGN.md`.
-
-## Follow-up work
-
-Known gaps that didn't block this release are tracked in the repository's issues labelled
+`docs/gateway/DESIGN.md`. Known gaps that didn't block this release are the repository's issues
+labelled
 [`post-release`](https://github.com/dirtydishes/gh-forgejo-shim/issues?q=label%3Apost-release).
+
+## Security fixes in this release
+
+- Trace redaction hides credentials in every form ordinary git and gh commands produce: URL
+  passwords, Authorization headers, `-c http.extraHeader`, JSON bodies, `gh secret set --body`
+  and gh's secret flags.
+- Trace files, a new `config.toml` and the token file are owner-only, the directories the shim
+  creates are writable only by their owner, and the installed wrapper is never group- or
+  world-writable.
+- `install-shim --force` never overwrites the real gh it found, and a dangling `gh` symlink needs
+  `--force` like any other file.
+- A copy of the shim is never taken for real gh, so the wrapper can't call itself in a loop.
+- The minimum-gh check runs `gh --version` with no token in its environment, and with gh's update
+  notices and telemetry off.
+- A token is never sent to a GitHub host: `config add-host` and an `api_url` pointing at GitHub
+  are refused.
+- Stepping aside to a logged-in gh removes GitHub token variables first.
+- `bootstrap` keeps a forge's web port, so the token goes to the server on that port, not the
+  default one.
+- In server mode, the gateway refuses any host but the forge's own with `421` before a token is
+  used, stores no token, and needs a token on every API route.
