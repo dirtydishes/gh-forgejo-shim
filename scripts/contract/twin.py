@@ -281,6 +281,11 @@ def prepare(case, home, token):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "open"})
         if setup.get("closed"):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "closed"})
+        # Forgejo checks a new PR's mergeability in the background, and a merge sent before it
+        # finishes gets "Pull Request has merge conflicts" (the gateway's #174). Wait for it, as
+        # seed.py does. A fork case's head is gone on purpose, so it never gets there.
+        if tuple(case["argv"][:2]) == ("pr", "merge") and not setup.get("fork"):
+            wait_mergeable(base, token, pr["number"])
     if setup.get("issue"):
         # Assigned to the twin's user, and labelled with the case's own label when asked.
         body = {"title": f"twin: {branch}", "body": "twin", "assignees": [REPO.split("/")[0]]}
@@ -369,6 +374,15 @@ def own_run(base, token, branch):
             raise RuntimeError(f"{branch} has {len(runs)} runs, not its own one")
         time.sleep(1)
     raise RuntimeError(f"{branch}'s workflow push queued no run")
+
+
+def wait_mergeable(base, token, number, attempts=30, pause=0.5):
+    """Until Forgejo reports `mergeable: true` for the PR, about 15 s at most."""
+    for _ in range(attempts):
+        if request(base, token, "GET", f"pulls/{number}").get("mergeable"):
+            return
+        time.sleep(pause)
+    raise RuntimeError(f"PR {number} never became mergeable")
 
 
 def fill(text, subs):

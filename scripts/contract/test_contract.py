@@ -199,6 +199,37 @@ class ContractTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
 
+    def test_a_merge_case_waits_until_forgejo_calls_its_pr_mergeable(self):
+        # A merge sent while Forgejo still checks the PR reads as a conflict (the gateway's #174).
+        replies = iter([False, False, True])
+        calls = []
+
+        def fake_api(base, token, method, path, body=None):
+            calls.append((method, path))
+            if path.endswith("/pulls/7") and method == "GET":
+                return {"mergeable": next(replies)}
+            if "/branches/" in path:
+                return {"commit": {"id": "abc"}}
+            if path.endswith("/pulls") and method == "POST":
+                return {"number": 7}
+            return {}
+
+        case = {"id": "twin-x", "argv": ["pr", "merge", "{pr}", "--squash"],
+                "setup": {"branch": "twin/x", "pr": True, "base": True}}
+        with patch.object(twin, "api", fake_api), patch.object(twin, "api_base", return_value="http://127.0.0.1:1"), \
+                patch.object(twin.time, "sleep", lambda _: None):
+            twin.prepare(case, "/nonexistent", "t")
+        self.assertEqual(sum(1 for call in calls if call == ("GET", f"repos/{REPO}/pulls/7")), 3)
+        # Another command, or a fork case, doesn't wait.
+        for other in ({"argv": ["pr", "view", "{pr}"]}, {"setup": {"branch": "twin/x", "pr": True, "base": True, "fork": True}}):
+            calls.clear()
+            with self.subTest(other=other), patch.object(twin, "api", fake_api), \
+                    patch.object(twin, "api_base", return_value="http://127.0.0.1:1"), \
+                    patch.object(twin, "fork_head", return_value="gfj-forks:twin/x"), \
+                    patch.object(twin, "delete_fork", lambda *a: None):
+                twin.prepare(case | other, "/nonexistent", "t")
+            self.assertNotIn(("GET", f"repos/{REPO}/pulls/7"), calls)
+
     def test_a_fork_case_deletes_its_fork_when_setup_fails(self):
         # Forgejo allows one fork per owner: a fork left behind would fail the next fork case.
         case = {"id": "twin-x", "setup": {"branch": "twin/x", "pr": True, "fork": True}}
