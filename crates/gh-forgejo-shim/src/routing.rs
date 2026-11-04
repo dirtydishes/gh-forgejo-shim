@@ -672,6 +672,10 @@ fn step_aside_logged_in(
     #[cfg(unix)]
     if matches!(mode, DelegateMode::Inherit) {
         let host = decision.trace_host()?;
+        // gh sends `api` and `auth` where routing says (the URL, `--hostname` or `GH_HOST`, or
+        // decision 4's), and their other words are data, such as a GraphQL document.
+        let targets_only = routed.command == "api" || routed.command.starts_with("auth ");
+        let words = if targets_only { &[][..] } else { words };
         if names_another_host(host, words, env, config) {
             return None;
         }
@@ -689,11 +693,12 @@ fn step_aside_logged_in(
 
 /// Whether plain gh could go somewhere other than `host`, judged from what the call says:
 /// `GH_HOST` naming another host, or a word or `GH_REPO` naming one: another allowlisted forge
-/// anywhere in it, or a URL, an SSH address (`host:o/r`, `git@host:o/r`) or a `HOST/OWNER/REPO` whose host
-/// isn't `host`. Routing doesn't model every argument gh takes a host from (`gh repo clone
-/// forge-b/o/r` in forge-a's checkout routes to forge-a), so stepping aside on the routed host's
-/// login could send the call elsewhere (Sol r1#1). A false match, such as a path `a/b/c`, leaves
-/// the call to the built-in path, as before.
+/// anywhere in it, or a URL, a `HOST/OWNER/REPO` or an SSH address (`host:o/r`, `git@host:o/r`)
+/// whose host isn't `host`. Routing doesn't model every argument gh takes a host from (`gh repo
+/// clone forge-b/o/r` in forge-a's checkout routes to forge-a), so stepping aside on the routed
+/// host's login could send the call elsewhere (Sol r1#1). Any `x:` counts as a host, whatever its
+/// characters (Sol r3#1): a false match, such as a path `a/b/c` or `--search is:open`, leaves the
+/// call to the built-in path, as before.
 fn names_another_host(
     host: &str,
     words: &[String],
@@ -730,17 +735,10 @@ fn names_another_host(
                 .split("://")
                 .skip(1)
                 .any(|rest| other(rest.split(['/', '?', '#']).next().unwrap_or(rest)))
-            // `host:o/r` or `git@host:o/r`: the host starts the word, a value, or follows `@`.
+            // `host:o/r` or `git@host:o/r`; `://` is a URL's, above.
             || word.match_indices(':').any(|(colon, _)| {
-                let rest = &word[colon + 1..];
-                let name = word[..colon].rsplit(['@', '=']).next().unwrap_or_default();
-                !rest.is_empty()
-                    && !rest.starts_with("//")
-                    && !name.is_empty()
-                    && name
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
-                    && other(name)
+                !word[colon + 1..].starts_with("//")
+                    && other(word[..colon].rsplit(['@', '=']).next().unwrap_or_default())
             })
             || (parts.len() == 3 && parts.iter().all(|part| !part.is_empty()) && other(parts[0]))
     })

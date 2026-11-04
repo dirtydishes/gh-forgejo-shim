@@ -200,9 +200,11 @@ included: those would otherwise answer with the shim's own token, or refuse a fo
 there, such as ChatGPT's `gh api graphql --hostname <forge>`. A form that doesn't launch steps
 aside only when nothing in the call names another host: `GH_HOST` naming one, or a word or
 `GH_REPO` naming another allowlisted forge, or holding a URL, an SSH address (`host:o/r`, `git@host:o/r`) or a
-`HOST/OWNER/REPO` whose host isn't the forge. Routing doesn't model every argument gh takes a
-host from (`gh repo clone forge-b/o/r` in forge-a's checkout routes to forge-a), so such a call
-keeps the built-in path. That is no run directory, no gateway, and
+`HOST/OWNER/REPO` whose host isn't the forge. Any `x:` counts as an SSH host, whatever its
+characters. Routing doesn't model every argument gh takes a host from (`gh repo clone
+forge-b/o/r` in forge-a's checkout routes to forge-a), so such a call keeps the built-in path.
+`gh api` and `gh auth` skip the word check: gh sends them where routing says, and their other
+words are data, such as a GraphQL document. That is no run directory, no gateway, and
 the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and two cases. A host-less
 `gh api` or `gh auth token` gets `GH_HOST` set to the forge's portless hostname, exactly as on the
 launch path (above), so decision 4 holds in every Forgejo checkout, server mode or not. Without
