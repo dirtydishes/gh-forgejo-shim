@@ -206,18 +206,16 @@ fn redact_url_credentials(value: &str, replacement: &str) -> String {
     while let Some(relative_scheme) = value[index..].find("://") {
         let scheme_index = index + relative_scheme;
         let credential_start = scheme_index + "://".len();
-        let authority_end = value[credential_start..]
-            .find(|character: char| {
-                character.is_whitespace() || matches!(character, '/' | '?' | '#')
-            })
-            .map_or(value.len(), |offset| credential_start + offset);
         // A password can hold a literal `?`, `#` or `@`, so the userinfo runs to the last `@`
         // before the path.
         let userinfo_end = value[credential_start..]
             .find(|character: char| character.is_whitespace() || character == '/')
             .map_or(value.len(), |offset| credential_start + offset);
 
-        index = authority_end;
+        // The next URL can start right after this one's host, as in
+        // `http.https://example.com.proxy=http://alice:pw@proxy` (Opus o7#1 on #94), so the
+        // search goes on from here rather than past the host.
+        index = credential_start;
         if let Some(relative_at) = value[credential_start..userinfo_end].rfind('@') {
             let at = credential_start + relative_at;
             if at > credential_start {
@@ -966,6 +964,16 @@ mod tests {
                 "audit-tail",
             ),
             (r#"password="a",audit-tail"#, "audit-tail"),
+            // A URL right after another one's host (Opus o7#1), and compact JSON of two URLs.
+            (
+                "-c http.https://example.com.proxy=http://alice:audit-pw@proxy:3128",
+                "audit-pw",
+            ),
+            (
+                r#"{"url":"https://example.com","clone":"https://alice:audit@host/r"}"#,
+                "audit",
+            ),
+            ("https://a.example,https://alice:audit@host/r", "audit"),
             // A pretty-printed array or object under a sensitive key (Sol r7#2).
             (
                 "{\"tokens\": [\n  \"audit-one\",\n  \"audit-two\"\n]}",
