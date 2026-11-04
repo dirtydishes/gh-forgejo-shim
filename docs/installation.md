@@ -5,11 +5,24 @@ not part of the supported product runtime.
 
 ## Requirements
 
-The `gh` wrapper hands GitHub work to the real GitHub CLI, so it needs `gh`
-2.103.3 or newer ([installation](https://github.com/cli/cli#installation)).
-`gfj bootstrap` and `gfj install-shim` check the `gh` they find, by running
-`gh --version`, and stop without changing anything when it is missing, older,
-or a pre-release of 2.103.3. `gfj doctor` reports the same check.
+The `gh` wrapper runs the real GitHub CLI, for GitHub work and for most Forgejo
+commands, so it needs `gh` 2.103.3 or newer. `gfj bootstrap` and
+`gfj install-shim` check the `gh` they find, by running `gh --version`, and stop
+without changing anything when it is missing, older, or a pre-release of
+2.103.3. `gfj doctor` reports the same check.
+
+Many distributions ship an older `gh`. To get a current one:
+
+- **Ubuntu and Debian:** add GitHub's own apt repository
+  (`cli.github.com/packages`), as
+  [gh's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+  shows, then `sudo apt install gh`.
+- **Homebrew:** `brew install gh`; the shim's formula installs it as a
+  dependency.
+- **Anywhere else:** a release archive from
+  [gh's releases page](https://github.com/cli/cli/releases).
+
+Check with `gh --version`.
 
 A `gh` you built yourself may report `DEV` or a `git describe` version that
 can't be compared. To go ahead with it, set `FJ_SHIM_ALLOW_UNKNOWN_GH=1`;
@@ -108,6 +121,21 @@ On macOS, restart already-running GUI apps after `bootstrap` reports that it
 changed the GUI PATH. Existing processes cannot inherit a new launchd
 environment in place.
 
+## Upgrading
+
+The config file and stored tokens stay where they are, and the managed `gh`
+wrapper keeps working across an upgrade.
+
+1. Check that `gh --version` reports 2.103.3 or newer ([Requirements](#requirements)).
+2. Upgrade the shim: `brew upgrade gh-forgejo-shim`, or unpack the new release
+   archive over the old binaries.
+3. From inside your Forgejo checkout, run `gfj bootstrap`, then `gfj doctor`.
+
+If you relied on a token in an `fj`, `tea` or `gitea` config file, or on a
+generic token variable with more than one host configured, run
+`gfj auth login HOST`, or `gfj auth import --from fj|tea` once: normal commands
+no longer read other tools' files.
+
 ## Rollback
 
 To roll back the shim integration without uninstalling the native binary:
@@ -120,3 +148,5 @@ gfj uninstall-gui-path
 To roll back the binary version, install an earlier Homebrew formula revision or
 download an older GitHub release tarball and replace the two binaries in your
 install directory. Configuration and auth live outside the binary install path.
+A release before this one doesn't read `[host."NAME"]` tables in `config.toml`,
+so a host set up only through one loses those settings after a rollback.
