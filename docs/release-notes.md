@@ -233,6 +233,8 @@ switches back.
   "Resource not accessible by token (search)" without it. This release answers it from the pull
   list, so it works with repository scope alone. If you can't upgrade the gateway yet, give gh's
   Forgejo token issue scope. Other searches by label, keyword or assignee still need `read:issue`.
+- With a token that can merge but lacks `read:issue`, ChatGPT can't see or cancel a scheduled
+  auto-merge; use `gh pr merge --disable-auto` or the web UI, or give the token `read:issue`.
 - Auto-merge can show as enabled after Forgejo has dropped the schedule.
 - A closed or merged pull request, or one whose branch is no longer its head, checks out from its
   own ref (`refs/pull/{n}/head`).

@@ -159,7 +159,9 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://forge.example.c
 Applications** with `read:user`, `write:repository`, `write:issue` and `read:organization`, then run
 `gh auth login --hostname forge.example.com` and paste it. Claude and ChatGPT desktop take their token
 from `gh`. For full ChatGPT and Claude PR views (comments, labels), give the token `read:issue`;
-without it the gateway shows PRs and hides what Forgejo won't let the token read.
+without it the gateway shows PRs and hides what Forgejo won't let the token read. A token that can
+merge but lacks `read:issue` can't see or cancel a scheduled auto-merge from ChatGPT; use
+`gh pr merge --disable-auto` or the web UI, or give the token `read:issue`.
 
 ### Upgrade and roll back
 
