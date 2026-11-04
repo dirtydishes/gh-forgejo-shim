@@ -25,8 +25,8 @@ There are two install paths, and you can use both:
 - **Client-only:** the `gh` wrapper on each machine, set up below. It covers agents and tools that run
   `gh`, including Claude's agent when it runs `gh` in a shell.
 - **[Server mode](#server-mode):** the gateway on your forge's hostname. **Use server mode if you use
-  Claude desktop.** Its pull request status calls the forge's GitHub API itself, outside any `gh`
-  process, so only a gateway on the forge can answer it. You need control of the forge's reverse
+  Claude Code or Claude desktop.** Their pull request status calls the forge's GitHub API itself,
+  outside any `gh` process, so only a gateway on the forge can answer it. You need control of the forge's reverse
   proxy.
 
 Install the native Rust binary with Homebrew:
@@ -115,8 +115,8 @@ Copy the example [compose file](packaging/gateway/compose.yaml) to where you kee
 the image tag, the forge's address and how the gateway reaches Forgejo, then start it from there:
 
 ```sh
-docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .
-docker compose up -d
+docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .   # in the release's checkout
+docker compose up -d                                                     # in your services folder
 ```
 
 **Route three paths to it** in the forge's own site or `server` block, and everything else to Forgejo
@@ -129,12 +129,18 @@ as before:
 
 Pass the client's `Host` header through unchanged: the gateway answers only the forge's own host and
 port, and refuses any other with `421` before a token is used. The repository ships an
-[nginx locations snippet](packaging/gateway/nginx/fga-locations.conf), which also works in Nginx
-Proxy Manager's **Advanced** field, and a [Caddy site block](packaging/gateway/caddy/Caddyfile).
+[nginx locations snippet](packaging/gateway/nginx/fga-locations.conf) and a
+[Caddy site block](packaging/gateway/caddy/Caddyfile). The example compose file publishes no port, so
+the proxy must share the gateway's Docker network and reach it as `fga-server:8080`: in the nginx
+snippet, replace `http://fga` with `http://fga-server:8080`; for Caddy, set
+`FGA_UPSTREAM=fga-server:8080`. Nginx Proxy Manager takes the snippet in the forge's **Advanced**
+field, with that replacement made first: if nginx can't resolve an upstream, NPM takes the whole proxy
+host offline, forge included. [server-mode.md](docs/gateway/server-mode.md#2-mount-it-on-the-forges-hostname)
+has each proxy's steps.
 
-**Check it.** Without a token, the API answers `401`, which shows the route reaches the gateway; with
-a Forgejo token, `/api/v3/meta` answers `{"installed_version":"3.19.0"}`. A PR link redirects to
-Forgejo's page:
+**Check it.** Without a token, the API answers `401`, which shows the route reaches the gateway; `421`
+means the proxy changed `Host`. With a Forgejo token, `/api/v3/meta` answers
+`{"installed_version":"3.19.0"}`. A PR link redirects to Forgejo's page:
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' https://forge.example.com/api/v3/meta
@@ -153,8 +159,13 @@ The gateway keeps no state, so an upgrade is a switch to a new image, and a roll
 Keep the previous image and a copy of the compose file until the new one has proved itself:
 
 ```sh
-docker build -f packaging/gateway/Dockerfile -t fga-server:<new> .   # from the new release's checkout
-cp compose.yaml compose.yaml.<old>                                   # keep the working file
+docker build -f packaging/gateway/Dockerfile -t fga-server:<new> .   # in the new release's checkout
+```
+
+Then, in your services folder:
+
+```sh
+cp compose.yaml compose.yaml.<old>    # keep the working file
 # set `image: fga-server:<new>` in compose.yaml, then:
 docker compose up -d
 ```
@@ -168,6 +179,8 @@ docker compose up -d
 ```
 
 Remove an old image (`docker image rm fga-server:<old>`) only once you no longer need to go back to it.
+`docker image prune -a` and `docker system prune -a` delete it as soon as no container uses it, which
+takes the rollback with it.
 
 ## Manual Setup
 
