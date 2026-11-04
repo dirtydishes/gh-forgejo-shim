@@ -140,7 +140,9 @@ jobs:
           EOF
           chmod +x "$real_bin/gh"
 
-          dist/smoke-install/gfj install-shim --bin-dir "$shim_bin"
+          # Install checks real gh's version (2.103.3 or newer); the runner's own gh may be
+          # older, so install against the fake one the wrapper will use below.
+          FJ_SHIM_REAL_GH="$real_bin/gh" dist/smoke-install/gfj install-shim --bin-dir "$shim_bin"
           test -x "$shim_bin/gh"
           if grep -Eiq 'python|pipx' "$shim_bin/gh"; then
             sed -n '1,20p' "$shim_bin/gh" >&2
