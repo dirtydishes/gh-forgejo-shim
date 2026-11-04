@@ -1,0 +1,25 @@
+{
+  "id": "pr-view-merged-6",
+  "argv": [
+    "pr",
+    "view",
+    "6",
+    "--json",
+    "number,state"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 6,
+  "normalize": [
+    "host",
+    "pr_urls",
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "{\"number\":6,\"state\":\"MERGED\"}\n",
+    "stderr": ""
+  }
+}

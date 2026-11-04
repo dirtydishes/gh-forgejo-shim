@@ -1,0 +1,28 @@
+{
+  "id": "twin-issue-list-own",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-list",
+    "issue": true
+  },
+  "argv": [
+    "issue",
+    "list",
+    "--state",
+    "open",
+    "--author",
+    "dirtydishes",
+    "--json",
+    "number,title,state",
+    "--jq",
+    ".[] | select(.number == {issue}) | [.title, .state] | @tsv"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "twin:\\ twin/issue\\-list\\\tOPEN\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

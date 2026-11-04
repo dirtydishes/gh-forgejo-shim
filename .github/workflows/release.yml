@@ -40,6 +40,18 @@ jobs:
           rustup show active-toolchain
           rustup target add "${{ matrix.target }}"
 
+      - name: Check the tag names the crate's version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The archives and the Homebrew formula take the version from Cargo.toml.
+          version="$(cargo pkgid -p gh-forgejo-shim | awk -F'[#@]' '{ print $NF }')"
+          if [[ "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} doesn't match the crate version ${version}" >&2
+            exit 1
+          fi
+
       - name: Cache cargo build output
         uses: Swatinem/rust-cache@v2
 
@@ -104,6 +116,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
+      # For docs/release-notes.md, which the release takes as its notes.
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -136,6 +152,6 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" dist/* \
               --title "$GITHUB_REF_NAME" \
-              --notes "Rust-first gh-forgejo-shim release artifacts." \
+              --notes-file docs/release-notes.md \
               --verify-tag
           fi

@@ -166,10 +166,26 @@ pub fn find_tool(
     fallback_dirs: &[PathBuf],
     skip_managed_gh: bool,
 ) -> Option<ToolPath> {
+    find_tool_passing_over(name, configured, env, fallback_dirs, skip_managed_gh, None)
+}
+
+/// [`find_tool`], also passing over a `gh` at `replaced`, where the shim is about to go.
+fn find_tool_passing_over(
+    name: &str,
+    configured: Option<&Path>,
+    env: &EnvMap,
+    fallback_dirs: &[PathBuf],
+    skip_managed_gh: bool,
+    replaced: Option<&Path>,
+) -> Option<ToolPath> {
+    let should_skip = |path: &Path| {
+        external::should_skip_gh_candidate(path)
+            || replaced.is_some_and(|replaced| same_location(path, replaced))
+    };
     if let Some(configured) = configured.filter(|path| !path.as_os_str().is_empty()) {
         let path = expand_home(configured, env);
         if is_executable_file(&path) {
-            if skip_managed_gh && name == "gh" && should_skip_gh_candidate(&path) {
+            if skip_managed_gh && name == "gh" && should_skip(&path) {
                 // Keep looking for the real GitHub CLI.
             } else {
                 let source = if name == "gh" && env.contains_key("FJ_SHIM_REAL_GH") {
@@ -192,7 +208,7 @@ pub fn find_tool(
         if !is_executable_file(&candidate) {
             continue;
         }
-        if skip_managed_gh && name == "gh" && should_skip_gh_candidate(&candidate) {
+        if skip_managed_gh && name == "gh" && should_skip(&candidate) {
             continue;
         }
         return Some(ToolPath {
@@ -213,7 +229,7 @@ pub fn find_tool(
         if !is_executable_file(&candidate) {
             continue;
         }
-        if skip_managed_gh && name == "gh" && should_skip_gh_candidate(&candidate) {
+        if skip_managed_gh && name == "gh" && should_skip(&candidate) {
             continue;
         }
         return Some(ToolPath {
@@ -257,7 +273,85 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn find_real_gh(
+/// The gh the wrapper will delegate to once the shim is installed: as [`find_real_gh`], but a gh
+/// at `replaced`, which the shim will replace (`--force`), is passed over.
+pub(crate) fn find_real_gh_after_install(
+    config: Option<&Config>,
+    env: &EnvMap,
+    fallback_dirs: &[PathBuf],
+    replaced: Option<&Path>,
+) -> Option<ToolPath> {
+    let configured = config.and_then(|config| config.paths.gh.as_deref().map(Path::new));
+    find_tool_passing_over("gh", configured, env, fallback_dirs, true, replaced)
+}
+
+/// Whether `path` reaches the directory entry `target` names, which installing replaces with the
+/// shim: it is that entry (through any symlinked directory), or a symlink whose chain passes
+/// through it. A symlink at `target` is replaced itself, so the file it points to doesn't count.
+fn same_location(path: &Path, target: &Path) -> bool {
+    let mut current = path.to_path_buf();
+    // Bounded like the system's own symlink limit, so a loop can't hold this up.
+    for _ in 0..40 {
+        if same_entry(&current, target) {
+            return true;
+        }
+        let Ok(link) = fs::read_link(&current) else {
+            return false;
+        };
+        current = match current.parent() {
+            Some(parent) if link.is_relative() => parent.join(link),
+            _ => link,
+        };
+    }
+    false
+}
+
+/// Whether two paths name one directory entry: the same file name in the same directory. The
+/// directories are compared as files (device and inode), so a symlinked directory, a bind mount
+/// or a macOS firmlink is the same one; a directory that doesn't exist yet compares by path.
+fn same_entry(left: &Path, right: &Path) -> bool {
+    let (Some(left_name), Some(right_name)) = (left.file_name(), right.file_name()) else {
+        return false;
+    };
+    let names_match = left_name == right_name
+        // A case-insensitive file system (macOS by default) reaches one entry as `GH` and `gh`:
+        // then both names lead to the same file, the link itself where it is one (Sol s2#1).
+        || (left_name.eq_ignore_ascii_case(right_name) && same_link_or_file(left, right));
+    names_match && same_directory(directory_of(left), directory_of(right))
+}
+
+/// Whether two paths reach one file without following a symlink at their last part.
+fn same_link_or_file(left: &Path, right: &Path) -> bool {
+    #[cfg(unix)]
+    if let (Ok(left), Ok(right)) = (left.symlink_metadata(), right.symlink_metadata()) {
+        use std::os::unix::fs::MetadataExt;
+
+        return (left.dev(), left.ino()) == (right.dev(), right.ino());
+    }
+    let _ = (left, right);
+    false
+}
+
+/// The directory `path` is in; a bare name (`gh`) is in the current directory.
+fn directory_of(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+fn same_directory(left: &Path, right: &Path) -> bool {
+    #[cfg(unix)]
+    if let (Ok(left), Ok(right)) = (left.metadata(), right.metadata()) {
+        use std::os::unix::fs::MetadataExt;
+
+        return (left.dev(), left.ino()) == (right.dev(), right.ino());
+    }
+    same_file(left, right)
+}
+
+/// The gh the wrapper delegates to: the configured one, else the first on PATH or in the
+/// common install dirs, passing over the shim itself.
+pub(crate) fn find_real_gh(
     config: Option<&Config>,
     env: &EnvMap,
     fallback_dirs: &[PathBuf],
@@ -315,10 +409,7 @@ fn safe_visible_target_dir(directory: &Path, home: Option<&Path>) -> bool {
     if !directory.is_absolute() || !directory.is_dir() || !is_writable_dir(directory) {
         return false;
     }
-    let Some(home) = home else {
-        return false;
-    };
-    if !(directory == home || directory.starts_with(home)) {
+    if !home.is_some_and(|home| is_under_home(directory, home)) {
         return false;
     }
     let candidate = directory.join("gh");
@@ -355,14 +446,25 @@ fn expanded_common_package_dirs(home: Option<&Path>, env: &EnvMap) -> Vec<PathBu
         .collect()
 }
 
-fn default_fallback_dirs() -> Vec<PathBuf> {
+pub(crate) fn default_fallback_dirs() -> Vec<PathBuf> {
     external::DEFAULT_FALLBACK_DIRS
         .iter()
         .map(PathBuf::from)
         .collect()
 }
 
-fn current_path_dirs(env: &EnvMap) -> Vec<PathBuf> {
+/// Whether `directory` is `home` or inside it. A `..` part is refused: `starts_with` compares path
+/// parts as text, so `$HOME/../other` would count as inside.
+pub(crate) fn is_under_home(directory: &Path, home: &Path) -> bool {
+    directory.is_absolute()
+        && !directory
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+        && directory.starts_with(home)
+}
+
+/// The PATH directories as bootstrap sees them, with `~` expanded.
+pub(crate) fn current_path_dirs(env: &EnvMap) -> Vec<PathBuf> {
     env.get("PATH")
         .map(|path| {
             std::env::split_paths(path)
@@ -409,18 +511,7 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     result
 }
 
-fn should_skip_gh_candidate(path: &Path) -> bool {
-    shim::is_managed_shim(path) || is_current_executable(path)
-}
-
-fn is_current_executable(path: &Path) -> bool {
-    let Ok(current) = std::env::current_exe() else {
-        return false;
-    };
-    same_file(path, &current)
-}
-
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
     };
@@ -549,6 +640,77 @@ mod tests {
 
         assert!(model.codex_restricted_path);
         assert!(model.real_gh.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn a_gh_install_would_replace_is_found_through_links() -> io::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new()?;
+        let target_dir = fixture.root.join("target");
+        let elsewhere = fixture.root.join("elsewhere");
+        let alias = fixture.root.join("alias");
+        for dir in [&target_dir, &elsewhere, &alias] {
+            fs::create_dir(dir)?;
+        }
+        let target = target_dir.join("gh");
+        fs::write(&target, "gh")?;
+        // The entry itself, also through a symlinked directory.
+        assert!(same_location(&target, &target));
+        symlink(&target_dir, fixture.root.join("linked-dir"))?;
+        assert!(same_location(&fixture.root.join("linked-dir/gh"), &target));
+        // A symlink to it, absolute or relative, and a chain through it (Sol s1#1).
+        symlink(&target, alias.join("gh"))?;
+        assert!(same_location(&alias.join("gh"), &target));
+        symlink(Path::new("../target/gh"), elsewhere.join("relative"))?;
+        assert!(same_location(&elsewhere.join("relative"), &target));
+        symlink(alias.join("gh"), elsewhere.join("chain"))?;
+        assert!(same_location(&elsewhere.join("chain"), &target));
+        // When the target is itself a link, installing replaces the link: the file it points to
+        // stays, so a gh there doesn't count, though a link through the target still does.
+        let real = elsewhere.join("gh");
+        fs::write(&real, "gh")?;
+        let linked_target_dir = fixture.root.join("linked-target");
+        fs::create_dir(&linked_target_dir)?;
+        let linked_target = linked_target_dir.join("gh");
+        symlink(&real, &linked_target)?;
+        assert!(!same_location(&real, &linked_target));
+        symlink(&linked_target, alias.join("through"))?;
+        assert!(same_location(&alias.join("through"), &linked_target));
+        // Somewhere else entirely, and a symlink loop.
+        assert!(!same_location(&elsewhere.join("gh"), &target));
+        symlink(elsewhere.join("loop"), elsewhere.join("loop"))?;
+        assert!(!same_location(&elsewhere.join("loop"), &target));
+        Ok(())
+    }
+
+    #[test]
+    fn another_case_reaches_the_target_only_where_the_file_system_folds_case() -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let target = fixture.root.join("gh");
+        fs::write(&target, "gh")?;
+        let upper = fixture.root.join("GH");
+        if upper.symlink_metadata().is_ok() {
+            // Case-insensitive (macOS by default): `GH` is the target itself (Sol s2#1).
+            assert!(same_location(&upper, &target));
+        } else {
+            // Case-sensitive: `GH` is a file of its own.
+            fs::write(&upper, "other")?;
+            assert!(!same_location(&upper, &target));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_bare_gh_is_in_the_current_directory() -> io::Result<()> {
+        // `FJ_SHIM_REAL_GH=gh` with `--bin-dir "$PWD"` (Sol s1#1).
+        let target = std::env::current_dir()?.join("gh");
+        assert!(same_location(Path::new("gh"), &target));
+        assert!(!same_location(
+            Path::new("gh"),
+            Path::new("/nonexistent/dir/gh")
+        ));
         Ok(())
     }
 

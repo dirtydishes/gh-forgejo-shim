@@ -6,7 +6,9 @@
 #![recursion_limit = "256"]
 
 pub mod auth;
+pub mod auth_import;
 pub mod bootstrap;
+mod checks;
 pub mod cli;
 pub mod codex_smoke;
 pub mod config;
@@ -14,8 +16,11 @@ pub mod create;
 pub mod doctor;
 pub mod external;
 pub mod forgejo;
+pub mod gh_version;
 pub mod git_recorder;
 pub mod gui_path;
+pub mod invocation;
+pub mod launcher;
 pub mod normalize;
 pub mod read_only;
 pub mod repo;

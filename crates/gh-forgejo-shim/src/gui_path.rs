@@ -345,22 +345,38 @@ mod tests {
         Ok(path)
     }
 
-    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
-        fs::write(path, contents)?;
-        make_executable(path)
-    }
-
+    /// Written by a child `sh`, so this test process never holds the script open for writing.
+    /// Linux refuses to exec a file any process holds open for writing, and a sibling test's fork
+    /// keeps this process's descriptors until it execs, so a script written here could fail the
+    /// spawn under test with ETXTBSY (6tt).
     #[cfg(unix)]
-    fn make_executable(path: &Path) -> io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions)
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let written = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no stdin for the script writer"))
+            .and_then(|mut stdin| stdin.write_all(contents.as_bytes()));
+        // Wait whatever happened, so no child is left behind and sh's status explains a failure.
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "writing {} failed: {status}",
+                path.display()
+            )));
+        }
+        written
     }
 
     #[cfg(not(unix))]
-    fn make_executable(_path: &Path) -> io::Result<()> {
-        Ok(())
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        fs::write(path, contents)
     }
 }

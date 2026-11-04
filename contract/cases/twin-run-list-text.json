@@ -1,0 +1,22 @@
+{
+  "id": "twin-run-list-text",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/run-list-text",
+    "workflow": true
+  },
+  "argv": [
+    "run",
+    "list",
+    "--branch",
+    "{branch}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "queued\\\t\\\ttwin/run\\-list\\-text\\\ttwin\\\ttwin/run\\-list\\-text\\\tpush\\\t{run}\\t[^\\t\\n]+\\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

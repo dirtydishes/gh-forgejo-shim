@@ -64,7 +64,7 @@
 
     <section>
       <h2>Summary</h2>
-      <p><code>islandflow</code> now detects as <code>git.dirtydishes.dev</code>, but the local shim config only allowed the older <code>git.deltaisland.io</code> host. The shim therefore delegated PR creation to the real GitHub CLI, which rejected Codex.app's create-shaped command instead of calling Forgejo. The machine config was repaired, and the repo now teaches <code>doctor</code> to report the current checkout host explicitly.</p>
+      <p><code>islandflow</code> now detects as <code>forge.example.com</code>, but the local shim config only allowed the older <code>old-forge.example.com</code> host. The shim therefore delegated PR creation to the real GitHub CLI, which rejected Codex.app's create-shaped command instead of calling Forgejo. The machine config was repaired, and the repo now teaches <code>doctor</code> to report the current checkout host explicitly.</p>
     </section>
 
     <section>
@@ -80,8 +80,8 @@
 
     <section>
       <h2>Context</h2>
-      <p>Logs showed repeated Codex.app PR status probes in <code>/Users/kell/dev/islandflow</code> and its Codex worktrees. Manual reproduction confirmed the key symptom: before the allowlist repair, shim routing did not engage and the real <code>gh</code> rejected flags such as <code>-R</code> or <code>--json</code> in the PR-create flow.</p>
-      <p>The live config repair added <code>git.dirtydishes.dev</code> to <code>~/.config/gh-forgejo-shim/config.toml</code>. That machine-state change is documented separately in <code>/Users/kell/docs/turns/2026-06-11-1310-repair-islandflow-pr-routing.html</code>.</p>
+      <p>Logs showed repeated Codex.app PR status probes in <code>~/dev/islandflow</code> and its Codex worktrees. Manual reproduction confirmed the key symptom: before the allowlist repair, shim routing did not engage and the real <code>gh</code> rejected flags such as <code>-R</code> or <code>--json</code> in the PR-create flow.</p>
+      <p>The live config repair added <code>forge.example.com</code> to <code>~/.config/gh-forgejo-shim/config.toml</code>. That machine-state change is documented in a separate turn report, not in this repository.</p>
     </section>
 
     <section>
@@ -296,8 +296,8 @@
       <ul>
         <li><code>python3 -m unittest tests.test_doctor</code> passed: 13 tests.</li>
         <li><code>PYTHONPATH=src python3 -m unittest discover -s tests</code> passed: 85 tests.</li>
-        <li><code>PYTHONPATH=src python3 -m gh_forgejo_shim doctor</code> reports <code>git.dirtydishes.dev</code> allowlisted for <code>dirtydishes/islandflow</code>.</li>
-        <li><code>gh repo view -R git.dirtydishes.dev/dirtydishes/islandflow --json ...</code> returned Forgejo-shaped repo metadata.</li>
+        <li><code>PYTHONPATH=src python3 -m gh_forgejo_shim doctor</code> reports <code>forge.example.com</code> allowlisted for <code>dirtydishes/islandflow</code>.</li>
+        <li><code>gh repo view -R forge.example.com/dirtydishes/islandflow --json ...</code> returned Forgejo-shaped repo metadata.</li>
         <li><code>gh pr create ... --web --json ...</code> returned the Forgejo compare URL without creating a PR.</li>
       </ul>
     </section>

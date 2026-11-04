@@ -2,7 +2,7 @@
 
 `gh-forgejo-shim` is a native Rust CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories without putting Python in the installed `gh`, `gfj`, or `gh-forgejo-shim` runtime path.
 
-It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`; allowlisted Forgejo repositories route a narrow set of repository, pull request, issue, and check commands through Forgejo-friendly behavior.
+It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`. In allowlisted Forgejo repositories, the pull request, issue, run and API commands that coding tools use run the real `gh` too, against a gateway the wrapper starts for the call; the shim's own code answers the rest of a narrow set of repository, pull request, issue and check commands. The wrapper needs `gh` 2.103.3 or newer ([Requirements](#requirements)).
 
 This is not full `gh` emulation. It is compatibility glue for the `gh` calls and repository probes that GitHub-style development tools commonly use.
 
@@ -13,12 +13,27 @@ This is not full `gh` emulation. It is compatibility glue for the `gh` calls and
 - Bootstrap setup that detects the current repo, installs the wrapper, allowlists the host, checks auth, and prints repair commands.
 - macOS GUI PATH setup for apps launched from Finder, Dock, Spotlight, or other GUI launchers.
 - Native Forgejo auth login, import, status, and logout commands with macOS Keychain support.
-- Auth discovery from shim-owned storage, environment variables, and common `fj`, `tea`, and `gitea` config files.
+- Auth from shim-owned storage, a host's `token_env`, or generic token variables, with a one-time import from `fj` or `tea`.
 - GitHub-shaped `gh repo view`, `gh pr ...`, and `gh issue ...` output for the fields tools usually probe.
 - Pull request checks mapped from Forgejo commit statuses into GitHub-style `statusCheckRollup` and `gh pr checks` output.
 - Safe rollback commands that remove only shim-managed files.
 
 ## Install
+
+### Requirements
+
+The `gh` wrapper runs the real GitHub CLI, so it needs `gh` 2.103.3 or newer. `gfj bootstrap` and `gfj install-shim` stop without changing anything when the `gh` they find is missing or older, and `gfj doctor` reports the same check. Many distributions ship an older `gh`; on Ubuntu and Debian, add GitHub's own apt repository as [gh's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) shows, or use Homebrew. A `gh` you built yourself that reports `DEV` needs `FJ_SHIM_ALLOW_UNKNOWN_GH=1`. See [docs/installation.md](docs/installation.md#requirements).
+
+### Install paths
+
+There are two install paths, and you can use both:
+
+- **Client-only:** the `gh` wrapper on each machine, set up below. It covers agents and tools that run
+  `gh`, including Claude's agent when it runs `gh` in a shell.
+- **[Server mode](#server-mode):** the gateway on your forge's hostname. **Use server mode if you use
+  Claude Code or Claude desktop.** Their pull request status calls the forge's GitHub API itself,
+  outside any `gh` process, so only a gateway on the forge can answer it. You need control of the forge's reverse
+  proxy.
 
 Install the native Rust binary with Homebrew:
 
@@ -48,7 +63,8 @@ gfj bootstrap
 - Installs the managed `gh` wrapper into the first safe writable directory already visible to the current process, falling back to `~/.local/bin` when needed.
 - Checks the current process `PATH`, the real GitHub CLI path, and whether managed `gh` is first.
 - On macOS, updates the launchd GUI PATH for newly opened GUI apps unless `--no-gui-path` is passed.
-- Checks whether Forgejo auth can be found from shim storage, env, or supported CLI config files.
+- Checks the real GitHub CLI's version (2.103.3 or newer) before it writes anything.
+- Checks whether Forgejo auth can be found from shim storage or token variables.
 - Checks `origin`, `origin/HEAD`, and current-branch upstream tracking.
 - Prints repair commands for anything it cannot fix automatically.
 
@@ -79,7 +95,7 @@ When bootstrap changes the macOS GUI PATH, restart already-running GUI apps befo
 1. Install the native package with Homebrew or a GitHub release tarball.
 2. Open a terminal inside your Forgejo repository.
 3. Run `gfj bootstrap`.
-4. Run `gfj auth login HOST`, or use `gfj auth import HOST` if a token already exists in env, `fj`, `tea`, or `gitea` config.
+4. Run `gfj auth login HOST`, or use `gfj auth import --from fj|tea --hostname HOST` to copy a token from that tool's config.
 5. Copy and run any repair commands `bootstrap` prints.
 6. On macOS, restart the GUI tool if `bootstrap` reports that it changed the GUI PATH.
 7. Confirm the setup:
@@ -92,6 +108,90 @@ gfj doctor
 
 For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
+## Server Mode
+
+Server mode runs the gateway, `fga-server`, next to Forgejo and mounts it on the forge's own hostname,
+so the forge answers the GitHub Enterprise API. Claude Code and Claude desktop look up a branch's pull
+request by calling that API themselves, outside any `gh` process, which the client-side wrapper can't
+answer. With server mode, a plain `gh auth login --hostname forge.example.com` is all a client needs,
+with no wrapper. You need control of the forge's reverse proxy; a hosted forge such as Codeberg can't
+use it. [docs/gateway/server-mode.md](docs/gateway/server-mode.md) has the details for each proxy.
+
+**Run the gateway.** Build the image from a checkout of the release you want, tagged with its version.
+Copy the example [compose file](packaging/gateway/compose.yaml) to where you keep your services, set
+the image tag, the forge's address and how the gateway reaches Forgejo, then start it from there:
+
+```sh
+docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .   # in the release's checkout
+docker compose up -d                                                     # in your services folder
+```
+
+**Route three paths to it** in the forge's own site or `server` block, and everything else to Forgejo
+as before:
+
+- `/api/v3/`: the GitHub REST API;
+- `/api/graphql`: the GitHub GraphQL API;
+- `/{owner}/{repo}/pull/{n}`: GitHub-style pull request links, which the gateway redirects to Forgejo's
+  `/pulls/{n}`.
+
+Pass the client's `Host` header through unchanged: the gateway answers only the forge's own host and
+port, and refuses any other with `421` before a token is used. The repository ships an
+[nginx locations snippet](packaging/gateway/nginx/fga-locations.conf) and a
+[Caddy site block](packaging/gateway/caddy/Caddyfile). The example compose file publishes no port, so
+the proxy must share the gateway's Docker network and reach it as `fga-server:8080`: in the nginx
+snippet, replace `http://fga` with `http://fga-server:8080`; for Caddy, set
+`FGA_UPSTREAM=fga-server:8080`. Nginx Proxy Manager takes the snippet in the forge's **Advanced**
+field, with that replacement made first: if nginx can't resolve an upstream, NPM takes the whole proxy
+host offline, forge included. [server-mode.md](docs/gateway/server-mode.md#2-mount-it-on-the-forges-hostname)
+has each proxy's steps.
+
+**Check it.** Without a token, the API answers `401`, which shows the route reaches the gateway; `421`
+means the proxy changed `Host`. With a Forgejo token, `/api/v3/meta` answers
+`{"installed_version":"3.19.0"}`. A PR link redirects to Forgejo's page:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://forge.example.com/api/v3/meta
+curl -fsS -H "Authorization: token <your Forgejo token>" https://forge.example.com/api/v3/meta
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://forge.example.com/<owner>/<repo>/pull/1
+```
+
+**Log in.** gh's browser login doesn't work with Forgejo. Create a token in Forgejo under **Settings →
+Applications** with `read:user`, `write:repository`, `write:issue` and `read:organization`, then run
+`gh auth login --hostname forge.example.com` and paste it. Claude and ChatGPT desktop take their token
+from `gh`. For full ChatGPT and Claude PR views (comments, labels), give the token `read:issue`;
+without it the gateway shows PRs and hides what Forgejo won't let the token read. A token that can
+merge but lacks `read:issue` can't see or cancel a scheduled auto-merge from ChatGPT; use
+`gh pr merge --disable-auto` or the web UI, or give the token `read:issue`.
+
+### Upgrade and roll back
+
+The gateway keeps no state, so an upgrade is a switch to a new image, and a rollback is a switch back.
+Keep the previous image and a copy of the compose file until the new one has proved itself:
+
+```sh
+docker build -f packaging/gateway/Dockerfile -t fga-server:<new> .   # in the new release's checkout
+```
+
+Then, in your services folder:
+
+```sh
+cp compose.yaml compose.yaml.<old>    # keep the working file
+# set `image: fga-server:<new>` in compose.yaml, then:
+docker compose up -d
+```
+
+Then run the checks above. To roll back, put the old file back and start it again; the old image is
+still there:
+
+```sh
+cp compose.yaml.<old> compose.yaml
+docker compose up -d
+```
+
+Remove an old image (`docker image rm fga-server:<old>`) only once you no longer need to go back to it.
+`docker image prune -a` and `docker system prune -a` delete it as soon as no container uses it, which
+takes the rollback with it.
+
 ## Manual Setup
 
 If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
@@ -100,8 +200,9 @@ If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
 gh-forgejo-shim config add-host git.example.com
 ```
 
-Known GitHub hosts such as `github.com` are ignored even if they appear in the
-allowlist. This keeps normal GitHub repositories delegated to the real GitHub
+Known GitHub hosts are ignored even if they appear in the allowlist: `github.com`,
+`ghe.com`, and every name under them, such as `api.github.com` or `acme.ghe.com`.
+This keeps normal GitHub repositories delegated to the real GitHub
 CLI if `bootstrap` is accidentally run from a GitHub checkout or an old config
 contains `github.com`.
 
@@ -216,7 +317,9 @@ export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"
 export FJ_SHIM_TRACE_BODY=1
 ```
 
-`FJ_SHIM_TRACE` is opt-in. With it unset, runtime behavior is unchanged. Trace records include timestamp, cwd, argv, route decision, host/repo, duration, exit code, stdout/stderr byte counts, relevant environment keys, and redacted excerpts when `FJ_SHIM_TRACE_BODY=1` is also set. Sensitive auth material is not logged; `gh auth token` stdout is always suppressed in trace excerpts.
+`FJ_SHIM_TRACE` is opt-in. With it unset, runtime behavior is unchanged. Trace records include timestamp, cwd, argv, route decision, host/repo, duration, exit code, stdout/stderr byte counts, relevant environment keys, and redacted excerpts when `FJ_SHIM_TRACE_BODY=1` is also set. Sensitive auth material is not logged; `gh auth token` stdout is always suppressed in trace excerpts. A new trace file is created owner-only (0600), and an existing one is narrowed to 0600 before records are added. If the file belongs to another user, so it can't be narrowed, no records are written to it.
+
+Redaction errs toward hiding. Any value under a key with `password`, `secret`, `token`, `credential`, `api_key`, `apikey` or `private_key` in its name is hidden (brackets count as part of a name, as in `config[secret]`), and so is any key with `pass` anywhere in it, unless the key part is exactly one of a few ordinary words such as `bypass`, `compass` or `lowpass`. Outside JSON, a hidden value takes the rest of its line with it, and runs past the line's end while a quote is still open. In JSON, a quoted value ends at its closing quote when a comma, a bracket or the line's end follows, and an array or object runs to its closing bracket, across lines. In the gh trace, a flag with one of those words in its name hides its value, and so do `--body` and `-b` for `gh secret`. URL passwords are hidden too, and so are tokens that start with a known prefix (`ghp_`, `github_pat_`, `glpat-`, `gitea_` and others). The cost: some harmless text shows as `<redacted>` (`[REDACTED]` in git traces), such as `byPassEnabled=true`, or `status=200` after `password=x` on the same line. A hidden value costs a little readability; a leaked one costs a credential.
 
 Summarize a trace file:
 
@@ -248,38 +351,26 @@ The recorder wrapper is temporary, prepends one directory to `PATH`, forwards re
 
 ## Routed Commands
 
-Only supported commands in allowlisted Forgejo repositories are routed through Forgejo. Everything else delegates to the real GitHub CLI.
+Only commands in allowlisted Forgejo repositories are routed. Everything else delegates to the real GitHub CLI unchanged.
 
-Supported pull request commands:
+These run the real `gh`, against a gateway the wrapper starts for the call, with the flags the gateway serves:
 
 ```sh
-gh pr checks
-gh pr checkout
-gh pr co
-gh pr comment
-gh pr create
-gh pr diff
-gh pr list
-gh pr new
-gh pr status
-gh pr view
+gh pr view | checks | list | create | comment | edit | merge | ready | close | reopen | checkout
+gh issue list | view | create | comment
+gh run list | view
+gh api
+gh auth token | status
 ```
 
-Supported issue commands:
+With any other flag, those commands, and these, are answered by the shim's own code:
 
 ```sh
-gh issue create
-gh issue list
-gh issue ls
-gh issue new
-gh issue view
-```
-
-Supported repository commands:
-
-```sh
+gh pr diff | status
 gh repo view
 ```
+
+gh's short forms (`pr co`, `pr new`, `issue ls`, `issue new`) are routed too.
 
 Unsupported commands and unsupported flags fail explicitly when routed, or delegate to the real `gh` when they are outside the shimmed Forgejo surface.
 
@@ -304,9 +395,43 @@ Unsupported commands and unsupported flags fail explicitly when routed, or deleg
 
 GitHub-only metadata flags such as reviewers, labels, assignees, projects, milestones, templates, recover, and maintainer-edit controls fail with a Forgejo-specific error.
 
-By default, `gh pr create` prints the created Forgejo pull request URL. For Codex.app compatibility, Forgejo `/pulls/7` URLs include a harmless fragment marker like `#codex-pr=/pull/7`, because Codex.app's create-PR action recognizes GitHub-style `/pull/7` URL markers when surfacing the new PR link.
+By default, `gh pr create` prints the created pull request's URL.
 
-`gh pr list` supports JSON output, repo selection, state, limit, head, and base filters. It currently accepts but does not apply several GitHub search-style filters, including author, app, assignee, label, and search. Real filtering for those flags is tracked as follow-up work in Beads issue `gh-forgejo-shim-9r8`.
+### Pull request links
+
+Every pull request URL the wrapper and the gateway print uses GitHub's layout,
+`https://<forge>/<owner>/<repo>/pull/7`, not Forgejo's `/pulls/7`. ChatGPT and Codex.app find a PR
+only by that `/pull/<number>` shape. Forgejo itself has no `/pull/` page:
+
+- **Server mode** redirects `/pull/7` to Forgejo's `/pulls/7`, so every link opens.
+- **Client-only installs:** the wrapper's own `--web` commands (`gh pr view --web`, `gh pr diff --web`,
+  `gh pr comment --web`, and `gh issue view --web` for a PR) give Forgejo's `/pulls/7` page. A `/pull/7` link opened anywhere else, such as
+  ChatGPT's "Open pull request in browser", gets a 404 unless the forge redirects it.
+
+If you run the forge, add the redirect to its reverse proxy. For nginx, in the forge's `server` block:
+
+```nginx
+location ~ "^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(/(?:files|commits|checks))?/?$" {
+    return 301 /$1/$2/pulls/$3$4$is_args$args;
+}
+```
+
+For Nginx Proxy Manager, paste the same block into the forge's proxy host, under **Advanced**, below
+anything already there.
+
+For Caddy, in the forge's site block:
+
+```caddyfile
+@pull_link path_regexp pull ^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(/(?:files|commits|checks))?/?$
+redir @pull_link /{re.pull.1}/{re.pull.2}/pulls/{re.pull.3}{re.pull.4}{?query} 301
+```
+
+Both match only plain owner and repository names, so a crafted path can't redirect to another site.
+They assume the forge is served at the root of its hostname; under a subpath, add the prefix to both
+the pattern and the target.
+Server mode's gateway does the same, and also redirects deeper paths under a PR.
+
+`gh pr list` runs the real `gh`, and the gateway applies its filters, including state, limit, head, base, author, assignee and label. `--search` takes GitHub's query syntax, and qualifiers that Forgejo has no equivalent for aren't applied.
 
 `gh pr view` and `gh pr status` return successfully when the current branch has no open PR. For JSON output, `gh pr view --json ...` returns `{}`, and `gh pr status --json ...` returns the GitHub CLI status envelope with `"currentBranch": null`.
 
@@ -423,7 +548,7 @@ visibility, watchers
   "currentBranch": {
     "number": 7,
     "title": "Add Forgejo support",
-    "url": "https://git.example.com/owner/repo/pulls/7"
+    "url": "https://git.example.com/owner/repo/pull/7"
   },
   "createdBy": [],
   "needsReview": []
@@ -436,14 +561,14 @@ Native auth commands:
 
 ```sh
 gh-forgejo-shim auth login [host]
-gh-forgejo-shim auth import [host]
+gh-forgejo-shim auth import --from fj|tea [--hostname HOST]
 gh-forgejo-shim auth status [host]
 gh-forgejo-shim auth logout [host]
 ```
 
 `auth login` prompts for a host when needed, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, stores it in shim-owned auth storage, and adds the host to the allowlist.
 
-`auth import` finds an existing token from supported sources, validates it, and stores it in the same shim-owned storage. This is useful when Terminal already has auth through an environment variable or another Forgejo CLI, but GUI-launched apps do not inherit that shell environment.
+`auth import --from fj` reads forgejo-cli's `keys.json`; `--from tea` reads tea's YAML config. It copies the requested host's token into shim storage and adds the host to the allowlist, without contacting the server. Omit `--hostname` only when the file has one entry. Missing or ambiguous entries cause an error without a write. The command prints the host and source path, never the token. Imports do not refresh OAuth tokens or read another tool's Keychain entries.
 
 `auth status` reports whether shim-owned auth exists for the host without printing secrets. `auth logout` removes only shim-owned stored auth for that host.
 
@@ -455,7 +580,7 @@ On macOS, the shim first tries to store tokens in Keychain with the system `secu
 
 The fallback file is written with owner-only permissions.
 
-Token environment variables are checked in this order:
+For each host, the shim first checks its stored token, then the variable named by that host's `token_env`. If exactly one Forgejo host is configured, it also checks these generic variables in order:
 
 ```text
 FJ_SHIM_TOKEN
@@ -464,15 +589,15 @@ GITEA_TOKEN
 FJ_TOKEN
 ```
 
-Environment variables take precedence for the current process. If none are set, the shim checks native shim storage and then tries common `fj`, `tea`, and `gitea` config files.
+Empty variables count as unset. With multiple hosts, generic variables never supply a token. Normal commands never read other tools' credential files; use the explicit import command once to copy a token.
 
 On macOS, the current `fj` CLI stores auth in:
 
 ```text
-~/Library/Application Support/Cyborus.forgejo-cli/keys.json
+~/Library/Application Support/forgejo-cli.forgejo-cli/keys.json
 ```
 
-The shim can import from that file when present.
+Import also accepts fj's older `Cyborus.forgejo-cli/keys.json` location. On Linux, fj uses `${XDG_DATA_HOME:-~/.local/share}/forgejo-cli/keys.json`. Tea uses `${XDG_CONFIG_HOME}/tea/config.yml`, defaulting to `~/Library/Application Support/tea/config.yml` on macOS or `~/.config/tea/config.yml` on Linux, with `~/.tea/tea.yml` as its legacy fallback.
 
 ## Configuration
 
@@ -487,10 +612,18 @@ Example:
 ```toml
 hosts = ["git.example.com"]
 
+[host."git.example.com"]
+api_url = "https://git.example.com"
+token_env = "EXAMPLE_FORGEJO_TOKEN"
+ca_file = "/path/to/ca.pem"
+wip_prefixes = ["WIP:", "[WIP]"]
+
 [paths]
 gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
 ```
+
+The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store. `wip_prefixes` lists the title prefixes the forge marks drafts with, and should match the forge's own WIP setting: commands that launch real gh strip them from a draft's title, and the first one marks a new draft. It defaults to `["WIP:", "[WIP]"]`; the list can't be empty, and a prefix can't contain a comma.
 
 Config commands:
 
@@ -505,6 +638,7 @@ Environment overrides:
 ```text
 FJ_SHIM_HOSTS
 FJ_SHIM_REAL_GH
+FJ_SHIM_ALLOW_UNKNOWN_GH
 FJ_SHIM_REAL_FJ
 FJ_SHIM_CA_FILE
 FJ_SHIM_TRACE
@@ -549,7 +683,7 @@ gfj doctor
 `doctor` checks:
 
 - Whether the current process `PATH` can resolve bare `gh`.
-- Whether the real GitHub CLI can be found from config, env, current `PATH`, or common install dirs.
+- Whether the real GitHub CLI can be found from config, env, current `PATH`, or common install dirs, and whether it is 2.103.3 or newer.
 - Whether managed `gh` is installed first and can delegate to real `gh`.
 - Whether duplicate managed wrappers are present.
 - Whether `bd` can be found for repo workflows. This is diagnostic only; `bd` is not part of the GitHub CLI shim.

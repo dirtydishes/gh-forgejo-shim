@@ -1,0 +1,25 @@
+{
+  "id": "pr-view-closed-7",
+  "argv": [
+    "pr",
+    "view",
+    "7",
+    "--json",
+    "number,state"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 7,
+  "normalize": [
+    "host",
+    "pr_urls",
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "{\"number\":7,\"state\":\"CLOSED\"}\n",
+    "stderr": ""
+  }
+}

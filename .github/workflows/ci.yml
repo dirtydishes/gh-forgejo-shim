@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "lavender/**"
+      - rewrite
   pull_request:
   workflow_dispatch:
 
@@ -15,6 +16,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  contract:
+    name: contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Cache cargo build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compare shim with committed gh oracle
+        run: scripts/contract/run.sh
+
   rust:
     name: rust
     runs-on: ubuntu-latest
@@ -39,6 +59,32 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --workspace --locked
+
+  gateway-e2e:
+    name: gateway e2e
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Run gh against the gateway and a real Forgejo
+        run: scripts/e2e.sh
+
+      - name: Run gh and Claude's lookups through the server-mode image and nginx snippet
+        run: scripts/e2e-server.sh
+
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-e2e-results
+          path: .local/e2e/
 
   release-package-smoke:
     name: release package smoke
@@ -94,7 +140,9 @@ jobs:
           EOF
           chmod +x "$real_bin/gh"
 
-          dist/smoke-install/gfj install-shim --bin-dir "$shim_bin"
+          # Install checks real gh's version (2.103.3 or newer); the runner's own gh may be
+          # older, so install against the fake one the wrapper will use below.
+          FJ_SHIM_REAL_GH="$real_bin/gh" dist/smoke-install/gfj install-shim --bin-dir "$shim_bin"
           test -x "$shim_bin/gh"
           if grep -Eiq 'python|pipx' "$shim_bin/gh"; then
             sed -n '1,20p' "$shim_bin/gh" >&2

@@ -1,0 +1,27 @@
+[
+  {
+    "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {id,url,number}\n    }\n  }",
+    "variables": {
+      "owner": "dirtydishes",
+      "pr_number": 29,
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "query": "mutation CommentCreate($input:AddCommentInput!){addComment(input: $input){commentEdge{node{url}}}}",
+    "variables": {
+      "input": {
+        "subjectId": "PR_kwDOVdZkPs8AAAABMHulKA",
+        "body": "x"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

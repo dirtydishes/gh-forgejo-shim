@@ -1,0 +1,23 @@
+# The launcher's launch list (crates/gh-forgejo-shim/src/launcher.rs, LAUNCH_LIST), one command
+# per line. The contract runner gives these cases real gh 2.103.3; every other case gets the
+# decoy. A unit test keeps this file equal to the code.
+pr view
+pr checks
+pr list
+api
+auth token
+auth status
+pr create
+pr comment
+pr edit
+pr merge
+pr ready
+pr close
+pr reopen
+pr checkout
+run list
+run view
+issue comment
+issue list
+issue view
+issue create

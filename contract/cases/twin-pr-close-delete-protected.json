@@ -1,0 +1,34 @@
+{
+  "id": "twin-pr-close-delete-protected",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-close-delete-held",
+    "pr": true,
+    "protect_head": true
+  },
+  "argv": [
+    "pr",
+    "close",
+    "{pr}",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "✓ Closed pull request dirtydishes/gfj\\-oracle#{pr} \\(twin: twin/pr-close-delete-held\\)\\n!\\ Skipped\\ deleting\\ the\\ local\\ branch\\ since\\ current\\ directory\\ is\\ not\\ a\\ git\\ repository\\nfailed to delete remote branch twin/pr\\-close\\-delete\\-held: HTTP 403: Resource not accessible by token \\(https://forge\\.test/api/v3/repos/dirtydishes/gfj\\-oracle/git/refs/heads%2Ftwin%2Fpr\\-close\\-delete\\-held\\)\\n"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "closed"
+      }
+    },
+    {
+      "path": "branches/{branch}",
+      "gone": false
+    }
+  ],
+  "normalize": []
+}

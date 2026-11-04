@@ -1,11 +1,15 @@
 //! Diagnostic checks for shim setup.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::auth;
 use crate::config::{self, Config, EnvMap};
+use crate::gh_version;
 use crate::gui_path;
-use crate::repo;
+use crate::invocation::Invocation;
+use crate::repo::{self, Checkout, GhHosts, RepoRef};
+use crate::routing::DispatcherConfig;
 use crate::setup::{self, SetupInspectOptions, TargetMode};
 use crate::Result;
 
@@ -92,15 +96,19 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     })?;
     let configured_fj = config.paths.fj.as_deref().map(Path::new);
     let real_fj = setup::find_tool("fj", configured_fj, &options.env, &fallback_dirs, false);
-    let token = auth::discover_fj_token(
-        config.hosts.first().map(String::as_str),
-        &options.env,
-        options.home.as_deref(),
-    );
+    let token = config.hosts.first().and_then(|host| {
+        auth::resolve_token(
+            host,
+            &config,
+            &options.env,
+            options.home.as_deref(),
+            Some(&options.platform),
+        )
+    });
 
     let mut checks = vec![
         current_path_check(&setup_model),
-        real_gh_check(&setup_model, &options.platform),
+        real_gh_check(&setup_model, &options.env, &options.platform),
         managed_gh_check(&setup_model),
     ];
     if let Some(check) = duplicate_managed_gh_check(&setup_model) {
@@ -138,8 +146,12 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     ));
 
     if should_check_current_repo {
-        if let Some(repo) = repo::detect_from_git(options.cwd.as_deref()) {
-            if config.is_forgejo_host(Some(&repo.host)) {
+        if let Some(CurrentRepo {
+            repo,
+            resolved_by_gh,
+        }) = current_repo(options.cwd.as_deref(), &options.env, &config)
+        {
+            if routes_to_forgejo(&config, &repo.host) {
                 checks.push(Check::new(
                     "current repo host",
                     true,
@@ -149,31 +161,229 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                     ),
                     Vec::<String>::new(),
                 ));
-            } else if config::is_known_github_host(Some(&repo.host)) {
+            } else if resolved_by_gh || is_github_host(&options.env, &repo.host) {
+                // gh resolves it, or it's GitHub's: github.com, or a host in the user's own gh
+                // hosts.yml (GitHub Enterprise, say). The wrapper hands it to real gh, and no
+                // command here may name it: allowlisting GHES would send it the Forgejo token.
+                let mut message = format!(
+                    "{} will delegate to the real GitHub CLI for {}/{}",
+                    repo.host, repo.owner, repo.name
+                );
+                if !config::is_known_github_host(Some(&repo.host))
+                    && in_gh_hosts_yml(&options.env, &repo.host)
+                {
+                    message.push_str(&format!(
+                        "; {} is in your gh hosts.yml, so doctor takes it for GitHub Enterprise; \
+                         if it's a Forgejo server, allowlist it with gh-forgejo-shim config \
+                         add-host HOST",
+                        repo.host
+                    ));
+                }
                 checks.push(Check::new(
                     "current repo host",
                     true,
-                    format!(
-                        "{} will delegate to the real GitHub CLI for {}/{}",
-                        repo.host, repo.owner, repo.name
-                    ),
+                    message,
                     Vec::<String>::new(),
                 ));
             } else {
+                // With the port the remote's web URL names, which gh drops. Quoted: an IPv6 host
+                // such as `[::1]:3000` is a glob pattern to the shell.
+                let entry = entry_with_web_port(options.cwd.as_deref(), &repo.host)
+                    .unwrap_or_else(|| repo.host.clone());
+                let command = format!(
+                    "gh-forgejo-shim config add-host {}",
+                    setup::shell_quote(&entry)
+                );
                 checks.push(Check::new(
                     "current repo host",
                     false,
-                    format!(
-                        "{} is not allowlisted; run gh-forgejo-shim config add-host {}",
-                        repo.host, repo.host
-                    ),
-                    [format!("gh-forgejo-shim config add-host {}", repo.host)],
+                    format!("{} is not allowlisted; run {command}", repo.host),
+                    [command],
                 ));
             }
         }
     }
 
     Ok(checks)
+}
+
+/// The repository a `gh` command run in `cwd` acts on, as [`current_repo`] finds it.
+pub(crate) struct CurrentRepo {
+    pub repo: RepoRef,
+    /// gh resolves this repository, so the wrapper routes it: to Forgejo if its host is
+    /// allowlisted, otherwise to real gh. When false, gh resolved nothing and this is the first
+    /// remote, on a host neither gh nor the allowlist knows yet.
+    pub resolved_by_gh: bool,
+}
+
+/// The repository a `gh` command run in `cwd` acts on, found the way the wrapper routes it, so
+/// `doctor` and `bootstrap` name the same one. In a fork whose origin is GitHub and whose
+/// allowlisted upstream is Forgejo, that's the upstream.
+pub(crate) fn current_repo(
+    cwd: Option<&Path>,
+    env: &EnvMap,
+    config: &Config,
+) -> Option<CurrentRepo> {
+    let env = gh_env(env);
+    // A command gh resolves a base repository for, with no -R and no URL to select another.
+    let invocation = Invocation::parse(&["pr".to_string(), "status".to_string()]);
+    let checkout = Checkout::new(cwd);
+    let launched = repo::detect_repo(
+        &invocation,
+        &env,
+        &checkout,
+        &GhHosts::load(&env, &config.hosts),
+    )
+    .repo;
+    // As routing does: plain gh knows only the user's hosts, and may still pick a Forgejo one.
+    let found = match launched {
+        Some(repo) if routes_to_forgejo(config, &repo.host) => Some(repo),
+        launched => repo::detect_repo(&invocation, &env, &checkout, &GhHosts::user(&env))
+            .repo
+            .filter(|repo| routes_to_forgejo(config, &repo.host))
+            .or(launched),
+    };
+    if let Some(repo) = found {
+        return Some(CurrentRepo {
+            repo,
+            resolved_by_gh: true,
+        });
+    }
+    // GH_REPO or GH_HOST pins gh to a repository or a host; with nothing found there, gh and the
+    // wrapper act on no remote, so neither does this.
+    // Tested as repo.rs tests them: a GH_HOST of spaces still pins gh to that host.
+    if ["GH_REPO", "GH_HOST"]
+        .iter()
+        .any(|name| env.get(*name).is_some_and(|value| !value.is_empty()))
+    {
+        return None;
+    }
+    // Fallback for unknown hosts. gh skips a remote whose host it doesn't know, so on a first run
+    // in a Forgejo checkout, before its host is allowlisted, it finds nothing. That remote is the
+    // one bootstrap should allowlist and doctor should name, so take the first remote, origin
+    // first, as before routing followed gh.
+    repo::detect_from_git(cwd).map(|repo| CurrentRepo {
+        repo,
+        resolved_by_gh: false,
+    })
+}
+
+/// `env` in the form the repo module takes.
+fn gh_env(env: &EnvMap) -> HashMap<String, String> {
+    env.iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Whether `host` is GitHub's: github.com, ghe.com and the names under them, or a host in the
+/// user's own gh `hosts.yml` ([`in_gh_hosts_yml`]).
+pub(crate) fn is_github_host(env: &EnvMap, host: &str) -> bool {
+    config::is_known_github_host(Some(host)) || in_gh_hosts_yml(env, host)
+}
+
+/// Whether the user's own gh `hosts.yml` lists `host`, compared as gh compares hosts: no port,
+/// any case. Such a host is most likely GitHub Enterprise, though a Forgejo server can be listed
+/// too, and nothing here can tell them apart. `GH_HOST` doesn't count: it names a host for gh to
+/// use, not one the user logged in to.
+pub(crate) fn in_gh_hosts_yml(env: &EnvMap, host: &str) -> bool {
+    let host = repo::gh_hostname(host);
+    repo::user_gh_hosts(&gh_env(env))
+        .iter()
+        .any(|listed| repo::gh_hostname(listed) == host)
+}
+
+/// The allowlist entry for `host` with the port the checkout's web remotes name, such as
+/// `git.example.com:3000` for `https://git.example.com:3000/owner/repo.git`. gh drops a remote's
+/// port, so `host` has none, and the wrapper would call the server's default port.
+///
+/// When in doubt, no port: every http(s) fetch and push URL of every remote on this hostname
+/// counts, whichever repository it leads to and with `www.` dropped as gh drops it, and they
+/// must all name one port, a URL without one counting as its scheme's default (443, or 80). A
+/// default port isn't written. An `ssh://` port is the SSH server's, so SSH URLs don't count.
+pub(crate) fn entry_with_web_port(cwd: Option<&Path>, host: &str) -> Option<String> {
+    let hostname = web_hostname(host);
+    let remotes = crate::external::git_output(&["remote"], cwd)?;
+    let mut ports = Vec::new();
+    for name in remotes
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        for args in [
+            &["remote", "get-url", "--all", name][..],
+            &["remote", "get-url", "--push", "--all", name],
+        ] {
+            let urls = crate::external::git_output(args, cwd).unwrap_or_default();
+            ports.extend(urls.lines().filter_map(|url| web_port(url, &hostname)));
+        }
+    }
+    let port = *ports.first()?;
+    if ports.iter().any(|other| *other != port) || port == 443 || port == 80 {
+        return None;
+    }
+    host_with_port(&hostname, port)
+}
+
+/// `hostname:port` as an allowlist entry; an IPv6 address keeps its brackets (Sol s1#5 on #175).
+fn host_with_port(hostname: &str, port: u32) -> Option<String> {
+    let entry = if hostname.contains(':') {
+        format!("[{hostname}]:{port}")
+    } else {
+        format!("{hostname}:{port}")
+    };
+    config::normalized_forgejo_host(&entry)
+}
+
+/// A host as gh compares remotes: no port, lowercase, and no leading `www.`.
+fn web_hostname(host: &str) -> String {
+    let hostname = repo::gh_hostname(host);
+    hostname
+        .strip_prefix("www.")
+        .map_or_else(|| hostname.clone(), str::to_string)
+}
+
+/// The web port an http(s) `url` on `hostname` uses: the one it names, or its scheme's default
+/// (443, or 80 for plain HTTP).
+fn web_port(url: &str, hostname: &str) -> Option<u32> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if web_hostname(host_port) != hostname {
+        return None;
+    }
+    let port = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once("]:").map(|(_, port)| port),
+        None if host_port.matches(':').count() == 1 => {
+            host_port.rsplit_once(':').map(|(_, port)| port)
+        }
+        None => None,
+    };
+    match port {
+        None => Some(default),
+        Some(port) => port.parse().ok().filter(|port| *port > 0),
+    }
+}
+
+/// Whether the wrapper routes a repository on `host` to Forgejo.
+pub(crate) fn routes_to_forgejo(config: &Config, host: &str) -> bool {
+    allowlist_entry(config, host).is_some()
+}
+
+/// The allowlist entry the wrapper routes a repository on `host` to. gh drops a remote's port, so
+/// `git.example.com` finds the entry `git.example.com:3000`.
+pub(crate) fn allowlist_entry(config: &Config, host: &str) -> Option<String> {
+    DispatcherConfig {
+        hosts: config.hosts.clone(),
+        real_gh: None,
+    }
+    .forgejo_host(host)
 }
 
 pub fn format_checks(checks: &[Check]) -> String {
@@ -270,26 +480,49 @@ fn current_path_check(model: &setup::SetupModel) -> Check {
     )
 }
 
-fn real_gh_check(model: &setup::SetupModel, platform: &str) -> Check {
-    if let Some(real_gh) = model.real_gh.as_ref() {
-        return Check::new(
-            "real gh",
-            true,
-            format!("found {} via {}", real_gh.path.display(), real_gh.source),
-            Vec::<String>::new(),
-        );
+/// Whether real gh is there and new enough ([`gh_version::MINIMUM`]).
+fn real_gh_check(model: &setup::SetupModel, env: &EnvMap, platform: &str) -> Check {
+    let check = gh_version::check(model.real_gh.as_ref(), env, platform);
+    match check.status {
+        gh_version::Status::Supported => {
+            Check::new("real gh", true, check.detail, Vec::<String>::new())
+        }
+        gh_version::Status::AllowedUnknown => Check::warn("real gh", check.detail),
+        gh_version::Status::Refused => {
+            Check::new("real gh", false, check.detail, check.repair_commands)
+        }
     }
-    Check::new(
-        "real gh",
-        false,
-        "could not find the real GitHub CLI from config, env, current PATH, or common install dirs",
-        real_gh_repair_commands(platform),
-    )
 }
 
 fn managed_gh_check(model: &setup::SetupModel) -> Check {
     if model.first_current_gh_is_managed {
         let first_gh = model.first_current_gh.as_ref().expect("managed gh path");
+        // A wrapper whose binary was moved or deleted, or that this user can't run, fails every
+        // call, real gh or not. So does one whose target can't be read back.
+        let target = crate::shim::wrapper_target(first_gh);
+        let unreadable = target.is_none() && crate::shim::is_rust_wrapper(first_gh);
+        if let Some(target) = target
+            .filter(|target| !runnable_by_this_user(target))
+            .or_else(|| unreadable.then(|| PathBuf::from("an unreadable path")))
+        {
+            let bin_dir = first_gh.parent().unwrap_or(&model.target_bin_dir);
+            return Check::new(
+                "managed gh",
+                false,
+                format!(
+                    "{} runs {}, which is missing or not executable",
+                    first_gh.display(),
+                    target.display()
+                ),
+                vec![
+                    format!(
+                        "gh-forgejo-shim install-shim --bin-dir {}",
+                        setup::shell_quote(&bin_dir.display().to_string())
+                    ),
+                    "gh-forgejo-shim doctor".to_string(),
+                ],
+            );
+        }
         if model.real_gh.is_some() {
             return Check::new(
                 "managed gh",
@@ -424,8 +657,24 @@ fn fj_check(real_fj: Option<setup::ToolPath>) -> Check {
     }
     Check::warn(
         "fj",
-        "not found; auth import can still use env, shim storage, tea, or gitea configs",
+        "not found; auth import --from fj or --from tea reads its source file directly",
     )
+}
+
+/// A regular file this user may execute. The execute bits alone don't say that: `0655` has
+/// them, but not for its owner. `access(X_OK)` asks the kernel, which applies the user's ids.
+fn runnable_by_this_user(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        setup::is_executable_file(path)
+    }
 }
 
 fn path_repair_commands(target_bin_dir: &Path) -> Vec<String> {
@@ -473,6 +722,41 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn a_web_remote_has_a_port_and_an_ssh_one_does_not() {
+        for (url, port) in [
+            ("https://git.example.com:3000/owner/repo.git", Some(3000)),
+            ("http://git.example.com:3000/owner/repo", Some(3000)),
+            (
+                "https://alice:secret@Git.Example.com:3000/Owner/Repo.git/",
+                Some(3000),
+            ),
+            ("https://git.example.com/owner/repo.git", Some(443)),
+            ("HTTP://git.example.com/owner/repo.git", Some(80)),
+            // gh drops `www.` (Sol s1#2 on #175).
+            ("https://www.git.example.com/owner/repo.git", Some(443)),
+            ("https://git.example.com:3000/any/path/at/all", Some(3000)),
+            ("ssh://git@git.example.com:2222/owner/repo.git", None),
+            ("git@git.example.com:owner/repo.git", None),
+            ("https://other.example.com:3000/owner/repo.git", None),
+            ("https://git.example.com:/owner/repo.git", None),
+        ] {
+            assert_eq!(web_port(url, "git.example.com"), port, "{url}");
+        }
+        assert_eq!(
+            web_port("https://[2001:db8::1]:3000/owner/repo.git", "2001:db8::1"),
+            Some(3000)
+        );
+        assert_eq!(
+            host_with_port("2001:db8::1", 3000).as_deref(),
+            Some("[2001:db8::1]:3000")
+        );
+        assert_eq!(
+            host_with_port("git.example.com", 3000).as_deref(),
+            Some("git.example.com:3000")
+        );
+    }
+
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
     #[test]
@@ -484,6 +768,7 @@ mod tests {
         fs::create_dir_all(&shim_a)?;
         fs::create_dir_all(&shim_b)?;
         fs::create_dir_all(&real_dir)?;
+        write_executable(&fixture.root.join("gh-forgejo-shim"), "#!/bin/sh\nexit 0\n")?;
         write_executable(
             &shim_a.join("gh"),
             &crate::shim::shim_script(&fixture.root.join("gh-forgejo-shim")),
@@ -492,10 +777,14 @@ mod tests {
             &shim_b.join("gh"),
             &crate::shim::shim_script(&fixture.root.join("gh-forgejo-shim")),
         )?;
-        write_executable(&real_dir.join("gh"), "#!/bin/sh\nexit 0\n")?;
+        write_executable(
+            &real_dir.join("gh"),
+            "#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n",
+        )?;
 
         let checks = run_checks(CheckOptions {
             config: Some(Config {
+                host: Default::default(),
                 hosts: vec!["git.example.com".to_string()],
                 paths: config::PathsConfig { gh: None, fj: None },
                 path: fixture.home.join("config.toml"),
@@ -540,10 +829,14 @@ mod tests {
         let homebrew = fixture.root.join("homebrew").join("bin");
         fs::create_dir_all(&cargo_bin)?;
         fs::create_dir_all(&homebrew)?;
-        write_executable(&homebrew.join("gh"), "#!/bin/sh\nexit 0\n")?;
+        write_executable(
+            &homebrew.join("gh"),
+            "#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n",
+        )?;
 
         let checks = run_checks(CheckOptions {
             config: Some(Config {
+                host: Default::default(),
                 hosts: vec!["git.example.com".to_string()],
                 paths: config::PathsConfig { gh: None, fj: None },
                 path: fixture.home.join("config.toml"),
@@ -604,22 +897,37 @@ mod tests {
         }
     }
 
-    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
-        fs::write(path, contents)?;
-        make_executable(path)
-    }
-
+    /// Doctor now runs the fake real gh (`--version`), so it's written from a child `sh`: this
+    /// process never holds a write descriptor a sibling test's fork could inherit (ETXTBSY).
     #[cfg(unix)]
-    fn make_executable(path: &Path) -> io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions)
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let written = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no stdin"))?
+            .write_all(contents.as_bytes());
+        let status = child.wait()?;
+        written?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "writing {}: {status}",
+                path.display()
+            )))
+        }
     }
 
     #[cfg(not(unix))]
-    fn make_executable(_path: &Path) -> io::Result<()> {
-        Ok(())
+    fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+        fs::write(path, contents)
     }
 }

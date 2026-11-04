@@ -1,0 +1,16 @@
+{
+  "id": "local-builtin-issue-view-text",
+  "kind": "shim-local",
+  "argv": [
+    "issue",
+    "view",
+    "1"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 0,
+    "stdout": "#1 scenario: checks pass\nstate: OPEN\nurl: https://forge.test/dirtydishes/gfj-oracle/pull/1\n\nOracle scenario `s/pass`. Do not merge by hand.\n",
+    "stderr": ""
+  }
+}

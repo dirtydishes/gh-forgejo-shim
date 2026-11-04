@@ -1,0 +1,15 @@
+title:	scenario: checks fail
+state:	OPEN
+author:	dirtydishes (dirtydishes)
+labels:	
+assignees:	
+reviewers:	
+projects:	
+milestone:	
+number:	2
+url:	https://github.com/dirtydishes/gfj-oracle/pull/2
+additions:	1
+deletions:	0
+auto-merge:	disabled
+--
+Oracle scenario `s/fail`. Do not merge by hand.

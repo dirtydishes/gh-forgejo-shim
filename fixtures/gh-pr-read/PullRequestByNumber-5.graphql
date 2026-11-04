@@ -1,0 +1,6 @@
+
+	query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {
+		repository(owner: $owner, name: $repo) {
+			pullRequest(number: $pr_number) {additions,author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},baseRefName,comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,deletions,headRefName,headRefOid,isDraft,latestReviews(first: 100) {nodes {author{login},authorAssociation,submittedAt,body,state}},mergedAt,mergedBy{login,...on User{id,name}},mergeStateStatus,mergeable,number,reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},reviewDecision,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login,name},...on Bot{login},...on Team{organization{login}name,slug}}}},state,title,updatedAt,url,body,commits(first: 100) {nodes {commit {authors(first:100) {nodes {name,email,user{id,login}}},messageHeadline,messageBody,oid,committedDate,authoredDate}}},id}
+		}
+	}

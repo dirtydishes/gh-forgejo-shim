@@ -287,7 +287,7 @@
       <ul>
         <li>This is still not full GitHub CLI emulation. Unsupported commands continue to delegate to real <code>gh</code>.</li>
         <li><code>gh pr list</code> accepts several search flags without applying their filters yet. That keeps automation from failing early, but follow-up work should implement real filtering or explicit Forgejo API query support.</li>
-        <li>Live validation did not include a successful call against a known existing Forgejo repository because this checkout's <code>origin</code> is GitHub and no matching local <code>git.deltaisland.io</code> checkout was found under <code>/Users/kell/dev</code>.</li>
+        <li>Live validation did not include a successful call against a known existing Forgejo repository because this checkout's <code>origin</code> is GitHub and no matching local <code>old-forge.example.com</code> checkout was found under <code>~/dev</code>.</li>
         <li>The Diffs render is static SSR HTML generated during the turn. It does not hydrate interactivity offline, but the rendered diff content is readable without network access.</li>
       </ul>
     </section>

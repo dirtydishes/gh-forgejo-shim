@@ -1,0 +1,14 @@
+{
+  "id": "error-unknown-pr-command",
+  "argv": [
+    "pr",
+    "gfjs-unknown"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "oracle": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "unknown command \"gfjs-unknown\" for \"gh pr\"\n\nUsage:  gh pr <command> [flags]\n\nAvailable commands:\n  checkout\n  checks\n  close\n  comment\n  create\n  diff\n  edit\n  list\n  lock\n  merge\n  ready\n  reopen\n  revert\n  review\n  status\n  unlock\n  update-branch\n  view\n"
+  }
+}

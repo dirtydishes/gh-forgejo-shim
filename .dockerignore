@@ -1,0 +1,13 @@
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/
+!crates/**
+!contract/
+!contract/**
+!scripts/
+!scripts/e2e/
+!scripts/e2e/**
+!fixtures/
+!fixtures/gh-pr-view.graphql

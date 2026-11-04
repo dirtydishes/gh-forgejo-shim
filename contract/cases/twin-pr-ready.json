@@ -1,0 +1,34 @@
+{
+  "id": "twin-pr-ready",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-ready",
+    "pr": true,
+    "draft": true
+  },
+  "argv": [
+    "pr",
+    "ready",
+    "{pr}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": "✓ Pull request dirtydishes/gfj\\-oracle#{pr} is marked as \"ready for review\"\\n"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "draft": false
+      }
+    }
+  ],
+  "normalize": [],
+  "shim_config": {
+    "wip_prefixes": [
+      "scenario: draft"
+    ]
+  }
+}

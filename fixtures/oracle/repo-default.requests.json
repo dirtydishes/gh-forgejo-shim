@@ -1,0 +1,17 @@
+[
+  {
+    "query": "query RepositoryInfo($owner: String!, $name: String!) {\n    repository(owner: $owner, name: $name) {name,owner{id,login},description}\n  }",
+    "variables": {
+      "name": "gfj-oracle",
+      "owner": "dirtydishes"
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  },
+  {
+    "method": "GET",
+    "path": "/repos/dirtydishes/gfj-oracle/readme"
+  }
+]

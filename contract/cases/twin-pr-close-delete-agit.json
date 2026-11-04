@@ -1,0 +1,31 @@
+{
+  "id": "twin-pr-close-delete-agit",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-close-agit",
+    "pr": true,
+    "agit": true
+  },
+  "argv": [
+    "pr",
+    "close",
+    "{pr}",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": "\u2713\\ Closed\\ pull\\ request\\ dirtydishes/gfj\\-oracle\\#{pr}\\ \\(twin:\\ twin/pr\\-close\\-agit\\)\\\n!\\ Skipped\\ deleting\\ the\\ local\\ branch\\ since\\ current\\ directory\\ is\\ not\\ a\\ git\\ repository\\\n!\\ Skipped\\ deleting\\ the\\ remote\\ branch\\ of\\ a\\ pull\\ request\\ from\\ fork\\\n\u2713\\ Deleted\\ branch\\ refs/pull/{pr}/head\\\n"
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "closed",
+        "merged": false
+      }
+    }
+  ],
+  "normalize": []
+}

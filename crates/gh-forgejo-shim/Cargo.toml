@@ -24,13 +24,31 @@ path = "src/main.rs"
 name = "gfj"
 path = "src/bin/gfj.rs"
 
+[[test]]
+name = "contract"
+path = "../../tests/contract.rs"
+
 [dependencies]
+fga-core = { path = "../fga-core", default-features = false }
+fga-server = { path = "../fga-server" }
+axum.workspace = true
+tokio = { workspace = true, features = ["rt", "process"] }
+url.workspace = true
+glob = "0.3"
+memchr = "2.8"
+time = { version = "0.3", features = ["formatting", "parsing"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 toml = "0.8"
+toml_edit = "0.22"
 ureq = { version = "2.10", default-features = false, features = ["tls"] }
 rpassword = "7.3"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.3", default-features = false }
+rustix = { version = "1.1", features = ["fs", "process", "termios"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,100 @@
+## gh auth login
+   GET /api/v3/ -> 200
+   GQL query UserCurrent
+## gh auth status
+   GET /api/v3/ -> 200
+## gh api user
+   GET /api/v3/user -> 200
+## gh repo view dirtydishes/gfj-oracle --json name,owner,defaultBranchRef,url
+   GQL query RepositoryInfo
+## gh pr list -R dirtydishes/gfj-oracle --head s/pass --author @me --state all --json number,url,state,hea
+   GET /api/v3/meta -> 200
+   GQL query SearchType_enumValues
+   GQL query PullRequestSearch
+## gh pr list -R dirtydishes/gfj-oracle --state all --limit 5
+   GQL query PullRequestList
+## gh pr view 1 -R dirtydishes/gfj-oracle --json number,title,url,state,isDraft,mergeable,mergeStateStatus
+   GQL query PullRequestByNumber
+## gh pr view 2 -R dirtydishes/gfj-oracle
+   GQL query PullRequestByNumber
+   GQL query PullRequestProjectItems
+## gh pr checks 2 -R dirtydishes/gfj-oracle
+   GQL query PullRequestByNumber
+   GQL query PullRequest_fields
+   GQL query PullRequest_fields2
+   GQL query PullRequestStatusChecks
+## gh pr checks 5 -R dirtydishes/gfj-oracle
+   GQL query PullRequestByNumber
+   GQL query PullRequestStatusChecks
+## gh pr diff 1 -R dirtydishes/gfj-oracle
+   GQL query PullRequestByNumber
+   GET /api/v3/repos/dirtydishes/gfj-oracle/pulls/{n} -> 200
+## gh api graphql -f query=query { viewer { login } }
+   GQL query (anonymous)
+## gh pr view 1 -R dirtydishes/gfj-oracle --json additions,author,autoMergeRequest,baseRefName,comments,cr
+   GQL query PullRequestByNumber
+## gh pr status -R dirtydishes/gfj-oracle
+   GQL query UserCurrent
+   GQL query PullRequestStatus
+   GET /api/v3/repos/dirtydishes/gfj-oracle/pulls/{n} -> 200
+## gh api repos/dirtydishes/gfj-oracle/commits/a1c1fca385dee273423b0d5079edd339e08b8eec/pulls
+   GET /api/v3/repos/dirtydishes/gfj-oracle/commits/{sha}/pulls -> 200
+## gh issue list -R dirtydishes/gfj-oracle
+   GQL query IssueList
+## gh run list -R dirtydishes/gfj-oracle --limit 3
+   GET /api/v3/repos/dirtydishes/gfj-oracle/actions/runs -> 200
+   GET /api/v3/repos/dirtydishes/gfj-oracle/actions/workflows -> 200
+## gh pr create -R dirtydishes/gfj-oracle --base main --head s/gw-flow --title scenario: gateway spike wri
+   GQL query RepositoryInfo
+   GQL query Issue_fields
+   GQL query PullRequestForBranch
+   GQL mutation PullRequestCreate
+   GQL query PullRequestList
+## gh pr comment 10 -R dirtydishes/gfj-oracle --body comment via recorder
+   GQL query PullRequestByNumber
+   GQL mutation CommentCreate
+## gh pr edit 10 -R dirtydishes/gfj-oracle --title scenario: gateway spike write flow (edited)
+   GQL query PullRequestByNumber
+   GQL query PullRequestProjectItems
+   GQL mutation PullRequestUpdate
+## gh pr ready 10 -R dirtydishes/gfj-oracle --undo
+   GQL query PullRequestByNumber
+   GQL mutation ConvertPullRequestToDraft
+## gh pr ready 10 -R dirtydishes/gfj-oracle
+   GQL query PullRequestByNumber
+   GQL mutation PullRequestReadyForReview
+## gh pr merge 10 -R dirtydishes/gfj-oracle --merge --match-head-commit 7978d3fb6d7866428f780b617534317f72
+   GQL query PullRequestByNumber
+   GQL mutation PullRequestMerge
+
+# GraphQL operations: 21
+   query PullRequestByNumber 12
+   query UserCurrent 2
+   query RepositoryInfo 2
+   query PullRequestList 2
+   query PullRequestProjectItems 2
+   query PullRequestStatusChecks 2
+   query SearchType_enumValues 1
+   query PullRequestSearch 1
+   query PullRequest_fields 1
+   query PullRequest_fields2 1
+   query (anonymous) 1
+   query PullRequestStatus 1
+   query IssueList 1
+   query Issue_fields 1
+   query PullRequestForBranch 1
+   mutation PullRequestCreate 1
+   mutation CommentCreate 1
+   mutation PullRequestUpdate 1
+   mutation ConvertPullRequestToDraft 1
+   mutation PullRequestReadyForReview 1
+   mutation PullRequestMerge 1
+
+# REST endpoints: 7
+   GET /api/v3/ 2
+   GET /api/v3/repos/dirtydishes/gfj-oracle/pulls/{n} 2
+   GET /api/v3/user 1
+   GET /api/v3/meta 1
+   GET /api/v3/repos/dirtydishes/gfj-oracle/commits/{sha}/pulls 1
+   GET /api/v3/repos/dirtydishes/gfj-oracle/actions/runs 1
+   GET /api/v3/repos/dirtydishes/gfj-oracle/actions/workflows 1

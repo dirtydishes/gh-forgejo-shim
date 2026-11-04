@@ -80,6 +80,19 @@ impl CliFixture {
         Ok(path)
     }
 
+    /// A real gh of the oldest version the shim supports: it answers `--version` with that and
+    /// prints `real-gh` otherwise. Written from a child `sh`, so no sibling test's fork can hold
+    /// it open for writing when it runs (ETXTBSY).
+    pub fn supported_gh(&self) -> io::Result<PathBuf> {
+        let dir = self.root.join("real");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("gh");
+        if !path.exists() {
+            write_script_from_child(&path, SUPPORTED_GH)?;
+        }
+        Ok(path)
+    }
+
     pub fn command(&self, binary: &str) -> io::Result<Command> {
         let mut command = Command::new(cargo_bin_path(binary)?);
         command
@@ -88,6 +101,7 @@ impl CliFixture {
             .env("HOME", &self.home)
             .env("PATH", self.fixture_path()?)
             .env("FJ_SHIM_HOSTS", "git.example.com")
+            .env("FJ_SHIM_AUTH_STORE", "file")
             .env("FJ_SHIM_REAL_GH", "/missing/gh");
         Ok(command)
     }
@@ -101,7 +115,7 @@ impl CliFixture {
         })
     }
 
-    fn git<I, S>(&self, args: I) -> io::Result<()>
+    pub fn git<I, S>(&self, args: I) -> io::Result<()>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -131,6 +145,37 @@ impl CliFixture {
                 "git {args:?} failed with {status}"
             )))
         }
+    }
+}
+
+/// A fake real gh that reports the oldest version the shim supports.
+pub const SUPPORTED_GH: &str = "#!/bin/sh\n\
+    if [ \"$1\" = --version ]; then echo 'gh version 2.103.3 (2026-05-01)'; else echo real-gh; fi\n";
+
+/// Writes an executable script through a child `sh`, so this process never holds a write
+/// descriptor on it.
+pub fn write_script_from_child(path: &Path, body: &str) -> io::Result<()> {
+    use std::io::Write;
+
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let written = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("no stdin"))?
+        .write_all(body.as_bytes());
+    let status = child.wait()?;
+    written?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "writing {}: {status}",
+            path.display()
+        )))
     }
 }
 
@@ -186,7 +231,7 @@ pub struct GoldenProbe {
 
 pub fn load_contract() -> Result<CompatibilityContract, Box<dyn std::error::Error>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v1.json");
+        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v2.json");
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
 }

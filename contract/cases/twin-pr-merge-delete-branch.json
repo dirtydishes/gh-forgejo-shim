@@ -1,0 +1,35 @@
+{
+  "id": "twin-pr-merge-delete-branch",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-merge-delete",
+    "pr": true,
+    "base": true
+  },
+  "argv": [
+    "pr",
+    "merge",
+    "{pr}",
+    "--squash",
+    "--delete-branch"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "merged": true
+      }
+    },
+    {
+      "path": "branches/{branch}",
+      "gone": true
+    }
+  ],
+  "normalize": []
+}

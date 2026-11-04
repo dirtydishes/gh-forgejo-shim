@@ -1,0 +1,23 @@
+{
+  "id": "pr-checks-json-fail-2",
+  "argv": [
+    "pr",
+    "checks",
+    "2",
+    "--json",
+    "bucket,name"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 2,
+  "normalize": [
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "Compare JSON values and array order without object key order or whitespace differences."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "[{\"bucket\":\"fail\",\"name\":\"check\"},{\"bucket\":\"pass\",\"name\":\"lint\"}]\n",
+    "stderr": ""
+  }
+}

@@ -1,0 +1,209 @@
+"""Case validation and explicit output normalization, shared by capture and tests."""
+
+import json
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+REPO = "dirtydishes/gfj-oracle"
+NORMALIZERS = {
+    "host", "pr_urls", "timestamps", "durations", "shas", "node_ids",
+    "check_details_urls", "json",
+}
+VALUE_FLAGS = {
+    "--json", "--jq", "-q", "--head", "-H", "--base", "-B", "--author",
+    "-A", "--state", "-s", "--limit", "-L", "--label",
+    "-l", "--assignee", "-a", "--repo", "-R",
+}
+BOOL_FLAGS = {"--name-only", "--patch", "--required", "--verbose"}
+SAFE_ENV = {"NO_COLOR", "CLICOLOR", "TERM", "TZ", "LANG", "LC_ALL", "COLUMNS"}
+
+# Exact client-error probes keep unknown flags and missing values out of the general allowlist.
+ERROR_PROBES = [
+    ["pr", "view", "1", "--gfjs-unknown"],
+    ["pr", "view", "1", "--template"],
+    ["pr", "view", "1", "--json"],
+    ["pr", "view", "1", "--json", "x"],
+    ["pr", "view", "1", "--jq", ".number"],
+    ["pr", "gfjs-unknown"],
+    ["pr", "view", "1", "-Z"],
+    ["pr", "view", "1", "--comments=no"],
+]
+# Off-list commands that must delegate, so the runner can prove they still reach the decoy.
+DECOY_PROBES = [
+    # gh's own version, in a Forgejo checkout: real gh answers it without a request.
+    ["--version"],
+    ["version"],
+    # The spec's delegate list (launcher §2): gh's own state, and help, in a Forgejo checkout.
+    ["auth", "setup-git"],
+    ["config", "get", "editor"],
+    ["pr", "view", "--help"],
+]
+LOCAL_PROBES = [
+    # Near a forge (the runner's checkout and GH_HOST), a call off the delegate list never runs
+    # plain gh, even one naming GitHub (launcher §2).
+    ["pr", "list", "-R", f"github.com/{REPO}"],
+    # gh sends the workflow's file name, which the gateway can't take yet (C4, cwe.18.1).
+    ["run", "list", "--workflow", "ci.yml"],
+    # run view's text lists the run's jobs, which the gateway can't (o2#1 on #125).
+    ["run", "view", "1"],
+    # issue view's text keeps the built-in path, whose own view has no dependencies to leave empty
+    # (o1#2 on #131); a launched gh's lists them, and the gateway leaves them empty.
+    ["issue", "view", "1"],
+    # --subject: a merge commit message the gateway doesn't take yet.
+    ["pr", "merge", "1", "--merge", "--subject", "s"],
+    # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
+    ["pr", "edit", "1", "--title", "x", "--add-reviewer", "alice"],
+    ["api", f"repos/{REPO}/pulls"],
+]
+
+
+def validate_case(case):
+    """Reject unsafe commands before reading credentials or starting any command."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", case["id"]):
+        raise ValueError("invalid case id")
+    if case["repo"] != REPO:
+        raise ValueError("only dirtydishes/gfj-oracle is allowed")
+    if not set(case.get("env", {})) <= SAFE_ENV:
+        raise ValueError("case env may only change output formatting")
+    if not set(case["normalize"]) <= NORMALIZERS:
+        raise ValueError("unknown normalizer")
+    if "json" in case["normalize"] and not case.get("normalize_reason", {}).get("json"):
+        raise ValueError("json normalization needs a one-line justification")
+    if "xfail" in case and not case["xfail"].strip():
+        raise ValueError("xfail needs a concrete reason")
+    argv = case["argv"]
+    if not isinstance(argv, list) or not argv or any(not isinstance(a, str) for a in argv):
+        raise ValueError("argv must be a nonempty string array")
+    kind = case.get("kind", "oracle")
+    if kind == "decoy":
+        if argv not in DECOY_PROBES:
+            raise ValueError("decoy command is outside the exact decoy allowlist")
+        if "oracle" in case or "expected" in case:
+            raise ValueError("decoy cases expect only the decoy")
+        return
+    if kind == "twin":
+        from twin import validate as validate_twin
+
+        validate_twin(case)
+        return
+    if kind == "shim-local":
+        if argv not in LOCAL_PROBES:
+            raise ValueError("shim-local command is outside the exact local allowlist")
+        if not isinstance(case.get("expected"), dict) or "oracle" in case:
+            raise ValueError("shim-local cases require expected output and no oracle")
+        return
+    if kind != "oracle":
+        raise ValueError("unknown case kind")
+    if argv in ERROR_PROBES:
+        return
+    command = tuple(argv[:2])
+    if argv == ["--version"]:
+        return
+    allowed = {("pr", verb) for verb in ("view", "list", "checks", "diff", "status")}
+    allowed |= {("repo", "view"), ("api", "user"), ("api", "rate_limit"), ("auth", "status")}
+    if command not in allowed:
+        raise ValueError("command is outside the read-only allowlist")
+    # --show-token is deliberately excluded even though auth status is read-only.
+    values = VALUE_FLAGS if command[0] == "pr" else {"--json", "--jq", "-q"}
+    bools = BOOL_FLAGS if command[0] == "pr" else set()
+    index = 2
+    positional = 0
+    while index < len(argv):
+        arg = argv[index]
+        flag, equal, value = arg.partition("=")
+        if flag in values:
+            if not equal:
+                index += 1
+                if index == len(argv):
+                    raise ValueError(f"missing value for {flag}")
+                value = argv[index]
+            if flag in {"--repo", "-R"} and value != f"forge.test/{REPO}":
+                raise ValueError("repository override must name the twin")
+        elif arg in bools:
+            pass
+        elif command[0] == "pr" and arg.startswith("-R") and len(arg) > 2:
+            if arg[2:].removeprefix("=") != f"forge.test/{REPO}":
+                raise ValueError("repository override must name the twin")
+        elif not arg.startswith("-") and command in {
+            ("pr", "view"), ("pr", "checks"), ("pr", "diff"), ("repo", "view"),
+        }:
+            positional += 1
+            if positional > 1:
+                raise ValueError("too many positional arguments")
+            if command == ("repo", "view"):
+                if arg != f"forge.test/{REPO}":
+                    raise ValueError("repository must name the twin")
+            elif not re.fullmatch(r"[0-9]+|s/[a-z0-9-]+", arg):
+                raise ValueError("PR selector must be a number or scenario branch")
+        else:
+            raise ValueError(f"flag or argument is not allowed: {arg}")
+        index += 1
+
+
+def launch_list():
+    """The launcher's launch list, mirrored in contract/launch-list.txt."""
+    lines = (ROOT / "contract/launch-list.txt").read_text().splitlines()
+    return [line.strip() for line in lines if line.strip() and not line.startswith("#")]
+
+
+def launched(case, commands):
+    """Whether real gh, not the decoy, sits on this case's PATH: oracle and twin cases on the list."""
+    argv = case["argv"]
+    # An entry is one word (`api`) or two (`pr view`); match as many leading words as it has.
+    return case.get("kind", "oracle") in ("oracle", "twin") and any(
+        argv[:len(command.split())] == command.split() for command in commands
+    )
+
+
+def load_cases(directory):
+    cases = []
+    for path in sorted(Path(directory).glob("*.json")):
+        case = json.loads(path.read_text())
+        validate_case(case)
+        if path.stem != case["id"]:
+            raise ValueError(f"case id does not match filename: {path.name}")
+        cases.append((path, case))
+    if not cases or len({case["id"] for _, case in cases}) != len(cases):
+        raise ValueError("case directory is empty or has duplicate ids")
+    branches = [case["setup"]["branch"] for _, case in cases if case.get("kind") == "twin"]
+    if len(set(branches)) != len(branches):
+        raise ValueError("twin cases need a branch each")
+    return cases
+
+
+def oracle_argv(case):
+    if case.get("kind") in ("shim-local", "decoy", "twin"):
+        raise ValueError("only oracle cases are captured from GitHub")
+    return [arg.replace(f"forge.test/{REPO}", f"github.com/{REPO}") for arg in case["argv"]]
+
+
+def normalize(text, names):
+    for name in names:
+        if name == "host":
+            text = re.sub(r"(?<![\w.-])(?:github\.com|forge\.test)(?![\w.-])", "<host>", text)
+        elif name == "pr_urls":
+            text = re.sub(r"(/[^/\s\"]+/[^/\s\"]+)/pulls?/(\d+)", r"\1/pull/\2", text)
+        elif name == "timestamps":
+            text = re.sub(r"\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)\b", "<timestamp>", text)
+        elif name == "durations":
+            text = re.sub(r"\b(?:\d+h)?(?:\d+m)?\d+(?:\.\d+)?s\b|\b\d+h(?:\d+m)?\b|\b\d+m\b", "<duration>", text)
+            # gh prints a bare 0 for zero/unknown elapsed time. Only replace
+            # the checks table's elapsed column, never other numeric values.
+            text = re.sub(r"(?m)^([^\t\n]+\t(?:pass|fail|pending|skipping)\t)0(?=\t)", r"\1<duration>", text)
+        elif name == "shas":
+            text = re.sub(r"\b[0-9a-fA-F]{7,40}\b", "<sha>", text)
+        elif name == "node_ids":
+            text = re.sub(r'("(?:id|node_id|nodeId)"\s*:\s*")[^"\n]+(")', r"\1<node-id>\2", text)
+        elif name == "check_details_urls":
+            text = re.sub(r'(?:https?://[^/\s\"]+)?/[^/\s\"]+/[^/\s\"]+/actions/runs/\d+/(?:jobs|job)/\d+', "<check-url>", text)
+            text = re.sub(r'("detailsUrl"\s*:\s*")[^"\n]+(")', r"\1<check-url>\2", text)
+        elif name == "json":
+            try:
+                text = json.dumps(json.loads(text), sort_keys=True, separators=(",", ":")) + "\n"
+            except json.JSONDecodeError:
+                # Invalid/missing JSON remains a real output mismatch, never an xfail bypass.
+                pass
+        else:
+            raise ValueError(f"unknown normalizer: {name}")
+    return text

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, EnvMap};
 use crate::routing;
 use crate::{
-    auth, bootstrap, codex_smoke, doctor, git_recorder, gui_path, setup, shim, trace_summary,
-    Result, ShimError, VERSION,
+    auth, bootstrap, codex_smoke, doctor, external, gh_version, git_recorder, gui_path, setup,
+    shim, trace_summary, Result, ShimError, VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,16 @@ pub fn run_from_env(binary: BinaryName) -> i32 {
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.first().is_some_and(|arg| arg == OsStr::new("gh")) {
         args.remove(0);
-        return routing::run_gh_from_env(args);
+        return external::exit_like_child(routing::run_gh_from_env(args));
+    }
+    // The launcher's browser helper, which a launched gh's GH_BROWSER names (launcher spec §9).
+    // Hidden: it isn't in help or completion.
+    #[cfg(unix)]
+    if args
+        .first()
+        .is_some_and(|arg| arg == OsStr::new(crate::launcher::browser::SUBCOMMAND))
+    {
+        return crate::launcher::browser::run(&args[1..]);
     }
     let string_args = args
         .iter()
@@ -42,7 +51,7 @@ pub fn run_from_env(binary: BinaryName) -> i32 {
         Some(prefix) if prefix == ["trace", "git-recorder", "run"]
     ) {
         return match run_trace_git_recorder_run(&string_args[3..]) {
-            Ok(code) => code,
+            Ok(code) => external::exit_like_child(code),
             Err(error) => {
                 eprintln!("gh-forgejo-shim: {error}");
                 1
@@ -346,6 +355,34 @@ fn run_install_shim(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runti
     }
 
     let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
+    // The shim delegates to real gh, so it isn't installed without one new enough (decision D3):
+    // the one the wrapper will run once installed. With --force that isn't a gh at the target,
+    // which the shim replaces; without it, install leaves an unmanaged gh there alone.
+    let config =
+        config::load_config_with_env(Some(&config::config_path(runtime.home())), runtime.env())?;
+    let target = shim::shim_path(bin_dir.as_deref(), runtime.home())?;
+    let real_gh = setup::find_real_gh_after_install(
+        Some(&config),
+        runtime.env(),
+        &setup::default_fallback_dirs(),
+        force.then_some(target.as_path()),
+    );
+    let gh = gh_version::check(real_gh.as_ref(), runtime.env(), runtime.platform());
+    match gh.status {
+        gh_version::Status::Supported => {}
+        gh_version::Status::AllowedUnknown => writeln!(stdout, "warning: real gh: {}", gh.detail)?,
+        gh_version::Status::Refused => {
+            let mut message = format!("not installing the gh shim: real gh: {}", gh.detail);
+            if !gh.repair_commands.is_empty() {
+                message.push_str("\nrepair commands:");
+                for command in &gh.repair_commands {
+                    message.push_str("\n  ");
+                    message.push_str(command);
+                }
+            }
+            return Err(ShimError::new(message));
+        }
+    }
     let path = shim::install_shim(
         bin_dir.as_deref(),
         runtime.home(),
@@ -386,9 +423,21 @@ fn run_uninstall_shim(
         }
     }
 
-    let bin_dir = resolve_optional_path(bin_dir_arg, runtime.home())?;
-    let path = shim::uninstall_shim(bin_dir.as_deref(), runtime.home())?;
-    writeln!(stdout, "removed gh shim at {}", path.display())?;
+    let paths = match resolve_optional_path(bin_dir_arg, runtime.home())? {
+        Some(bin_dir) => vec![shim::uninstall_shim(Some(&bin_dir), runtime.home())?],
+        None => {
+            shim::uninstall_default_shims(runtime.home(), &setup::current_path_dirs(runtime.env()))?
+        }
+    };
+    if paths.is_empty() {
+        writeln!(
+            stdout,
+            "no gh shim found in ~/.local/bin or in PATH directories under HOME"
+        )?;
+    }
+    for path in paths {
+        writeln!(stdout, "removed gh shim at {}", path.display())?;
+    }
     Ok(0)
 }
 
@@ -529,6 +578,7 @@ fn run_config(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) ->
     let path = config::config_path(runtime.home());
     match args {
         [command, host] if command == "add-host" => {
+            forgejo_host_arg(host)?;
             let config = config::add_host(host, Some(&path))?;
             writeln!(stdout, "added Forgejo host: {host}")?;
             print_hosts(&config.hosts, stdout)?;
@@ -920,8 +970,7 @@ fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) 
     match args {
         [command] if command == "login" => auth_login(None, stdout, runtime),
         [command, host] if command == "login" => auth_login(Some(host), stdout, runtime),
-        [command] if command == "import" => auth_import(None, stdout, runtime),
-        [command, host] if command == "import" => auth_import(Some(host), stdout, runtime),
+        [command, args @ ..] if command == "import" => auth_import(args, stdout, runtime),
         [command] if command == "status" => auth_status(None, stdout, runtime),
         [command, host] if command == "status" => auth_status(Some(host), stdout, runtime),
         [command] if command == "logout" => auth_logout(None, stdout, runtime),
@@ -937,7 +986,8 @@ fn auth_login(
     stdout: &mut dyn Write,
     runtime: &mut dyn Runtime,
 ) -> Result<i32> {
-    let host = prompt_host(host_arg, runtime)?;
+    // Logout shares prompt_host, so it can still remove a token for any host an older version took.
+    let host = forgejo_host_arg(&prompt_host(host_arg, runtime)?)?;
     let token = runtime
         .prompt_token(&format!("Forgejo access token for {host}: "))?
         .trim()
@@ -949,9 +999,10 @@ fn auth_login(
     let login = runtime.validate_token(&host, &token)?;
     let home = runtime.home().map(Path::to_path_buf);
     let platform = runtime.platform().to_string();
-    let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
+    // The config first: when it is corrupt, the command fails before replacing a stored token.
     let config_path = config::config_path(home.as_deref());
     config::add_host(&host, Some(&config_path))?;
+    let storage = auth::write_stored_token(&host, &token, home.as_deref(), Some(&platform))?;
 
     writeln!(
         stdout,
@@ -962,32 +1013,50 @@ fn auth_login(
     Ok(0)
 }
 
-fn auth_import(
-    host_arg: Option<&String>,
-    stdout: &mut dyn Write,
-    runtime: &mut dyn Runtime,
-) -> Result<i32> {
-    let host = prompt_host(host_arg, runtime)?;
-    let home = runtime.home().map(Path::to_path_buf);
-    let discovery = auth::discover_import_token(&host, runtime.env(), home.as_deref()).ok_or_else(|| {
-        ShimError::new(
-            "no Forgejo token found in FJ_SHIM_TOKEN, FORGEJO_TOKEN, GITEA_TOKEN, FJ_TOKEN, or common fj/tea/gitea config files",
-        )
-    })?;
-
-    let login = runtime.validate_token(&host, &discovery.token)?;
-    let platform = runtime.platform().to_string();
-    let storage =
-        auth::write_stored_token(&host, &discovery.token, home.as_deref(), Some(&platform))?;
-    let config_path = config::config_path(home.as_deref());
-    config::add_host(&host, Some(&config_path))?;
-
+fn auth_import(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
+    let usage = "usage: gfj auth import --from fj|tea [--hostname HOST]";
+    let mut source = None;
+    let mut hostname = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--from" if source.is_none() => {
+                source = Some(crate::auth_import::ImportSource::parse(
+                    args.next().ok_or_else(|| ShimError::new(usage))?,
+                )?);
+            }
+            "--hostname" if hostname.is_none() => {
+                hostname = Some(args.next().ok_or_else(|| ShimError::new(usage))?.as_str());
+            }
+            _ => return Err(ShimError::new(usage)),
+        }
+    }
+    let source = source.ok_or_else(|| ShimError::new(usage))?;
+    let home = runtime
+        .home()
+        .ok_or_else(|| ShimError::new("HOME is required for auth import"))?
+        .to_path_buf();
+    let imported = crate::auth_import::read_import(
+        source,
+        hostname,
+        &home,
+        runtime.env(),
+        runtime.platform(),
+    )?;
+    // The config first: when it is corrupt, the command fails before replacing a stored token.
+    config::add_host(&imported.host, Some(&config::config_path(Some(&home))))?;
+    let storage = auth::write_stored_token(
+        &imported.host,
+        &imported.token,
+        Some(&home),
+        Some(runtime.platform()),
+    )?;
     writeln!(
         stdout,
-        "{}",
-        validated_message("imported auth", &host, login.as_deref())
+        "imported auth for {} from {}",
+        imported.host,
+        imported.path.display()
     )?;
-    writeln!(stdout, "source: {}", discovery.source)?;
     writeln!(stdout, "saved auth in {storage}")?;
     Ok(0)
 }
@@ -1000,6 +1069,8 @@ fn auth_status(
     let hosts = status_hosts(host_arg, runtime)?;
     let home = runtime.home().map(Path::to_path_buf);
     let platform = runtime.platform().to_string();
+    let config =
+        config::load_config_with_env(Some(&config::config_path(home.as_deref())), runtime.env())?;
     let mut all_authenticated = true;
 
     for host in hosts {
@@ -1010,18 +1081,14 @@ fn auth_status(
             continue;
         }
 
-        if let Some(discovery) = auth::discover_token(
-            Some(&host),
+        if let Some(discovery) = auth::resolve_token(
+            &host,
+            &config,
             runtime.env(),
             home.as_deref(),
             Some(&platform),
-            false,
         ) {
-            writeln!(
-                stdout,
-                "{host}: token available from {}; run gh-forgejo-shim auth import {host}",
-                discovery.source
-            )?;
+            writeln!(stdout, "{host}: token available from {}", discovery.source)?;
         } else {
             all_authenticated = false;
             writeln!(stdout, "{host}: not logged in")?;
@@ -1044,6 +1111,22 @@ fn auth_logout(
         writeln!(stdout, "no stored shim auth for {host}")?;
     }
     Ok(0)
+}
+
+/// A host `auth login` may send a token to and `config add-host` may allowlist, by the
+/// allowlist's own rule: never a GitHub host, and spelled the way the URL parser reads it back,
+/// so the token goes to the host named.
+fn forgejo_host_arg(host: &str) -> Result<String> {
+    if config::is_known_github_host(Some(host)) {
+        return Err(ShimError::new(format!(
+            "{host} is a GitHub host; the shim leaves GitHub to the real gh"
+        )));
+    }
+    config::normalized_forgejo_host(host).ok_or_else(|| {
+        ShimError::new(format!(
+            "{host} isn't a host name the shim can use; write it as HOST or HOST:PORT"
+        ))
+    })
 }
 
 fn prompt_host(host_arg: Option<&String>, runtime: &mut dyn Runtime) -> Result<String> {
@@ -1222,7 +1305,8 @@ mod tests {
             String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
         assert_eq!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home))
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
                 .as_deref(),
             Some("login-token")
         );
@@ -1249,6 +1333,7 @@ mod tests {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
         runtime.current_exe = home.join("runtime bin").join("gfj");
+        use_supported_gh(&mut runtime, &home)?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -1278,6 +1363,7 @@ mod tests {
     fn install_shim_refuses_unmanaged_target_without_force() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
+        use_supported_gh(&mut runtime, &home)?;
         let bin = home.join("custom-bin");
         fs::create_dir(&bin)?;
         fs::write(bin.join("gh"), "unrelated")?;
@@ -1471,6 +1557,39 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_shim_reads_tilde_path_entries_as_bootstrap_does() -> Result<()> {
+        let home = temp_root()?;
+        let cargo = home.join(".cargo").join("bin");
+        shim::install_shim(Some(&cargo), Some(&home), Path::new("/opt/gfj"), false)?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.env = EnvMap::from([
+            ("HOME".to_string(), home.display().to_string()),
+            ("PATH".to_string(), "~/.cargo/bin:/usr/bin:/bin".to_string()),
+        ]);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["uninstall-shim"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0);
+        assert!(
+            !cargo.join("gh").exists(),
+            "the ~/.cargo/bin wrapper stayed"
+        );
+        let output =
+            String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
+        assert!(output.contains(".cargo/bin/gh"), "{output}");
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
     fn uninstall_gui_path_removes_only_temp_home_plist() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
@@ -1505,18 +1624,28 @@ mod tests {
     }
 
     #[test]
-    fn import_uses_env_token_without_printing_secret() -> Result<()> {
+    fn import_uses_fj_file_without_printing_secret() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
-        runtime
-            .env
-            .insert("FJ_SHIM_TOKEN".to_string(), "import-token".to_string());
+        let source_dir = home.join(".local/share/forgejo-cli");
+        fs::create_dir_all(&source_dir)?;
+        fs::write(
+            source_dir.join("keys.json"),
+            r#"{"hosts":{"git.example.com":{"type":"Application","token":"import-token"}}}"#,
+        )?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let code = run_with_runtime(
             BinaryName::GhForgejoShim,
-            os_args(["auth", "import", "git.example.com"]),
+            os_args([
+                "auth",
+                "import",
+                "--from",
+                "fj",
+                "--hostname",
+                "git.example.com",
+            ]),
             &mut stdout,
             &mut stderr,
             &mut runtime,
@@ -1526,11 +1655,12 @@ mod tests {
             String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
         assert_eq!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home))
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
                 .as_deref(),
             Some("import-token")
         );
-        assert!(output.contains("source: FJ_SHIM_TOKEN"), "{output}");
+        assert!(output.contains("forgejo-cli/keys.json"), "{output}");
         assert!(!output.contains("import-token"), "{output}");
         assert_eq!(
             config::load_config_with_env(Some(&config::config_path(Some(&home))), &EnvMap::new())?
@@ -1565,7 +1695,9 @@ mod tests {
             "{error}"
         );
         assert!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
         );
         assert!(config::load_config_with_env(
             Some(&config::config_path(Some(&home))),
@@ -1578,6 +1710,128 @@ mod tests {
             vec![("git.example.com".to_string(), "bad-token".to_string())]
         );
         fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_corrupt_config_keeps_the_previous_token() -> Result<()> {
+        let home = temp_root()?;
+        auth::write_stored_token("git.example.com", "old-token", Some(&home), Some("linux"))?;
+        let config_path = config::config_path(Some(&home));
+        fs::write(&config_path, "hosts = [\"git.example.com\"\n")?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("new-token".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .as_deref(),
+            Some("old-token")
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_github_host_before_asking_for_a_token() -> Result<()> {
+        for host in ["github.com", "api.github.com", "acme.ghe.com"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            runtime.token_prompts.push("forgejo-token".to_string());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["auth", "login", host]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+
+            assert_eq!(code, 1, "{host}");
+            assert!(
+                runtime.validated.is_empty(),
+                "{host}: the token was sent for validation"
+            );
+            assert_eq!(
+                runtime.token_prompts.len(),
+                1,
+                "{host}: the token was asked for"
+            );
+            fs::remove_dir_all(home).ok();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_misspelled_host_and_logout_still_clears_github() -> Result<()> {
+        let home = temp_root()?;
+        // `local%68ost` reaches localhost, though the allowlist would drop the spelling.
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("forgejo-token".to_string());
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "local%68ost:3000"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+        assert_eq!(code, 1);
+        assert!(
+            runtime.validated.is_empty(),
+            "the token was sent for validation"
+        );
+
+        // An older version may have stored a token for a GitHub host; logout still removes it.
+        auth::write_stored_token("api.github.com", "old-token", Some(&home), Some("linux"))?;
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "logout", "api.github.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+        assert_eq!(code, 0);
+        assert!(auth::read_stored_token("api.github.com", Some(&home), Some("linux")).is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn config_add_host_refuses_a_host_it_would_not_keep() -> Result<()> {
+        for host in ["acme.ghe.com", "local%68ost:3000"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["config", "add-host", host]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+            assert_eq!(code, 1, "{host}");
+            assert!(
+                !String::from_utf8_lossy(&stdout).contains("added"),
+                "{host} reported as added"
+            );
+            assert!(!config::config_path(Some(&home)).exists(), "{host}");
+            fs::remove_dir_all(home).ok();
+        }
         Ok(())
     }
 
@@ -1602,7 +1856,9 @@ mod tests {
         assert!(error.contains("Forgejo token is required"), "{error}");
         assert!(runtime.validated.is_empty());
         assert!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
         );
         assert!(config::load_config_with_env(
             Some(&config::config_path(Some(&home))),
@@ -1674,7 +1930,9 @@ mod tests {
         assert!(output.contains("logged out of git.example.com"), "{output}");
         assert!(!output.contains("stored-secret"), "{output}");
         assert!(
-            auth::discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none()
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
         );
         assert_eq!(
             config::load_config_with_env(Some(&config::config_path(Some(&home))), &EnvMap::new())?
@@ -1713,6 +1971,49 @@ mod tests {
 
     fn os_args<const N: usize>(values: [&str; N]) -> Vec<OsString> {
         values.into_iter().map(OsString::from).collect()
+    }
+
+    /// Points `runtime` at a fake real gh that reports the oldest supported version, so install
+    /// never looks for one in this machine's install dirs, and gives it a HOME of its own. Written from a child `sh`, so no
+    /// sibling test's fork holds it open for writing when it runs (ETXTBSY).
+    fn use_supported_gh(runtime: &mut FakeRuntime, home: &Path) -> Result<()> {
+        use std::process::{Command, Stdio};
+
+        let dir = home.join("real gh");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("gh");
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let written = child
+            .stdin
+            .take()
+            .ok_or_else(|| ShimError::new("no stdin"))?
+            .write_all(b"#!/bin/sh\necho 'gh version 2.103.3 (2026-05-01)'\n");
+        let status = child.wait()?;
+        written?;
+        if !status.success() {
+            return Err(ShimError::new(format!("writing the fake gh: {status}")));
+        }
+        runtime
+            .env
+            .insert("FJ_SHIM_REAL_GH".to_string(), path.display().to_string());
+        // Whatever install runs keeps its state in this test's own directory: with no HOME, a
+        // real gh writes `.local/state` into the current directory, the repo.
+        for (key, sub) in [
+            ("HOME", ""),
+            ("XDG_CONFIG_HOME", ".config"),
+            ("XDG_STATE_HOME", ".local/state"),
+            ("XDG_DATA_HOME", ".local/share"),
+            ("XDG_CACHE_HOME", ".cache"),
+        ] {
+            runtime
+                .env
+                .insert(key.to_string(), home.join(sub).display().to_string());
+        }
+        Ok(())
     }
 
     fn temp_root() -> Result<PathBuf> {

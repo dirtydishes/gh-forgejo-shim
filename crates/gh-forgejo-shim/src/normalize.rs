@@ -116,19 +116,6 @@ pub const SUPPORTED_ISSUE_JSON_FIELDS: &[&str] = &[
     "url",
 ];
 
-pub const SUPPORTED_CHECK_JSON_FIELDS: &[&str] = &[
-    "bucket",
-    "completedAt",
-    "conclusion",
-    "description",
-    "detailsUrl",
-    "link",
-    "name",
-    "startedAt",
-    "state",
-    "workflow",
-];
-
 pub fn normalize_pull(pull: &Value) -> Value {
     let user = object_field(pull, "user");
     let head = object_field(pull, "head");
@@ -141,7 +128,7 @@ pub fn normalize_pull(pull: &Value) -> Value {
         "title": cloned_or_null(pull.get("title")),
         "state": normalize_state(pull),
         "isDraft": truthy(pull.get("draft").unwrap_or(&Value::Bool(false))),
-        "url": value_or(pull.get("html_url"), pull.get("url")),
+        "url": pull_web_url(value_or(pull.get("html_url"), pull.get("url"))),
         "headRefName": object_value(head, "ref"),
         "baseRefName": object_value(base, "ref"),
         "author": {
@@ -204,23 +191,6 @@ fn normalize_status_check_rollup_base(statuses: &[Value], repo: Option<&RepoRef>
     )
 }
 
-pub fn normalize_pr_checks(statuses: &[Value]) -> Value {
-    normalize_pr_checks_base(statuses, None)
-}
-
-pub fn normalize_pr_checks_for_repo(statuses: &[Value], repo: &RepoRef) -> Value {
-    normalize_pr_checks_base(statuses, Some(repo))
-}
-
-fn normalize_pr_checks_base(statuses: &[Value], repo: Option<&RepoRef>) -> Value {
-    Value::Array(
-        latest_statuses(statuses)
-            .into_iter()
-            .map(|status| status_to_check_item(&status, repo))
-            .collect(),
-    )
-}
-
 pub fn filter_fields<S: AsRef<str>>(data: &Value, fields: &[S]) -> Value {
     filter_supported_fields(data, fields, SUPPORTED_JSON_FIELDS)
 }
@@ -231,10 +201,6 @@ pub fn filter_repo_fields<S: AsRef<str>>(data: &Value, fields: &[S]) -> Value {
 
 pub fn filter_issue_fields<S: AsRef<str>>(data: &Value, fields: &[S]) -> Value {
     filter_supported_fields(data, fields, SUPPORTED_ISSUE_JSON_FIELDS)
-}
-
-pub fn filter_check_fields<S: AsRef<str>>(data: &Value, fields: &[S]) -> Value {
-    filter_supported_fields(data, fields, SUPPORTED_CHECK_JSON_FIELDS)
 }
 
 pub fn normalize_repo(repo: &Value, fallback: &RepoRef) -> Value {
@@ -380,7 +346,7 @@ pub fn normalize_issue(issue: &Value) -> Value {
         "stateReason": null,
         "title": cloned_or_null(issue.get("title")),
         "updatedAt": cloned_or_null(issue.get("updated_at")),
-        "url": value_or(issue.get("html_url"), issue.get("url")),
+        "url": pull_web_url(value_or(issue.get("html_url"), issue.get("url"))),
     })
 }
 
@@ -587,23 +553,6 @@ fn status_to_rollup_item(status: &Value, repo: Option<&RepoRef>) -> Value {
     })
 }
 
-fn status_to_check_item(status: &Value, repo: Option<&RepoRef>) -> Value {
-    let state = status_state(status);
-    let target_url = status_url(status, repo);
-    json!({
-        "bucket": status_bucket(&state),
-        "completedAt": status_completed_at(status, &state),
-        "conclusion": status_conclusion(&state),
-        "description": cloned_or_null(status.get("description")),
-        "detailsUrl": target_url.clone(),
-        "link": target_url.clone(),
-        "name": status_name(status),
-        "startedAt": cloned_or_null(status.get("created_at")),
-        "state": check_state(&state),
-        "workflow": status_workflow(status),
-    })
-}
-
 fn status_name(status: &Value) -> String {
     truthy_string(status.get("context"))
         .or_else(|| truthy_string(status.get("name")))
@@ -682,21 +631,6 @@ fn status_conclusion(state: &str) -> Value {
         "SUCCESS" => Value::String("success".to_string()),
         "FAILURE" | "ERROR" => Value::String("failure".to_string()),
         _ => Value::Null,
-    }
-}
-
-fn status_bucket(state: &str) -> &'static str {
-    match state {
-        "SUCCESS" => "pass",
-        "FAILURE" | "ERROR" => "fail",
-        _ => "pending",
-    }
-}
-
-fn check_state(state: &str) -> &'static str {
-    match state {
-        "SUCCESS" | "FAILURE" | "ERROR" => "completed",
-        _ => "pending",
     }
 }
 
@@ -842,6 +776,14 @@ fn connection(total_count: i64, nodes: Option<Vec<Value>>) -> Value {
         "nodes": nodes.unwrap_or_default(),
         "totalCount": total_count,
     })
+}
+
+/// A pull request's URL in GitHub's `/pull/{n}` layout, which ChatGPT and Codex look for (MAPPING §8).
+fn pull_web_url(url: Value) -> Value {
+    match url {
+        Value::String(url) => Value::String(fga_core::map::pull_web_url(&url)),
+        other => other,
+    }
 }
 
 fn value_or(primary: Option<&Value>, fallback: Option<&Value>) -> Value {
@@ -1060,52 +1002,11 @@ mod tests {
                 "currentBranch": {
                     "number": 12,
                     "title": "Add shim",
-                    "url": "https://git.example.com/o/r/pulls/12"
+                    "url": "https://git.example.com/o/r/pull/12"
                 },
                 "createdBy": [],
                 "needsReview": []
             })
-        );
-    }
-
-    #[test]
-    fn normalizes_forgejo_commit_statuses_to_check_rows() {
-        let statuses = vec![
-            json!({
-                "context": "ci/test",
-                "description": "old result",
-                "state": "failure",
-                "created_at": "2026-06-01T00:00:00Z",
-                "updated_at": "2026-06-01T00:01:00Z"
-            }),
-            json!({
-                "context": "ci/test",
-                "description": "new result",
-                "state": "success",
-                "target_url": "https://git.example.com/owner/repo/actions/runs/2",
-                "created_at": "2026-06-01T00:02:00Z",
-                "updated_at": "2026-06-01T00:03:00Z"
-            }),
-        ];
-
-        let checks = normalize_pr_checks(&statuses);
-
-        assert_eq!(
-            checks,
-            json!([
-                {
-                    "bucket": "pass",
-                    "completedAt": "2026-06-01T00:03:00Z",
-                    "conclusion": "success",
-                    "description": "new result",
-                    "detailsUrl": "https://git.example.com/owner/repo/actions/runs/2",
-                    "link": "https://git.example.com/owner/repo/actions/runs/2",
-                    "name": "ci/test",
-                    "startedAt": "2026-06-01T00:02:00Z",
-                    "state": "completed",
-                    "workflow": "ci/test"
-                }
-            ])
         );
     }
 
@@ -1151,7 +1052,6 @@ mod tests {
         })];
 
         let rollup = normalize_status_check_rollup_for_repo(&statuses, &repo);
-        let checks = normalize_pr_checks_for_repo(&statuses, &repo);
 
         assert_eq!(
             rollup[0]["targetUrl"],
@@ -1159,14 +1059,6 @@ mod tests {
         );
         assert_eq!(
             rollup[0]["detailsUrl"],
-            "https://git.example.com/owner/repo/actions/runs/2"
-        );
-        assert_eq!(
-            checks[0]["link"],
-            "https://git.example.com/owner/repo/actions/runs/2"
-        );
-        assert_eq!(
-            checks[0]["detailsUrl"],
             "https://git.example.com/owner/repo/actions/runs/2"
         );
     }

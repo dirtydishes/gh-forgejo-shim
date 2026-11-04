@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::{Result, ShimError};
+use crate::Result;
 
 pub const SLOW_CALL_MS: f64 = 1000.0;
 
@@ -21,22 +21,20 @@ pub struct TraceSummary {
     pub parse_errors: Vec<String>,
 }
 
+/// Bytes, not text: a record cut off mid-character (an interrupted write) is one bad line, not
+/// a file that can't be read.
 pub fn load_trace(path: &Path) -> Result<(Vec<Value>, Vec<String>)> {
-    let text = fs::read_to_string(path)?;
+    let bytes = fs::read(path)?;
     let mut records = Vec::new();
     let mut errors = Vec::new();
 
-    for (index, line) in text.lines().enumerate() {
-        let stripped = line.trim();
+    for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        let stripped = line.trim_ascii();
         if stripped.is_empty() {
             continue;
         }
-        match serde_json::from_str::<Value>(stripped) {
-            Ok(Value::Object(_)) => {
-                records.push(serde_json::from_str(stripped).map_err(|error| {
-                    ShimError::new(format!("could not load trace record: {error}"))
-                })?)
-            }
+        match serde_json::from_slice::<Value>(stripped) {
+            Ok(record @ Value::Object(_)) => records.push(record),
             Ok(_) => errors.push(format!("line {}: expected object", index + 1)),
             Err(error) => errors.push(format!("line {}: {}", index + 1, json_error_message(error))),
         }

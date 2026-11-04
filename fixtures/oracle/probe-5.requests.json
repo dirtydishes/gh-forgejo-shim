@@ -1,0 +1,14 @@
+[
+  {
+    "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {number,title,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},headRefName,baseRefName,reviewDecision,id}\n    }\n  }",
+    "variables": {
+      "owner": "dirtydishes",
+      "pr_number": 5,
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]

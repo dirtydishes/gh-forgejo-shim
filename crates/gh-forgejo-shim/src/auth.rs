@@ -1,33 +1,55 @@
-//! Authentication storage and token discovery.
+//! Host-keyed authentication storage and token resolution.
 
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use crate::config::{current_env, normalize_host, EnvMap};
+use crate::config::{self, normalize_host, Config, EnvMap};
 use crate::{Result, ShimError};
 
 pub const TOKEN_ENV_VARS: &[&str] = &["FJ_SHIM_TOKEN", "FORGEJO_TOKEN", "GITEA_TOKEN", "FJ_TOKEN"];
 pub const KEYCHAIN_SERVICE: &str = "gh-forgejo-shim";
 pub const AUTH_FILE_NAME: &str = "auth.json";
+/// Absolute, so a PATH entry can never substitute the binary that receives tokens.
+const SECURITY: &str = "/usr/bin/security";
 
 static NEXT_AUTH_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TokenDiscovery {
     pub token: String,
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StoredToken {
     pub token: String,
     pub storage: String,
+}
+
+// Tokens never reach Debug output.
+impl fmt::Debug for TokenDiscovery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenDiscovery")
+            .field("token", &"<redacted>")
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl fmt::Debug for StoredToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredToken")
+            .field("token", &"<redacted>")
+            .field("storage", &self.storage)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,16 +59,7 @@ pub struct AuthStatus {
     pub storage: Option<String>,
 }
 
-pub fn token_from_process_env() -> Option<String> {
-    let env = current_env();
-    token_from_env(&env)
-}
-
-pub fn token_from_env(env: &EnvMap) -> Option<String> {
-    token_from_env_with_source(env).map(|discovery| discovery.token)
-}
-
-pub fn token_from_env_with_source(env: &EnvMap) -> Option<TokenDiscovery> {
+fn token_from_env_with_source(env: &EnvMap) -> Option<TokenDiscovery> {
     for name in TOKEN_ENV_VARS {
         if let Some(value) = env
             .get(*name)
@@ -62,62 +75,47 @@ pub fn token_from_env_with_source(env: &EnvMap) -> Option<TokenDiscovery> {
     None
 }
 
-pub fn discover_fj_token(host: Option<&str>, env: &EnvMap, home: Option<&Path>) -> Option<String> {
-    discover_token(host, env, home, None, true).map(|discovery| discovery.token)
-}
-
-pub fn discover_import_token(
+/// Resolve credentials only for this host. Generic env tokens are safe only
+/// when the effective allowlist contains exactly one Forgejo host.
+pub fn resolve_token(
     host: &str,
-    env: &EnvMap,
-    home: Option<&Path>,
-) -> Option<TokenDiscovery> {
-    discover_token(Some(host), env, home, None, false)
-}
-
-pub fn discover_token(
-    host: Option<&str>,
+    config: &Config,
     env: &EnvMap,
     home: Option<&Path>,
     platform: Option<&str>,
-    include_stored: bool,
 ) -> Option<TokenDiscovery> {
-    if let Some(discovery) = token_from_env_with_source(env) {
-        return Some(discovery);
+    let host = normalize_host(host);
+    // Checked before the store, so a token stored for a GitHub host is never handed out either.
+    if config::is_known_github_host(Some(&host)) {
+        return None;
     }
-
-    let normalized_host = host.map(normalize_host).filter(|host| !host.is_empty());
-    if include_stored {
-        if let Some(host) = normalized_host.as_deref() {
-            if let Some(stored) = read_stored_token(host, home, platform) {
-                return Some(TokenDiscovery {
-                    token: stored.token,
-                    source: stored.storage,
-                });
-            }
-        }
+    if let Some(stored) = read_stored_token(&host, home, platform) {
+        return Some(TokenDiscovery {
+            token: stored.token,
+            source: stored.storage,
+        });
     }
-
-    let base = home_dir(home);
-    let candidates = [
-        base.join("Library")
-            .join("Application Support")
-            .join("Cyborus.forgejo-cli")
-            .join("keys.json"),
-        base.join(".config").join("fj").join("config.json"),
-        base.join(".config").join("fj").join("config.yml"),
-        base.join(".config").join("fj").join("config.yaml"),
-        base.join(".config").join("tea").join("config.yml"),
-        base.join(".config").join("tea").join("config.yaml"),
-        base.join(".config").join("gitea").join("tea.yml"),
-    ];
-
-    for path in candidates {
-        if let Some(token) = read_token_file(&path, normalized_host.as_deref()) {
+    if !config.is_forgejo_host(Some(&host)) {
+        return None;
+    }
+    if let Some(name) = config
+        .host
+        .get(&host)
+        .and_then(|settings| settings.token_env.as_ref())
+    {
+        if let Some(value) = env
+            .get(name)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
             return Some(TokenDiscovery {
-                token,
-                source: path.display().to_string(),
+                token: value.to_string(),
+                source: name.clone(),
             });
         }
+    }
+    if config.hosts.len() == 1 {
+        return token_from_env_with_source(env);
     }
     None
 }
@@ -203,13 +201,11 @@ pub fn auth_file_path(home: Option<&Path>) -> PathBuf {
 }
 
 pub fn validate_token(host: &str, token: &str) -> Result<Option<String>> {
-    let client = match std::env::var_os("FJ_SHIM_CA_FILE") {
-        Some(path) => {
-            crate::forgejo::ForgejoClient::with_ca_file(Some(token.to_string()), Path::new(&path))?
-        }
-        None => crate::forgejo::ForgejoClient::with_token(token),
-    }
-    .with_timeout(Duration::from_secs(10));
+    let env = config::current_env();
+    let config = config::load_config_with_env(None, &env)?;
+    let client =
+        crate::forgejo::ForgejoClient::for_host(host, Some(token.to_string()), &config, &env)?
+            .with_timeout(Duration::from_secs(10));
     let value = client.get_current_user(&normalize_host(host))?;
     let object = value
         .as_object()
@@ -227,145 +223,8 @@ pub fn validate_token(host: &str, token: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn read_token_file(path: &Path, host: Option<&str>) -> Option<String> {
-    if !path.is_file() {
-        return None;
-    }
-    let text = fs::read_to_string(path).ok()?;
-
-    if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
-        let data = serde_json::from_str::<Value>(&text).ok()?;
-        return find_token(&data, host);
-    }
-
-    find_token_in_text(&text, host)
-}
-
-fn find_token(data: &Value, host: Option<&str>) -> Option<String> {
-    match data {
-        Value::Object(object) => {
-            if let Some(host) = host {
-                for (key, value) in object {
-                    if normalize_host(key) == host {
-                        if let Some(found) = find_token(value, None) {
-                            return Some(found);
-                        }
-                    }
-                }
-                if dict_matches_host(object, host) {
-                    if let Some(found) = token_from_object(object) {
-                        return Some(found);
-                    }
-                }
-                for value in object.values() {
-                    if let Some(found) = find_token(value, Some(host)) {
-                        return Some(found);
-                    }
-                }
-                None
-            } else {
-                if let Some(found) = token_from_object(object) {
-                    return Some(found);
-                }
-                for value in object.values() {
-                    if let Some(found) = find_token(value, None) {
-                        return Some(found);
-                    }
-                }
-                None
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                if let Some(found) = find_token(item, host) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn token_from_object(object: &Map<String, Value>) -> Option<String> {
-    for key in ["token", "access_token"] {
-        if let Some(value) = object
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn dict_matches_host(object: &Map<String, Value>, host: &str) -> bool {
-    for key in [
-        "host",
-        "hostname",
-        "url",
-        "server",
-        "server_url",
-        "base_url",
-    ] {
-        if object
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|value| normalize_host(value) == host)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn find_token_in_text(text: &str, host: Option<&str>) -> Option<String> {
-    if let Some(host) = host {
-        let lower_text = text.to_ascii_lowercase();
-        let lower_host = host.to_ascii_lowercase();
-        let host_index = lower_text.find(&lower_host)?;
-        let nearby = text[host_index..].chars().take(2000).collect::<String>();
-        return token_line(&nearby);
-    }
-    token_line(text)
-}
-
-fn token_line(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let lower = trimmed.to_ascii_lowercase();
-        for key in ["token", "access_token"] {
-            if lower.starts_with(key) {
-                if let Some(token) = parse_token_tail(&trimmed[key.len()..]) {
-                    return Some(token);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn parse_token_tail(value: &str) -> Option<String> {
-    let value = value.trim_start();
-    let value = value
-        .strip_prefix(':')
-        .or_else(|| value.strip_prefix('='))?
-        .trim_start();
-    let value = value
-        .strip_prefix('"')
-        .or_else(|| value.strip_prefix('\''))
-        .unwrap_or(value);
-    let token = value
-        .chars()
-        .take_while(|character| !matches!(character, '"' | '\'' | '#' | ' ' | '\t' | '\r' | '\n'))
-        .collect::<String>();
-    (!token.is_empty()).then_some(token)
-}
-
 fn read_file_token(host: &str, home: Option<&Path>) -> Option<String> {
-    let data = read_auth_file(home);
+    let data = read_auth_file(home).ok()?;
     let item = data.get("hosts")?.as_object()?.get(host)?;
     if let Some(object) = item.as_object() {
         return object
@@ -382,25 +241,27 @@ fn read_file_token(host: &str, home: Option<&Path>) -> Option<String> {
 }
 
 fn write_file_token(host: &str, token: &str, home: Option<&Path>) -> Result<()> {
-    let mut data = read_auth_file(home);
+    let mut data = read_auth_file(home)?;
     let object = ensure_object(&mut data);
+    // Like a malformed root in `read_auth_file`, a malformed `hosts` is an error: replacing it
+    // would lose the tokens it holds.
     let hosts = object
         .entry("hosts".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !hosts.is_object() {
-        *hosts = Value::Object(Map::new());
-    }
-    let host_object = json!({ "token": token });
-    hosts
+        .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .ok_or_else(|| ShimError::new("auth hosts must be an object"))?
-        .insert(host.to_string(), host_object);
+        .ok_or_else(|| {
+            ShimError::new(format!(
+                "{} is unreadable (hosts is not a JSON object); fix or remove it",
+                auth_file_path(home).display()
+            ))
+        })?;
+    hosts.insert(host.to_string(), json!({ "token": token }));
     write_auth_file(&data, home)
 }
 
 fn delete_file_token(host: &str, home: Option<&Path>) -> Result<bool> {
     let path = auth_file_path(home);
-    let mut data = read_auth_file(home);
+    let mut data = read_auth_file(home)?;
     let Some(hosts) = data.get_mut("hosts").and_then(Value::as_object_mut) else {
         return Ok(false);
     };
@@ -425,14 +286,25 @@ fn delete_file_token(host: &str, home: Option<&Path>) -> Result<bool> {
     Ok(true)
 }
 
-fn read_auth_file(home: Option<&Path>) -> Value {
+/// A missing file is an empty store. Any other failure is an error, so a write
+/// never replaces an unreadable file and loses the other hosts' tokens.
+fn read_auth_file(home: Option<&Path>) -> Result<Value> {
     let path = auth_file_path(home);
-    let Ok(text) = fs::read_to_string(path) else {
-        return json!({ "hosts": {} });
+    let unreadable = |detail: String| {
+        ShimError::new(format!(
+            "{} is unreadable ({detail}); fix or remove it",
+            path.display()
+        ))
+    };
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(json!({ "hosts": {} })),
+        Err(error) => return Err(unreadable(error.to_string())),
     };
     match serde_json::from_str::<Value>(&text) {
-        Ok(data) if data.is_object() => data,
-        _ => json!({ "hosts": {} }),
+        Ok(data) if data.is_object() => Ok(data),
+        Ok(_) => Err(unreadable("not a JSON object".to_string())),
+        Err(error) => Err(unreadable(error.to_string())),
     }
 }
 
@@ -530,7 +402,12 @@ fn create_temp_file(parent: &Path) -> io::Result<(File, PathBuf)> {
 }
 
 fn use_keychain(platform: Option<&str>) -> bool {
-    platform.unwrap_or(current_platform()) == "darwin" && executable_in_path("security")
+    // Unit tests may simulate macOS, but must never access the user's Keychain.
+    // Process tests set FJ_SHIM_AUTH_STORE=file for the same reason.
+    !cfg!(test)
+        && platform.unwrap_or(current_platform()) == "darwin"
+        && std::env::var_os("FJ_SHIM_AUTH_STORE").is_none_or(|store| store != "file")
+        && Path::new(SECURITY).is_file()
 }
 
 fn current_platform() -> &'static str {
@@ -542,13 +419,6 @@ fn current_platform() -> &'static str {
     {
         std::env::consts::OS
     }
-}
-
-fn executable_in_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|directory| directory.join(name).is_file())
 }
 
 fn read_keychain_token(host: &str) -> Option<String> {
@@ -568,27 +438,56 @@ fn read_keychain_token(host: &str) -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-fn write_keychain_token(host: &str, token: &str) -> Result<()> {
-    let output = run_security([
-        "add-generic-password",
-        "-a",
-        host,
-        "-s",
-        KEYCHAIN_SERVICE,
-        "-w",
-        token,
-        "-U",
-    ])
-    .map_err(|error| ShimError::new(format!("security add-generic-password failed: {error}")))?;
-    if output.status.success() {
-        return Ok(());
+/// The `security -i` command line that stores `token`. Values are double-quoted
+/// with backslash escapes; a control character would end the command early.
+fn keychain_add_command(host: &str, token: &str) -> Result<String> {
+    if token.chars().chain(host.chars()).any(char::is_control) {
+        return Err(ShimError::new(
+            "token and host must not contain control characters",
+        ));
     }
+    let quote = |value: &str| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
+    Ok(format!(
+        "add-generic-password -a {} -s {} -w {} -U\n",
+        quote(host),
+        quote(KEYCHAIN_SERVICE),
+        quote(token)
+    ))
+}
+
+/// `security -i` reads its command from stdin, so the token never appears in
+/// argv, where other local users could read it with `ps`.
+fn write_keychain_token(host: &str, token: &str) -> Result<()> {
+    let command = keychain_add_command(host, token)?;
+    let failed =
+        |detail: String| ShimError::new(format!("security add-generic-password failed: {detail}"));
+    let mut child = Command::new(SECURITY)
+        .arg("-i")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| failed(error.to_string()))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| failed("no stdin".to_string()))?
+        .write_all(command.as_bytes())
+        .map_err(|error| failed(error.to_string()))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| failed(error.to_string()))?;
     let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(ShimError::new(if message.is_empty() {
-        "security add-generic-password failed".to_string()
+    // Treat any stderr as failure too: security reports problems there.
+    if output.status.success() && message.is_empty() {
+        Ok(())
     } else {
-        message
-    }))
+        Err(failed(if message.is_empty() {
+            output.status.to_string()
+        } else {
+            message
+        }))
+    }
 }
 
 fn delete_keychain_token(host: &str) -> bool {
@@ -603,7 +502,7 @@ fn delete_keychain_token(host: &str) -> bool {
 }
 
 fn run_security<const N: usize>(args: [&str; N]) -> io::Result<std::process::Output> {
-    Command::new("security").args(args).output()
+    Command::new(SECURITY).args(args).output()
 }
 
 fn home_dir(home: Option<&Path>) -> PathBuf {
@@ -648,93 +547,16 @@ mod tests {
             ("FJ_TOKEN", "fj"),
         ]);
 
-        assert_eq!(token_from_env(&env).as_deref(), Some("shim"));
+        assert_eq!(
+            token_from_env_with_source(&env)
+                .map(|found| found.token)
+                .as_deref(),
+            Some("shim")
+        );
     }
 
     #[test]
-    fn discovers_macos_fj_keys_json_token_for_host() -> Result<()> {
-        let home = temp_root()?;
-        let path = home
-            .join("Library")
-            .join("Application Support")
-            .join("Cyborus.forgejo-cli");
-        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
-        fs::write(
-            path.join("keys.json"),
-            r#"{"hosts":{"git.deltaisland.io":{"type":"token","name":"dirtydishes","token":"secret-token"},"git.example.com":{"token":"other-token"}}}"#,
-        )
-        .map_err(|error| ShimError::new(error.to_string()))?;
-
-        let token = discover_fj_token(Some("git.deltaisland.io"), &EnvMap::new(), Some(&home));
-
-        assert_eq!(token.as_deref(), Some("secret-token"));
-        fs::remove_dir_all(home).ok();
-        Ok(())
-    }
-
-    #[test]
-    fn discovers_yaml_token_for_matching_host() -> Result<()> {
-        let home = temp_root()?;
-        let path = home.join(".config").join("tea");
-        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
-        fs::write(
-            path.join("config.yml"),
-            "servers:\n  - host: https://git.example.com/path\n    token: yaml-token\n",
-        )
-        .map_err(|error| ShimError::new(error.to_string()))?;
-
-        let token = discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home));
-
-        assert_eq!(token.as_deref(), Some("yaml-token"));
-        fs::remove_dir_all(home).ok();
-        Ok(())
-    }
-
-    #[test]
-    fn env_token_wins_over_external_config() -> Result<()> {
-        let home = temp_root()?;
-        let path = home
-            .join("Library")
-            .join("Application Support")
-            .join("Cyborus.forgejo-cli");
-        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
-        fs::write(
-            path.join("keys.json"),
-            r#"{"hosts":{"git.deltaisland.io":{"token":"file-token"}}}"#,
-        )
-        .map_err(|error| ShimError::new(error.to_string()))?;
-        let env = env([("FJ_SHIM_TOKEN", "env-token")]);
-
-        let token = discover_fj_token(Some("git.deltaisland.io"), &env, Some(&home));
-
-        assert_eq!(token.as_deref(), Some("env-token"));
-        fs::remove_dir_all(home).ok();
-        Ok(())
-    }
-
-    #[test]
-    fn host_specific_discovery_ignores_unrelated_file_tokens() -> Result<()> {
-        let home = temp_root()?;
-        let path = home
-            .join("Library")
-            .join("Application Support")
-            .join("Cyborus.forgejo-cli");
-        fs::create_dir_all(&path).map_err(|error| ShimError::new(error.to_string()))?;
-        fs::write(
-            path.join("keys.json"),
-            r#"{"hosts":{"git.other.test":{"token":"other-token"}}}"#,
-        )
-        .map_err(|error| ShimError::new(error.to_string()))?;
-
-        let token = discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home));
-
-        assert!(token.is_none());
-        fs::remove_dir_all(home).ok();
-        Ok(())
-    }
-
-    #[test]
-    fn stores_and_discovers_shim_auth_file_token() -> Result<()> {
+    fn stores_and_reads_shim_auth_file_token() -> Result<()> {
         let home = temp_root()?;
         let storage = write_stored_token(
             "https://Git.Example.com/path",
@@ -743,7 +565,8 @@ mod tests {
             Some("linux"),
         )?;
 
-        let token = discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home));
+        let token = read_stored_token("git.example.com", Some(&home), Some("linux"))
+            .map(|stored| stored.token);
 
         assert_eq!(storage, auth_file_path(Some(&home)).display().to_string());
         assert_eq!(token.as_deref(), Some("stored-token"));
@@ -763,6 +586,132 @@ mod tests {
     }
 
     #[test]
+    fn host_token_precedence_covers_each_layer_and_combination() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join("config.toml");
+        fs::write(
+            &path,
+            "[host.\"git.example.com\"]\ntoken_env = \"HOST_TOKEN\"\n",
+        )?;
+        let config = config::load_config_with_env(Some(&path), &EnvMap::new())?;
+
+        for stored in [false, true] {
+            for per_host in [false, true] {
+                for generic in [false, true] {
+                    delete_stored_token("git.example.com", Some(&home), Some("linux"))?;
+                    if stored {
+                        write_stored_token(
+                            "git.example.com",
+                            "stored",
+                            Some(&home),
+                            Some("linux"),
+                        )?;
+                    }
+                    let env = env([
+                        ("HOST_TOKEN", if per_host { "host-env" } else { " \t" }),
+                        ("FORGEJO_TOKEN", if generic { "generic" } else { "" }),
+                    ]);
+                    let found = resolve_token(
+                        "https://Git.Example.com/path",
+                        &config,
+                        &env,
+                        Some(&home),
+                        Some("linux"),
+                    );
+                    let expected = if stored {
+                        Some("stored")
+                    } else if per_host {
+                        Some("host-env")
+                    } else if generic {
+                        Some("generic")
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        found.as_ref().map(|found| found.token.as_str()),
+                        expected,
+                        "stored={stored}, per_host={per_host}, generic={generic}"
+                    );
+                    if per_host && !stored {
+                        assert_eq!(
+                            found.map(|found| found.source).as_deref(),
+                            Some("HOST_TOKEN")
+                        );
+                    }
+                }
+            }
+        }
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn two_hosts_never_share_generic_or_host_specific_tokens() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join("config.toml");
+        fs::write(
+            &path,
+            "[host.\"a.example.com\"]\ntoken_env = \"A_TOKEN\"\n[host.\"b.example.com\"]\n",
+        )?;
+        let config = config::load_config_with_env(Some(&path), &EnvMap::new())?;
+        let mut env = env([("FORGEJO_TOKEN", "generic")]);
+        for host in ["a.example.com", "b.example.com", "other.example.com"] {
+            assert!(resolve_token(host, &config, &env, Some(&home), Some("linux")).is_none());
+        }
+        env.insert("A_TOKEN".to_string(), "a-token".to_string());
+        assert_eq!(
+            resolve_token("a.example.com", &config, &env, Some(&home), Some("linux"))
+                .map(|found| found.token)
+                .as_deref(),
+            Some("a-token")
+        );
+        assert!(
+            resolve_token("b.example.com", &config, &env, Some(&home), Some("linux")).is_none()
+        );
+        write_stored_token("b.example.com", "b-stored", Some(&home), Some("linux"))?;
+        assert_eq!(
+            resolve_token("b.example.com", &config, &env, Some(&home), Some("linux"))
+                .map(|found| found.token)
+                .as_deref(),
+            Some("b-stored")
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn generic_env_requires_one_matching_configured_host() -> Result<()> {
+        let home = temp_root()?;
+        let path = home.join("config.toml");
+        let env = env([("FORGEJO_TOKEN", "generic")]);
+        let empty = config::load_config_with_env(Some(&path), &env)?;
+        assert!(
+            resolve_token("git.example.com", &empty, &env, Some(&home), Some("linux")).is_none()
+        );
+        fs::write(
+            &path,
+            "hosts = [\"Git.Example.com\", \"git.example.com\", \"github.com\"]\n",
+        )?;
+        let config = config::load_config_with_env(Some(&path), &env)?;
+        assert_eq!(
+            resolve_token("git.example.com", &config, &env, Some(&home), Some("linux"))
+                .map(|found| found.token)
+                .as_deref(),
+            Some("generic")
+        );
+        assert!(resolve_token(
+            "other.example.com",
+            &config,
+            &env,
+            Some(&home),
+            Some("linux")
+        )
+        .is_none());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
     fn reads_python_compatible_string_auth_file_token() -> Result<()> {
         let home = temp_root()?;
         let path = auth_file_path(Some(&home));
@@ -774,44 +723,10 @@ mod tests {
         fs::write(&path, r#"{"hosts":{"git.example.com":"old-token"}}"#)
             .map_err(|error| ShimError::new(error.to_string()))?;
 
-        let token = discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home));
+        let token = read_stored_token("git.example.com", Some(&home), Some("linux"))
+            .map(|stored| stored.token);
 
         assert_eq!(token.as_deref(), Some("old-token"));
-        fs::remove_dir_all(home).ok();
-        Ok(())
-    }
-
-    #[test]
-    fn env_token_wins_over_stored_shim_auth() -> Result<()> {
-        let home = temp_root()?;
-        write_stored_token(
-            "git.example.com",
-            "stored-token",
-            Some(&home),
-            Some("linux"),
-        )?;
-        let env = env([("FJ_SHIM_TOKEN", "env-token")]);
-
-        let token = discover_fj_token(Some("git.example.com"), &env, Some(&home));
-
-        assert_eq!(token.as_deref(), Some("env-token"));
-        fs::remove_dir_all(home).ok();
-        Ok(())
-    }
-
-    #[test]
-    fn import_discovery_excludes_existing_shim_auth() -> Result<()> {
-        let home = temp_root()?;
-        write_stored_token(
-            "git.example.com",
-            "stored-token",
-            Some(&home),
-            Some("linux"),
-        )?;
-
-        let discovery = discover_import_token("git.example.com", &EnvMap::new(), Some(&home));
-
-        assert!(discovery.is_none());
         fs::remove_dir_all(home).ok();
         Ok(())
     }
@@ -827,7 +742,8 @@ mod tests {
         )?;
 
         let deleted = delete_stored_token("git.example.com", Some(&home), Some("linux"))?;
-        let token = discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home));
+        let token = read_stored_token("git.example.com", Some(&home), Some("linux"))
+            .map(|stored| stored.token);
 
         assert!(deleted);
         assert!(token.is_none());
@@ -849,24 +765,60 @@ mod tests {
         let deleted = delete_stored_token("git.example.com", Some(&home), Some("linux"))?;
 
         assert!(deleted);
-        assert!(discover_fj_token(Some("git.example.com"), &EnvMap::new(), Some(&home)).is_none());
+        assert!(
+            read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .is_none()
+        );
         assert_eq!(
-            discover_fj_token(Some("git.other.test"), &EnvMap::new(), Some(&home)).as_deref(),
+            read_stored_token("git.other.test", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .as_deref(),
             Some("other-token")
         );
         fs::remove_dir_all(home).ok();
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
-    fn text_token_scan_handles_utf8_near_scan_boundary() {
-        let padding = "a".repeat(2000 - "git.example.com".len() - 1);
-        let text = format!("git.example.com{padding}é\ntoken: secret");
-
-        assert_eq!(find_token_in_text(&text, Some("git.example.com")), None);
+    fn corrupt_auth_file_is_never_overwritten() -> Result<()> {
+        let root = temp_root()?;
+        let path = auth_file_path(Some(&root));
+        fs::create_dir_all(path.parent().expect("parent"))?;
+        let corrupt = r#"{"hosts": {"a.example": "#;
+        fs::write(&path, corrupt)?;
+        let error = write_stored_token("b.example", "token-b", Some(&root), Some("linux"))
+            .expect_err("a corrupt file must block the write");
+        assert!(error.to_string().contains("fix or remove it"));
+        assert!(delete_stored_token("a.example", Some(&root), Some("linux")).is_err());
+        assert_eq!(fs::read_to_string(&path)?, corrupt);
+        Ok(())
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn keychain_command_quotes_values_and_rejects_control_characters() -> Result<()> {
+        assert_eq!(
+            keychain_add_command("git.example.com", r#"a"b\c"#)?,
+            "add-generic-password -a \"git.example.com\" -s \"gh-forgejo-shim\" -w \"a\\\"b\\\\c\" -U\n"
+        );
+        assert!(keychain_add_command("git.example.com", "a\nadd-generic-password").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn token_debug_output_is_redacted() {
+        let stored = StoredToken {
+            token: "secret-token".to_string(),
+            storage: "file".to_string(),
+        };
+        let found = TokenDiscovery {
+            token: "secret-token".to_string(),
+            source: "FJ_SHIM_TOKEN".to_string(),
+        };
+        assert!(!format!("{stored:?}{found:?}").contains("secret-token"));
+    }
+
     #[test]
     fn auth_temp_file_starts_private() -> Result<()> {
         let home = temp_root()?;

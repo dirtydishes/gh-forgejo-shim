@@ -1,0 +1,11 @@
+{
+  "id": "decoy-config-get",
+  "kind": "decoy",
+  "argv": [
+    "config",
+    "get",
+    "editor"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": []
+}

@@ -1,9 +1,9 @@
 [workspace]
-members = ["crates/gh-forgejo-shim"]
+members = ["crates/gh-forgejo-shim", "crates/fga-core", "crates/fga-server"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/dirtydishes/gh-forgejo-shim"
@@ -13,6 +13,21 @@ description = "Opt-in gh wrapper for Forgejo repositories, tuned for Codex.app w
 authors = ["dirtydishes"]
 keywords = ["forgejo", "gitea", "github-cli", "codex", "gh"]
 categories = ["command-line-utilities", "development-tools"]
+
+# The gateway crates (fga-core, fga-server) came from forgejo-github-api and keep their own
+# version and edition.
+[workspace.dependencies]
+async-graphql = "7.2"
+axum = "0.8"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+regex = { version = "1", default-features = false, features = ["std", "unicode-case"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+url = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

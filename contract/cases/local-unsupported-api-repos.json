@@ -1,0 +1,15 @@
+{
+  "id": "local-unsupported-api-repos",
+  "kind": "shim-local",
+  "argv": [
+    "api",
+    "repos/dirtydishes/gfj-oracle/pulls"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "gh-forgejo-shim: \"gh api\" is not supported for Forgejo host forge.test yet\n"
+  }
+}

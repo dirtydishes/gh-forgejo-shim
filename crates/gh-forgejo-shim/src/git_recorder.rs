@@ -11,7 +11,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::{shim, Result, ShimError};
+use crate::trace::{append_jsonl, is_sensitive_key, redact_text_with};
+use crate::{external, shim, Result, ShimError};
 
 pub const MARKER: &str = "managed by gh-forgejo-shim git recorder";
 pub const TRACE_PATH_ENV: &str = "FJ_SHIM_TRACE";
@@ -70,7 +71,8 @@ pub fn create_git_recorder(
     } else {
         marker_header()
     };
-    shim::replace_file(&marker, marker_text.as_bytes(), false)?;
+    // `remove` trusts this file to say whether it made the directory, so only its owner may edit it.
+    shim::replace_private_file(&marker, marker_text.as_bytes())?;
 
     let path = prepend_path(&directory, env.get("PATH").map_or("", String::as_str));
     let mut launch_env = env.clone();
@@ -246,7 +248,7 @@ pub fn run_git_recorder(real_git: &Path, trace_path: &Path, args: &[String]) -> 
             return 127;
         }
     };
-    let exit_code = status.code().unwrap_or(1);
+    let exit_code = external::inherited_exit_code(status);
     let stdout_stats = stdout_forwarder
         .map(|handle| handle.join().unwrap_or_default())
         .unwrap_or_default();
@@ -454,26 +456,6 @@ fn is_recorder_wrapper(path: &Path) -> bool {
     })
 }
 
-fn append_jsonl(path: &Path, record: &Value) -> io::Result<()> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        shim::create_dirs(parent, 0o700)?;
-    }
-    let mut options = fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    serde_json::to_writer(&mut file, record)?;
-    file.write_all(b"\n")?;
-    Ok(())
-}
-
 fn absolute_path(path: &Path) -> Result<PathBuf> {
     let expanded = expand_home(path);
     if expanded.is_absolute() {
@@ -517,8 +499,14 @@ fn redact_argv(args: &[String]) -> Vec<String> {
             continue;
         }
 
-        let (key, separator, value) = split_assignment(arg);
-        if key.starts_with('-') && is_secret_key(key) {
+        let (key, separator, _) = split_assignment(arg);
+        // An `=` inside a URL, as in a password `pa=ss`, isn't an assignment: the whole URL goes
+        // to the URL rules, which hide its userinfo up to the last `@` (Sol r7#1 on #94).
+        if key.contains("://") {
+            redacted.push(redact_text(arg));
+            continue;
+        }
+        if key.starts_with('-') && is_sensitive_key(key) {
             if separator.is_some() {
                 redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
             } else {
@@ -527,15 +515,13 @@ fn redact_argv(args: &[String]) -> Vec<String> {
             }
             continue;
         }
-        if separator.is_some() && is_secret_key(key) {
-            redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
+        if separator.is_some() && is_sensitive_key(key) {
+            // The part before `=` is redacted too: `password` may be in a URL's userinfo there.
+            redacted.push(format!("{}={SECRET_REPLACEMENT}", redact_text(key)));
             continue;
         }
-        if separator.is_some() {
-            redacted.push(format!("{key}={}", redact_text(value)));
-        } else {
-            redacted.push(redact_text(arg));
-        }
+        // The whole argument: the part before `=` can hold a URL's userinfo too.
+        redacted.push(redact_text(arg));
     }
     redacted
 }
@@ -548,132 +534,7 @@ fn split_assignment(value: &str) -> (&str, Option<char>, &str) {
 }
 
 fn redact_text(value: &str) -> String {
-    let mut result = redact_url_userinfo(value);
-    result = redact_authorization(&result);
-    result = redact_secret_assignments(&result);
-    redact_known_tokens(&result)
-}
-
-fn redact_url_userinfo(value: &str) -> String {
-    let mut output = String::new();
-    let mut rest = value;
-    while let Some(scheme_index) = rest.find("://") {
-        let credential_start = scheme_index + 3;
-        let Some(at_relative) = rest[credential_start..].find('@') else {
-            output.push_str(&rest[..credential_start]);
-            rest = &rest[credential_start..];
-            continue;
-        };
-        let at_index = credential_start + at_relative;
-        let authority = &rest[credential_start..at_index];
-        if authority.contains('/') || authority.contains(char::is_whitespace) {
-            output.push_str(&rest[..=at_index]);
-        } else {
-            output.push_str(&rest[..credential_start]);
-            output.push_str(SECRET_REPLACEMENT);
-            output.push('@');
-        }
-        rest = &rest[at_index + 1..];
-    }
-    output.push_str(rest);
-    output
-}
-
-fn redact_authorization(value: &str) -> String {
-    let lower = value.to_ascii_lowercase();
-    for prefix in ["authorization:", "authorization="] {
-        if let Some(index) = lower.find(prefix) {
-            let secret_start = index + prefix.len();
-            let after = &value[secret_start..];
-            let token_end = after.find(['\n', '\r', ';', '&']).unwrap_or(after.len());
-            return format!(
-                "{}{}{}",
-                &value[..secret_start],
-                SECRET_REPLACEMENT,
-                &after[token_end..]
-            );
-        }
-    }
-    value.to_string()
-}
-
-fn redact_secret_assignments(value: &str) -> String {
-    let mut words = Vec::new();
-    for word in value.split_whitespace() {
-        let (key, separator, _rest) = split_key_value(word);
-        if separator.is_some() && is_secret_key(key) {
-            let delimiter = separator.unwrap_or('=');
-            words.push(format!("{key}{delimiter}{SECRET_REPLACEMENT}"));
-        } else {
-            words.push(word.to_string());
-        }
-    }
-    words.join(" ")
-}
-
-fn split_key_value(value: &str) -> (&str, Option<char>, &str) {
-    if let Some(index) = value.find('=') {
-        return (&value[..index], Some('='), &value[index + 1..]);
-    }
-    if let Some(index) = value.find(':') {
-        return (&value[..index], Some(':'), &value[index + 1..]);
-    }
-    (value, None, "")
-}
-
-fn redact_known_tokens(value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|word| {
-            if is_known_token(word) {
-                SECRET_REPLACEMENT.to_string()
-            } else {
-                word.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn is_known_token(value: &str) -> bool {
-    let normalized = value.trim_matches(|character: char| {
-        !character.is_ascii_alphanumeric() && !matches!(character, '_' | '-')
-    });
-    normalized.starts_with("github_pat_")
-        || normalized.starts_with("ghp_")
-        || normalized.starts_with("gho_")
-        || normalized.starts_with("ghu_")
-        || normalized.starts_with("ghs_")
-        || normalized.starts_with("ghr_")
-        || normalized.starts_with("glpat-")
-        || normalized.starts_with("gitea_")
-}
-
-fn is_secret_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase();
-    [
-        "token",
-        "secret",
-        "pass",
-        "password",
-        "passwd",
-        "api-key",
-        "api_key",
-        "authorization",
-        "auth-token",
-        "auth_token",
-        "credential",
-        "client-secret",
-        "client_secret",
-        "access-token",
-        "access_token",
-        "refresh-token",
-        "refresh_token",
-        "private-key",
-        "private_key",
-    ]
-    .iter()
-    .any(|part| normalized.contains(part))
+    redact_text_with(value, SECRET_REPLACEMENT)
 }
 
 fn utc_timestamp() -> String {
@@ -726,6 +587,54 @@ mod tests {
                 "https://[REDACTED]@example.com/repo.git",
             ]
         );
+    }
+
+    #[test]
+    fn argv_redacts_a_url_password_that_holds_an_equals_sign() {
+        // Git accepts `=` in a password; it isn't an assignment (Sol r7#1).
+        for url in [
+            "https://alice:audit-password=tail@example.com/repo.git",
+            "https://alice:audit=@example.com/repo.git",
+            "https://user=x:audit-secret@example.com/r?ref=main",
+        ] {
+            let redacted = redact_argv(&[url.to_string()]).join(" ");
+            assert!(!redacted.contains("audit"), "{url} -> {redacted}");
+            assert!(redacted.contains("@example.com/"), "{url} -> {redacted}");
+        }
+        // A proxy URL right after another URL's host (Opus o7#1).
+        let proxy = "http.https://example.com.proxy=http://alice:audit-pw@proxy:3128";
+        let redacted = redact_argv(&["-c".to_string(), proxy.to_string()]).join(" ");
+        assert!(!redacted.contains("audit-pw"), "{proxy} -> {redacted}");
+    }
+
+    #[test]
+    fn argv_redacts_a_url_password_before_an_assignment() {
+        // `password` in the userinfo makes the part before `=` look like a sensitive key.
+        let redacted = redact_argv(&["https://alice:audit-password@host/r?ref=main".to_string()]);
+
+        assert!(
+            !redacted.join(" ").contains("audit-password"),
+            "{redacted:?}"
+        );
+    }
+
+    #[test]
+    fn redacts_url_passwords_and_secrets_that_contain_separators() {
+        let argv = redact_argv(&[
+            "fetch".to_string(),
+            "https://alice:hunter2@host/r?ref=main".to_string(),
+            "https://user:dGVzdA==@host/repo".to_string(),
+            "--config=user.password=a;b".to_string(),
+        ])
+        .join(" ");
+        let excerpt = redact_text("protocol=https\nhost=x\npassword=p@ss;w,rd\n");
+
+        for secret in ["hunter2", "dGVzdA", ";b", ";w,rd"] {
+            assert!(
+                !argv.contains(secret) && !excerpt.contains(secret),
+                "{argv} {excerpt}"
+            );
+        }
     }
 
     #[test]

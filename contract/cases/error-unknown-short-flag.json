@@ -1,0 +1,16 @@
+{
+  "id": "error-unknown-short-flag",
+  "argv": [
+    "pr",
+    "view",
+    "1",
+    "-Z"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "oracle": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "unknown shorthand flag: 'Z' in -Z\n\nUsage:  gh pr view [<number> | <url> | <branch>] [flags]\n\nFlags:\n  -c, --comments          View pull request comments\n  -q, --jq expression     Filter JSON output using a jq expression\n      --json fields       Output JSON with the specified fields\n  -t, --template string   Format JSON output using a Go template; see \"gh help formatting\"\n  -w, --web               Open a pull request in the browser\n  \n"
+  }
+}

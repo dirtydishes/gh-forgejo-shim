@@ -1,0 +1,10 @@
+{
+  "id": "decoy-auth-setup-git",
+  "kind": "decoy",
+  "argv": [
+    "auth",
+    "setup-git"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": []
+}

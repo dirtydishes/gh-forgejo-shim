@@ -1,0 +1,283 @@
+//! Forgejo Actions uses workflow filenames and native run states, not GitHub IDs.
+use crate::forgejo::{Error, MAX_PAGES, Session};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+
+mod workflow_name;
+
+#[derive(Deserialize)]
+pub struct RunList {
+    pub total_count: u64,
+    pub workflow_runs: Vec<Run>,
+}
+#[derive(Deserialize)]
+pub struct Run {
+    pub id: i64,
+    pub workflow_id: String,
+    pub index_in_repo: i64,
+    pub title: String,
+    pub prettyref: String,
+    pub commit_sha: String,
+    pub status: String,
+    pub event: String,
+    pub html_url: String,
+    pub created: String,
+    pub updated: String,
+    pub started: String,
+}
+#[derive(Clone, Serialize)]
+pub struct Workflow {
+    pub id: i64,
+    pub name: String,
+    pub path: String,
+    pub state: &'static str,
+}
+pub fn workflow_id(filename: &str) -> i64 {
+    let digest = Sha256::digest(filename.as_bytes());
+    i64::from_be_bytes(digest[..8].try_into().expect("eight hash bytes")) & i64::MAX
+}
+
+pub fn status(native: &str) -> Result<(&'static str, Option<&'static str>), Error> {
+    Ok(match native {
+        // Forgejo gives a run with no jobs `unknown` and counts it as pending
+        // (`models/actions/run_job.go` `AggregateJobStatus`, `status.go` `PendingStatuses`).
+        "waiting" | "blocked" | "unknown" => ("queued", None),
+        "running" => ("in_progress", None),
+        "success" => ("completed", Some("success")),
+        "failure" => ("completed", Some("failure")),
+        "cancelled" => ("completed", Some("cancelled")),
+        "skipped" => ("completed", Some("skipped")),
+        _ => return Err(Error::Upstream),
+    })
+}
+
+pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
+    let (status, conclusion) = status(&run.status)?;
+    // A run Forgejo never started carries Unix time 0 in its display timezone, which is
+    // 1969-12-31 west of UTC. GitHub reports the creation time, as gh does for a missing start.
+    let started = if run.started.starts_with("1970-01-01") || run.started.starts_with("1969-12-31")
+    {
+        &run.created
+    } else {
+        &run.started
+    };
+    // Forgejo 15 reruns a run's jobs in place and keeps no attempt per run (only per job), so
+    // every run is its first attempt; GitHub numbers attempts from 1.
+    Ok(
+        json!({"id":run.id,"workflow_id":workflow.id,"name":workflow.name,
+        "display_title":run.title,"head_branch":run.prettyref.strip_prefix("refs/heads/").unwrap_or(&run.prettyref),
+        "head_sha":run.commit_sha,"run_number":run.index_in_repo,"event":run.event,
+        "status":status,"conclusion":conclusion,"html_url":run.html_url,"path":workflow.path,
+        "created_at":run.created,"updated_at":run.updated,"run_started_at":started,
+        "run_attempt":1}),
+    )
+}
+
+/// The directories Forgejo reads workflows from, in order (`modules/actions/workflows.go:62-102`).
+const WORKFLOW_DIRECTORIES: [&str; 3] = [
+    ".forgejo/workflows",
+    ".gitea/workflows",
+    ".github/workflows",
+];
+
+impl Session {
+    pub async fn action_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        filters: &[(&str, String)],
+        start: usize,
+        limit: usize,
+    ) -> Result<RunList, Error> {
+        // Read only the upstream pages that overlap the requested window.
+        let size = self.page_size().await?;
+        let skip = start % size;
+        let first = (start / size).saturating_add(1);
+        let mut collected = Vec::new();
+        for page in first..first.saturating_add(MAX_PAGES) {
+            let mut query = filters.to_vec();
+            query.extend([("page", page.to_string()), ("limit", size.to_string())]);
+            let (batch, _): (RunList, _) = self
+                .page(&["repos", owner, repo, "actions", "runs"], &query)
+                .await?;
+            let count = batch.workflow_runs.len();
+            collected.extend(batch.workflow_runs);
+            if count == 0
+                || collected.len() >= skip.saturating_add(limit)
+                || page.saturating_mul(size) as u64 >= batch.total_count
+            {
+                return Ok(RunList {
+                    total_count: batch.total_count,
+                    workflow_runs: collected.into_iter().skip(skip).take(limit).collect(),
+                });
+            }
+        }
+        Err(Error::Upstream)
+    }
+
+    pub async fn workflows(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<BTreeMap<String, Workflow>, Error> {
+        // Forgejo reads the first of these directories that exists, even if it holds no workflows
+        // (`modules/actions/workflows.go:62-102`).
+        let mut workflows = BTreeMap::new();
+        for directory in WORKFLOW_DIRECTORIES {
+            let mut segments = vec!["repos", owner, repo, "contents"];
+            segments.extend(directory.split('/'));
+            let entries: serde_json::Value = match self.get(&segments, &[]).await {
+                Ok(entries) => entries,
+                Err(Error::NotFound) => continue,
+                Err(e) => return Err(e),
+            };
+            let entries = entries.as_array().ok_or(Error::Upstream)?;
+            for entry in entries {
+                let filename = entry["name"].as_str().ok_or(Error::Upstream)?;
+                if entry["type"] != "file"
+                    || !(filename.ends_with(".yml") || filename.ends_with(".yaml"))
+                {
+                    continue;
+                }
+                let path = format!("{directory}/{filename}");
+                let content = self.file_text(owner, repo, &path).await?;
+                let name = workflow_name::from_content(&content, &path);
+                workflows.insert(
+                    filename.into(),
+                    Workflow {
+                        id: workflow_id(filename),
+                        name,
+                        path,
+                        state: "active",
+                    },
+                );
+            }
+            break;
+        }
+        Ok(workflows)
+    }
+
+    /// A run's workflow. `known` holds the default branch's, and its name wins for a file it has, as
+    /// gh's WORKFLOW column shows it (GitHub would name the run from its own commit, which a PR
+    /// renaming its workflow makes differ). A run of a workflow that exists only on its own branch
+    /// (a PR adding one) is named from the file at the run's commit, looked for first in the
+    /// directory the default branch uses, and failing that from its file name. It never fails, so
+    /// one such run can't fail a list of runs. Forgejo's `workflow_id` is the bare file name
+    /// (`services/actions/notifier_helper.go:375`).
+    pub async fn workflow_for(
+        &self,
+        owner: &str,
+        repo: &str,
+        run: &Run,
+        known: &BTreeMap<String, Workflow>,
+    ) -> Workflow {
+        if let Some(workflow) = known.get(&run.workflow_id) {
+            return workflow.clone();
+        }
+        let filename = &run.workflow_id;
+        let used = known.values().find_map(|workflow| {
+            workflow
+                .path
+                .rsplit_once('/')
+                .map(|(directory, _)| directory)
+        });
+        let directories = used.into_iter().chain(
+            WORKFLOW_DIRECTORIES
+                .into_iter()
+                .filter(|d| Some(*d) != used),
+        );
+        for directory in directories {
+            let path = format!("{directory}/{filename}");
+            match self
+                .file_text_at(owner, repo, &path, Some(&run.commit_sha))
+                .await
+            {
+                Ok(content) => {
+                    return Workflow {
+                        id: workflow_id(filename),
+                        name: workflow_name::from_content(&content, &path),
+                        path,
+                        state: "active",
+                    };
+                }
+                // Only a missing file sends Forgejo on to the next directory.
+                Err(Error::NotFound) => continue,
+                Err(_) => break,
+            }
+        }
+        Workflow {
+            id: workflow_id(filename),
+            name: filename.clone(),
+            path: format!("{}/{filename}", used.unwrap_or(WORKFLOW_DIRECTORIES[0])),
+            state: "active",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn maps_native_run_states_without_inventing_success() {
+        for (native, expected) in [
+            ("waiting", ("queued", None)),
+            ("blocked", ("queued", None)),
+            ("running", ("in_progress", None)),
+            ("success", ("completed", Some("success"))),
+            ("failure", ("completed", Some("failure"))),
+            ("cancelled", ("completed", Some("cancelled"))),
+            ("skipped", ("completed", Some("skipped"))),
+        ] {
+            assert_eq!(status(native).unwrap(), expected);
+        }
+        // A run with no jobs; Forgejo counts it as pending (`PendingStatuses`).
+        assert_eq!(status("unknown").unwrap(), ("queued", None));
+        assert!(status("future-state").is_err());
+        assert_eq!(workflow_id("ci.yml"), workflow_id("ci.yml"));
+        assert_ne!(workflow_id("ci.yml"), workflow_id("other.yml"));
+    }
+
+    /// Forgejo sends a run it never started with Unix time 0 in its display timezone; GitHub's
+    /// `run_started_at` then takes the creation time, as gh itself does for a missing start.
+    #[test]
+    fn a_run_that_never_started_starts_when_it_was_created() {
+        let workflow = Workflow {
+            id: 1,
+            name: "ci".into(),
+            path: ".forgejo/workflows/ci.yml".into(),
+            state: "active",
+        };
+        let created = "2026-11-03T00:00:00Z";
+        let mapped = |status: &str, started: &str| {
+            let source = Run {
+                id: 5,
+                workflow_id: "ci.yml".into(),
+                index_in_repo: 1,
+                title: "t".into(),
+                prettyref: "refs/heads/main".into(),
+                commit_sha: "abc".into(),
+                status: status.into(),
+                event: "push".into(),
+                html_url: "https://forge.test/o/r/actions/runs/1".into(),
+                created: created.into(),
+                updated: "2026-11-03T00:00:09Z".into(),
+                started: started.into(),
+            };
+            run(&source, &workflow).unwrap()["run_started_at"].clone()
+        };
+        for unset in [
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T01:00:00+01:00",
+            "1969-12-31T19:00:00-05:00",
+        ] {
+            assert_eq!(mapped("waiting", unset), created, "{unset}");
+            assert_eq!(mapped("failure", unset), created, "{unset}");
+        }
+        assert_eq!(
+            mapped("running", "2026-11-03T00:00:03Z"),
+            "2026-11-03T00:00:03Z"
+        );
+    }
+}

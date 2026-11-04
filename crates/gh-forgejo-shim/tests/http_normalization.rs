@@ -4,8 +4,8 @@ use std::path::Path;
 
 use gh_forgejo_shim::forgejo::RepoRef;
 use gh_forgejo_shim::normalize::{
-    filter_check_fields, filter_fields, filter_repo_fields, normalize_pr_checks, normalize_pull,
-    normalize_repo, render_json_or_jq, status_for_current_branch, with_status_check_rollup,
+    filter_fields, filter_repo_fields, normalize_pull, normalize_repo, render_json_or_jq,
+    status_for_current_branch, with_status_check_rollup,
 };
 use serde_json::{json, Value};
 
@@ -149,39 +149,6 @@ fn pr_view_normalization_matches_contract_probe() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn pr_checks_normalization_matches_contract_probe() -> TestResult {
-    let statuses = vec![
-        json!({
-            "context": "ci/test",
-            "description": "tests passed",
-            "state": "success",
-            "target_url": "https://git.example.com/owner/repo/actions/runs/1",
-            "created_at": "2026-06-01T00:00:00Z",
-            "updated_at": "2026-06-01T00:02:00Z"
-        }),
-        json!({
-            "context": "lint",
-            "description": "lint is running",
-            "state": "pending",
-            "created_at": "2026-06-01T00:01:00Z"
-        }),
-    ];
-    let fields = ["bucket", "description", "link", "name", "workflow"];
-    let checks = normalize_pr_checks(&statuses)
-        .as_array()
-        .ok_or_else(|| io::Error::other("checks normalization did not produce an array"))?
-        .iter()
-        .map(|check| filter_check_fields(check, &fields))
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        Value::Array(checks),
-        expected_stdout_json("gh_pr_checks_json")?
-    );
-    Ok(())
-}
-
 fn expected_stdout(id: &str) -> TestResult<String> {
     let expected = expected(id)?;
     expected
@@ -216,6 +183,6 @@ fn expected(id: &str) -> TestResult<Value> {
 
 fn load_contract() -> TestResult<Value> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v1.json");
+        .join("../../docs/implementation/rust-rewrite/contracts/compatibility-contract.v2.json");
     Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }

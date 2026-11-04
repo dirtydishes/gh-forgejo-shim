@@ -1,0 +1,31 @@
+{
+  "id": "twin-pr-merge-rebase",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-merge-rebase",
+    "pr": true,
+    "base": true
+  },
+  "argv": [
+    "pr",
+    "merge",
+    "{pr}",
+    "--rebase"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "state": "closed",
+        "merged": true
+      }
+    }
+  ],
+  "normalize": []
+}

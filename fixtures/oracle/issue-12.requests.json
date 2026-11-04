@@ -1,0 +1,14 @@
+[
+  {
+    "query": "query IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      hasIssuesEnabled\n      issue: issueOrPullRequest(number: $number) {\n        __typename\n        ...on Issue{number,state,title,id}\n        ...on PullRequest{number,state,title,id}\n      }\n    }\n  }",
+    "variables": {
+      "number": 12,
+      "owner": "dirtydishes",
+      "repo": "gfj-oracle"
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/graphql"
+  }
+]
