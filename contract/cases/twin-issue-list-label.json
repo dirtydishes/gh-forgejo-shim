@@ -15,7 +15,7 @@
     "--json",
     "number",
     "--jq",
-    "[.[] | select(.number == {issue})] == ."
+    "[.[] | select(.number == {issue})] == . and length == 1"
   ],
   "expect": {
     "exit": 0,

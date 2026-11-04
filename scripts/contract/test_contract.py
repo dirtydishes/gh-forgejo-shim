@@ -173,6 +173,8 @@ class ContractTests(unittest.TestCase):
               "setup": {"branch": "twin/x", "issue": True}}, "select\\(.number"),
             ({"argv": ["issue", "view", "{issue}", "--json", "title"], "setup": {"branch": "twin/x", "issue": True},
               "expect": {"exit": 0, "stdout": "(?P<issue>[0-9]+)", "stderr": ""}}, "rebind"),
+            ({"argv": ["issue", "view", "{issue}", "--json", "title"], "setup": {"branch": "twin/x", "issue": True},
+              "expect": {"exit": 0, "stdout": "", "stderr": "(?P<issue>[0-9]+)"}}, "rebind"),
             ({"argv": ["issue", "view", "{issue}", "--json", "title"], "setup": {"branch": "twin/x", "label": True}},
              "needs setup.issue"),
             ({"argv": ["issue", "view", "{pr}"], "setup": {"branch": "twin/x", "pr": True, "issue": True}},

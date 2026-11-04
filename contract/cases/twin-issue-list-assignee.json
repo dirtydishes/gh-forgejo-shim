@@ -12,13 +12,13 @@
     "--assignee",
     "dirtydishes",
     "--json",
-    "number,title",
+    "number,assignees",
     "--jq",
-    ".[] | select(.number == {issue}) | .title"
+    "([.[] | select(.number == {issue})] | length) == 1 and all(.[]; any(.assignees[]; .login == \"dirtydishes\"))"
   ],
   "expect": {
     "exit": 0,
-    "stdout": "twin:\\ twin/issue\\-list\\-assignee\\\n",
+    "stdout": "true\\\n",
     "stderr": ""
   },
   "state": [],
