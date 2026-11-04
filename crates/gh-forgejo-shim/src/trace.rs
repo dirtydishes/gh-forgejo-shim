@@ -283,20 +283,54 @@ fn sensitive_value_range(value: &str, delimiter_index: usize) -> Option<(usize, 
         None
     };
     let line_end = rest_of_line(value, value_start);
+    // JSON, where the key itself was quoted (`"token":`).
+    let json = value[..delimiter_index].trim_end().ends_with(['"', '\'']);
     if let Some((quoted_start, quoted_end, quote_len)) = quoted {
         let after = (quoted_end + quote_len).min(value.len());
-        // JSON, where the key itself was quoted (`"token":`): the string is the value when a
-        // comma, a bracket or the line's end follows it, and the next field stays.
-        let json = value[..delimiter_index].trim_end().ends_with(['"', '\'']);
+        // In JSON the string is the value when a comma, a bracket or the line's end follows it,
+        // and the next field stays.
         if (json && ends_json_value(value, after)) || line_end == after {
             return Some((quoted_start, quoted_end));
         }
         return Some((quoted_start, line_end));
     }
+    // An array or object runs to its own closing bracket, across lines when a formatter has
+    // spread it out (Sol r7#2). In JSON the next field stays; elsewhere the rest of the line goes
+    // too.
+    if matches!(first, '[' | '{') {
+        let close = bracket_end(value, value_start);
+        return Some((value_start, if json { close } else { close.max(line_end) }));
+    }
     if authorization {
         return Some((after_scheme_word(value, value_start, line_end), line_end));
     }
     Some((value_start, line_end))
+}
+
+/// The end of the array or object opening at `start`, just past the bracket that closes it,
+/// skipping brackets inside strings. One that never closes runs to the end of `value`.
+fn bracket_end(value: &str, start: usize) -> usize {
+    let mut depth = 0_usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, character) in value[start..].char_indices() {
+        match character {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' | '\'' if quote.is_none() => quote = Some(character),
+            _ if quote == Some(character) => quote = None,
+            _ if quote.is_some() => {}
+            '[' | '{' => depth += 1,
+            ']' | '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return start + offset + character.len_utf8();
+                }
+            }
+            _ => {}
+        }
+    }
+    value.len()
 }
 
 /// Where a secret starting at `start` ends outside JSON: at the end of its line, or further while
@@ -818,6 +852,18 @@ mod tests {
     }
 
     #[test]
+    fn an_array_under_a_sensitive_key_ends_at_its_bracket() {
+        assert_eq!(
+            redact_text(r#"{"tokens":["a","b]"],"status":200}"#),
+            r#"{"tokens":<redacted>,"status":200}"#
+        );
+        assert_eq!(
+            redact_text("{\"tokens\": [\n  \"a\"\n],\n\"status\": 200}"),
+            "{\"tokens\": <redacted>,\n\"status\": 200}"
+        );
+    }
+
+    #[test]
     fn an_unclosed_quote_hides_the_rest_of_its_own_field_only() {
         // It fails closed: the rest of the argv element or excerpt, never the next one.
         let argv = [
@@ -920,6 +966,21 @@ mod tests {
                 "audit-tail",
             ),
             (r#"password="a",audit-tail"#, "audit-tail"),
+            // A pretty-printed array or object under a sensitive key (Sol r7#2).
+            (
+                "{\"tokens\": [\n  \"audit-one\",\n  \"audit-two\"\n]}",
+                "audit-one",
+            ),
+            (
+                "{\"tokens\": [\n  \"audit-one\",\n  \"audit-two\"\n]}",
+                "audit-two",
+            ),
+            (
+                "{\"credentials\": {\n  \"user\": \"audit-user\"\n}}",
+                "audit-user",
+            ),
+            ("tokens = [\n  \"audit-one\" ]", "audit-one"),
+            ("{\"tokens\": [\"a\", \"audit-open", "audit-open"),
             // A nested key's quoted value, inside the rest of a line or across its break (Sol r6#2).
             (r#"bypass1=token="first audit-tail""#, "audit-tail"),
             (
