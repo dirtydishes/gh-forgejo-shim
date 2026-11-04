@@ -29,6 +29,13 @@ pub async fn search(
                 .into_iter()
                 .filter(|pr| {
                     query.state.matches_pull(pr)
+                        // Forgejo's `poster` filter does this too; the check keeps a PR-only search
+                        // as strict as one the issue list also filtered by author.
+                        && query
+                            .filters
+                            .author
+                            .as_ref()
+                            .is_none_or(|author| pr.user.login.eq_ignore_ascii_case(author))
                         && query
                             .base
                             .as_ref()

@@ -466,8 +466,11 @@ async fn a_pr_only_search_needs_no_issue_scope() {
             "/api/v1/repos/o/r/pulls",
             get(move |Query(q): Query<HashMap<String, String>>| async move {
                 assert_eq!((q["state"].as_str(), q["poster"].as_str()), ("all", "viewer"));
+                // Someone else's PR from the same branch, as a Forgejo ignoring `poster` would send.
+                let mut theirs = mine(10, "topic", false);
+                theirs["user"]["login"] = json!("someone");
                 let listed = if q.get("page").is_none_or(|p| p == "1") {
-                    json!([mine(9, "topic", false), mine(8, "other", false), mine(7, "topic", true)])
+                    json!([theirs, mine(9, "topic", false), mine(8, "other", false), mine(7, "topic", true)])
                 } else {
                     json!([])
                 };
