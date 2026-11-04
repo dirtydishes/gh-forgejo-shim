@@ -754,3 +754,138 @@ async fn auto_merge_merges_ready_prs_and_schedules_after_a_policy_refusal() {
         assert_eq!(*seen.lock().unwrap(), sent, "{mutation}");
     }
 }
+
+/// `gh issue comment` sends the issue's own ID and `gh pr comment` the PR's; each comments only on
+/// what its ID names. An issue ID whose number is a pull request writes nothing.
+#[tokio::test]
+async fn comments_go_to_issues_and_pull_requests_by_their_own_ids() {
+    use axum::{extract::Path, routing::post};
+    use std::sync::{Arc, Mutex};
+    let posted = Arc::new(Mutex::new(Vec::new()));
+    let record = posted.clone();
+    let issue = |number: i32, pull: bool| {
+        json!({"id":number,"number":number,"title":"T","body":"","state":"open",
+            "html_url":format!("https://forge.test/o/r/issues/{number}"),"user":user(),
+            "created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","labels":[],
+            "pull_request":if pull { json!({"merged":false}) } else { Value::Null }})
+    };
+    let router = router()
+        .route("/api/v1/repos/o/r/issues/1", get(move || async move { Json(issue(1, true)) }))
+        .route("/api/v1/repos/o/r/issues/2", get(move || async move { Json(issue(2, false)) }))
+        .route(
+            "/api/v1/repos/o/r/issues/{number}/comments",
+            post(move |Path(number): Path<i32>| {
+                record.lock().unwrap().push(number);
+                async move {
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({"id":9,"user":user(),"body":"hi","created_at":"2026-11-03T00:00:00Z",
+                            "html_url":if number == 1 {
+                                // Forgejo links a PR's comment under /pulls/.
+                                "https://forge.test/o/r/pulls/1#issuecomment-9".to_owned()
+                            } else {
+                                format!("https://forge.test/o/r/issues/{number}#issuecomment-9")
+                            }})),
+                    )
+                }
+            }),
+        );
+    let comment = |kind: &str, number: i32| {
+        format!(
+            r#"mutation{{addComment(input:{{subjectId:"{}",body:"hi"}}){{commentEdge{{node{{url}}}}}}}}"#,
+            node_id(kind, "o/r", number)
+        )
+    };
+    // gh reads back only the comment's URL: an issue's stays under /issues/, a PR's takes GitHub's
+    // /pull/ layout (MAPPING §8).
+    for (kind, number, url) in [
+        ("Issue", 2, "https://forge.test/o/r/issues/2#issuecomment-9"),
+        (
+            "PullRequest",
+            1,
+            "https://forge.test/o/r/pull/1#issuecomment-9",
+        ),
+    ] {
+        let response = execute(router.clone(), comment(kind, number)).await;
+        assert!(response.errors.is_empty(), "{kind}: {:?}", response.errors);
+        assert_eq!(
+            response.data.into_json().unwrap(),
+            json!({"addComment":{"commentEdge":{"node":{"url":url}}}})
+        );
+    }
+    // Each kind of ID names only its own kind: an issue ID for a PR, a PR ID for an issue.
+    for (kind, number) in [("Issue", 1), ("PullRequest", 2)] {
+        let response = execute(router.clone(), comment(kind, number)).await;
+        assert_eq!(response.errors[0].message, "Not Found", "{kind} {number}");
+    }
+    assert_eq!(*posted.lock().unwrap(), [2, 1]);
+}
+
+/// `gh pr close --delete-branch` deletes the head branch only when `isCrossRepository` is false
+/// (`close.go:150-157` in gh 2.103.3), and deletes it in the base repository. Forgejo sends
+/// `head.repo` null once a PR's fork is deleted; that PR is still cross-repository, as GitHub
+/// reports it, or gh would delete the base's branch of the same name. The query is gh's own, from
+/// the oracle capture of `pr close`.
+#[tokio::test]
+async fn a_pr_from_a_deleted_fork_stays_cross_repository() {
+    let captured: Value = serde_json::from_str(include_str!(
+        "../../../fixtures/oracle/writes/close.requests.json"
+    ))
+    .unwrap();
+    let query = captured[0]["query"].as_str().unwrap();
+    assert!(query.contains("isCrossRepository"), "{query}");
+    let with_head = |number: i32, head: Value| {
+        let mut source = pull();
+        source["number"] = json!(number);
+        source["head"] = head;
+        source
+    };
+    // A fork deleted after the PR was opened: no head repository, the branch name kept in `label`.
+    let deleted_fork = with_head(
+        5,
+        json!({"label":"feature","ref":"refs/pull/5/head","sha":"abc","repo":null}),
+    );
+    let same_repo = with_head(
+        6,
+        json!({"label":"feature","ref":"feature","sha":"abc",
+            "repo":{"name":"r","owner":{"id":1,"login":"o","avatar_url":""}}}),
+    );
+    let app = router()
+        .route(
+            "/api/v1/repos/o/r/pulls/5",
+            get(move || async move { Json(deleted_fork) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/pulls/6",
+            get(move || async move { Json(same_repo) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = Forgejo::new(base)
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    for (number, cross) in [(5, true), (6, false)] {
+        let variables = json!({"owner":"o","repo":"r","pr_number":number});
+        let response = graphql::schema()
+            .execute(
+                Request::new(query)
+                    .variables(async_graphql::Variables::from_json(variables))
+                    .data(session.clone()),
+            )
+            .await;
+        assert!(
+            response.errors.is_empty(),
+            "{number}: {:?}",
+            response.errors
+        );
+        let pull = &response.data.into_json().unwrap()["repository"]["pullRequest"];
+        assert_eq!(pull["isCrossRepository"], json!(cross), "{number}: {pull}");
+        assert_eq!(pull["headRefName"], json!("feature"), "{number}");
+    }
+    task.abort();
+}

@@ -205,6 +205,38 @@ fn executable(path: &Path, contents: &str) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
+/// `path` as one shell word, whatever it holds: `'it'\''s'`.
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+/// Writes an executable script from a child `sh`, so this process never holds a write descriptor
+/// on it that a sibling test's fork could inherit (ETXTBSY when it runs).
+fn executable_from_child(path: &Path, contents: &str) -> io::Result<()> {
+    use std::io::Write;
+
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let written = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("no stdin"))?
+        .write_all(contents.as_bytes());
+    let status = child.wait()?;
+    written?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "writing {}: {status}",
+            path.display()
+        )))
+    }
+}
+
 #[test]
 fn audit_route_copied_dispatcher_on_path() -> TestResult {
     let fixture = Fixture::new()?;
@@ -242,7 +274,7 @@ fn audit_route_copied_sibling_entry_point_on_path() -> TestResult {
 }
 
 #[test]
-fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
+fn audit_route_symlinked_dispatcher_rejects_a_copied_gfj() -> TestResult {
     // Run through a symlink in a directory with no gfj beside it, as a symlinked install does.
     let fixture = Fixture::new()?;
     let linked = fixture.root.join("linked");
@@ -264,6 +296,103 @@ fn audit_route_symlinked_dispatcher_still_finds_its_sibling() -> TestResult {
         String::from_utf8_lossy(&output.stdout),
         REAL_GH,
         "a copied gfj must not pass as real gh when the dispatcher runs through a symlink"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_hardlinked_dispatcher_rejects_a_copied_gfj() -> TestResult {
+    // Run through a hardlink in another directory: there is no sibling gfj to compare with, so
+    // only the marker can show that the copy on PATH is the shim.
+    let fixture = Fixture::new()?;
+    let alias = fixture.root.join("alias");
+    fs::create_dir(&alias)?;
+    let dispatcher = fixture.root.join("dispatcher");
+    fs::copy(env!("CARGO_BIN_EXE_gh-forgejo-shim"), &dispatcher)?;
+    fs::hard_link(&dispatcher, alias.join("dispatcher"))?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let path = std::env::join_paths([&fixture.bin, fixture.real_gh.parent().ok_or("no parent")?])?;
+    let mut command = Command::new(alias.join("dispatcher"));
+    fixture.isolate(&mut command);
+    command
+        .args(["gh", "--version"])
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not pass as real gh when the dispatcher runs through a hardlink"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_moved_dispatcher_rejects_a_copied_gfj() -> TestResult {
+    // Move the running dispatcher before gh discovery, from the git it runs to read the repo. On
+    // macOS the path it started from is then gone, so only the marker can show that the copy on
+    // PATH is the shim.
+    let fixture = Fixture::new()?;
+    fixture.origin("https://github.com/owner/repo")?;
+    let dispatcher = fixture.root.join("dispatcher");
+    let moved = fixture.root.join("dispatcher.moved");
+    fs::copy(env!("CARGO_BIN_EXE_gh-forgejo-shim"), &dispatcher)?;
+    fs::copy(env!("CARGO_BIN_EXE_gfj"), fixture.bin.join("gh"))?;
+    let moving = fixture.root.join("moving");
+    fs::create_dir(&moving)?;
+    let mover = format!(
+        "#!/bin/sh\n/bin/mv {} {} 2>/dev/null\nexec {} \"$@\"\n",
+        sh_quote(&dispatcher),
+        sh_quote(&moved),
+        sh_quote(&fixture.bin.join("git"))
+    );
+    executable_from_child(&moving.join("git"), &mover)?;
+    let path = std::env::join_paths([
+        &moving,
+        &fixture.bin,
+        fixture.real_gh.parent().ok_or("no parent")?,
+    ])?;
+    let mut command = Command::new(&dispatcher);
+    fixture.isolate(&mut command);
+    command
+        .args(["gh", "pr", "list"])
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", path);
+    let output = fixture.run(&mut command)?;
+    assert!(
+        moved.exists(),
+        "the fixture git never moved the dispatcher: {output:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a copied gfj must not pass as real gh after the running dispatcher moves"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_route_real_gh_of_the_shims_size_is_still_used() -> TestResult {
+    // A real gh without the marker is accepted even at exactly the dispatcher's size, so the size
+    // window alone never hides it.
+    let fixture = Fixture::new()?;
+    let size = fs::metadata(env!("CARGO_BIN_EXE_gh-forgejo-shim"))?.len();
+    let script = "#!/bin/sh\nprintf 'real-gh\\n'\nexit 0\n#";
+    let padding = usize::try_from(size)? - script.len() - 1;
+    executable(
+        &fixture.bin.join("gh"),
+        &format!("{script}{}\n", "x".repeat(padding)),
+    )?;
+    assert_eq!(fs::metadata(fixture.bin.join("gh"))?.len(), size);
+    let mut command = fixture.gh(&["--version"]);
+    command
+        .env_remove("FJ_SHIM_REAL_GH")
+        .env("PATH", &fixture.bin);
+    let output = fixture.run(&mut command)?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        REAL_GH,
+        "a real gh the dispatcher's size, without the marker, must still be used"
     );
     Ok(())
 }

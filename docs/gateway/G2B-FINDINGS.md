@@ -68,6 +68,7 @@ the sign bit cleared. This choice needs a rule in MAPPING.md. It is not a GitHub
 
 Waiting and blocked runs map to queued; running maps to in_progress; success, failure, cancelled,
 and skipped map to completed with the same conclusion. Unknown states produce an upstream error.
+(Changed since: Forgejo's own `unknown`, a run with no jobs, maps to queued; see DESIGN.md's runs row.)
 The gateway preserves run IDs and metadata and paginates Forgejo pages into the requested GitHub page.
 Status sets use repeated query parameters, such as `status=waiting&status=blocked`. Forgejo returns
 HTTP 400 for a comma-separated set. Workflow lookup supports the extra read that `run view --json` sends.
@@ -76,9 +77,10 @@ The oracle's five completed runs have no counterparts in the status-only twin se
 expected failure only when stdout is empty, the oracle has five completed successful ci rows, and
 exit code and stderr still match. No new run normalizers hide names, results, IDs, or durations.
 A separate repository creates real queued Forgejo Actions runs and checks them through real gh,
-including branch/event/status filters and `run view` with mapped JSON fields. No runner executes jobs.
-Default `run view` needs jobs; that route returns a GitHub-shaped 404. Jobs, logs, annotations, rerun
-attempts, and workflows removed from the current default branch remain outside this subset.
+including branch/event/status filters and `run view` with mapped JSON fields. No runner executes
+jobs. Default `run view` needs jobs; that route returns a GitHub-shaped 404 (since changed: the
+gateway answers an empty jobs list; see DESIGN.md). Jobs, logs, annotations, rerun attempts, and
+workflows removed from the current default branch remain outside this subset.
 
 ## Commit lookup and seed timing
 

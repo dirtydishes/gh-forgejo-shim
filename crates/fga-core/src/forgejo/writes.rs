@@ -117,6 +117,12 @@ pub struct CreatePull<'a> {
     pub body: &'a str,
 }
 
+#[derive(Serialize)]
+pub struct CreateIssue<'a> {
+    pub title: &'a str,
+    pub body: &'a str,
+}
+
 #[derive(Default, Serialize)]
 pub struct EditPull {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,6 +199,22 @@ impl Session {
         Ok(written(response)?.json()?)
     }
 
+    pub async fn create_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        input: CreateIssue<'_>,
+    ) -> Result<Issue, WriteError> {
+        let response = self
+            .write(
+                Method::POST,
+                &["repos", owner, repo, "issues"],
+                Some(&input),
+            )
+            .await?;
+        Ok(written(response)?.json()?)
+    }
+
     pub async fn edit_pull(
         &self,
         owner: &str,
@@ -205,7 +227,7 @@ impl Session {
         Ok(written(response)?.json()?)
     }
 
-    pub async fn add_pull_comment(
+    pub async fn add_comment(
         &self,
         owner: &str,
         repo: &str,

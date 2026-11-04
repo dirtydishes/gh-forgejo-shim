@@ -65,15 +65,19 @@ Forgejo still checks each data request. Credentials and memoized data remain ins
 request. Concurrent GraphQL fields share each upstream response, including errors.
 
 The GraphQL subset covers gh's PR read documents, introspection, PR node lookup, checks, reviews,
-review requests, and empty project connections: `projectItems`, and `projectCards` for classic
-projects, which Forgejo lacks. Its mutations cover `gh pr create`, `comment`, `edit`, `close`,
-`reopen`, `ready` (both ways) and `merge`, including auto-merge. `search`
-supports the repo-scoped author and review-request queries from `pr status`. Other search
-qualifiers return an error. The
-[trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the source commit and checksum. Its
-contract test checks type kinds, fields, nullability, arguments, defaults, enums, interfaces, and
-unions. [The schema example](../../crates/fga-core/examples/schema.rs) emits the implemented SDL,
-and [pin-schema.py](../../scripts/oracle/pin-schema.py) trims the independent GitHub reference to it.
+review requests, an issue's pin (`isPinned`) and the open or merged PRs that close it on merge
+(`closedByPullRequestsReferences`: each PR's newest `closes` or `reopens` reference on the issue's
+timeline, as Forgejo applies it), and empty project connections: `projectItems`, and `projectCards`
+for classic projects, which Forgejo lacks. Its mutations cover `gh pr create`, `comment`, `edit`,
+`close`, `reopen`, `ready` (both ways) and `merge`, including auto-merge, `gh issue comment`, and a
+non-interactive `gh issue create` with a title and body ([DESIGN.md](DESIGN.md) lists the flags it
+refuses).
+`search` supports the repo-scoped author and review-request queries from `pr status`. Other search
+qualifiers return an error. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the
+source commit and checksum. Its contract test checks type kinds, fields, nullability, arguments,
+defaults, enums, interfaces, and unions. [The schema
+example](../../crates/fga-core/examples/schema.rs) emits the implemented SDL, and
+[pin-schema.py](../../scripts/oracle/pin-schema.py) trims the independent GitHub reference to it.
 The full schema download remains ignored under `.local/`.
 
 The pull-list route filters `head=owner:branch` after reading Forgejo's pages, then applies GitHub
@@ -84,6 +88,11 @@ requests on repositories with many PRs. PR web URLs, and URLs under a PR, use Gi
 Forgejo has no `/pull/N` route, so links open only where the forge redirects them: server mode does
 ([server-mode.md](server-mode.md)).
 Merged PRs have GraphQL state `MERGED`, REST state `closed`, and their upstream `merged_at`.
+`GET /api/v3/rate_limit` answers GitHub's shape with fixed numbers, because Forgejo has no
+rate-limit API and the gateway sets no limits of its own. It reports GitHub's per-user ceilings with
+nothing used: 5000 an hour for `core` and `graphql`, and 30 and 10 a minute for `search` and
+`code_search`, each with a reset at the end of its window. `rate` repeats `core`. A script that
+paces itself by `remaining` never waits.
 
 Run the gates from the repository root:
 

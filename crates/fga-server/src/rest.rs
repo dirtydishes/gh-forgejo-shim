@@ -11,7 +11,10 @@ use fga_core::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 pub async fn root(Extension(host): Extension<Arc<Host>>) -> impl IntoResponse {
     let public = host.public_url.as_str().trim_end_matches('/');
@@ -30,6 +33,26 @@ pub async fn meta(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({"installed_version": state.ghes_version}))
 }
 
+/// Forgejo has no rate-limit API and the gateway sets no limits of its own, so `rate_limit`
+/// answers GitHub's overview with GitHub's per-user ceilings and nothing used: `core` and `graphql`
+/// per hour, `search` and `code_search` per minute, each renewing when its window would.
+/// A script that paces itself by `remaining` never waits.
+pub async fn rate_limit() -> impl IntoResponse {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let budget = |limit: u32, window: u64| json!({"limit": limit, "used": 0, "remaining": limit, "reset": now + window});
+    Json(json!({
+        "resources": {
+            "core": budget(5000, 3600),
+            "graphql": budget(5000, 3600),
+            "search": budget(30, 60),
+            "code_search": budget(10, 60),
+        },
+        "rate": budget(5000, 3600),
+    }))
+}
+
 pub async fn user(
     Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
@@ -43,9 +66,14 @@ pub async fn user(
 /// name the gateway won't send is a 400, and anything but Forgejo's 204 is a 502.
 pub async fn delete_branch(
     Extension(session): Extension<Session>,
-    Path((owner, repo, branch)): Path<(String, String, String)>,
+    Path((owner, repo, reference)): Path<(String, String, String)>,
 ) -> Response {
-    match session.delete_branch(&owner, &repo, &branch).await {
+    // gh escapes `heads/{branch}` as one segment (`safeurl.JoinPath` in `api.BranchDeleteRemote`),
+    // so the route takes the whole ref, decoded. Only branches are served.
+    let Some(branch) = reference.strip_prefix("heads/") else {
+        return rest_error(Error::NotFound);
+    };
+    match session.delete_branch(&owner, &repo, branch).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(WriteError::Transport(Error::NotFound)) => (
             StatusCode::UNPROCESSABLE_ENTITY,

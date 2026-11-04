@@ -158,6 +158,7 @@ pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/v3/", get(rest::root))
         .route("/api/v3/meta", get(rest::meta))
+        .route("/api/v3/rate_limit", get(rest::rate_limit))
         .route("/api/v3/user", get(rest::user))
         .route("/api/v3/repos/{owner}/{repo}", get(rest::repository))
         .route("/api/v3/repos/{owner}/{repo}/pulls", get(rest::pulls))
@@ -167,8 +168,8 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/v3/repos/{owner}/{repo}/readme", get(rest::readme))
         .route(
-            "/api/v3/repos/{owner}/{repo}/git/refs/heads/{*branch}",
-            delete(rest::delete_branch),
+            "/api/v3/repos/{owner}/{repo}/git/refs/{*reference}",
+            delete(rest::delete_branch).fallback(|| async { rest_error(Error::NotFound) }),
         )
         .route(
             "/api/v3/repos/{owner}/{repo}/commits/{sha}/pulls",
@@ -188,12 +189,24 @@ pub fn app(state: AppState) -> Router {
             get(runs::run),
         )
         .route(
+            "/api/v3/repos/{owner}/{repo}/actions/runs/{id}/jobs",
+            get(runs::jobs),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/actions/runs/{id}/artifacts",
+            get(runs::artifacts),
+        )
+        .route(
             "/api/v3/repos/{owner}/{repo}/actions/workflows",
             get(runs::workflows),
         )
         .route(
             "/api/v3/repos/{owner}/{repo}/actions/workflows/{id}",
             get(runs::workflow),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/actions/workflows/{id}/runs",
+            get(runs::workflow_runs),
         )
         .route("/api/graphql", post(graphql_request))
         .fallback(|| async { rest_error(Error::NotFound) })

@@ -1,0 +1,17 @@
+{
+  "id": "local-unsupported-run-workflow",
+  "kind": "shim-local",
+  "argv": [
+    "run",
+    "list",
+    "--workflow",
+    "ci.yml"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "gh-forgejo-shim: \"gh run list\" is not supported for Forgejo host forge.test yet\n"
+  }
+}

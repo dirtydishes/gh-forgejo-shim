@@ -152,3 +152,75 @@ async fn workflow_runs_by_head_sha_accept_a_repeated_parameter() {
     let (code, _) = get_json(addr, "/api/v3/repos/o/r/actions/runs?bogus=1").await;
     assert_eq!(code, 422);
 }
+
+/// `status=queued` asks Forgejo for every state the gateway reports as queued, including
+/// `unknown`, its state for a run with no jobs.
+#[tokio::test]
+async fn queued_runs_include_forgejos_unknown_state() {
+    let (addr, runs) = gateway().await;
+    let (code, body) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=queued").await;
+    assert_eq!(code, 200, "{body}");
+    let seen = runs.lock().unwrap().clone();
+    assert!(
+        seen.iter().any(|q| ["waiting", "blocked", "unknown"]
+            .iter()
+            .all(|state| q.split('&').any(|pair| pair == format!("status={state}")))),
+        "Forgejo got {seen:?}"
+    );
+}
+
+/// A run in Forgejo's `unknown` state (no jobs, never started) lists as queued, with its creation
+/// time as its start, and the rest of the page still answers.
+#[tokio::test]
+async fn an_unknown_run_lists_as_queued() {
+    let run = json!({"id":7,"workflow_id":"ci.yml","index_in_repo":1,"title":"t",
+        "prettyref":"refs/heads/main","commit_sha":"abc","status":"unknown","event":"push",
+        "html_url":"https://forge.test/o/r/actions/runs/1","created":"2026-11-03T00:00:00Z",
+        "updated":"2026-11-03T00:00:00Z","started":"1970-01-01T00:00:00Z"});
+    let listed = json!({"total_count":1,"workflow_runs":[run]});
+    let upstream = Router::new()
+        .route(
+            "/api/v1/user",
+            get(|| async { Json(json!({"id":1,"login":"e2e","full_name":"","avatar_url":""})) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/actions/runs",
+            get(move || async move { Json(listed) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/contents/.forgejo/workflows",
+            get(|| async { Json(json!([{"name":"ci.yml","type":"file"}])) }),
+        )
+        .route(
+            "/api/v1/repos/o/r/contents/.forgejo/workflows/ci.yml",
+            // "name: ci\non: push\n"
+            get(|| async { Json(json!({"content":"bmFtZTogY2kKb246IHB1c2gK"})) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let host = Host::new(
+        "https://forge.test".parse().unwrap(),
+        Forgejo::new(upstream_url.parse().unwrap()).unwrap(),
+        WipPrefixes::default(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
+    tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
+    let (code, body) = get_json(addr, "/api/v3/repos/o/r/actions/runs").await;
+    assert_eq!(code, 200, "{body}");
+    let listed = &body["workflow_runs"][0];
+    assert_eq!(
+        (
+            &listed["status"],
+            &listed["conclusion"],
+            &listed["run_started_at"]
+        ),
+        (
+            &json!("queued"),
+            &Value::Null,
+            &json!("2026-11-03T00:00:00Z")
+        )
+    );
+}

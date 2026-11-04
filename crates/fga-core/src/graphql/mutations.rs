@@ -21,6 +21,23 @@ fn id(value: &ID, kind: &str) -> async_graphql::Result<ids::NodeId> {
         .filter(|id| id.kind == kind)
         .ok_or_else(|| super::error(forgejo::Error::NotFound))
 }
+/// The repository a `Repository` ID names. The ID carries the repository's Forgejo ID, so one
+/// deleted and recreated under the same name is another repository and answers `Not Found`.
+async fn named_repository(
+    ctx: &Context<'_>,
+    value: &ID,
+) -> async_graphql::Result<(ids::NodeId, forgejo::Repository)> {
+    let id = id(value, "Repository")?;
+    let repository = ctx
+        .data_unchecked::<Session>()
+        .repository(&id.owner, &id.repository)
+        .await
+        .map_err(error)?;
+    if repository.id != i64::from(id.number) {
+        return Err(error(forgejo::Error::NotFound));
+    }
+    Ok((id, repository))
+}
 fn draft_title(ctx: &Context<'_>, title: &str) -> async_graphql::Result<String> {
     ctx.data_unchecked::<map::WipPrefixes>()
         .draft_title(title)
@@ -45,20 +62,44 @@ async fn edit(
 
 #[Object]
 impl Mutation {
+    async fn create_issue(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateIssueInput,
+    ) -> async_graphql::Result<Option<CreateIssuePayload>> {
+        let (id, repository) = named_repository(ctx, &input.repository_id).await?;
+        // Forgejo answers an archived repository's create with 423, which reads as a server fault;
+        // gh doesn't check first, so say what GitHub says.
+        if repository.archived {
+            return Err(
+                async_graphql::Error::new("Repository was archived so is read-only.")
+                    .extend_with(|_, e| e.set("type", "UNPROCESSABLE")),
+            );
+        }
+        let session = ctx.data_unchecked::<Session>();
+        let source = session
+            .create_issue(
+                &id.owner,
+                &id.repository,
+                forgejo::CreateIssue {
+                    title: &input.title,
+                    body: input.body.as_deref().unwrap_or(""),
+                },
+            )
+            .await
+            .map_err(write_error)?;
+        Ok(Some(CreateIssuePayload {
+            client_mutation_id: input.client_mutation_id,
+            issue: Some(Issue::new(source, &id.owner, &id.repository)),
+        }))
+    }
     async fn create_pull_request(
         &self,
         ctx: &Context<'_>,
         input: CreatePullRequestInput,
     ) -> async_graphql::Result<Option<CreatePullRequestPayload>> {
-        let id = id(&input.repository_id, "Repository")?;
+        let (id, _) = named_repository(ctx, &input.repository_id).await?;
         let session = ctx.data_unchecked::<Session>();
-        let repository = session
-            .repository(&id.owner, &id.repository)
-            .await
-            .map_err(error)?;
-        if repository.id != i64::from(id.number) {
-            return Err(error(forgejo::Error::NotFound));
-        }
         let title = if input.draft.unwrap_or(false) {
             draft_title(ctx, &input.title)?
         } else {
@@ -117,15 +158,24 @@ impl Mutation {
         ctx: &Context<'_>,
         input: AddCommentInput,
     ) -> async_graphql::Result<Option<AddCommentPayload>> {
-        let id = id(&input.subject_id, "PullRequest")?;
+        let id =
+            id(&input.subject_id, "PullRequest").or_else(|_| id(&input.subject_id, "Issue"))?;
         let session = ctx.data_unchecked::<Session>();
-        // The issues endpoint also accepts ordinary issues; confirm the typed ID targets a PR.
-        session
-            .pull_request(&id.owner, &id.repository, id.number)
-            .await
-            .map_err(error)?;
+        // Forgejo's issue comments endpoint takes issues and PRs alike; confirm the typed ID names
+        // what it says (`issue` refuses a PR's number).
+        if id.kind == "PullRequest" {
+            session
+                .pull_request(&id.owner, &id.repository, id.number)
+                .await
+                .map_err(error)?;
+        } else {
+            session
+                .issue(&id.owner, &id.repository, id.number)
+                .await
+                .map_err(error)?;
+        }
         let source = session
-            .add_pull_comment(&id.owner, &id.repository, id.number, &input.body)
+            .add_comment(&id.owner, &id.repository, id.number, &input.body)
             .await
             .map_err(write_error)?;
         Ok(Some(AddCommentPayload {
@@ -468,6 +518,11 @@ macro_rules! pull_payload {
             pub pull_request: Option<PullRequest>,
         }
     };
+}
+#[derive(SimpleObject)]
+pub struct CreateIssuePayload {
+    pub client_mutation_id: Option<String>,
+    pub issue: Option<Issue>,
 }
 pull_payload!(CreatePullRequestPayload);
 pull_payload!(UpdatePullRequestPayload);

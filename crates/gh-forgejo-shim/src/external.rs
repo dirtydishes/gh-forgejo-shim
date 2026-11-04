@@ -340,49 +340,76 @@ fn should_skip_gh_candidate(path: &Path) -> bool {
     is_managed_shim(path) || is_current_executable(path)
 }
 
-/// Whether `path` may run this dispatcher: the running binary or its sibling entry point (`gfj`
-/// beside `gh-forgejo-shim`, which differs in bytes), under any name or as a copy. Only copies of
-/// this build are caught; a copy left by an older install differs and passes. The launcher's own
-/// recursion guards cover that case.
+/// Compiled into both entry points of every build from here on, so discovery recognizes a copy
+/// of either without knowing where it came from. `#[used]` keeps the bytes in the binary in one
+/// piece, even where the optimizer would otherwise fold the comparison into the code.
+#[used]
+static DISPATCHER_MARKER: [u8; 47] = *b"gh-forgejo-shim dispatcher, not real gh: 7f3c1e";
+
+/// Whether `path` may run this dispatcher: the running binary under any name (a symlink or a
+/// hardlink), or a binary within a tenth of its size that carries [`DISPATCHER_MARKER`], such as
+/// a copy of either entry point (`gfj` and `gh-forgejo-shim` differ in bytes). When the running
+/// binary can't be found, any candidate that carries the marker or can't be read counts. Some
+/// copies still pass, and the launcher's own recursion guards cover them: a build from before the
+/// marker, a marked build of another size (a debug `gfj` beside a release dispatcher), or a
+/// release whose size moved more than a tenth.
 fn is_current_executable(path: &Path) -> bool {
-    let Ok(current) = std::env::current_exe() else {
+    let Ok(candidate_meta) = path.metadata() else {
         return false;
     };
-    // macOS returns the path as exec'd, so a symlinked install would look for its sibling in the
-    // wrong directory.
-    let current = fs::canonicalize(&current).unwrap_or(current);
-    // On Linux the running binary stays readable here even after its file is deleted.
+    // On Linux the running binary stays readable here even after its file is deleted. Elsewhere
+    // `current_exe` names the path it was started from, which is gone if the binary was moved
+    // or replaced since; then only the marker can tell.
     let running = if cfg!(target_os = "linux") {
-        PathBuf::from("/proc/self/exe")
+        Ok(PathBuf::from("/proc/self/exe"))
     } else {
-        current.clone()
+        std::env::current_exe()
     };
-    [
-        running,
-        current.with_file_name("gh-forgejo-shim"),
-        current.with_file_name("gfj"),
-    ]
-    .iter()
-    .any(|reference| may_be_same_binary(path, reference))
+    let Some((running, running_meta)) = running
+        .ok()
+        .and_then(|running| running.metadata().ok().map(|meta| (running, meta)))
+    else {
+        return carries_marker(path).unwrap_or(true);
+    };
+    same_file(path, &candidate_meta, &running, &running_meta)
+        || is_copy(path, &candidate_meta, &running_meta)
 }
 
-/// Whether `candidate` is `reference` or may be a copy of it. A candidate of another size costs a
-/// `stat` of each and no reads. A same-length candidate that can't be read counts as a copy: it
-/// may still be executable, and it can't be shown to differ.
-fn may_be_same_binary(candidate: &Path, reference: &Path) -> bool {
-    let (Ok(candidate_meta), Ok(reference_meta)) = (candidate.metadata(), reference.metadata())
-    else {
-        return false;
-    };
-    if same_file(candidate, &candidate_meta, reference, &reference_meta) {
-        return true;
-    }
-    if candidate_meta.len() != reference_meta.len() {
+/// A dispatcher build of about the running binary's size. Real gh is a different size, so it
+/// costs only the `stat` already made. A candidate in range that can't be read counts as a copy:
+/// it may still be executable, and it can't be shown to differ.
+fn is_copy(candidate: &Path, candidate_meta: &fs::Metadata, running_meta: &fs::Metadata) -> bool {
+    let (len, running_len) = (candidate_meta.len(), running_meta.len());
+    if len.abs_diff(running_len) > running_len / 10 {
         return false;
     }
-    match (fs::read(candidate), fs::read(reference)) {
-        (Ok(candidate), Ok(reference)) => candidate == reference,
-        _ => true,
+    carries_marker(candidate).unwrap_or(true)
+}
+
+/// Whether the file at `path` carries [`DISPATCHER_MARKER`], read in pieces so a large binary
+/// such as real gh is never held whole; `None` when it can't be read to the end.
+fn carries_marker(path: &Path) -> Option<bool> {
+    use std::io::Read;
+
+    let marker = DISPATCHER_MARKER.as_slice();
+    let finder = memchr::memmem::Finder::new(marker);
+    let mut file = fs::File::open(path).ok()?;
+    let mut buffer = vec![0; 64 * 1024 + marker.len()];
+    // Bytes kept from the last piece, so a marker split across two reads is still seen.
+    let mut kept = 0;
+    loop {
+        let read = match file.read(&mut buffer[kept..]) {
+            Ok(0) => return Some(false),
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        let filled = kept + read;
+        if finder.find(&buffer[..filled]).is_some() {
+            return Some(true);
+        }
+        kept = filled.min(marker.len() - 1);
+        buffer.copy_within(filled - kept..filled, 0);
     }
 }
 
@@ -549,6 +576,47 @@ mod tests {
         let found = find_program_with_fallbacks("gh", Some(&configured), &env, &[fallback_dir]);
 
         assert_eq!(found, Some(fallback));
+        Ok(())
+    }
+
+    #[test]
+    fn the_marker_is_found_anywhere_and_only_whole() -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let path = fixture.root.join("candidate");
+        let marker = DISPATCHER_MARKER.as_slice();
+        let mut near_miss = marker.to_vec();
+        near_miss[marker.len() - 1] ^= 1;
+        for (haystack, expected) in [
+            (marker.to_vec(), true),
+            ([b"x".as_slice(), marker].concat(), true),
+            ([marker, b"x".as_slice()].concat(), true),
+            ([marker[..10].to_vec(), marker.to_vec()].concat(), true),
+            (marker[..marker.len() - 1].to_vec(), false),
+            (near_miss.clone(), false),
+            ([near_miss.as_slice(), &marker[1..]].concat(), false),
+            (Vec::new(), false),
+        ] {
+            fs::write(&path, &haystack)?;
+            assert_eq!(carries_marker(&path), Some(expected), "{haystack:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_marker_split_between_two_reads_is_found() -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let marker = DISPATCHER_MARKER.as_slice();
+        for split in [1, marker.len() / 2, marker.len() - 1] {
+            let path = fixture.root.join(format!("split-{split}"));
+            let mut bytes = vec![b'x'; 64 * 1024 + marker.len() - split];
+            bytes.extend_from_slice(marker);
+            bytes.extend(vec![b'y'; 70 * 1024]);
+            fs::write(&path, &bytes)?;
+            assert_eq!(carries_marker(&path), Some(true), "split {split}");
+            bytes.truncate(64 * 1024 + marker.len() - split + marker.len() - 1);
+            fs::write(&path, &bytes)?;
+            assert_eq!(carries_marker(&path), Some(false), "cut {split}");
+        }
         Ok(())
     }
 
