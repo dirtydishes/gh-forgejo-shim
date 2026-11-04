@@ -922,6 +922,12 @@ fn a_call_naming_another_host_keeps_the_built_in_path() {
             Some("forge-a.test"),
         ),
         (&["repo", "clone", "--", "other.example:o/r"][..], None),
+        // Any characters (Sol r3#1).
+        (&["repo", "clone", "forge_b:o/r"][..], Some("forge-a.test")),
+        (
+            &["repo", "clone", "git@other_host.example:o/r"][..],
+            Some("forge-a.test"),
+        ),
         (&["repo", "clone", "other.example/o/r"][..], None),
         (&["pr", "diff", "1"][..], Some("other.example")),
     ] {
