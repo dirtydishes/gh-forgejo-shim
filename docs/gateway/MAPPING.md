@@ -272,6 +272,71 @@ would pass raw HTML from a PR body to clients that trust `bodyHTML` as sanitized
 Escaping costs nothing and can't inject markup. Optional sanitized rendering is
 `gh-forgejo-shim-xml`, if the pane turns out to need it.
 
+## 10. Head branch (`headRefName`, `headRepository`)
+
+Forgejo's `head.label` holds the head branch's name, and `head.ref` holds it too only while the
+branch exists. For an AGit PR, a deleted branch or a deleted fork, `head.ref` is `refs/pull/N/head`
+(`services/convert/pull.go:106-110,165-231`). While the branch exists, `head.sha` is its tip, which
+need not be the PR's head: the PR's own ref `refs/pull/N/head` in the base repository is.
+
+| GitHub | Forgejo |
+|---|---|
+| `headRefName` | `head.label`, or `head.ref` for an AGit PR (empty label): always Forgejo's own name |
+| `headRepositoryOwner` | `head.repo.owner`; null only for a deleted fork |
+| `headRepository` | `head.repo`, but null unless the PR is open and unmerged, `head.ref` equals a non-empty `head.label` that doesn't start with `refs/`, **and** `head.sha` equals the commit of `refs/pull/N/head` (`GET repos/{o}/{r}/git/refs/pull/{n}/head`; unreadable counts as different) |
+| `isCrossRepository` | true when `head.repo` differs from the base or is null (a deleted fork); for an open same-repository PR, false only when `headRepository` is reported, i.e. the branch is the PR's head; false for a closed or merged same-repository PR, as on GitHub |
+
+**A deliberate difference from GitHub.** GitHub keeps `headRepository` when the head branch is
+deleted and nulls it only for a deleted fork. `gh pr checkout` reads `headRepository` alone to
+choose what to fetch: with one it fetches `refs/heads/{headRefName}`, without one `refs/pull/N/head`
+from the base. So the gateway reports a head repository only when that branch is the PR's head and
+stays so. An open PR moves with its branch: a push to it updates the PR. A closed or merged PR's
+branch can move, or be deleted and created again, at any time, even between the gateway's answer
+and gh's fetch, so only its own ref is offered. A PR reopened through Forgejo's API keeps its old
+`refs/pull/N/head` while the branch may have moved, so even an open PR is checked against its ref.
+The owner stays as GitHub reports it, which keeps gh's `owner:branch` labels and current-branch
+matching.
+
+**`isCrossRepository` follows the same test for an open PR.** `gh pr close -d` and `gh pr merge -d`
+delete the head branch in the base repository when it's false (`close.go:150-157`,
+`merge.go:519,592`). An open same-repository PR whose branch isn't the PR's head would have gh
+delete whatever branch now carries the name: an AGit PR's `refs/pull/N/head`, or a branch deleted
+and created again for other work. So such a PR counts as cross-repository, and gh leaves the branch
+alone. Before Forgejo has caught up after a push, this errs toward keeping the branch. gh deletes no
+remote branch for a closed or merged PR: `pr close` stops at one (`close.go:77-83`), and `pr merge`
+skips the remote branch of one already merged (`merge.go:523`). So a closed or merged
+same-repository PR is not cross-repository, as on GitHub, and `gh pr list` shows its branch without
+an owner.
+
+`headRefName` is never made up. A made-up name could equal a real branch's, and gh's branch finder
+(`gh pr checkout {branch}`) would then take one PR for the other. A name starting with `refs/` counts
+as gone, so gh fetches the PR's own ref. REST `head.ref`, which Claude desktop reads, is the same
+name.
+
+**What `gh pr checkout` does for an AGit PR** (gh 2.103.3, pinned by `agit_checkout.rs`): it fetches
+`refs/pull/N/head` from the base remote into the raw ref `refs/pull/N/head`, and checks that out. It
+exits 0 with HEAD on the PR's head commit, **detached**: no local branch is made. The repository is
+left with the ref `refs/pull/N/head`, and with `branch.refs/pull/N/head.remote`, `.pushremote` and
+`.merge` in its config, which gh writes as it would for a branch. To work on the PR, make a branch
+from there (`git switch -c topic`).
+
+If the local branch already holds commits on top of the PR's head, gh keeps them: it merges the
+fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
+against GitHub, on either fetch path, so the gateway doesn't change it.
+
+**Residues**, each as gh behaves against GitHub:
+
+- **A force-push just before checkout.** For an open PR, Forgejo updates `refs/pull/N/head` after a
+  push, in a queue. Between the push and that update, the branch tip and the PR's ref differ, so the
+  gateway reports no head repository, and gh fetches the PR's ref, which is about to move. If the
+  push lands just after the gateway's answer, gh fetches the branch by name and gets the new tip.
+  Against GitHub, gh fetches an open PR's branch by name too and gets whatever it holds then.
+- **A branch whose name starts with `refs/`, with no head repository** (gone, moved, or the PR
+  closed). gh fetches the PR's ref into the raw ref of that name and checks it out. If the user's
+  repository also has a local branch with that literal name (`refs/heads/refs/topic`), git checks
+  out the branch instead. Against GitHub, a PR whose fork is deleted has no head repository either,
+  and gh takes the same path with the same name.
+
 ## Open items to verify against the live twin (G2/G3)
 
 1. ~~Forgejo "checking" vs "conflict"~~: **resolved v1**. Not distinguishable; see §2.

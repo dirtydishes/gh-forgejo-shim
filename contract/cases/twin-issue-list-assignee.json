@@ -1,0 +1,26 @@
+{
+  "id": "twin-issue-list-assignee",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-list-assignee",
+    "issue": true
+  },
+  "argv": [
+    "issue",
+    "list",
+    "--assignee",
+    "dirtydishes",
+    "--json",
+    "number,assignees",
+    "--jq",
+    "([.[] | select(.number == {issue})] | length) == 1 and all(.[]; any(.assignees[]; .login == \"dirtydishes\"))"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "true\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

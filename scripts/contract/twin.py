@@ -7,6 +7,7 @@ asked for, read back through Forgejo's own API. Each case works on a branch, and
 request, of its own, so cases don't depend on their order.
 """
 
+import base64
 import json
 import re
 import time
@@ -26,13 +27,36 @@ TWIN_COMMANDS = {
     ("pr", "ready"): {"--undo"},
     ("pr", "close"): {"--delete-branch"},
     ("pr", "reopen"): set(),
+    # Reads of the case's own queued run, and a comment on its own issue (C4).
+    ("run", "list"): {"--branch", "--json", "--jq", "--limit", "--status", "--event"},
+    ("run", "view"): {"--json", "--jq"},
+    ("issue", "comment"): {"--body"},
+    # The case's own issue: read back, listed, or made with a title naming the case (C4).
+    ("issue", "view"): {"--json", "--jq"},
+    ("issue", "list"): {"--json", "--jq", "--state", "--author", "--assignee", "--label", "--limit"},
+    ("issue", "create"): {"--title", "--body"},
 }
 BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--delete-branch"}
-PLACEHOLDERS = {"{pr}", "{branch}"}
-STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|branches/\{branch\}")
-SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "protect_head", "fork"}
+PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
+ISSUE_SELECT = "select(.number == {issue})"
+# The selector each command takes; `run list` takes `--branch {branch}` instead.
+SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
+STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}")
+SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label",
+         "protect_head", "fork"}
 # The organization a `fork` case forks into, then deletes its fork from.
 FORK_OWNER = "gfj-forks"
+# The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
+# default branch. It runs only for `twin/run-*` branches, so creating such a case's branch
+# queues that case's one run, which waits (the twin has no runner), and no other push queues any.
+WORKFLOW_PATH = ".forgejo/workflows/twin.yml"
+WORKFLOW = ("name: twin\non:\n  push:\n    branches: ['twin/run-*']\njobs:\n  check:\n"
+            "    runs-on: docker\n    steps:\n      - run: \"true\"\n")
+RUN_BRANCH = re.compile(r"twin/run-[a-z0-9-]+")
+# `workflow: "branch"` instead puts this one on the case's own branch only, outside twin/run-*, so
+# it queues the only run: a run whose workflow isn't on the default branch (the gateway's #128).
+BRANCH_WORKFLOW_PATH = ".forgejo/workflows/branch.yml"
+BRANCH_WORKFLOW = "name: branch\non: push\njobs:\n  check:\n    runs-on: docker\n    steps:\n      - run: \"true\"\n"
 # The twin's own draft prefix (seed.py), which Forgejo reads to mark a pull request a draft.
 DRAFT_PREFIX = "scenario: draft"
 BRANCH = re.compile(r"twin/[a-z0-9-]+")
@@ -49,6 +73,8 @@ def validate(case):
         raise ValueError("twin command is outside the twin allowlist")
     selectors = []
     heads = []
+    branches = []
+    values = {}
     index = 2
     while index < len(argv):
         arg = argv[index]
@@ -63,17 +89,34 @@ def validate(case):
                     heads.append(argv[index])
                 if arg == "--base" and argv[index] != "main":
                     raise ValueError("--base must be main")
+                if arg == "--branch":
+                    branches.append(argv[index])
+                values.setdefault(arg, []).append(argv[index])
                 if arg == "--match-head-commit" and not re.fullmatch(r"\{head\}|[0-9a-f]{40}", argv[index]):
                     raise ValueError("--match-head-commit takes {head} or a full sha")
-        elif arg in PLACEHOLDERS:
+        elif arg in SELECTORS.get(command, {"{pr}", "{branch}"}):
             selectors.append(arg)
         else:
-            raise ValueError("a twin selector must be {pr} or {branch}")
+            raise ValueError("a twin selector must be the case's own {pr}, {branch}, {run} or {issue}")
         index += 1
     # Without a selector gh picks the checkout's branch, s/pass: scenario PR 1.
     if command == ("pr", "create"):
         if heads != ["{branch}"] or selectors:
             raise ValueError("pr create needs one --head {branch}, its own branch")
+    elif command == ("run", "list"):
+        # Without --branch it would list every case's runs.
+        if branches != ["{branch}"] or selectors:
+            raise ValueError("run list needs one --branch {branch}, the case's own, and no selector")
+    elif command == ("issue", "list"):
+        # Other cases make issues too: the case's --jq picks out its own, so nothing it prints
+        # depends on theirs (a count of them would).
+        if not any(ISSUE_SELECT in jq for jq in values.get("--jq", [])) or selectors:
+            raise ValueError(f"issue list needs a --jq with {ISSUE_SELECT}, and no selector")
+    elif command == ("issue", "create"):
+        # The issue it makes names the case, and stdout gives its number as (?P<issue>...).
+        titles = values.get("--title", [])
+        if not titles or "{branch}" not in titles[-1] or "--body" not in values or selectors:
+            raise ValueError("issue create needs --title naming {branch}, a --body, and no selector")
     elif len(selectors) != 1:
         raise ValueError("a twin pr command needs one selector, {pr} or {branch}")
     setup = case.get("setup")
@@ -84,8 +127,8 @@ def validate(case):
     # prepare() names a case's own base <branch>-base; no case may claim such a name.
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
-    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork"):
-        if flag in setup and not isinstance(setup[flag], bool):
+    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label"):
+        if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
         raise ValueError("setup.draft and setup.closed need setup.pr")
@@ -93,6 +136,16 @@ def validate(case):
         raise ValueError("setup.fork needs setup.pr, and takes no closed or protect_head")
     if "{pr}" in argv and not setup.get("pr"):
         raise ValueError("{pr} needs setup.pr")
+    if command[0] == "run" and not setup.get("workflow"):
+        raise ValueError("a twin run command needs setup.workflow, its own run")
+    if setup.get("workflow") is True and (not RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
+        raise ValueError("setup.workflow needs a twin/run-<name> branch made from main")
+    if setup.get("workflow") == "branch" and (RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
+        raise ValueError('setup.workflow "branch" needs a branch outside twin/run-*, made from main')
+    if command[0] == "issue" and (not setup.get("issue")) != (command == ("issue", "create")):
+        raise ValueError("a twin issue command needs setup.issue, its own issue (issue create makes its own)")
+    if setup.get("label") and not setup.get("issue"):
+        raise ValueError("setup.label labels the case's own issue, so it needs setup.issue")
     # A merge goes into the case's own base branch, never main, which other cases read.
     if command == ("pr", "merge") and not setup.get("base"):
         raise ValueError("a twin merge needs setup.base, its own base branch")
@@ -119,6 +172,13 @@ def validate(case):
             re.compile(expect[stream])
         except (TypeError, re.error) as error:
             raise ValueError(f"twin expect.{stream} isn't a pattern: {error}") from error
+    # Neither stream may name what setup bound: check() binds groups from both, and a rebound
+    # {issue} would point the state checks at another case's issue (o2#3).
+    bound = {"branch", "head"} | {name for name, made in (
+        ("pr", setup.get("pr")), ("issue", setup.get("issue")), ("run", setup.get("workflow")),
+        ("label", setup.get("label"))) if made}
+    if any(set(re.compile(expect[stream]).groupindex) & bound for stream in ("stdout", "stderr")):
+        raise ValueError("a stdout pattern can't rebind a placeholder the case's setup made")
     for check in case.get("state", []):
         path = check.get("path", "")
         if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any", "none", "gone"}:
@@ -170,11 +230,22 @@ def prepare(case, home, token):
     branch = setup["branch"]
     # A merge case's own base branch, so nothing it merges reaches main.
     target = f"{branch}-base" if setup.get("base") else "main"
+    if setup.get("workflow") is True:
+        try:
+            request(base, token, "GET", f"contents/{WORKFLOW_PATH}")
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            request(base, token, "POST", f"contents/{WORKFLOW_PATH}",
+                    {"content": base64.b64encode(WORKFLOW.encode()).decode(), "branch": "main", "message": "twin"})
     if target != "main":
         request(base, token, "POST", f"contents/{target}.txt",
                 {"content": "dHdpbgo=", "branch": "main", "new_branch": target, "message": target})
     request(base, token, "POST", f"contents/{branch}.txt",
             {"content": "dHdpbgo=", "branch": target, "new_branch": branch, "message": branch})
+    if setup.get("workflow") == "branch":
+        request(base, token, "POST", f"contents/{BRANCH_WORKFLOW_PATH}",
+                {"content": base64.b64encode(BRANCH_WORKFLOW.encode()).decode(), "branch": branch, "message": "branch"})
     head = request(base, token, "GET", f"branches/{urllib.parse.quote(branch, safe='')}")["commit"]["id"]
     subs = {"branch": branch, "head": head}
     if setup.get("status"):
@@ -201,6 +272,17 @@ def prepare(case, home, token):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "open"})
         if setup.get("closed"):
             request(base, token, "PATCH", f"pulls/{pr['number']}", {"state": "closed"})
+    if setup.get("issue"):
+        # Assigned to the twin's user, and labelled with the case's own label when asked.
+        body = {"title": f"twin: {branch}", "body": "twin", "assignees": [REPO.split("/")[0]]}
+        if setup.get("label"):
+            subs["label"] = "twin-" + branch.removeprefix("twin/")
+            label = request(base, token, "POST", "labels", {"name": subs["label"], "color": "#ededed"})
+            body["labels"] = [label["id"]]
+        issue = request(base, token, "POST", "issues", body)
+        subs["issue"] = str(issue["number"])
+    if setup.get("workflow"):
+        subs["run"] = own_run(base, token, branch)
     return subs
 
 
@@ -238,6 +320,19 @@ def fork_head(base, token, branch):
     except BaseException:
         delete_fork(base, token, branch)
         raise
+
+
+def own_run(base, token, branch):
+    """The run the case's workflow push queued; Forgejo files it in the background."""
+    ref = urllib.parse.quote(f"refs/heads/{branch}", safe="")
+    for _ in range(30):
+        runs = request(base, token, "GET", f"actions/runs?ref={ref}").get("workflow_runs") or []
+        if len(runs) == 1:
+            return str(runs[0]["id"])
+        if runs:
+            raise RuntimeError(f"{branch} has {len(runs)} runs, not its own one")
+        time.sleep(1)
+    raise RuntimeError(f"{branch}'s workflow push queued no run")
 
 
 def fill(text, subs):

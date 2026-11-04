@@ -1,0 +1,27 @@
+{
+  "id": "pr-view-rollup-nochecks-5",
+  "argv": [
+    "pr",
+    "view",
+    "5",
+    "--json",
+    "statusCheckRollup,reviewDecision"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 5,
+  "normalize": [
+    "host",
+    "pr_urls",
+    "timestamps",
+    "check_details_urls",
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "{\"reviewDecision\":\"\",\"statusCheckRollup\":[]}\n",
+    "stderr": ""
+  }
+}

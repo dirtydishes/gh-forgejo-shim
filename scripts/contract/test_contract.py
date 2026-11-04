@@ -146,6 +146,50 @@ class ContractTests(unittest.TestCase):
             ({"state": [{"path": "pulls/{pr}", "gone": True}]}, "exactly {path, gone"),
             ({"state": [{"path": "branches/main", "gone": True}]}, "own pull request or branch"),
             ({"setup": {"branch": "twin/x", "draft": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "need setup.pr"),
+            # C4: a run case reads only its own run; an issue case comments only on its own issue.
+            ({"argv": ["run", "list", "--json", "status"],
+              "setup": {"branch": "twin/run-x", "workflow": True}}, "--branch {branch}"),
+            ({"argv": ["run", "list", "--branch", "main"],
+              "setup": {"branch": "twin/run-x", "workflow": True}}, "the case's own"),
+            # A value that only reads --branch isn't the flag (o1#6).
+            ({"argv": ["run", "list", "--jq", "--branch"],
+              "setup": {"branch": "twin/run-x", "workflow": True}}, "the case's own"),
+            ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/run-x"}}, "setup.workflow"),
+            ({"argv": ["run", "view", "{pr}"], "setup": {"branch": "twin/run-x", "pr": True, "workflow": True}},
+             "selector"),
+            ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/x", "workflow": True}}, "twin/run-<name>"),
+            ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/run-x", "workflow": "branch"}},
+             "outside twin/run-"),
+            ({"argv": ["run", "view", "{run}"], "setup": {"branch": "twin/x", "workflow": "main"}}, "true or false"),
+            ({"argv": ["run", "view", "{run}", "--log"], "setup": {"branch": "twin/run-x", "workflow": True}},
+             "flag is not allowed"),
+            ({"argv": ["issue", "comment", "{issue}", "--body", "b"], "setup": {"branch": "twin/x"}}, "setup.issue"),
+            ({"argv": ["issue", "comment", "{pr}", "--body", "b"], "setup": {"branch": "twin/x", "pr": True, "issue": True}},
+             "selector"),
+            ({"argv": ["issue", "comment", "{issue}", "--edit-last", "--body", "b"],
+              "setup": {"branch": "twin/x", "issue": True}}, "flag is not allowed"),
+            ({"argv": ["issue", "list", "--json", "number"], "setup": {"branch": "twin/x", "issue": True}},
+             "select\\(.number"),
+            ({"argv": ["issue", "list", "--jq", ".[0]"], "setup": {"branch": "twin/x", "issue": True}},
+             "select\\(.number"),
+            # Mentioning {issue} isn't selecting it: a count depends on other cases (o1#5).
+            ({"argv": ["issue", "list", "--json", "number", "--jq", "[length, {issue}]"],
+              "setup": {"branch": "twin/x", "issue": True}}, "select\\(.number"),
+            ({"argv": ["issue", "view", "{issue}", "--json", "title"], "setup": {"branch": "twin/x", "issue": True},
+              "expect": {"exit": 0, "stdout": "(?P<issue>[0-9]+)", "stderr": ""}}, "rebind"),
+            ({"argv": ["issue", "view", "{issue}", "--json", "title"], "setup": {"branch": "twin/x", "issue": True},
+              "expect": {"exit": 0, "stdout": "", "stderr": "(?P<issue>[0-9]+)"}}, "rebind"),
+            ({"argv": ["issue", "view", "{issue}", "--json", "title"], "setup": {"branch": "twin/x", "label": True}},
+             "needs setup.issue"),
+            ({"argv": ["issue", "view", "{pr}"], "setup": {"branch": "twin/x", "pr": True, "issue": True}},
+             "selector"),
+            ({"argv": ["issue", "create", "--title", "t", "--body", "b"], "setup": {"branch": "twin/x"}},
+             "naming {branch}"),
+            ({"argv": ["issue", "create", "--title", "{branch}"], "setup": {"branch": "twin/x"}}, "a --body"),
+            ({"argv": ["issue", "create", "--title", "{branch}", "--body", "b"],
+              "setup": {"branch": "twin/x", "issue": True}}, "makes its own"),
+            ({"argv": ["issue", "create", "--title", "{branch}", "--body", "b", "--label", "bug"],
+              "setup": {"branch": "twin/x"}}, "flag is not allowed"),
             ({"setup": {"branch": "twin/x", "fork": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "fork needs setup.pr"),
             ({"setup": {"branch": "twin/x", "pr": True, "fork": True, "closed": True}}, "no closed or protect_head"),
             ({"setup": {"branch": "twin/x", "pr": True, "fork": "yes"}}, "true or false"),
@@ -191,7 +235,7 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(launched(self.case(["api", "user"]), ["pr view"]))
         self.assertTrue(launched(self.case(["pr", "view", "1"]), commands))
         self.assertTrue(launched(self.case(["pr", "checks", "1"]), commands))
-        self.assertFalse(launched(self.case(["issue", "list"]), commands))
+        self.assertFalse(launched(self.case(["repo", "list"]), commands))
         self.assertFalse(launched(self.case(["repo", "view"]), commands))
         local = self.case(["pr", "view", "1"]) | {"kind": "shim-local"}
         self.assertFalse(launched(local, commands))

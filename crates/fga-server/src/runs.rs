@@ -11,7 +11,7 @@ use fga_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,7 +51,7 @@ fn links(
     host: &Host,
     owner: &str,
     repo: &str,
-    resource: &str,
+    resource: &[&str],
     pagination: (usize, usize),
     total: u64,
     query: &[(&str, String)],
@@ -62,7 +62,8 @@ fn links(
     url.path_segments_mut()
         .expect("validated public URL")
         .pop_if_empty()
-        .extend(["api", "v3", "repos", owner, repo, "actions", resource]);
+        .extend(["api", "v3", "repos", owner, repo, "actions"])
+        .extend(resource);
     let mut links = Vec::new();
     let last = (total as usize).div_ceil(limit).max(1);
     for (rel, page) in [
@@ -111,6 +112,27 @@ pub async fn runs(
     Path((owner, repo)): Path<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> Response {
+    list(&host, &session, &owner, &repo, raw, None).await
+}
+
+/// One workflow's runs, which `gh run list --workflow` reads once it has the workflow's ID.
+pub async fn workflow_runs(
+    Extension(host): Extension<Arc<Host>>,
+    Extension(session): Extension<Session>,
+    Path((owner, repo, selector)): Path<(String, String, String)>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    list(&host, &session, &owner, &repo, raw, Some(&selector)).await
+}
+
+async fn list(
+    host: &Host,
+    session: &Session,
+    owner: &str,
+    repo: &str,
+    raw: Option<String>,
+    workflow: Option<&str>,
+) -> Response {
     let Some(q) = last_wins::<RunQuery>(raw) else {
         return invalid();
     };
@@ -149,40 +171,47 @@ pub async fn runs(
         public.push(("exclude_pull_requests", exclude.to_string()));
     }
     let result = async {
+        let workflows = session.workflows(owner, repo).await?;
+        let mut resource = vec!["runs"];
+        if let Some(selector) = workflow {
+            // Forgejo keys a run's workflow by its bare file name.
+            let found = find_workflow(session, owner, repo, selector, &workflows).await?;
+            let file = found.path.rsplit('/').next().unwrap_or_default();
+            upstream.push(("workflow_id", file.to_owned()));
+            resource = vec!["workflows", selector, "runs"];
+        }
         let runs = session
             .action_runs(
-                &owner,
-                &repo,
+                owner,
+                repo,
                 &upstream,
                 (page - 1).saturating_mul(limit),
                 limit,
             )
             .await?;
-        let workflows = session.workflows(&owner, &repo).await?;
-        let mapped: Result<Vec<Value>, Error> = runs
-            .workflow_runs
-            .iter()
-            .map(|run| {
-                let workflow = workflows.get(&run.workflow_id).ok_or(Error::NotFound)?;
-                Ok(with_links(
-                    &host,
-                    &owner,
-                    &repo,
-                    actions::run(run, workflow)?,
-                ))
-            })
-            .collect();
+        // A run of a workflow that exists only on its own branch is named from there, so it never
+        // fails the page.
+        let named = futures_util::future::join_all(
+            runs.workflow_runs
+                .iter()
+                .map(|run| session.workflow_for(owner, repo, run, &workflows)),
+        )
+        .await;
+        let mut mapped = Vec::new();
+        for (run, workflow) in runs.workflow_runs.iter().zip(&named) {
+            mapped.push(with_links(host, owner, repo, actions::run(run, workflow)?));
+        }
         Ok((
             links(
-                &host,
-                &owner,
-                &repo,
-                "runs",
+                host,
+                owner,
+                repo,
+                &resource,
                 (page, limit),
                 runs.total_count,
                 &public,
             ),
-            Json(json!({"total_count":runs.total_count,"workflow_runs":mapped?})),
+            Json(json!({"total_count":runs.total_count,"workflow_runs":mapped})),
         )
             .into_response())
     }
@@ -219,7 +248,15 @@ pub async fn workflows(
             .take(limit)
             .collect();
         Ok((
-            links(&host, &owner, &repo, "workflows", (page, limit), total, &[]),
+            links(
+                &host,
+                &owner,
+                &repo,
+                &["workflows"],
+                (page, limit),
+                total,
+                &[],
+            ),
             Json(json!({"total_count":total,"workflows":workflows})),
         )
             .into_response())
@@ -251,8 +288,8 @@ pub async fn run(
     let result = async {
         let run = source(&session, &owner, &repo, id).await?;
         let workflows = session.workflows(&owner, &repo).await?;
-        let workflow = workflows.get(&run.workflow_id).ok_or(Error::NotFound)?;
-        let mapped = with_links(&host, &owner, &repo, actions::run(&run, workflow)?);
+        let workflow = session.workflow_for(&owner, &repo, &run, &workflows).await;
+        let mapped = with_links(&host, &owner, &repo, actions::run(&run, &workflow)?);
         Ok(Json(mapped).into_response())
     }
     .await;
@@ -283,16 +320,42 @@ pub async fn artifacts(
 
 pub async fn workflow(
     Extension(session): Extension<Session>,
-    Path((owner, repo, id)): Path<(String, String, i64)>,
+    Path((owner, repo, selector)): Path<(String, String, String)>,
 ) -> Response {
     let result = async {
         let workflows = session.workflows(&owner, &repo).await?;
-        let workflow = workflows
-            .into_values()
-            .find(|v| v.id == id)
-            .ok_or(Error::NotFound)?;
-        Ok(Json(workflow).into_response())
+        find_workflow(&session, &owner, &repo, &selector, &workflows).await
     }
     .await;
-    result.unwrap_or_else(rest_error)
+    match result {
+        Ok(workflow) => Json(workflow).into_response(),
+        Err(error) => rest_error(error),
+    }
+}
+
+/// GitHub's `{workflow_id}`: a workflow's ID, or its file name for a workflow on the default branch.
+async fn find_workflow(
+    session: &Session,
+    owner: &str,
+    repo: &str,
+    selector: &str,
+    workflows: &BTreeMap<String, actions::Workflow>,
+) -> Result<actions::Workflow, Error> {
+    let Ok(id) = selector.parse::<i64>() else {
+        return workflows.get(selector).cloned().ok_or(Error::NotFound);
+    };
+    if let Some(workflow) = workflows.values().find(|v| v.id == id) {
+        return Ok(workflow.clone());
+    }
+    // gh's `run view` and `run watch` look up the workflow a run names (`GetRun` in
+    // `pkg/cmd/run/shared/shared.go`) and stop on a 404. A workflow that exists only on a branch
+    // isn't among the default branch's, but its ID is its file name's hash, so find a recent run of
+    // it and name it as that run's list entry does.
+    let recent = session.action_runs(owner, repo, &[], 0, 50).await?;
+    let run = recent
+        .workflow_runs
+        .iter()
+        .find(|run| actions::workflow_id(&run.workflow_id) == id)
+        .ok_or(Error::NotFound)?;
+    Ok(session.workflow_for(owner, repo, run, workflows).await)
 }

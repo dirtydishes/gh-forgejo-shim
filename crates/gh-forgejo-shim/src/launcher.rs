@@ -40,10 +40,16 @@ pub const LAUNCH_LIST: &[&str] = &[
     "pr close",
     "pr reopen",
     "pr checkout",
+    "run list",
+    "run view",
+    "issue comment",
+    "issue list",
+    "issue view",
+    "issue create",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
-/// `cwe.15.1`; C3b, `cwe.16.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
+/// `cwe.15.1`; C3b, `cwe.16.1`; C4, `cwe.18.1`); `repo` is gh's `-R`. Any other flag keeps the built-in path,
 /// which serves or refuses that form before anything is written: gh would write part of a
 /// `pr edit` and then fail on a reviewer the gateway can't set. For `--delete-branch`, the
 /// gateway answers gh's branch delete with 422 only when Forgejo says the branch doesn't exist
@@ -78,7 +84,48 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     // same-repository pull request (C3c, `cwe.17`). `--recurse-submodules` and `--worktree` stay
     // off until traced.
     ("pr checkout", &["branch", "detach", "force", "repo"]),
+    // `--workflow`, `--user`, `--created` and `--attempt` fail on the gateway. `--log`,
+    // `--log-failed` and `--exit-status` matter only for a completed run, which no trace has
+    // covered; `--verbose` shows jobs, which the gateway can't list (C4, `cwe.18.1`).
+    (
+        "run list",
+        &[
+            "json", "jq", "limit", "status", "branch", "event", "commit", "all", "repo",
+        ],
+    ),
+    ("run view", &["json", "jq", "repo"]),
+    // `--edit-last`, `--delete-last` and `--create-if-none` need mutations the gateway lacks.
+    ("issue comment", &["body", "body-file", "repo"]),
+    // `--milestone`, `--type` and `--app` fail on the gateway, and `--search` passes GitHub's
+    // query syntax through, which the gateway reads its own way (`label:a,b` as one label).
+    (
+        "issue list",
+        &[
+            "state", "limit", "json", "jq", "author", "assignee", "label", "mention", "repo",
+        ],
+    ),
+    ("issue view", &["json", "jq", "repo"]),
+    // Title and body only. `--type`, `--parent`, `--blocked-by` and `--blocking` fail after the
+    // issue is made (bead `r0t`); labels, assignees, milestone, projects and templates fail first.
+    ("issue create", &["title", "body", "body-file", "repo"]),
 ];
+
+/// `gh api` reads the gateway serves beyond the built-in path's `user`: the rate-limit overview
+/// (C1, `cwe.11`), a GET with the flags traced for it.
+fn reads_rate_limit(invocation: &Invocation) -> bool {
+    invocation.command == "api"
+        && matches!(
+            invocation.positionals.as_slice(),
+            [path] if path == "rate_limit" || path == "/rate_limit"
+        )
+        && invocation
+            .flags
+            .keys()
+            .all(|flag| ["jq", "include", "hostname", "method"].contains(&flag.as_str()))
+        && invocation
+            .flag("method")
+            .is_none_or(|method| method.eq_ignore_ascii_case("GET"))
+}
 
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
@@ -88,7 +135,7 @@ pub fn launches(invocation: &Invocation) -> bool {
             .flags
             .keys()
             .all(|flag| flags.contains(&flag.as_str())),
-        None => invocation.is_native(),
+        None => invocation.is_native() || reads_rate_limit(invocation),
     };
     // Without a method, gh's terminal prompts ask whether to delete the branch, and to edit the
     // commit message: the forms kept off above. One method skips both prompts (`merge.go:307-330`).
@@ -113,6 +160,43 @@ pub fn launches(invocation: &Invocation) -> bool {
         && invocation.validate().is_ok()
         && invocation.help().is_none()
         && served
+        // Without a run ID, gh prompts for one in a terminal, which no trace has covered. Without
+        // `--json`, gh prints the run's jobs, which the gateway can't list, and for a failed run
+        // with none blames the workflow file (o2#1).
+        && !(command == "run view"
+            && (invocation.positionals.is_empty() || invocation.json_fields.is_none()))
+        // The gateway can't fill these yet: a run's jobs (Forgejo 15's API lists none) and its
+        // attempt (it reads 0; GitHub's first is 1). gh would print them empty and exit 0.
+        && !(matches!(command, "run list" | "run view")
+            && invocation.json_fields.as_ref().is_some_and(|fields| {
+                fields.iter().any(|field| field == "jobs" || field == "attempt")
+            }))
+        // Without a body, gh asks in a terminal whether to write the comment in an editor or a
+        // browser, the forms kept off above (`pr/shared/commentable.go`).
+        && !(matches!(command, "pr comment" | "issue comment")
+            && !invocation.flags.contains_key("body")
+            && !invocation.flags.contains_key("body-file"))
+        // Issue fields the gateway leaves empty though Forgejo has them: dependencies and
+        // reactions. gh would print none and exit 0. `issue view`'s text lists the dependencies,
+        // so it launches only with `--json` (o1#2 on #131).
+        && !(matches!(command, "issue list" | "issue view")
+            && invocation.json_fields.as_ref().is_some_and(|fields| {
+                fields
+                    .iter()
+                    .any(|field| matches!(field.as_str(), "blockedBy" | "blocking" | "reactionGroups"))
+            }))
+        && !(command == "issue view" && invocation.json_fields.is_none())
+        // With a label too, gh searches with a `mentions:` qualifier the gateway refuses; alone
+        // it filters, as traced.
+        && !(command == "issue list"
+            && invocation.flags.contains_key("mention")
+            && invocation.flags.contains_key("label"))
+        // Without a title and a body gh prompts for them in a terminal (`create.go`'s
+        // interactive path), which no trace has covered.
+        && !(command == "issue create"
+            && !(invocation.flags.contains_key("title")
+                && (invocation.flags.contains_key("body")
+                    || invocation.flags.contains_key("body-file"))))
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -200,6 +284,47 @@ mod tests {
             &["pr", "checkout", "12"][..],
             &["pr", "checkout", "12", "-b", "local", "--force"][..],
             &["pr", "checkout", "12", "--detach"][..],
+            &["run", "list"][..],
+            &[
+                "run", "list", "--json", "status", "--limit", "5", "-b", "main",
+            ][..],
+            &[
+                "run", "list", "--status", "queued", "--event", "push", "--all",
+            ][..],
+            &[
+                "run",
+                "view",
+                "7",
+                "--json",
+                "status,conclusion",
+                "--jq",
+                ".status",
+            ][..],
+            &["issue", "comment", "3", "--body", "b"][..],
+            &["issue", "comment", "3", "-F", "notes.md"][..],
+            &["api", "rate_limit"][..],
+            &["api", "/rate_limit", "--jq", ".rate", "-i", "-X", "GET"][..],
+            &["issue", "list"][..],
+            &[
+                "issue", "list", "-s", "all", "-L", "5", "-A", "me", "-l", "bug",
+            ][..],
+            &[
+                "issue",
+                "list",
+                "--json",
+                "number",
+                "--jq",
+                ".[]",
+                "-a",
+                "me",
+                "--mention",
+                "me",
+            ][..],
+            &["issue", "view", "3", "--json", "title,comments"][..],
+            &["issue", "create", "-t", "t", "-b", "b"][..],
+            &[
+                "issue", "create", "--title", "t", "-F", "body.md", "-R", "o/r",
+            ][..],
         ] {
             assert!(launches(&invocation(args)), "{args:?}");
         }
@@ -251,11 +376,56 @@ mod tests {
             &["pr", "merge", "12", "-sd", "--auto"][..],
             &["pr", "checkout", "12", "--recurse-submodules"][..],
             &["pr", "checkout", "12", "--worktree", "../w"][..],
+            // Untraced or failing on the gateway.
+            &["run", "list", "--workflow", "ci.yml"][..],
+            &["run", "list", "--user", "alice"][..],
+            &["run", "view", "7", "--attempt", "1"][..],
+            &["run", "view", "7", "--log"][..],
+            // Only for a completed run, or the jobs the gateway can't list.
+            &["run", "view", "7"][..],
+            &["run", "view", "7", "--exit-status"][..],
+            &["run", "view", "7", "--verbose"][..],
+            &["run", "view", "7", "--json", "status,jobs"][..],
+            &["run", "view", "7", "--json", "attempt"][..],
+            &["run", "list", "--json", "databaseId,attempt"][..],
+            // gh would ask for an editor or a browser in a terminal.
+            &["issue", "comment", "3"][..],
+            &["pr", "comment", "12"][..],
+            // gh would prompt for a run in a terminal.
+            &["run", "view"][..],
+            &["issue", "comment", "3", "--edit-last", "--body", "b"][..],
+            &["issue", "comment", "3", "--delete-last", "--yes"][..],
+            &["api", "rate_limit", "-X", "POST"][..],
+            &["api", "rate_limit", "--paginate"][..],
+            &["api", "repos/o/r/pulls"][..],
+            &["issue", "list", "--milestone", "m1"][..],
+            &["issue", "list", "--app", "x"][..],
+            &["issue", "view", "3", "--web"][..],
+            // Text view, or fields the gateway leaves empty (o1#2).
+            &["issue", "view", "3"][..],
+            &["issue", "view", "3", "--comments"][..],
+            &["issue", "view", "3", "--json", "title,blockedBy"][..],
+            &["issue", "list", "--json", "number,blocking"][..],
+            &["issue", "list", "--json", "reactionGroups"][..],
+            // Searches the gateway reads its own way, or refuses (o1#1, o1#4).
+            &["issue", "list", "--search", "label:a,b"][..],
+            &["issue", "list", "--mention", "me", "--label", "bug"][..],
+            // gh would prompt for the title or the body in a terminal.
+            &["issue", "create"][..],
+            &["issue", "create", "-t", "t"][..],
+            &["issue", "create", "-b", "b"][..],
+            // Fails after the issue is made (`r0t`), or before it.
+            &["issue", "create", "-t", "t", "-b", "b", "--parent", "1"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "--type", "Bug"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-l", "bug"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-a", "me"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-T", "bug"][..],
+            &["issue", "create", "-t", "t", "-b", "b", "-w"][..],
         ] {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
-        assert!(!launches(&invocation(&["issue", "list"])));
-        assert!(!launches(&invocation(&["issue", "view", "3"])));
+        assert!(!launches(&invocation(&["repo", "list"])));
+        assert!(!launches(&invocation(&["release", "view", "v1"])));
         assert!(
             launches(&invocation(&["pr", "view", "12", "--web"])),
             "the browser helper"

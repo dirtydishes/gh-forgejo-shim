@@ -15,6 +15,16 @@ pub struct CreatePullRequestInput {
     pub client_mutation_id: Option<String>,
 }
 
+/// `gh issue create` sends these; labels, assignees, a milestone and projects need gh's metadata
+/// lookups first and aren't served yet, so their fields are left out and refused as unknown.
+#[derive(InputObject)]
+pub struct CreateIssueInput {
+    pub repository_id: ID,
+    pub title: String,
+    pub body: Option<String>,
+    pub client_mutation_id: Option<String>,
+}
+
 #[derive(InputObject)]
 pub struct AddCommentInput {
     pub subject_id: ID,

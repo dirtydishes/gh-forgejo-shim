@@ -35,6 +35,10 @@ pub struct Repository {
     pub description: String,
     #[serde(default)]
     pub ssh_url: String,
+    /// Set when the repository's issues live in an external tracker; Forgejo then also reports
+    /// `has_issues` (`services/convert/repository.go:60-80`).
+    #[serde(default)]
+    pub external_tracker: Option<serde_json::Value>,
     #[serde(default)]
     pub has_issues: bool,
     #[serde(default)]
@@ -82,6 +86,14 @@ impl Branch {
         } else {
             &self.ref_name
         }
+    }
+
+    /// Whether the head is a branch that still exists. Forgejo puts the branch name in `ref` only
+    /// then (`label` always holds it); an AGit PR, a deleted branch or a deleted fork has
+    /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`). A name starting with
+    /// `refs/` can't be told from that placeholder, so it counts as gone.
+    pub fn exists(&self) -> bool {
+        !self.label.is_empty() && self.ref_name == self.label && !self.ref_name.starts_with("refs/")
     }
 
     pub fn label(&self) -> String {
@@ -351,6 +363,26 @@ pub struct TimelineEvent {
     pub kind: String,
     pub created_at: String,
     pub user: User,
+    /// For a cross-reference, what resolving it does: `closes`, `reopens`, `neutered` (the keyword
+    /// was edited away) or `none` (`modules/references/references.go:54-59`).
+    #[serde(default)]
+    pub ref_action: String,
+    /// For a cross-reference, the issue or PR it was made from.
+    #[serde(default)]
+    pub ref_issue: Option<RefIssue>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct RefIssue {
+    pub number: i32,
+    pub state: String,
+    pub pull_request: Option<serde_json::Value>,
+    pub repository: Option<IssueRepository>,
+}
+/// Forgejo's `RepositoryMeta`: the owner is a login.
+#[derive(Clone, Debug, Deserialize)]
+pub struct IssueRepository {
+    pub name: String,
+    pub owner: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct PullCommit {
@@ -401,4 +433,7 @@ pub struct Issue {
     #[serde(default)]
     pub is_locked: bool,
     pub pull_request: Option<serde_json::Value>,
+    /// Non-zero while the issue is pinned (`services/convert/issue.go:57`).
+    #[serde(default)]
+    pub pin_order: i32,
 }

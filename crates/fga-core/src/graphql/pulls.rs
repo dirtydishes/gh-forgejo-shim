@@ -22,6 +22,21 @@ impl PullRequest {
             repo: repo.into(),
         }
     }
+
+    /// Whether the head branch is the PR's head: an open, unmerged PR whose branch exists and isn't
+    /// named like a ref ([`forgejo::Branch::exists`]), and whose tip is the commit of the PR's own ref
+    /// `refs/pull/N/head`. gh decides on this both to fetch the branch (`headRepository`) and, for a
+    /// same-repository PR, to delete it (`isCrossRepository`). A closed or merged PR's branch, a
+    /// recreated or moved one, or an AGit PR's ref is not the PR's head; a failed read counts as not.
+    async fn head_is_pr_head(&self, session: &Session) -> bool {
+        self.source.head.exists()
+            && self.source.state == "open"
+            && !self.source.merged
+            && session
+                .pull_head(&self.owner, &self.repo, self.source.number)
+                .await
+                .is_ok_and(|sha| sha == self.source.head.sha)
+    }
     /// Forgejo lets the poster or a repository writer edit, close and reopen a PR.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
@@ -139,6 +154,8 @@ impl PullRequest {
     async fn maintainer_can_modify(&self) -> bool {
         self.source.allow_maintainer_edit
     }
+    /// Forgejo's own name, never one made up: a made-up name could equal a real branch's, and gh's
+    /// branch finder would then take one PR for the other. An AGit PR's is `refs/pull/N/head`.
     async fn head_ref_name(&self) -> &str {
         self.source.head.name()
     }
@@ -155,11 +172,23 @@ impl PullRequest {
     /// fork is deleted. GitHub still calls that PR cross-repository, and gh relies on it:
     /// `pr close --delete-branch` deletes the head branch in the base repository unless this is
     /// true, which would delete the base's branch of the same name.
-    async fn is_cross_repository(&self) -> bool {
-        self.source.head.repo.as_ref().is_none_or(|r| {
-            !r.owner.login.eq_ignore_ascii_case(&self.owner)
-                || r.name.as_ref().is_some_and(|name| name != &self.repo)
-        })
+    /// GitHub's meaning, with one safety turn. `gh pr close -d` and `gh pr merge -d` delete the head
+    /// branch in the base repository unless this is true (`close.go:150-157`, `merge.go:519,592`),
+    /// so an open same-repository PR counts as cross-repository unless its branch is the PR's head:
+    /// otherwise gh would delete whatever branch now carries the name (an AGit PR's
+    /// `refs/pull/N/head`, or a branch recreated for other work). gh deletes no remote branch for a
+    /// closed or merged PR (`pr close` stops at one, `close.go:77-83`; `pr merge` skips it for one
+    /// already merged, `merge.go:523`), and checks one out from its own ref, since it has no head
+    /// repository; so such a PR is same-repository, as on GitHub, and `gh pr list` labels it by
+    /// branch alone. A deleted fork (`head.repo` null) is cross-repository, as GitHub reports it.
+    async fn is_cross_repository(&self, ctx: &Context<'_>) -> bool {
+        let Some(head) = self.source.head.repo.as_ref() else {
+            return true;
+        };
+        let same_repository = head.owner.login.eq_ignore_ascii_case(&self.owner)
+            && head.name.as_ref().is_none_or(|name| name == &self.repo);
+        let open = self.source.state == "open" && !self.source.merged;
+        !same_repository || (open && !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await)
     }
     async fn head_repository_owner(&self) -> Option<RepositoryOwner> {
         self.source
@@ -168,14 +197,34 @@ impl PullRequest {
             .as_ref()
             .map(|r| User(r.owner.clone()).into())
     }
+    /// The base repository, which the PR belongs to.
+    async fn repository(&self, ctx: &Context<'_>) -> async_graphql::Result<Repository> {
+        let source = ctx
+            .data_unchecked::<Session>()
+            .repository(&self.owner, &self.repo)
+            .await
+            .map_err(error)?;
+        Ok(Repository { source })
+    }
     async fn head_repository(
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<Repository>> {
-        // Deleted head repositories are represented by null upstream.
+        // Deleted head repositories are represented by null upstream. GitHub keeps one for a
+        // deleted branch, but gh pr checkout fetches `refs/heads/{headRefName}` from it and falls
+        // back to the PR's own ref `refs/pull/N/head` only without one. So the gateway reports a
+        // head repository only for an open PR whose head branch exists and whose tip is the PR's
+        // head; a branch that's gone, recreated or moved (a closed PR, or one reopened through the
+        // API, which leaves the PR's ref where it was) would otherwise be checked out in its place.
+        // The owner stays, as on GitHub; gh's checkout reads only `headRepository` to choose.
+        // A closed or merged PR's branch can move at any time after the check, and gh would fetch
+        // it; the PR's own ref can't. An open PR moves with its branch. Unknown counts as moved.
         let Some(head) = self.source.head.repo.as_ref() else {
             return Ok(None);
         };
+        if !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await {
+            return Ok(None);
+        }
         let name = head.name.as_deref().unwrap_or(&self.repo);
         let source = ctx
             .data_unchecked::<Session>()

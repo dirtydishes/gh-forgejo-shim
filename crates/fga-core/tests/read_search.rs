@@ -199,3 +199,229 @@ async fn project_cards_are_an_empty_connection() {
         json!({"repository":{"pullRequest":empty,"issue":empty}})
     );
 }
+
+/// gh pr checkout fetches `refs/heads/{headRefName}` from the head repository, or the PR's own ref
+/// `refs/pull/N/head` from the base when there's none. The gateway reports a head repository only
+/// while the head branch exists and its tip is the PR's head, so gh never checks out a branch that
+/// isn't there, was recreated, or has moved since (a closed PR; a PR reopened through the API). The
+/// owner stays as GitHub reports it; an open PR's `isCrossRepository` is true unless the branch is the
+/// PR's head, so `gh pr close -d`/`merge -d` never delete a branch that isn't it. gh deletes no remote
+/// branch for a closed or merged PR, so one from the same repository is not cross-repository, as on
+/// GitHub, and `gh pr list` shows its branch without an owner. `headRefName` is always Forgejo's own
+/// name, so no made-up name can equal a real branch's.
+#[tokio::test]
+async fn a_head_branch_that_is_gone_has_no_head_repository() {
+    let repo = |owner: &str| json!({"name":"r","owner":{"id":1,"login":owner,"avatar_url":""}});
+    // (label, ref, head repository owner, head SHA, state, merged, the PR ref's SHA if readable)
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        bool,
+        Option<&'static str>,
+    );
+    let cases: [Case; 15] = [
+        ("feature", "feature", "o", "aaa", "open", false, Some("aaa")),
+        (
+            "feature",
+            "refs/pull/2/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        (
+            "",
+            "refs/pull/3/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        ("feature", "feature", "f", "aaa", "open", false, Some("aaa")),
+        (
+            "feature",
+            "refs/pull/5/head",
+            "f",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        (
+            "refs/pull/6/head",
+            "refs/pull/6/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        // Merged with its branch still at the PR's head: the branch can still move before gh
+        // fetches it, and the PR's own ref can't, so only the ref is offered.
+        (
+            "feature",
+            "feature",
+            "o",
+            "aaa",
+            "closed",
+            true,
+            Some("aaa"),
+        ),
+        // Closed, then the branch recreated at another commit.
+        (
+            "feature",
+            "feature",
+            "o",
+            "ccc",
+            "closed",
+            false,
+            Some("aaa"),
+        ),
+        // Reopened through the API after the branch moved: the PR's ref stayed where it was.
+        ("feature", "feature", "o", "ccc", "open", false, Some("aaa")),
+        (
+            "refs/refs/topic",
+            "refs/refs/topic",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        // The PR's ref can't be read: unknown counts as moved.
+        ("feature", "feature", "o", "aaa", "open", false, None),
+        // A real branch named like a ref keeps its name, so it can't be taken for `topic`, but
+        // counts as gone: gh fetches the PR's own ref.
+        (
+            "refs/topic",
+            "refs/topic",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        ("topic", "topic", "o", "aaa", "open", false, Some("aaa")),
+        // r5#3: a real branch named like an AGit PR's ref without `refs/`. No name is made up, so
+        // it can't be taken for AGit PR 3.
+        (
+            "pull/3/head",
+            "pull/3/head",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
+        // r5#2, the GitHub-equivalent residue: a closed PR from `refs/topic` keeps that name and
+        // gets no head repository, as on GitHub once its fork is deleted.
+        (
+            "refs/topic",
+            "refs/topic",
+            "o",
+            "aaa",
+            "closed",
+            false,
+            Some("aaa"),
+        ),
+    ];
+    let pulls: Vec<Value> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, (label, reference, owner, sha, state, merged, _))| {
+            let mut source = pull(i as i32 + 1, *merged);
+            source["state"] = json!(state);
+            source["head"] = json!({"label":label,"ref":reference,"sha":sha,"repo":repo(owner)});
+            source
+        })
+        .collect();
+    let repository = |owner: &'static str| {
+        get(move || async move {
+            Json(
+                json!({"id":1,"name":"r","full_name":format!("{owner}/r"),"private":false,
+                "owner":{"id":1,"login":owner,"avatar_url":"https://forge.test/avatar"},
+                "html_url":format!("https://forge.test/{owner}/r"),"default_branch":"main",
+                "fork":owner != "o","archived":false,
+                "permissions":{"admin":false,"push":true,"pull":true}}),
+            )
+        })
+    };
+    let listed = Value::Array(pulls.clone());
+    let mut upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route("/api/v1/repos/o/r", repository("o"))
+        .route("/api/v1/repos/f/r", repository("f"))
+        .route(
+            "/api/v1/repos/o/r/pulls",
+            get(move || async move { Json(listed) }),
+        );
+    for (number, (source, case)) in (1..).zip(pulls.into_iter().zip(cases)) {
+        upstream = upstream.route(
+            &format!("/api/v1/repos/o/r/pulls/{number}"),
+            get(move || async move { Json(source) }),
+        );
+        if let Some(sha) = case.6 {
+            let reference = format!("refs/pull/{number}/head");
+            upstream = upstream.route(
+                &format!("/api/v1/repos/o/r/git/refs/pull/{number}/head"),
+                get(move || async move {
+                    Json(json!({"ref":reference,"object":{"type":"commit","sha":sha}}))
+                }),
+            );
+        }
+    }
+    let (session, task) = session(upstream).await;
+    let fields = "headRefName isCrossRepository headRepository{name} headRepositoryOwner{login}";
+    let query = (1..=cases.len())
+        .map(|n| format!("p{n}:pullRequest(number:{n}){{{fields}}}"))
+        .chain([
+            "agit:pullRequests(headRefName:\"refs/pull/3/head\",first:5){nodes{number}}".into(),
+            "pull3:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into(),
+            "topic:pullRequests(headRefName:\"topic\",first:5){nodes{number}}".into(),
+        ])
+        .collect::<Vec<_>>()
+        .join(" ");
+    let response = graphql::schema()
+        .execute(
+            Request::new(format!(r#"{{repository(owner:"o",name:"r"){{{query}}}}}"#)).data(session),
+        )
+        .await;
+    task.abort();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let head = |name: &str, cross: bool, repository: Value, owner: &str| {
+        json!({"headRefName":name,"isCrossRepository":cross,"headRepository":repository,
+            "headRepositoryOwner":{"login":owner}})
+    };
+    let r = json!({"name":"r"});
+    assert_eq!(
+        response.data.into_json().unwrap()["repository"],
+        json!({
+            "p1":head("feature", false, r.clone(), "o"),
+            "p2":head("feature", true, Value::Null, "o"),
+            // An AGit PR reports Forgejo's own ref name.
+            "p3":head("refs/pull/3/head", true, Value::Null, "o"),
+            "p4":head("feature", true, r.clone(), "f"),
+            "p5":head("feature", true, Value::Null, "f"),
+            // A known limit: a gone branch named `refs/…` keeps its name.
+            "p6":head("refs/pull/6/head", true, Value::Null, "o"),
+            "p7":head("feature", false, Value::Null, "o"),
+            "p8":head("feature", false, Value::Null, "o"),
+            "p9":head("feature", true, Value::Null, "o"),
+            "p10":head("refs/refs/topic", true, Value::Null, "o"),
+            "p11":head("feature", true, Value::Null, "o"),
+            // gh pr list --head takes the name gh was shown.
+            "p12":head("refs/topic", true, Value::Null, "o"),
+            "p13":head("topic", false, r.clone(), "o"),
+            "p14":head("pull/3/head", false, r, "o"),
+            "p15":head("refs/topic", false, Value::Null, "o"),
+            "agit":{"nodes":[{"number":3}]},
+            "pull3":{"nodes":[{"number":14}]},
+            "topic":{"nodes":[{"number":13}]},
+        })
+    );
+}

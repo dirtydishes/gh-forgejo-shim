@@ -44,6 +44,17 @@ jobs:
     steps:
       - run: echo probe
 ''')
+# A second workflow, run only for the probe branch, so --workflow has runs to leave out.
+Path('.forgejo/workflows/lint.yaml').write_text('''name: lint
+on:
+  push:
+    branches: [probe]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+''')
 git('add', '.'); git('commit', '-qm', 'actions probe')
 git('checkout', '-qb', 'probe')
 Path('probe.txt').write_text('probe\n')
@@ -76,21 +87,30 @@ print('PASS positive author/assignee/quoted-label filters; unknown and missing l
 
 for attempt in range(60):
     runs = api('/repos/' + REPO + '/actions/runs')['workflow_runs']
-    if runs: break
+    if len(runs) == 3: break
     time.sleep(0.5)
 else: raise SystemExit('Forgejo did not create native Actions runs')
 fields = 'status,conclusion,displayTitle,workflowName,headBranch,event'
 actual = gh('run', 'list', '--limit', '5', '--json', fields)
-assert len(actual) == 2, actual
-assert {r['headBranch'] for r in actual} == {'main', 'probe'}, actual
-assert all(r['status'] == 'queued' and r['conclusion'] == '' and r['workflowName'] == 'native ci' and r['event'] == 'push' for r in actual), actual
-assert gh('run', 'list', '--branch', 'probe', '--event', 'push', '--status', 'queued', '--json', fields) == [next(r for r in actual if r['headBranch'] == 'probe')]
+key = lambda r: (r['workflowName'], r['headBranch'])
+assert sorted(map(key, actual)) == [('lint', 'probe'), ('native ci', 'main'), ('native ci', 'probe')], actual
+assert all(r['status'] == 'queued' and r['conclusion'] == '' and r['event'] == 'push' for r in actual), actual
+assert gh('run', 'list', '--branch', 'probe', '--event', 'push', '--status', 'queued', '--json', fields) == [r for r in actual if r['headBranch'] == 'probe']
 assert gh('run', 'list', '--status', 'completed', '--json', fields) == []
 print('PASS native Forgejo Actions runs through real gh run list: queued, workflow name, branches, event', flush=True)
+# --workflow by file name and by name: gh resolves the workflow, then reads
+# actions/workflows/{id}/runs, which asks Forgejo for runs of that file.
+for selector, name in (('ci.yaml', 'native ci'), ('native ci', 'native ci'), ('lint.yaml', 'lint')):
+    by_workflow = gh('run', 'list', '--workflow', selector, '--json', fields)
+    assert by_workflow == [r for r in actual if r['workflowName'] == name], (selector, by_workflow)
+result = subprocess.run(['gh', 'run', 'list', '--workflow', 'missing.yml', '-R', 'forge.test/' + REPO], capture_output=True, text=True)
+assert result.returncode != 0 and 'not found' in result.stderr, (result.returncode, result.stderr)
+print('PASS real gh run list --workflow by file name and by name; a missing file is not found', flush=True)
 # The simple JSON form needs only a mapped run, not the unsupported jobs/log APIs.
-actual = gh('run', 'view', str(runs[0]['id']), '--json', 'status,headBranch,displayTitle')
-assert actual['status'] == 'queued' and actual['headBranch'] in ('main', 'probe'), actual
-print('PASS real gh run view with mapped JSON fields', flush=True)
+actual = gh('run', 'view', str(runs[0]['id']), '--json', 'status,headBranch,displayTitle,attempt')
+assert actual['status'] == 'queued' and actual['headBranch'] in ('main', 'probe') and actual['attempt'] == 1, actual
+assert all(r['attempt'] == 1 for r in gh('run', 'list', '--json', 'attempt')), 'run list attempt'
+print('PASS real gh run view with mapped JSON fields; run view and list report attempt 1', flush=True)
 # The default view follows the run's jobs_url and reads its artifacts; both answer empty lists,
 # since Forgejo 15's API has neither per run.
 result = subprocess.run(['gh', 'run', 'view', str(runs[0]['id']), '-R', 'forge.test/' + REPO], capture_output=True, text=True)

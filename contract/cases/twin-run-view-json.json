@@ -1,0 +1,23 @@
+{
+  "id": "twin-run-view-json",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/run-view-json",
+    "workflow": true
+  },
+  "argv": [
+    "run",
+    "view",
+    "{run}",
+    "--json",
+    "status,conclusion,event,headBranch,workflowName,databaseId"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "\\{\"conclusion\":\"\",\"databaseId\":{run},\"event\":\"push\",\"headBranch\":\"twin/run\\-view\\-json\",\"status\":\"queued\",\"workflowName\":\"twin\"\\}\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

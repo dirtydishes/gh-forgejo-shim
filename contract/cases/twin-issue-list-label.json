@@ -1,0 +1,27 @@
+{
+  "id": "twin-issue-list-label",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-list-label",
+    "issue": true,
+    "label": true
+  },
+  "argv": [
+    "issue",
+    "list",
+    "--label",
+    "{label}",
+    "--json",
+    "number",
+    "--jq",
+    "[.[] | select(.number == {issue})] == . and length == 1"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "true\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

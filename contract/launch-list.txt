@@ -15,3 +15,9 @@ pr ready
 pr close
 pr reopen
 pr checkout
+run list
+run view
+issue comment
+issue list
+issue view
+issue create

@@ -1,0 +1,25 @@
+{
+  "id": "twin-issue-view-json",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-view-json",
+    "issue": true
+  },
+  "argv": [
+    "issue",
+    "view",
+    "{issue}",
+    "--json",
+    "title,body,state,comments",
+    "--jq",
+    "[.title, .body, .state, (.comments | length)] | @tsv"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "twin:\\ twin/issue\\-view\\-json\\\ttwin\\\tOPEN\\\t0\\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

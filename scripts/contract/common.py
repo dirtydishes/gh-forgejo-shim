@@ -37,6 +37,13 @@ DECOY_PROBES = [
     ["version"],
 ]
 LOCAL_PROBES = [
+    # gh sends the workflow's file name, which the gateway can't take yet (C4, cwe.18.1).
+    ["run", "list", "--workflow", "ci.yml"],
+    # run view's text lists the run's jobs, which the gateway can't (o2#1 on #125).
+    ["run", "view", "1"],
+    # issue view's text keeps the built-in path, whose own view has no dependencies to leave empty
+    # (o1#2 on #131); a launched gh's lists them, and the gateway leaves them empty.
+    ["issue", "view", "1"],
     # --subject: a merge commit message the gateway doesn't take yet.
     ["pr", "merge", "1", "--merge", "--subject", "s"],
     # A pr edit flag the gateway doesn't serve: gh would write the title, then fail.
@@ -88,7 +95,7 @@ def validate_case(case):
     if argv == ["--version"]:
         return
     allowed = {("pr", verb) for verb in ("view", "list", "checks", "diff", "status")}
-    allowed |= {("repo", "view"), ("api", "user"), ("auth", "status")}
+    allowed |= {("repo", "view"), ("api", "user"), ("api", "rate_limit"), ("auth", "status")}
     if command not in allowed:
         raise ValueError("command is outside the read-only allowlist")
     # --show-token is deliberately excluded even though auth status is read-only.

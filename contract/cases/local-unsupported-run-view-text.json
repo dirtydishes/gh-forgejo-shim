@@ -1,0 +1,16 @@
+{
+  "id": "local-unsupported-run-view-text",
+  "kind": "shim-local",
+  "argv": [
+    "run",
+    "view",
+    "1"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "normalize": [],
+  "expected": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "gh-forgejo-shim: \"gh run view\" is not supported for Forgejo host forge.test yet\n"
+  }
+}

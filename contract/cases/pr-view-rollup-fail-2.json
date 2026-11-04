@@ -1,0 +1,27 @@
+{
+  "id": "pr-view-rollup-fail-2",
+  "argv": [
+    "pr",
+    "view",
+    "2",
+    "--json",
+    "statusCheckRollup,reviewDecision"
+  ],
+  "repo": "dirtydishes/gfj-oracle",
+  "pr": 2,
+  "normalize": [
+    "host",
+    "pr_urls",
+    "timestamps",
+    "check_details_urls",
+    "json"
+  ],
+  "normalize_reason": {
+    "json": "JSON object order and whitespace do not change the returned field values; array order stays significant."
+  },
+  "oracle": {
+    "exit": 0,
+    "stdout": "{\"reviewDecision\":\"\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"completedAt\":\"2026-10-30T19:02:37Z\",\"conclusion\":\"FAILURE\",\"detailsUrl\":\"https://github.com/dirtydishes/gfj-oracle/actions/runs/41111888450/job/124255743871\",\"name\":\"check\",\"startedAt\":\"2026-10-30T19:02:33Z\",\"status\":\"COMPLETED\",\"workflowName\":\"ci\"},{\"__typename\":\"CheckRun\",\"completedAt\":\"2026-10-30T19:02:36Z\",\"conclusion\":\"SUCCESS\",\"detailsUrl\":\"https://github.com/dirtydishes/gfj-oracle/actions/runs/41111888450/job/124255743348\",\"name\":\"lint\",\"startedAt\":\"2026-10-30T19:02:33Z\",\"status\":\"COMPLETED\",\"workflowName\":\"ci\"}]}\n",
+    "stderr": ""
+  }
+}
