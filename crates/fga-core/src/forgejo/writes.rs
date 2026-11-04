@@ -258,8 +258,8 @@ impl Session {
         // Forgejo sends "Please try again later" both while it is still checking a PR and when the
         // PR conflicts (`services/pull/check.go:97`), and a PR pushed moments ago is usually still
         // being checked, which a busy forge can take seconds over. A refused merge changes nothing,
-        // so retry, waiting longer each time, before reporting a conflict. The last 2 s of the
-        // request's deadline stay for the final attempt and reading the merged PR back.
+        // so retry, waiting longer each time, before reporting a conflict. The window is short
+        // enough that a merge which succeeds on its last attempt still has time to finish.
         let give_up = (tokio::time::Instant::now() + self.forgejo.merge_wait)
             .min(self.deadline - Duration::from_secs(2));
         let mut pause = Duration::from_millis(250);
