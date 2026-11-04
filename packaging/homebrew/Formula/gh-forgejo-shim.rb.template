@@ -31,6 +31,15 @@ class GhForgejoShim < Formula
     bin.install "gfj"
   end
 
+  def caveats
+    <<~EOS
+      gh-forgejo-shim needs GitHub CLI 2.103.3 or newer, which Homebrew installs
+      as a dependency. After installing or upgrading, run this from inside your
+      Forgejo checkout to set up or refresh the managed gh wrapper:
+        gfj bootstrap
+    EOS
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/gfj --version")
     assert_match "doctor", shell_output("#{bin}/gh-forgejo-shim --help")
