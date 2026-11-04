@@ -85,7 +85,7 @@
     <section>
       <h2>Context</h2>
       <p>The Codex app bundle showed that its native PR workflow asks <code>gh pr list</code> for board fields such as <code>additions</code>, <code>deletions</code>, <code>mergeable</code>, <code>mergeStateStatus</code>, and <code>statusCheckRollup</code>, including an additional merged PR query. Before this change, the shim returned missing or incompatible values for some of those fields and rejected <code>--state merged</code>.</p>
-      <p>The fix was tested against the real Islandflow Forgejo repository on branch <code>lavender/all-quiet</code>, where PR <code>#16</code> is the current branch pull request.</p>
+      <p>The fix was tested against the real Islandflow Forgejo repository on branch <code>agent/all-quiet</code>, where PR <code>#16</code> is the current branch pull request.</p>
     </section>
 
     <section>
@@ -253,11 +253,11 @@
     <section>
       <h2>Validation</h2>
       <ul>
-        <li><code>PYTHONPATH=/Users/kell/dev/gh-forgejo-shim/src python3 -m unittest</code>: passed, 57 tests.</li>
+        <li><code>PYTHONPATH=~/dev/gh-forgejo-shim/src python3 -m unittest</code>: passed, 57 tests.</li>
         <li><code>git diff --check</code>: passed.</li>
-        <li><code>pipx install --force /Users/kell/dev/gh-forgejo-shim</code>: updated the shim installation used by <code>/Users/kell/.local/bin/gh</code>.</li>
+        <li><code>pipx install --force ~/dev/gh-forgejo-shim</code>: updated the shim installation used by <code>~/.local/bin/gh</code>.</li>
         <li><code>gh-forgejo-shim doctor</code> in Islandflow: confirmed the shim is first in terminal and macOS GUI <code>PATH</code>.</li>
-        <li>Installed-shim smoke tests in Islandflow passed for <code>gh pr list --state open</code>, <code>gh pr list --state merged</code>, <code>gh pr status --json ...</code>, <code>gh pr checks 16 --json ...</code>, <code>gh pr view 16 --json ...</code>, <code>--jq .currentBranch.url</code>, and <code>--head lavender/all-quiet</code>.</li>
+        <li>Installed-shim smoke tests in Islandflow passed for <code>gh pr list --state open</code>, <code>gh pr list --state merged</code>, <code>gh pr status --json ...</code>, <code>gh pr checks 16 --json ...</code>, <code>gh pr view 16 --json ...</code>, <code>--jq .currentBranch.url</code>, and <code>--head agent/all-quiet</code>.</li>
         <li>User confirmed Codex.app's PR workflow now works after the fix.</li>
       </ul>
     </section>

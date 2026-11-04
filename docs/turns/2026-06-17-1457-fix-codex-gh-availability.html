@@ -83,7 +83,7 @@
 
   <section>
     <h2>Context</h2>
-    <p>The important failing repro was not basic PATH discovery. <code>gfj doctor</code> already reported a good GUI PATH, installed shim, real <code>gh</code>, <code>fj</code>, and Forgejo auth. The red path was a constrained invocation such as <code>GH_HOST=git.dirtydishes.dev gh auth status</code>: before this change, the shim delegated <code>auth</code> to the real GitHub CLI, which tried to validate Forgejo auth as if it were GitHub Enterprise auth and returned a failure.</p>
+    <p>The important failing repro was not basic PATH discovery. <code>gfj doctor</code> already reported a good GUI PATH, installed shim, real <code>gh</code>, <code>fj</code>, and Forgejo auth. The red path was a constrained invocation such as <code>GH_HOST=forge.example.com gh auth status</code>: before this change, the shim delegated <code>auth</code> to the real GitHub CLI, which tried to validate Forgejo auth as if it were GitHub Enterprise auth and returned a failure.</p>
   </section>
 
   <section>
@@ -233,9 +233,9 @@
     <h2>Validation</h2>
     <ul>
       <li><span class="status">Passed:</span> <code>python3 -m unittest</code> ran 98 tests on the branch based on <code>origin/main</code>.</li>
-      <li><span class="status">Passed:</span> source smoke check for <code>PYTHONPATH=/Users/kell/dev/gh-forgejo-shim/src GH_HOST=git.dirtydishes.dev python3 -m gh_forgejo_shim gh auth status</code>.</li>
-      <li><span class="status">Passed:</span> source smoke check for <code>PYTHONPATH=/Users/kell/dev/gh-forgejo-shim/src GH_HOST=git.dirtydishes.dev python3 -m gh_forgejo_shim gh api user --jq .login</code>.</li>
-      <li><span class="status">Passed:</span> installed-path smoke checks after <code>pipx install --force /Users/kell/dev/gh-forgejo-shim</code> and <code>gfj install-shim</code>.</li>
+      <li><span class="status">Passed:</span> source smoke check for <code>PYTHONPATH=~/dev/gh-forgejo-shim/src GH_HOST=forge.example.com python3 -m gh_forgejo_shim gh auth status</code>.</li>
+      <li><span class="status">Passed:</span> source smoke check for <code>PYTHONPATH=~/dev/gh-forgejo-shim/src GH_HOST=forge.example.com python3 -m gh_forgejo_shim gh api user --jq .login</code>.</li>
+      <li><span class="status">Passed:</span> installed-path smoke checks after <code>pipx install --force ~/dev/gh-forgejo-shim</code> and <code>gfj install-shim</code>.</li>
       <li><span class="status">Passed:</span> <code>gfj doctor</code> reports real <code>gh</code>, <code>fj</code>, Forgejo auth, shim PATH, and macOS GUI PATH all ok.</li>
     </ul>
   </section>
