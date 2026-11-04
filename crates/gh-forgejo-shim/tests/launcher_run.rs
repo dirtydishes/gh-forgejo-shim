@@ -850,7 +850,8 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset");
     assert!(reported(&report, "FJ_SHIM_SAVED").contains("GH_HOST"));
 
-    // The user's own GH_HOST naming the forge stays, and so do their enterprise tokens.
+    // The user's own GH_HOST naming the forge stays, but their token variables still go: gh has
+    // the user's stored login there, and a call naming another host would carry them there.
     let output = fixture
         .command(&gh, &["api", "user"])
         .env("GH_HOST", "forge.test")
@@ -861,11 +862,15 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = fixture.report();
     assert_eq!(reported(&report, "GH_HOST"), "forge.test");
-    assert_eq!(reported(&report, "GH_TOKEN"), "ghp_github", "{report}");
+    assert_eq!(reported(&report, "GH_TOKEN"), "unset", "{report}");
     assert_eq!(
         reported(&report, "GH_ENTERPRISE_TOKEN"),
-        "ghe_corp",
+        "unset",
         "{report}"
+    );
+    assert_eq!(
+        reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
+        "ghe_corp"
     );
 
     // Forms that set no GH_HOST drop them too, launched or not: gh would otherwise send another
