@@ -9,7 +9,10 @@ request, of its own, so cases don't depend on their order.
 
 import base64
 import json
+import os
 import re
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -43,7 +46,7 @@ ISSUE_SELECT = "select(.number == {issue})"
 SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
 STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}")
 SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label",
-         "protect_head", "fork"}
+         "protect_head", "fork", "agit"}
 # The organization a `fork` case forks into, then deletes its fork from.
 FORK_OWNER = "gfj-forks"
 # The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
@@ -127,13 +130,16 @@ def validate(case):
     # prepare() names a case's own base <branch>-base; no case may claim such a name.
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
-    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label"):
+    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label", "agit"):
         if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
         raise ValueError("setup.draft and setup.closed need setup.pr")
     if setup.get("fork") and (not setup.get("pr") or setup.get("closed") or setup.get("protect_head")):
         raise ValueError("setup.fork needs setup.pr, and takes no closed or protect_head")
+    # An AGit PR's head is no branch of the base at all (the gateway's #122).
+    if setup.get("agit") and (not setup.get("pr") or setup.get("fork") or setup.get("closed") or setup.get("protect_head")):
+        raise ValueError("setup.agit needs setup.pr, and takes no fork, closed or protect_head")
     if "{pr}" in argv and not setup.get("pr"):
         raise ValueError("{pr} needs setup.pr")
     if command[0] == "run" and not setup.get("workflow"):
@@ -260,7 +266,10 @@ def prepare(case, home, token):
         title = f"{DRAFT_PREFIX} twin: {branch}" if setup.get("draft") else f"twin: {branch}"
         head_ref = fork_head(base, token, branch) if setup.get("fork") else branch
         try:
-            pr = request(base, token, "POST", "pulls", {"head": head_ref, "base": target, "title": title})
+            if setup.get("agit"):
+                pr = agit_pull(base, token, branch, target, title)
+            else:
+                pr = request(base, token, "POST", "pulls", {"head": head_ref, "base": target, "title": title})
         finally:
             # Forgejo allows one fork per owner, so a fork left behind would fail the next case.
             # It closes a fork's pull requests when the fork is deleted, and reopens one on
@@ -284,6 +293,33 @@ def prepare(case, home, token):
     if setup.get("workflow"):
         subs["run"] = own_run(base, token, branch)
     return subs
+
+
+def agit_pull(base, token, branch, target, title):
+    """An AGit pull request into `target`: a commit pushed to `refs/for/<target>`, with no branch
+    of its own. The token goes to git as a header in its environment, never in argv, and only to
+    the twin's own URL."""
+    if not base.startswith("http://127.0.0.1:"):
+        raise RuntimeError("an AGit push goes only to the local twin")
+    with tempfile.TemporaryDirectory(prefix="twin-agit-") as work:
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": work, "GIT_TERMINAL_PROMPT": "0",
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_COUNT": "1",
+               "GIT_CONFIG_KEY_0": "http.extraHeader", "GIT_CONFIG_VALUE_0": f"Authorization: token {token}",
+               "GIT_AUTHOR_NAME": "twin", "GIT_AUTHOR_EMAIL": "twin@example.invalid",
+               "GIT_COMMITTER_NAME": "twin", "GIT_COMMITTER_EMAIL": "twin@example.invalid"}
+        git = lambda *args: subprocess.run(["git", *args], cwd=work, env=env, check=True,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        git("clone", "-q", "-b", target, f"{base}/{REPO}.git", "repo")
+        repo = Path(work) / "repo"
+        (repo / "agit.txt").write_text(branch + "\n")
+        git("-C", "repo", "add", "agit.txt")
+        git("-C", "repo", "commit", "-q", "-m", "agit")
+        topic = branch.removeprefix("twin/")
+        git("-C", "repo", "push", "-q", "-o", f"topic={topic}", "-o", f"title={title}", "origin", f"HEAD:refs/for/{target}")
+    for pull in request(base, token, "GET", "pulls?state=open&limit=50"):
+        if pull["title"] == title:
+            return pull
+    raise RuntimeError(f"the AGit push for {branch} made no pull request")
 
 
 def fork_name(branch):
