@@ -203,6 +203,8 @@ aside only when nothing in the call names another host: `GH_HOST` naming one, or
 `HOST/OWNER/REPO` whose host isn't the forge. Any `x:` counts as an SSH host, whatever its
 characters. Routing doesn't model every argument gh takes a host from (`gh repo clone
 forge-b/o/r` in forge-a's checkout routes to forge-a), so such a call keeps the built-in path.
+The token rule below already keeps every token variable from leaving; this check also keeps
+the call where routing and the trace say it goes.
 `gh api` and `gh auth` skip the word check: gh sends them where routing says, and their other
 words are data, such as a GraphQL document. That is no run directory, no gateway, and
 the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and two cases. A host-less
@@ -219,9 +221,11 @@ variable, if set, for the forge ahead of the user's login there (fact 3): `GH_EN
 or `GITHUB_ENTERPRISE_TOKEN` for most forges, and `GH_TOKEN` or `GITHUB_TOKEN` for a forge named
 `github.localhost` or `*.ghe.com`. Either would send another site's login to the forge, the
 enterprise ones whatever `GH_HOST` says. So stepping aside removes those of the four token
-variables that are set, as a launch does, whether or not it sets `GH_HOST`. When the user's own `GH_HOST` already
-names the forge, the wrapper sets nothing and keeps those variables, as plain gh would: the user
-chose that host. It records both changes with §7's
+variables that are set, as a launch does, whether or not it sets `GH_HOST`, and even when the
+user's own `GH_HOST` already names the forge, where it sets nothing. Stepping aside needs the
+user's stored login for the forge, so gh never needs the variables there, and without them a call
+that reaches another host carries only the user's own login for it, as plain gh would.
+It records both changes with §7's
 `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`, so a nested call, such as one
 from `gh api`'s pager, gets the user's values back. It never sets `FJ_SHIM_LAUNCHER`: the wrapper
 execs gh here, so gh has the wrapper's pid, and guard 2 would stop a wrapper that gh runs directly
