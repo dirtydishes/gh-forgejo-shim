@@ -59,6 +59,13 @@ pub fn apply(edits: &[(&str, Edit)]) {
     }
 }
 
+/// Removes `names` without recording them, so no nested call puts them back (§2, §7).
+pub fn remove_unrecorded(names: &[&str]) {
+    for name in names {
+        env::remove_var(name);
+    }
+}
+
 /// Puts back every variable a launcher changed, unless something in between changed it on
 /// purpose, then removes the bookkeeping, except `FJ_SHIM_DEPTH` (guard 3 needs it). Runs at
 /// wrapper entry, after guard 2, while single-threaded.

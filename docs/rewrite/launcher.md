@@ -225,9 +225,13 @@ variables that are set, as a launch does, whether or not it sets `GH_HOST`, and 
 user's own `GH_HOST` already names the forge, where it sets nothing. Stepping aside needs the
 user's stored login for the forge, so gh never needs the variables there, and without them a call
 that reaches another host carries only the user's own login for it, as plain gh would.
-It records both changes with §7's
+It records the `GH_HOST` change with §7's
 `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`, so a nested call, such as one
-from `gh api`'s pager, gets the user's values back. It never sets `FJ_SHIM_LAUNCHER`: the wrapper
+from `gh api`'s pager, gets the user's value back. It doesn't record the token variables: a
+nested call, such as git's credential helper running `gh auth git-credential` for a remote on
+another host, would otherwise get them back and hand one to that host. Plain gh would do the
+same (fact 3), so here the wrapper is stricter than plain gh: a nested gh that relied on
+`GH_TOKEN` for GitHub uses the user's stored GitHub login instead, and fails without one. It never sets `FJ_SHIM_LAUNCHER`: the wrapper
 execs gh here, so gh has the wrapper's pid, and guard 2 would stop a wrapper that gh runs directly
 (§8). That holds for every route to the host,
 the "user's gh hosts" route included (§3), and such a host is never in *S*. Until `cwe.42` adds
@@ -759,9 +763,10 @@ thread at the edit point. Building gh's environment by hand and spawning it with
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
 
-The table is the launch path. Stepping aside (§2) changes only `GH_HOST` and the four token
-variables, and only for a host-less `gh api` or `gh auth token`, with `FJ_SHIM_SAVED`,
-`FJ_SHIM_ORIG_<NAME>` and `FJ_SHIM_SET_<NAME>`. It never sets `FJ_SHIM_LAUNCHER`.
+The table is the launch path. Stepping aside (§2) sets `GH_HOST` only for a host-less `gh api`
+or `gh auth token`, recorded with `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and
+`FJ_SHIM_SET_<NAME>`. It removes the four token variables on every form, unrecorded, so no
+nested call gets them back. It never sets `FJ_SHIM_LAUNCHER`.
 
 The launcher spawns gh by absolute path, so `argv[0]` is that path too.
 
