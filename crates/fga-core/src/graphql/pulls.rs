@@ -174,17 +174,21 @@ impl PullRequest {
     /// true, which would delete the base's branch of the same name.
     /// GitHub's meaning, with one safety turn. `gh pr close -d` and `gh pr merge -d` delete the head
     /// branch in the base repository unless this is true (`close.go:150-157`, `merge.go:519,592`),
-    /// so a same-repository PR counts as cross-repository unless its branch is the PR's head:
+    /// so an open same-repository PR counts as cross-repository unless its branch is the PR's head:
     /// otherwise gh would delete whatever branch now carries the name (an AGit PR's
-    /// `refs/pull/N/head`, or a branch recreated for other work). A deleted fork (`head.repo` null)
-    /// is cross-repository, as GitHub reports it.
+    /// `refs/pull/N/head`, or a branch recreated for other work). gh deletes no remote branch for a
+    /// closed or merged PR (`pr close` stops at one, `close.go:77-83`; `pr merge` skips it for one
+    /// already merged, `merge.go:523`), and checks one out from its own ref, since it has no head
+    /// repository; so such a PR is same-repository, as on GitHub, and `gh pr list` labels it by
+    /// branch alone. A deleted fork (`head.repo` null) is cross-repository, as GitHub reports it.
     async fn is_cross_repository(&self, ctx: &Context<'_>) -> bool {
         let Some(head) = self.source.head.repo.as_ref() else {
             return true;
         };
         let same_repository = head.owner.login.eq_ignore_ascii_case(&self.owner)
             && head.name.as_ref().is_none_or(|name| name == &self.repo);
-        !same_repository || !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await
+        let open = self.source.state == "open" && !self.source.merged;
+        !same_repository || (open && !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await)
     }
     async fn head_repository_owner(&self) -> Option<RepositoryOwner> {
         self.source
