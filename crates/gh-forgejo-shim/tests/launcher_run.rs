@@ -904,6 +904,41 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
 }
 
 #[test]
+fn a_call_naming_another_host_keeps_the_built_in_path() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.allowlist(&["forge-a.test", "forge-b.test"]);
+    fixture.user_hosts("forge-a.test:\n    user: kell\n");
+    let gh = reporting_gh(&fixture);
+    // Routing picks forge-a from GH_REPO, but gh would clone from forge-b, where the user has no
+    // login, or reach another host GH_HOST names (Sol r1#1).
+    for (args, gh_host) in [
+        (&["repo", "clone", "forge-b.test/o/r"][..], None),
+        (&["repo", "clone", "https://forge-b.test/o/r"][..], None),
+        (&["repo", "clone", "git@forge-b.test:o/r"][..], None),
+        (&["repo", "clone", "other.example/o/r"][..], None),
+        (&["pr", "diff", "1"][..], Some("other.example")),
+    ] {
+        let mut command = fixture.command(&gh, args);
+        command.env("GH_REPO", "forge-a.test/o/r");
+        if let Some(gh_host) = gh_host {
+            command.env("GH_HOST", gh_host);
+        }
+        let output = command.output().expect("run wrapper");
+        assert_ne!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert_eq!(fixture.report(), "", "{args:?}: gh never ran");
+    }
+    // Naming the forge itself still steps aside.
+    let output = fixture
+        .command(&gh, &["pr", "diff", "1", "-R", "forge-a.test/o/r"])
+        .env("GH_HOST", "forge-a.test")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(reported(&fixture.report(), "GH_CONFIG_DIR"), "unset");
+}
+
+#[test]
 fn only_a_login_under_the_portless_key_steps_aside() {
     let _serial = serial();
     let fixture = Fixture::new("http://127.0.0.1:9");

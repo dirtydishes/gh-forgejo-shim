@@ -538,7 +538,15 @@ fn run_gh(
         RouteKind::Forgejo => {
             launch_listed(&routed, &decision, &original_argv, &env, &config, &mode)
                 .or_else(|| {
-                    step_aside_logged_in(&routed, &decision, &original_argv, &env, &config, &mode)
+                    step_aside_logged_in(
+                        &routed,
+                        &decision,
+                        &words,
+                        &original_argv,
+                        &env,
+                        &config,
+                        &mode,
+                    )
                 })
                 .unwrap_or_else(|| run_forgejo(&invocation, &env, cwd, &decision, &mut mode))
         }
@@ -651,10 +659,11 @@ fn launch_listed(
 /// Plain gh for a forge the user's own gh is logged in to (server mode, spec §2), when the call
 /// didn't launch: the built-in path would answer with the shim's own token, or refuse a form
 /// plain gh serves there, such as ChatGPT's `gh api graphql --hostname <forge>`. Only on the
-/// terminal path, as a launch.
+/// terminal path, as a launch, and only when nothing in the call names another host.
 fn step_aside_logged_in(
     routed: &Invocation,
     decision: &RouteDecision,
+    words: &[String],
     argv: &[OsString],
     env: &HashMap<String, String>,
     config: &DispatcherConfig,
@@ -663,6 +672,9 @@ fn step_aside_logged_in(
     #[cfg(unix)]
     if matches!(mode, DelegateMode::Inherit) {
         let host = decision.trace_host()?;
+        if names_another_host(host, words, env, config) {
+            return None;
+        }
         return crate::launcher::start::step_aside_if_logged_in(
             host,
             routed,
@@ -671,8 +683,64 @@ fn step_aside_logged_in(
             config.real_gh.as_deref(),
         );
     }
-    let _ = (routed, decision, argv, env, config, mode);
+    let _ = (routed, decision, words, argv, env, config, mode);
     None
+}
+
+/// Whether plain gh could go somewhere other than `host`, judged from what the call says:
+/// `GH_HOST` naming another host, or a word or `GH_REPO` naming one: another allowlisted forge
+/// anywhere in it, or a URL, an SSH address (`git@host:o/r`) or a `HOST/OWNER/REPO` whose host
+/// isn't `host`. Routing doesn't model every argument gh takes a host from (`gh repo clone
+/// forge-b/o/r` in forge-a's checkout routes to forge-a), so stepping aside on the routed host's
+/// login could send the call elsewhere (Sol r1#1). A false match, such as a path `a/b/c`, leaves
+/// the call to the built-in path, as before.
+fn names_another_host(
+    host: &str,
+    words: &[String],
+    env: &HashMap<String, String>,
+    config: &DispatcherConfig,
+) -> bool {
+    let forge = gh_hostname(host).to_ascii_lowercase();
+    let other = |name: &str| {
+        let name = name.rsplit_once('@').map_or(name, |(_, name)| name);
+        gh_hostname(name).to_ascii_lowercase() != forge
+    };
+    if env
+        .get("GH_HOST")
+        .filter(|value| !value.trim().is_empty())
+        .is_some_and(|value| other(value))
+    {
+        return true;
+    }
+    let forges = config
+        .hosts
+        .iter()
+        .filter(|entry| config.is_forgejo_host(Some(entry)))
+        .map(|entry| gh_hostname(entry).to_ascii_lowercase())
+        .filter(|entry| *entry != forge)
+        .collect::<Vec<_>>();
+    words.iter().chain(env.get("GH_REPO")).any(|word| {
+        let word = word.to_ascii_lowercase();
+        let value = word
+            .rsplit_once('=')
+            .map_or(word.as_str(), |(_, value)| value);
+        let parts = value.split('/').collect::<Vec<_>>();
+        forges.iter().any(|entry| word.contains(entry.as_str()))
+            || word
+                .split("://")
+                .skip(1)
+                .any(|rest| other(rest.split(['/', '?', '#']).next().unwrap_or(rest)))
+            || word.match_indices('@').any(|(at, _)| {
+                word[at + 1..].split_once(':').is_some_and(|(name, _)| {
+                    !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                        && other(name)
+                })
+            })
+            || (parts.len() == 3 && parts.iter().all(|part| !part.is_empty()) && other(parts[0]))
+    })
 }
 
 fn run_forgejo(
