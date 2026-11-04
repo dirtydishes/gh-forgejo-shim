@@ -32,7 +32,7 @@ pub fn error(error: forgejo::Error) -> async_graphql::Error {
     let kind = match error {
         forgejo::Error::Unauthorized => "UNAUTHORIZED",
         forgejo::Error::NotFound => "NOT_FOUND",
-        forgejo::Error::Forbidden => "FORBIDDEN",
+        forgejo::Error::Forbidden | forgejo::Error::MissingScope => "FORBIDDEN",
         forgejo::Error::Timeout | forgejo::Error::Upstream | forgejo::Error::TooLarge => "INTERNAL",
     };
     async_graphql::Error::new(error.to_string())
