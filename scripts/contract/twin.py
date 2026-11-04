@@ -167,12 +167,12 @@ def validate(case):
             re.compile(expect[stream])
         except (TypeError, re.error) as error:
             raise ValueError(f"twin expect.{stream} isn't a pattern: {error}") from error
-    # stdout may name only what the command makes, never what setup bound: a rebound {issue}
-    # would point the state checks at another case's issue.
+    # Neither stream may name what setup bound: check() binds groups from both, and a rebound
+    # {issue} would point the state checks at another case's issue (o2#3).
     bound = {"branch", "head"} | {name for name, made in (
         ("pr", setup.get("pr")), ("issue", setup.get("issue")), ("run", setup.get("workflow")),
         ("label", setup.get("label"))) if made}
-    if set(re.compile(expect["stdout"]).groupindex) & bound:
+    if any(set(re.compile(expect[stream]).groupindex) & bound for stream in ("stdout", "stderr")):
         raise ValueError("a stdout pattern can't rebind a placeholder the case's setup made")
     for check in case.get("state", []):
         path = check.get("path", "")
