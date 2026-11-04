@@ -21,10 +21,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux builds on Ubuntu 22.04: its binaries need glibc 2.34 at most, so they run on
+          # Ubuntu 22.04, Debian 12 and RHEL 9 too. Ubuntu 24.04's would need 2.39.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
           - target: x86_64-apple-darwin
             runner: macos-15-intel
           - target: aarch64-apple-darwin
