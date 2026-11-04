@@ -546,6 +546,8 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
             leave(notes)
         });
     };
+    // gh drops a remote's port; the entry keeps the one the remote's web URL names (jko.41).
+    let entry = doctor::entry_with_web_port(cwd, &candidate).unwrap_or(entry);
     let hostname = repo::gh_hostname(&candidate.host);
     let allowlisted = doctor::allowlist_entry(config, &candidate.host);
     let sharing = config

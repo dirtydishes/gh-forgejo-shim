@@ -186,10 +186,13 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
                     Vec::<String>::new(),
                 ));
             } else {
-                // Quoted: an IPv6 host such as `[::1]:3000` is a glob pattern to the shell.
+                // With the port the remote's web URL names, which gh drops. Quoted: an IPv6 host
+                // such as `[::1]:3000` is a glob pattern to the shell.
+                let entry = entry_with_web_port(options.cwd.as_deref(), &repo)
+                    .unwrap_or_else(|| repo.host.clone());
                 let command = format!(
                     "gh-forgejo-shim config add-host {}",
-                    setup::shell_quote(&repo.host)
+                    setup::shell_quote(&entry)
                 );
                 checks.push(Check::new(
                     "current repo host",
@@ -287,6 +290,53 @@ pub(crate) fn in_gh_hosts_yml(env: &EnvMap, host: &str) -> bool {
     repo::user_gh_hosts(&gh_env(env))
         .iter()
         .any(|listed| repo::gh_hostname(listed) == host)
+}
+
+/// The allowlist entry for `repo` with the port its remote's web URL names, such as
+/// `git.example.com:3000` for `https://git.example.com:3000/owner/repo.git`. gh drops a remote's
+/// port, so `repo.host` has none, and the wrapper would call the server's default port. An
+/// `ssh://` port is the SSH server's, not the web one, so only an http(s) remote counts.
+pub(crate) fn entry_with_web_port(cwd: Option<&Path>, repo: &RepoRef) -> Option<String> {
+    let remotes = crate::external::git_output(&["remote"], cwd)?;
+    remotes
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .find_map(|name| {
+            let url = crate::external::git_output(&["remote", "get-url", name], cwd)?;
+            web_host_port(&url, repo)
+        })
+}
+
+/// `host:port` from an http(s) `url` that names a port and leads to `repo`.
+fn web_host_port(url: &str, repo: &RepoRef) -> Option<String> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let port = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once("]:").map(|(_, port)| port),
+        None => host_port.rsplit_once(':').map(|(_, port)| port),
+    };
+    if !port.is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return None;
+    }
+    if repo::gh_hostname(host_port) != repo::gh_hostname(&repo.host) {
+        return None;
+    }
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let mut parts = path.trim_end_matches('/').rsplit('/');
+    let name = parts.next()?;
+    let name = name.strip_suffix(".git").unwrap_or(name);
+    let owner = parts.next()?;
+    (owner.eq_ignore_ascii_case(&repo.owner) && name.eq_ignore_ascii_case(&repo.name))
+        .then(|| config::normalized_forgejo_host(host_port))
+        .flatten()
 }
 
 /// Whether the wrapper routes a repository on `host` to Forgejo.
@@ -639,6 +689,38 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    #[test]
+    fn a_web_remote_keeps_its_port_and_an_ssh_one_does_not() {
+        let repo = RepoRef::new("git.example.com", "owner", "repo");
+        for (url, entry) in [
+            (
+                "https://git.example.com:3000/owner/repo.git",
+                Some("git.example.com:3000"),
+            ),
+            (
+                "http://git.example.com:3000/owner/repo",
+                Some("git.example.com:3000"),
+            ),
+            (
+                "https://alice:secret@Git.Example.com:3000/Owner/Repo.git/",
+                Some("git.example.com:3000"),
+            ),
+            ("https://git.example.com/owner/repo.git", None),
+            ("ssh://git@git.example.com:2222/owner/repo.git", None),
+            ("git@git.example.com:owner/repo.git", None),
+            ("https://git.example.com:3000/owner/other.git", None),
+            ("https://other.example.com:3000/owner/repo.git", None),
+            ("https://git.example.com:/owner/repo.git", None),
+        ] {
+            assert_eq!(web_host_port(url, &repo).as_deref(), entry, "{url}");
+        }
+        let literal = RepoRef::new("[::1]", "owner", "repo");
+        assert_eq!(
+            web_host_port("https://[::1]:3000/owner/repo.git", &literal).as_deref(),
+            Some("[::1]:3000")
+        );
+    }
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 

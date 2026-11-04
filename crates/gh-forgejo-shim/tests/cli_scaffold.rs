@@ -441,6 +441,48 @@ fn doctor_names_no_repository_where_gh_host_finds_none() -> TestResult {
 }
 
 #[test]
+fn bootstrap_allowlists_a_web_remote_with_its_port() -> TestResult {
+    // gh drops the port, but Forgejo's default is 3000: the entry keeps the remote's web port,
+    // or the token would go to the server's default port (jko.41). An ssh:// port is the SSH
+    // server's, so that remote's entry has none.
+    for (remote, hosts) in [
+        (
+            "https://git.example.com:3000/owner/repo.git",
+            "hosts = [\"git.example.com:3000\"]",
+        ),
+        (
+            "ssh://git@git.example.com:2222/owner/repo.git",
+            "hosts = [\"git.example.com\"]",
+        ),
+    ] {
+        let fixture = CliFixture::new()?;
+        fixture.init_git_repo()?;
+        fixture.git(["remote", "set-url", "origin", remote])?;
+        let stdout = bootstrap(&fixture, &[])?;
+        assert!(shim_config(&fixture)?.contains(hosts), "{remote}: {stdout}");
+    }
+    Ok(())
+}
+
+#[test]
+fn doctor_suggests_the_web_port_for_an_unlisted_remote() -> TestResult {
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.git([
+        "remote",
+        "set-url",
+        "origin",
+        "https://git.example.com:3000/owner/repo.git",
+    ])?;
+    let stdout = doctor(&fixture, &[("FJ_SHIM_HOSTS", "")])?;
+    assert!(
+        stdout.contains("config add-host git.example.com:3000"),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
 fn bootstrap_keeps_the_port_of_an_allowlisted_host() -> TestResult {
     // gh drops the remote's port, so gh's spelling is git.example.com; adding that beside
     // git.example.com:3000 would leave two entries for one hostname, and neither would route.
