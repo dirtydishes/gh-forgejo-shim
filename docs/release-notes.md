@@ -55,31 +55,33 @@ shows a warning. A gh that reports an older version is refused even then.
 
 ## What runs real gh now
 
-In an allowlisted Forgejo checkout, these commands run the real gh through the gateway, with the
-flags listed. `-R`/`--repo` works with all of them.
+In an allowlisted Forgejo checkout, these commands run the real gh through the gateway, in the
+forms listed. `-R`/`--repo` works with all of them; a pull request or issue given as a URL keeps
+the shim's own code.
 
 | Command | Flags |
 |---|---|
-| `gh pr view`, `pr checks`, `pr list` | all |
+| `gh pr view`, `pr list` | all |
+| `gh pr checks` | all but `--watch`, `--interval`, `--fail-fast` and `--web` |
 | `gh pr create` | `--head`, `--base`, `--title`, `--body`, `--draft` |
 | `gh pr comment`, `pr edit` | `--body`; `pr edit` also `--title` |
-| `gh pr merge` | `--merge`, `--squash`, `--rebase`, `--auto`, `--match-head-commit`, `--delete-branch` |
+| `gh pr merge` | exactly one of `--merge`, `--squash`, `--rebase`, with `--auto`, `--match-head-commit`, `--delete-branch` |
 | `gh pr ready` | `--undo` |
 | `gh pr close` | `--delete-branch` |
 | `gh pr reopen` | none |
 | `gh pr checkout` | `--branch`, `--detach`, `--force` |
 | `gh issue list` | `--state`, `--limit`, `--json`, `--jq`, `--author`, `--assignee`, `--label`, and `--mention` without `--label` |
-| `gh issue view` | `--json`, `--jq` |
+| `gh issue view` | with `--json`, and `--jq` |
 | `gh issue create` | `--title`, with `--body` or `--body-file` |
 | `gh issue comment` | `--body`, `--body-file` |
 | `gh run list` | `--json`, `--jq`, `--limit`, `--status`, `--branch`, `--event`, `--commit`, `--all` |
 | `gh run view` | a run ID, with `--json`, `--jq` |
-| `gh api` | `graphql` in the shape ChatGPT desktop sends (one read-only `query`), and `rate_limit` |
+| `gh api` | `user`, `rate_limit`, and `graphql` in the shape ChatGPT desktop sends (one read-only `query`) |
 | `gh auth token`, `gh auth status` | all |
 
 A few forms stay on the shim's own code even within those commands: `gh pr merge --auto` with
-`--delete-branch`, `issue list --search`, a `--json` naming `jobs`, `attempt`, `blockedBy`,
-`blocking` or `reactionGroups`, and `run view`'s text form. Every other Forgejo command (`pr status`,
+`--delete-branch`, `issue list --search`, `issue view` without `--json`, a `--json` naming `jobs`,
+`attempt`, `blockedBy`, `blocking` or `reactionGroups`, and `run view`'s text form. Every other Forgejo command (`pr status`,
 `pr diff`, `repo view` and others) is also answered by the shim's own code, as before. GitHub
 repositories, and commands such as `gh --version`, `gh config` and `gh auth login`, go to real gh
 unchanged.
@@ -117,7 +119,7 @@ tools opening the `/pull/` link reach the page.
 - `gfj uninstall-shim` also removes managed wrappers in `PATH` directories under `$HOME`.
 - A `gh` that leads back to the shim stops with exit 127 and names `FJ_SHIM_REAL_GH`.
 - Trace files are created owner-only (0600), and redaction errs toward hiding: some harmless
-  values show as `<redacted>` so that a secret never shows.
+  values show as `<redacted>`, to keep secrets out.
 
 ## Upgrading
 
@@ -150,9 +152,12 @@ and of this one, with gh 2.103.3:
 
 1. **Clear the generic token variables first** if you have more than one Forgejo host. The
    previous version uses `FJ_SHIM_TOKEN`, `FORGEJO_TOKEN`, `GITEA_TOKEN` and `FJ_TOKEN` before a
-   host's stored token, for every host, so a token meant for one forge would go to another. Unset
-   them in your shell profile, and check that `gfj auth status HOST` finds a stored token for each
-   host.
+   host's stored token, for every host, so a token meant for one forge would go to another.
+   Remove them from your shell profile, unset them in the shell you're using
+   (`unset FJ_SHIM_TOKEN FORGEJO_TOKEN GITEA_TOKEN FJ_TOKEN`), and check that
+   `env | grep -E '^(FJ_SHIM_TOKEN|FORGEJO_TOKEN|GITEA_TOKEN|FJ_TOKEN)='` prints nothing and that
+   `gfj auth status HOST` finds a stored token for each host. Do the same in any app or service
+   that sets them.
 2. Install the previous version's binaries in place of these: an earlier Homebrew formula, or the
    previous archive. Config and tokens live outside the install path.
 3. Recreate the managed wrapper from the rolled-back binary, because the wrapper names the
@@ -238,17 +243,19 @@ labelled
 
 ## Security fixes in this release
 
-- Trace redaction hides credentials in every form ordinary git and gh commands produce: URL
+- Trace redaction hides credentials in the forms ordinary git and gh commands produce: URL
   passwords, Authorization headers, `-c http.extraHeader`, JSON bodies, `gh secret set --body`
-  and gh's secret flags.
+  (also after `-R`) and gh's secret flags.
 - Trace files, a new `config.toml` and the token file are owner-only, the directories the shim
   creates are writable only by their owner, and the installed wrapper is never group- or
   world-writable.
 - `install-shim --force` never overwrites the real gh it found, and a dangling `gh` symlink needs
   `--force` like any other file.
-- A copy of the shim is never taken for real gh, so the wrapper can't call itself in a loop.
-- The minimum-gh check runs `gh --version` with no token in its environment, and with gh's update
-  notices and telemetry off.
+- Discovery recognises a copy of this release's shim and doesn't take it for real gh, and
+  recursion guards stop the wrapper calling itself through any other copy.
+- The minimum-gh check runs `gh --version` without `GH_TOKEN`, `GITHUB_TOKEN`,
+  `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`, and with gh's update notices and telemetry
+  off.
 - A token is never sent to a GitHub host: `config add-host` and an `api_url` pointing at GitHub
   are refused.
 - Stepping aside to a logged-in gh removes GitHub token variables first.
