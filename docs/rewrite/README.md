@@ -11,7 +11,6 @@ it, the plan review wins.
 | [`gateway-spike.md`](gateway-spike.md) | 2026-10-30 | The spike that ran real gh against a GitHub Enterprise-shaped host |
 | [`plan-review-2026-11-01.md`](plan-review-2026-11-01.md) | 2026-11-01 | Option B (real gh plus an in-process gateway), the adversarial review of the plan, the amended order of work, and Kell's decisions D1 to D6 |
 | [`launcher.md`](launcher.md) | 2026-11-02 | L0: how the `gh` wrapper runs real gh against the in-process gateway: config directory, socket, tokens, signals, exit codes, timeouts |
-| [`release-notes-server-mode.md`](release-notes-server-mode.md) | 2026-11-03 | Draft of the release notes' server-mode section, to merge into the full notes |
 
 The client captures that `clients.md` describes were taken with a logging gh wrapper, gh-capture.
 The wrapper and the raw captures, redacted, arrive with bead A1 (`cwe.1`).

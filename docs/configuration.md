@@ -18,7 +18,15 @@ hosts = ["git.example.com"]
 [paths]
 gh = "/opt/homebrew/bin/gh"
 fj = "/opt/homebrew/bin/fj"
+
+[host."git.example.com"]
+api_url = "https://git.example.com"
+token_env = "EXAMPLE_FORGEJO_TOKEN"
 ```
+
+A `[host."NAME"]` table sets `api_url`, `token_env`, `ca_file` and `wip_prefixes`
+for one host; the README's [Configuration](../README.md#configuration) section
+describes each key.
 
 ## Host Allowlist
 
@@ -42,10 +50,11 @@ gh-forgejo-shim config list
 
 The shim routes Forgejo commands only when the detected repository host is in the allowlist.
 
-Known GitHub hosts are ignored even if they appear in the allowlist: `github.com`,
-`ghe.com`, and every name under them, such as `api.github.com` or `acme.ghe.com`.
-This preserves native GitHub CLI behavior for GitHub repositories and
-prevents a stale or accidental `github.com` entry from being treated as Forgejo.
+`config add-host` refuses a known GitHub host: `github.com`, `ghe.com`, and every
+name under them, such as `api.github.com` or `acme.ghe.com`. Such a host is also
+ignored if it appears in the allowlist anyway. This preserves native GitHub CLI
+behavior for GitHub repositories and keeps a stale or accidental `github.com`
+entry from being treated as Forgejo.
 
 ## Environment Overrides
 
@@ -54,6 +63,10 @@ prevents a stale or accidental `github.com` entry from being treated as Forgejo.
 ```sh
 FJ_SHIM_HOSTS=git.example.com,code.example.org gh pr view
 ```
+
+`FJ_SHIM_ALLOW_UNKNOWN_GH=1` lets install and bootstrap go ahead with a real `gh`
+whose version can't be read, such as one built from source; see
+[Installation](installation.md#requirements).
 
 `FJ_SHIM_REAL_GH` and `FJ_SHIM_REAL_FJ` override configured executable paths:
 
@@ -134,14 +147,14 @@ Native auth commands are:
 
 ```sh
 gh-forgejo-shim auth login [host]
-gh-forgejo-shim auth import [host]
+gh-forgejo-shim auth import --from fj|tea [--hostname HOST]
 gh-forgejo-shim auth status [host]
 gh-forgejo-shim auth logout [host]
 ```
 
 `auth login` prompts for a Forgejo host when one is not supplied, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, and saves it in shim-owned auth storage. It also adds the host to the allowlist, so routed `gh pr ...`, `gh issue ...`, and `gh repo view` commands can use the saved token immediately.
 
-`auth import` finds an existing token from supported sources, validates it, and saves it to the same shim-owned storage. This is useful when Terminal already has auth through an environment variable or another Forgejo CLI, but GUI-launched apps such as Codex.app do not inherit that shell environment.
+`auth import --from fj` reads forgejo-cli's `keys.json`; `--from tea` reads tea's YAML config. It copies the host's token into shim-owned storage and adds the host to the allowlist, without contacting the server. This is useful when Terminal already has auth through another Forgejo CLI, but GUI-launched apps such as Codex.app don't inherit that shell's environment.
 
 `auth status` reports whether auth is available for the host without printing the token. `auth logout` removes only the shim-owned stored auth for that host.
 
@@ -161,7 +174,9 @@ that created it, as `gh`'s does, so any process running as you can read it with
 the token for a Forgejo host to any caller, as plain `gh` does for GitHub,
 because agents and scripts rely on it.
 
-The shim checks token environment variables in this order:
+For each host, the shim first checks its stored token, then the variable named by
+that host's `token_env`. If exactly one Forgejo host is configured, it also checks
+these generic variables in order:
 
 ```text
 FJ_SHIM_TOKEN
@@ -170,15 +185,17 @@ GITEA_TOKEN
 FJ_TOKEN
 ```
 
-Environment variables still take precedence for the current process. If none are set, the shim checks native shim storage and then tries a best-effort read from common `fj`, `tea`, and `gitea` config files.
+With more than one host, generic variables never supply a token. Normal commands
+never read other tools' credential files; run `auth import` once to copy a token.
 
 On macOS, the current `fj` CLI stores auth in:
 
 ```text
-~/Library/Application Support/Cyborus.forgejo-cli/keys.json
+~/Library/Application Support/forgejo-cli.forgejo-cli/keys.json
 ```
 
-The shim can import from this file when present. After import, GUI apps such as Codex.app can find Forgejo auth without inheriting shell-only environment variables.
+After import, GUI apps such as Codex.app find Forgejo auth without inheriting
+shell-only environment variables.
 
 ## Repository Detection
 
