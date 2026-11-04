@@ -696,3 +696,37 @@ async fn chatgpt_documents_answer_a_token_without_issue_scope() {
         );
     }
 }
+
+/// Only Forgejo's missing-scope 403 reads as "nothing this token may see". Any other refusal on
+/// the same routes, such as a 403 for a user Forgejo won't show the conversation to, or a token
+/// revoked mid-request (401), stays an error rather than turning into empty data.
+#[tokio::test]
+async fn only_a_missing_scope_refusal_reads_as_empty() {
+    use axum::http::StatusCode;
+    let refusing = |status: StatusCode| {
+        forge_with(true, pull("other", "open"), true).layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                let path = request.uri().path().to_owned();
+                if path.contains("/issues") || path.starts_with("/api/v1/orgs/") {
+                    (status, Json(json!({"message":"you may not see this"}))).into_response()
+                } else {
+                    next.run(request).await
+                }
+            },
+        ))
+    };
+    for status in [StatusCode::FORBIDDEN, StatusCode::UNAUTHORIZED] {
+        let response = run(refusing(status), SCOPED).await;
+        let failed: Vec<String> = response
+            .errors
+            .iter()
+            .map(|error| format!("{:?}", error.path.last()))
+            .collect();
+        assert!(
+            ["autoMergeRequest", "comments", "owner"]
+                .iter()
+                .all(|field| failed.iter().any(|path| path.contains(field))),
+            "{status}: {failed:?}"
+        );
+    }
+}

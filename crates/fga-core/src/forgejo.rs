@@ -30,6 +30,11 @@ pub enum Error {
     NotFound,
     #[error("Resource not accessible by token")]
     Forbidden,
+    /// Forgejo's 403 for a token that lacks the route's scope (`read:issue` for `/issues/…`,
+    /// `read:organization` for `/orgs/…`), as opposed to one the user may not see at all. Clients
+    /// get the same message as [`Error::Forbidden`].
+    #[error("Resource not accessible by token")]
+    MissingScope,
     #[error("Forgejo request timed out")]
     Timeout,
     #[error("Forgejo returned an invalid response")]
@@ -106,7 +111,18 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 fn ok(reply: Reply) -> Result<Reply, Error> {
     match reply.status {
         StatusCode::UNAUTHORIZED => Err(Error::Unauthorized),
-        StatusCode::FORBIDDEN => Err(Error::Forbidden),
+        StatusCode::FORBIDDEN => Err(
+            // `routers/api/v1/api.go` `tokenRequiresScopes`, Forgejo 15.
+            if reply.json::<serde_json::Value>().is_ok_and(|body| {
+                body["message"].as_str().is_some_and(|message| {
+                    message.starts_with("token does not have at least one of required scope(s)")
+                })
+            }) {
+                Error::MissingScope
+            } else {
+                Error::Forbidden
+            },
+        ),
         StatusCode::NOT_FOUND => Err(Error::NotFound),
         status if !status.is_success() => Err(Error::Upstream),
         _ => Ok(reply),
@@ -392,7 +408,7 @@ impl Session {
             Ok(settings) => settings.max_response_items.clamp(1, PAGE_SIZE),
             // A forge or proxy that hides the settings keeps the default; a failure that may pass
             // (a timeout, a 5xx) still fails the request and isn't cached.
-            Err(Error::NotFound | Error::Forbidden) => PAGE_SIZE,
+            Err(Error::NotFound | Error::Forbidden | Error::MissingScope) => PAGE_SIZE,
             Err(e) => return Err(e),
         };
         *self.forgejo.page_size.lock().expect("page size lock") = Some((size, Instant::now()));
@@ -544,7 +560,7 @@ impl Session {
                 .await
             {
                 Ok(rules) => return Ok(Protection::for_branch(rules, branch)),
-                Err(Error::Forbidden) => {}
+                Err(Error::Forbidden | Error::MissingScope) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -613,7 +629,7 @@ impl Session {
     pub async fn owner_type(&self, owner: &str) -> Result<&'static str, Error> {
         match self.get::<serde_json::Value>(&["orgs", owner], &[]).await {
             Ok(_) => Ok("Organization"),
-            Err(Error::NotFound | Error::Forbidden | Error::Unauthorized) => Ok("User"),
+            Err(Error::NotFound | Error::MissingScope) => Ok("User"),
             Err(error) => Err(error),
         }
     }

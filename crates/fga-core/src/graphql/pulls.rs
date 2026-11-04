@@ -320,7 +320,7 @@ impl PullRequest {
             .await
         {
             Ok(event) => event,
-            Err(forgejo::Error::Forbidden | forgejo::Error::Unauthorized) => None,
+            Err(forgejo::Error::MissingScope) => None,
             Err(other) => return Err(error(other)),
         };
         let Some(event) = event else {
@@ -369,7 +369,7 @@ impl PullRequest {
             .await
         {
             Ok(None) => {}
-            Ok(Some(_)) | Err(forgejo::Error::Forbidden | forgejo::Error::Unauthorized) => {
+            Ok(Some(_)) | Err(forgejo::Error::MissingScope) => {
                 return Ok(false);
             }
             Err(other) => return Err(error(other)),
@@ -580,7 +580,7 @@ impl PullRequest {
             .await
         {
             Ok(comments) => comments,
-            Err(forgejo::Error::Forbidden | forgejo::Error::Unauthorized) => Vec::new(),
+            Err(forgejo::Error::MissingScope) => Vec::new(),
             Err(other) => return Err(error(other)),
         };
         let nodes = comments

@@ -417,7 +417,7 @@ fn rest_error(error: Error) -> Response {
     let status = match error {
         Error::Unauthorized => StatusCode::UNAUTHORIZED,
         Error::NotFound => StatusCode::NOT_FOUND,
-        Error::Forbidden => StatusCode::FORBIDDEN,
+        Error::Forbidden | Error::MissingScope => StatusCode::FORBIDDEN,
         Error::Timeout => StatusCode::GATEWAY_TIMEOUT,
         Error::Upstream | Error::TooLarge => StatusCode::BAD_GATEWAY,
     };
