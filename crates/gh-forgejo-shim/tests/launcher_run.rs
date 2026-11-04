@@ -867,6 +867,40 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
         "ghe_corp",
         "{report}"
     );
+
+    // Forms that set no GH_HOST drop them too, launched or not: gh would otherwise send another
+    // host's enterprise token to the forge ahead of the user's login there (Sol r1#2).
+    for args in [
+        &["pr", "diff", "1", "-R", "forge.test:3443/o/r"][..],
+        &[
+            "pr",
+            "view",
+            "1",
+            "--json",
+            "number",
+            "-R",
+            "forge.test:3443/o/r",
+        ][..],
+    ] {
+        let output = fixture
+            .command(&gh, args)
+            .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+            .output()
+            .expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let report = fixture.report();
+        assert_eq!(reported(&report, "GH_HOST"), "unset", "{args:?}: {report}");
+        assert_eq!(
+            reported(&report, "GH_ENTERPRISE_TOKEN"),
+            "unset",
+            "{args:?}: {report}"
+        );
+        assert_eq!(
+            reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
+            "ghe_corp",
+            "{args:?}"
+        );
+    }
 }
 
 #[test]

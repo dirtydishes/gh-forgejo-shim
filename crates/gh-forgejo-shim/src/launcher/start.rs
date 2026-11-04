@@ -107,6 +107,8 @@ pub fn launch(
             &gh,
             args,
             extra_edits,
+            host,
+            env,
             crate::trace::tracing_enabled(env),
         ));
     }
@@ -356,6 +358,8 @@ pub fn step_aside_if_logged_in(
         &gh,
         args,
         extra_edits,
+        host,
+        env,
         crate::trace::tracing_enabled(env),
     ))
 }
@@ -376,14 +380,27 @@ fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
 }
 
 /// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but for a
-/// host-less `api` or `auth token` the forge as `GH_HOST`, without the token variables, which
+/// host-less `api` or `auth token` the forge as `GH_HOST`, and without the token variables, which
 /// would otherwise beat the user's login there: the enterprise ones for most forges, `GH_TOKEN`
-/// and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). Recorded for nested calls
-/// (§7), with no `FJ_SHIM_LAUNCHER`. As on the delegate path, gh replaces this process, unless
-/// tracing is on, when the wrapper waits so it can write the trace record.
-fn step_aside(gh: &Path, args: &[OsString], mut edits: Edits, trace_enabled: bool) -> i32 {
-    if edits.iter().any(|(name, _)| *name == "GH_HOST") {
-        edits.extend(TOKEN_VARIABLES.iter().map(|name| (*name, Edit::Remove)));
+/// and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). They stay only when the user's
+/// own `GH_HOST` names the forge. Recorded for nested calls (§7), with no `FJ_SHIM_LAUNCHER`. As
+/// on the delegate path, gh replaces this process, unless tracing is on, when the wrapper waits so
+/// it can write the trace record.
+fn step_aside(
+    gh: &Path,
+    args: &[OsString],
+    mut edits: Edits,
+    host: &str,
+    env: &HashMap<String, String>,
+    trace_enabled: bool,
+) -> i32 {
+    if env.get("GH_HOST") != Some(&gh_hostname(host)) {
+        edits.extend(
+            TOKEN_VARIABLES
+                .iter()
+                .filter(|name| env.contains_key(**name))
+                .map(|name| (*name, Edit::Remove)),
+        );
     }
     // Still single-threaded: nothing in the wrapper has started a thread yet.
     crate::launcher::env::apply(&edits);
