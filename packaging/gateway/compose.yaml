@@ -1,0 +1,26 @@
+# The gateway in server mode, for a Forgejo that runs in a container. See docs/gateway/server-mode.md.
+#
+# Build the image from a checkout of the release you want, and tag it with that version:
+#   docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .
+# Keep each version's image and a copy of this file, so a rollback is a switch back (README, "Upgrade
+# and roll back").
+services:
+  fga-server:
+    image: fga-server:1.0.0 # the tag you built
+    container_name: fga-server
+    restart: unless-stopped
+    environment:
+      # How the gateway reaches Forgejo: its address on the shared network.
+      FGA_FORGEJO_URL: http://forgejo:3000
+      # The forge's own address, as users type it. The gateway answers only this host and port.
+      FGA_PUBLIC_URL: https://forge.example.com
+      # Match Forgejo's [repository.pull-request] WORK_IN_PROGRESS_PREFIXES if you changed them.
+      # FGA_WIP_PREFIXES: "WIP:,[WIP]"
+    # The network Forgejo and the reverse proxy share. With Nginx Proxy Manager, that's NPM's network,
+    # and the proxy reaches the gateway as http://fga-server:8080. No port is published.
+    networks: [forge]
+
+networks:
+  forge:
+    external: true
+    name: forge # the existing network's name

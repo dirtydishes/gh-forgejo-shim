@@ -20,6 +20,15 @@ This is not full `gh` emulation. It is compatibility glue for the `gh` calls and
 
 ## Install
 
+There are two install paths, and you can use both:
+
+- **Client-only:** the `gh` wrapper on each machine, set up below. It covers agents and tools that run
+  `gh`, including Claude's agent when it runs `gh` in a shell.
+- **[Server mode](#server-mode):** the gateway on your forge's hostname. **Use server mode if you use
+  Claude desktop.** Its pull request status calls the forge's GitHub API itself, outside any `gh`
+  process, so only a gateway on the forge can answer it. You need control of the forge's reverse
+  proxy.
+
 Install the native Rust binary with Homebrew:
 
 ```sh
@@ -92,13 +101,73 @@ gfj doctor
 
 For scripted setup or documentation, use `gh-forgejo-shim`. For day-to-day typing, `gfj` is the same command with a shorter name.
 
-## Server Mode For Claude
+## Server Mode
 
-Claude Code and Claude desktop look up a branch's pull request by calling your forge's GitHub API themselves,
-outside of any `gh` process, so the client-side wrapper can't answer them. If you use Claude, run the
-gateway in server mode: it mounts the GitHub Enterprise API on your forge's own hostname, and a plain
-`gh auth login --hostname <forge>` is then all a client needs. It requires access to the forge's
-reverse proxy. See [docs/gateway/server-mode.md](docs/gateway/server-mode.md).
+Server mode runs the gateway, `fga-server`, next to Forgejo and mounts it on the forge's own hostname,
+so the forge answers the GitHub Enterprise API. Claude Code and Claude desktop look up a branch's pull
+request by calling that API themselves, outside any `gh` process, which the client-side wrapper can't
+answer. With server mode, a plain `gh auth login --hostname forge.example.com` is all a client needs,
+with no wrapper. You need control of the forge's reverse proxy; a hosted forge such as Codeberg can't
+use it. [docs/gateway/server-mode.md](docs/gateway/server-mode.md) has the details for each proxy.
+
+**Run the gateway.** Build the image from a checkout of the release you want, tagged with its version.
+Copy the example [compose file](packaging/gateway/compose.yaml) to where you keep your services, set
+the image tag, the forge's address and how the gateway reaches Forgejo, then start it from there:
+
+```sh
+docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .
+docker compose up -d
+```
+
+**Route three paths to it** in the forge's own site or `server` block, and everything else to Forgejo
+as before:
+
+- `/api/v3/`: the GitHub REST API;
+- `/api/graphql`: the GitHub GraphQL API;
+- `/{owner}/{repo}/pull/{n}`: GitHub-style pull request links, which the gateway redirects to Forgejo's
+  `/pulls/{n}`.
+
+Pass the client's `Host` header through unchanged: the gateway answers only the forge's own host and
+port, and refuses any other with `421` before a token is used. The repository ships an
+[nginx locations snippet](packaging/gateway/nginx/fga-locations.conf), which also works in Nginx
+Proxy Manager's **Advanced** field, and a [Caddy site block](packaging/gateway/caddy/Caddyfile).
+
+**Check it.** Without a token, the API answers `401`, which shows the route reaches the gateway; with
+a Forgejo token, `/api/v3/meta` answers `{"installed_version":"3.19.0"}`. A PR link redirects to
+Forgejo's page:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://forge.example.com/api/v3/meta
+curl -fsS -H "Authorization: token <your Forgejo token>" https://forge.example.com/api/v3/meta
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://forge.example.com/<owner>/<repo>/pull/1
+```
+
+**Log in.** gh's browser login doesn't work with Forgejo. Create a token in Forgejo under **Settings →
+Applications** with `read:user`, `write:repository`, `write:issue` and `read:organization`, then run
+`gh auth login --hostname forge.example.com` and paste it. Claude and ChatGPT desktop take their token
+from `gh`.
+
+### Upgrade and roll back
+
+The gateway keeps no state, so an upgrade is a switch to a new image, and a rollback is a switch back.
+Keep the previous image and a copy of the compose file until the new one has proved itself:
+
+```sh
+docker build -f packaging/gateway/Dockerfile -t fga-server:<new> .   # from the new release's checkout
+cp compose.yaml compose.yaml.<old>                                   # keep the working file
+# set `image: fga-server:<new>` in compose.yaml, then:
+docker compose up -d
+```
+
+Then run the checks above. To roll back, put the old file back and start it again; the old image is
+still there:
+
+```sh
+cp compose.yaml.<old> compose.yaml
+docker compose up -d
+```
+
+Remove an old image (`docker image rm fga-server:<old>`) only once you no longer need to go back to it.
 
 ## Manual Setup
 
@@ -335,6 +404,9 @@ location ~ "^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(/(?:files|commit
     return 301 /$1/$2/pulls/$3$4$is_args$args;
 }
 ```
+
+For Nginx Proxy Manager, paste the same block into the forge's proxy host, under **Advanced**, below
+anything already there.
 
 For Caddy, in the forge's site block:
 
