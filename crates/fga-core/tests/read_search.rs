@@ -428,7 +428,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
 
 /// ChatGPT desktop finds a branch's PR with `gh pr list --head <branch> --author @me --state all
 /// --json number,url,state,headRefName`, which gh 2.103.3 sends as a search: its query text is the
-/// oracle capture's, and the variables are those gh sent the gateway. A token without issue scope
+/// oracle capture's, and the variables have the shape gh sent the gateway (this test's branch and
+/// repository). A token without issue scope
 /// can't read Forgejo's issue list, which such a PR-only query doesn't need: it is answered from
 /// the pull list alone, newest first, as search orders by default.
 #[tokio::test]
@@ -470,7 +471,8 @@ async fn a_pr_only_search_needs_no_issue_scope() {
                 let mut theirs = mine(10, "topic", false);
                 theirs["user"]["login"] = json!("someone");
                 let listed = if q.get("page").is_none_or(|p| p == "1") {
-                    json!([theirs, mine(9, "topic", false), mine(8, "other", false), mine(7, "topic", true)])
+                    // Out of order, so the answer shows the gateway sorts newest first.
+                    json!([mine(7, "topic", true), theirs, mine(9, "topic", false), mine(8, "other", false)])
                 } else {
                     json!([])
                 };
