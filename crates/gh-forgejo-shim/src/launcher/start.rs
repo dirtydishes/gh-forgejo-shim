@@ -107,7 +107,6 @@ pub fn launch(
             &gh,
             args,
             extra_edits,
-            env,
             crate::trace::tracing_enabled(env),
         ));
     }
@@ -357,7 +356,6 @@ pub fn step_aside_if_logged_in(
         &gh,
         args,
         extra_edits,
-        env,
         crate::trace::tracing_enabled(env),
     ))
 }
@@ -382,24 +380,14 @@ fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
 /// would otherwise beat the user's login there: the enterprise ones for most forges, `GH_TOKEN`
 /// and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). They go even when the user's
 /// own `GH_HOST` names the forge: gh has the user's stored login there, and a call naming another
-/// host would carry them there too. Recorded for nested calls (§7), with no `FJ_SHIM_LAUNCHER`. As
-/// on the delegate path, gh replaces this process, unless tracing is on, when the wrapper waits so
-/// it can write the trace record.
-fn step_aside(
-    gh: &Path,
-    args: &[OsString],
-    mut edits: Edits,
-    env: &HashMap<String, String>,
-    trace_enabled: bool,
-) -> i32 {
-    edits.extend(
-        TOKEN_VARIABLES
-            .iter()
-            .filter(|name| env.contains_key(**name))
-            .map(|name| (*name, Edit::Remove)),
-    );
+/// host would carry them there too. The other changes are recorded for nested calls (§7), with no
+/// `FJ_SHIM_LAUNCHER`; the token variables aren't, so a nested call, such as git's credential
+/// helper, never gets them back either (Sol r4#1). As on the delegate path, gh replaces this
+/// process, unless tracing is on, when the wrapper waits so it can write the trace record.
+fn step_aside(gh: &Path, args: &[OsString], edits: Edits, trace_enabled: bool) -> i32 {
     // Still single-threaded: nothing in the wrapper has started a thread yet.
     crate::launcher::env::apply(&edits);
+    crate::launcher::env::remove_unrecorded(&TOKEN_VARIABLES);
     let mut command = std::process::Command::new(gh);
     command.args(args);
     let error = if trace_enabled {

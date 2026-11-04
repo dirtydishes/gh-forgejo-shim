@@ -832,7 +832,7 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     assert_eq!(reported(&report, "GH_CONFIG_DIR"), "unset", "{report}");
     // gh would send GH_TOKEN to a forge named github.localhost or *.ghe.com (§2).
     assert_eq!(reported(&report, "GH_TOKEN"), "unset", "{report}");
-    assert_eq!(reported(&report, "FJ_SHIM_ORIG_GH_TOKEN"), "ghp_github");
+    assert_eq!(reported(&report, "FJ_SHIM_ORIG_GH_TOKEN"), "unset");
     assert_eq!(
         reported(&report, "GH_HOST"),
         "forge.test",
@@ -845,7 +845,8 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     );
     assert_eq!(
         reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
-        "ghe_corp"
+        "unset",
+        "not recorded"
     );
     assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset");
     assert!(reported(&report, "FJ_SHIM_SAVED").contains("GH_HOST"));
@@ -870,7 +871,8 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     );
     assert_eq!(
         reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
-        "ghe_corp"
+        "unset",
+        "not recorded"
     );
 
     // Forms that set no GH_HOST drop them too, launched or not: gh would otherwise send another
@@ -902,9 +904,44 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
         );
         assert_eq!(
             reported(&report, "FJ_SHIM_ORIG_GH_ENTERPRISE_TOKEN"),
-            "ghe_corp",
-            "{args:?}"
+            "unset",
+            "{args:?}: not recorded"
         );
+    }
+}
+
+#[test]
+fn a_nested_call_never_gets_the_token_variables_back() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.user_hosts("forge.test:\n    user: kell\n");
+    // Plain gh runs git, whose credential helper calls the wrapper again (Sol r4#1).
+    let gh = fixture.fake_gh(&format!(
+        r#"if [ "$1" = auth ]; then
+  for name in GH_TOKEN GH_ENTERPRISE_TOKEN FJ_SHIM_SAVED; do
+    eval "printf '%s=%s\n' $name \"\${{$name-unset}}\""
+  done > "$REPORT"
+else
+  "{SHIM}" gh auth git-credential get < /dev/null
+fi"#
+    ));
+    for gh_host in [None, Some("forge.test")] {
+        let mut command = fixture.command(&gh, &["pr", "diff", "1", "-R", "forge.test/o/r"]);
+        command
+            .env("GH_ENTERPRISE_TOKEN", "ghe_corp")
+            .env("GH_TOKEN", "ghp_github");
+        if let Some(gh_host) = gh_host {
+            command.env("GH_HOST", gh_host);
+        }
+        let output = command.output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{gh_host:?}: {output:?}");
+        let report = fixture.report();
+        assert_eq!(
+            reported(&report, "GH_ENTERPRISE_TOKEN"),
+            "unset",
+            "{gh_host:?}: {report}"
+        );
+        assert_eq!(reported(&report, "GH_TOKEN"), "unset", "{gh_host:?}");
     }
 }
 
