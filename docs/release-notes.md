@@ -124,6 +124,19 @@ wrapper keeps working.
    variable with more than one host configured, run `gfj auth login HOST`, or
    `gfj auth import --from fj|tea` once.
 
+**Tested.** Before this release, the upgrade and the rollback were rehearsed on macOS in a
+scratch home directory, against a local Forgejo 15, using a build of the previous release (0.1.2)
+and of this one, with gh 2.103.3:
+
+- The previous build installed the wrapper, listed the host and found its stored token.
+- Copying this release's binaries over it left `config.toml` and the token file byte for byte
+  unchanged. The wrapper kept working, `gfj bootstrap` kept the token, and `gfj doctor` passed
+  the gh version check.
+- `gh pr list`, `gh pr view`, `gh issue list` and `gh api user` then worked through the wrapper.
+  That Forgejo served plain HTTP, so it needed a `[host]` table with an `api_url`.
+- Putting the previous binaries back left the token file unchanged. The previous build still
+  listed the host and found the token, ignoring the `[host]` table, and the wrapper kept working.
+
 ## Rolling back
 
 Install the previous release's binaries in place of these; config and tokens live outside the
