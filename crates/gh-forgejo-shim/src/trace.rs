@@ -139,6 +139,10 @@ fn repo_record(repo: &RepoRef) -> Value {
     })
 }
 
+/// gh flags with a sensitive word in their name that take no value: the argument after one is
+/// left as it is.
+const VALUELESS_FLAGS: &[&str] = &["--with-token", "--show-token"];
+
 pub fn redact_argv(argv: &[String]) -> Vec<String> {
     let mut redacted = Vec::with_capacity(argv.len());
     let mut redact_next = false;
@@ -149,18 +153,17 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
         .find(|arg| !arg.starts_with('-'))
         .is_some_and(|command| command == "secret");
     let is_secret_flag = |flag: &str| {
-        flag.starts_with("--") && is_sensitive_key(flag)
+        flag.starts_with("--") && is_sensitive_key(flag) && !VALUELESS_FLAGS.contains(&flag)
             || (secret_command && matches!(flag, "--body" | "-b"))
     };
 
     for arg in argv {
+        // gh takes the next argument as the value whatever it starts with, so a secret such as
+        // a PEM key (`-----BEGIN …`) is hidden too (Opus o1#1 on #182).
         if redact_next {
+            redacted.push(REDACTED.to_string());
             redact_next = false;
-            // A flag that takes no value, such as `--with-token`, leaves the next flag alone.
-            if !arg.starts_with('-') {
-                redacted.push(REDACTED.to_string());
-                continue;
-            }
+            continue;
         }
         if redact_header_next {
             redacted.push(redact_text(arg));
@@ -454,7 +457,8 @@ pub(crate) fn is_sensitive_key(key: &str) -> bool {
     {
         return true;
     }
-    key.split(['-', '_', '.']).any(|part| {
+    // Brackets split parts too, so `map[Authorization:…]` and `headers[Authorization]` are read.
+    key.split(['-', '_', '.', '[', ']']).any(|part| {
         let whole = key_word(part);
         // The exceptions match exactly: `bypass1` isn't `bypass`.
         let exact = part.to_ascii_lowercase();
@@ -763,6 +767,23 @@ mod tests {
             ],
             &["api", "x", "-f", "apikey=audit-secret"],
             &["api", "/search?q=x&tokens[]=audit-secret"],
+            // A value that starts with `-` is still the value (Opus o1#1).
+            &[
+                "secret",
+                "set",
+                "DEPLOY_KEY",
+                "--body",
+                "-----BEGIN OPENSSH PRIVATE KEY-----\naudit-secret\n",
+            ],
+            &["secret", "set", "K", "-b", "-audit-secret"],
+            &["api", "x", "--client-secret", "-audit-secret"],
+            &["api", "x", "--token", "-audit-secret"],
+            &[
+                "api",
+                "x",
+                "-f",
+                "headers[Authorization]=token audit-secret",
+            ],
         ] {
             let redacted = redact_argv(&args(argv)).join(" ");
             assert!(!redacted.contains("audit-secret"), "{argv:?} -> {redacted}");
@@ -1049,6 +1070,7 @@ mod tests {
                 "https://host.example/x?tokens[]=audit-secret",
                 "audit-secret",
             ),
+            ("map[Authorization:[token audit-secret]]", "audit-secret"),
             (r#"{"config[secret]": "audit-secret"}"#, "audit-secret"),
             // A URL right after another one's host (Opus o7#1), and compact JSON of two URLs.
             (
