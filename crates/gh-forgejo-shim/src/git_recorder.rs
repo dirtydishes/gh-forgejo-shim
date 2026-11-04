@@ -601,6 +601,10 @@ mod tests {
             assert!(!redacted.contains("audit"), "{url} -> {redacted}");
             assert!(redacted.contains("@example.com/"), "{url} -> {redacted}");
         }
+        // A proxy URL right after another URL's host (Opus o7#1).
+        let proxy = "http.https://example.com.proxy=http://alice:audit-pw@proxy:3128";
+        let redacted = redact_argv(&["-c".to_string(), proxy.to_string()]).join(" ");
+        assert!(!redacted.contains("audit-pw"), "{proxy} -> {redacted}");
     }
 
     #[test]
