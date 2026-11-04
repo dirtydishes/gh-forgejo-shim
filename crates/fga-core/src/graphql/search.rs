@@ -58,6 +58,7 @@ pub async fn search(
     let needs_issues = query.kind == Kind::Issues
         || !query.filters.labels.is_empty()
         || !query.filters.words.is_empty()
+        || query.title_only
         || query.filters.assignee.is_some()
         || query.filters.mention.is_some()
         || !matches!(query.filters.sort, Sort::CreatedDesc);

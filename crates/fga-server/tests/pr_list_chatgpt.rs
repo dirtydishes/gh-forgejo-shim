@@ -15,14 +15,25 @@ use std::{
     process::Command,
 };
 
+/// gh 2.103.3 from `GFJS_REAL_GH`, Homebrew's path, or the first `gh` on PATH.
 fn real_gh() -> Option<PathBuf> {
-    let gh = std::env::var_os("GFJS_REAL_GH")
+    let on_path = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|dir| dir.join("gh"));
+    std::env::var_os("GFJS_REAL_GH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/gh"));
-    let version = Command::new(&gh).arg("--version").output().ok()?;
-    String::from_utf8_lossy(&version.stdout)
-        .contains("gh version 2.103.3")
-        .then_some(gh)
+        .into_iter()
+        .chain([PathBuf::from("/opt/homebrew/bin/gh")])
+        .chain(on_path)
+        .find(|gh| {
+            Command::new(gh)
+                .arg("--version")
+                .output()
+                .is_ok_and(|version| {
+                    String::from_utf8_lossy(&version.stdout).contains("gh version 2.103.3")
+                })
+        })
 }
 
 /// HOME and the XDG directories for a program the test runs, so its state stays in the test's temp
@@ -133,6 +144,7 @@ async fn chatgpt_finds_its_branch_pr_without_issue_scope() {
         "forge.test:\n    oauth_token: t\n    user: o\n",
     )
     .unwrap();
+    let cleanup = root.clone();
     let output = tokio::task::spawn_blocking(move || {
         let mut command = Command::new(gh);
         command.env_clear();
@@ -162,6 +174,7 @@ async fn chatgpt_finds_its_branch_pr_without_issue_scope() {
     })
     .await
     .unwrap();
+    let _ = std::fs::remove_dir_all(&cleanup);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // gh's own request, as GH_DEBUG logs it.
     for line in stderr
