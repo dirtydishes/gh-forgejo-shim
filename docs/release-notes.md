@@ -223,6 +223,9 @@ switches back.
 - Actions runs have no jobs, logs or artifacts through Forgejo 15's API, and every run is
   attempt 1.
 - `gh api rate_limit` answers with fixed numbers.
+- ChatGPT's pull request lookup (`gh pr list --head … --author @me`) needs only a token that can read
+  repositories and the user; a search by label, keyword, assignee or mention also needs
+  `read:issue`, because it reads Forgejo's issue list.
 - Auto-merge can show as enabled after Forgejo has dropped the schedule.
 - A closed or merged pull request, or one whose branch is no longer its head, checks out from its
   own ref (`refs/pull/{n}/head`).
