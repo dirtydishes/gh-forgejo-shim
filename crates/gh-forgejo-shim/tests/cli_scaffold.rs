@@ -498,6 +498,14 @@ fn bootstrap_writes_a_port_only_when_the_routed_repos_remotes_agree() -> TestRes
             ],
             "hosts = [\"git.example.com:3000\"]",
         ),
+        // gh drops `www.`, so that remote is on this host too (Sol s1#2).
+        (
+            &[
+                ("origin", "https://git.example.com:3000/owner/repo.git"),
+                ("upstream", "https://www.git.example.com/owner/repo.git"),
+            ],
+            "hosts = [\"git.example.com\"]",
+        ),
     ] {
         let fixture = CliFixture::new()?;
         fixture.init_git_repo()?;
@@ -511,6 +519,57 @@ fn bootstrap_writes_a_port_only_when_the_routed_repos_remotes_agree() -> TestRes
             "{remotes:?}: {stdout}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn a_push_url_on_another_port_leaves_the_entry_without_one() -> TestResult {
+    // A remote's push URL counts as well as its fetch URL (Sol s1#3).
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.git([
+        "remote",
+        "set-url",
+        "origin",
+        "https://git.example.com:3000/owner/repo.git",
+    ])?;
+    fixture.git([
+        "remote",
+        "set-url",
+        "--push",
+        "origin",
+        "https://git.example.com/owner/repo.git",
+    ])?;
+    let stdout = bootstrap(&fixture, &[])?;
+    assert!(
+        shim_config(&fixture)?.contains("hosts = [\"git.example.com\"]"),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn doctor_suggests_no_port_when_a_fork_disagrees() -> TestResult {
+    // A fork's remote on another port: doctor's advice names no port either (Sol s1#1).
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.git([
+        "remote",
+        "set-url",
+        "origin",
+        "https://git.example.com:3000/me/repo.git",
+    ])?;
+    fixture.git([
+        "remote",
+        "add",
+        "upstream",
+        "https://git.example.com/owner/repo.git",
+    ])?;
+    let stdout = doctor(&fixture, &[("FJ_SHIM_HOSTS", "")])?;
+    assert!(
+        stdout.contains("config add-host git.example.com") && !stdout.contains(":3000"),
+        "{stdout}"
+    );
     Ok(())
 }
 
@@ -2033,5 +2092,33 @@ fn install_refuses_a_relative_real_gh_path() -> TestResult {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("must be absolute"), "{stderr}");
     assert!(!target_dir.join("gh").exists());
+    Ok(())
+}
+
+#[test]
+fn bootstrap_plans_with_the_entry_it_writes() -> TestResult {
+    // With GitHub auth in the environment, a forge fork beside a GitHub upstream: routing is
+    // trialled with the entry bootstrap writes, so what it reports is what the wrapper then does
+    // (Sol s1#4 on #175).
+    let fixture = CliFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.git([
+        "remote",
+        "set-url",
+        "origin",
+        "https://git.example.com:3000/me/repo.git",
+    ])?;
+    fixture.git([
+        "remote",
+        "add",
+        "upstream",
+        "https://github.com/owner/repo.git",
+    ])?;
+    let stdout = bootstrap(&fixture, &[("GH_TOKEN", "audit-dummy-github-token")])?;
+    assert!(stdout.contains("acts on github.com/owner/repo"), "{stdout}");
+    assert!(
+        !shim_config(&fixture)?.contains("git.example.com"),
+        "bootstrap allowlisted the forge although gh acts on GitHub here: {stdout}"
+    );
     Ok(())
 }

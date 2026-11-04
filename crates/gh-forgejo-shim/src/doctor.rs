@@ -188,7 +188,7 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
             } else {
                 // With the port the remote's web URL names, which gh drops. Quoted: an IPv6 host
                 // such as `[::1]:3000` is a glob pattern to the shell.
-                let entry = entry_with_web_port(options.cwd.as_deref(), &repo)
+                let entry = entry_with_web_port(options.cwd.as_deref(), &repo.host)
                     .unwrap_or_else(|| repo.host.clone());
                 let command = format!(
                     "gh-forgejo-shim config add-host {}",
@@ -292,61 +292,78 @@ pub(crate) fn in_gh_hosts_yml(env: &EnvMap, host: &str) -> bool {
         .any(|listed| repo::gh_hostname(listed) == host)
 }
 
-/// The allowlist entry for `repo` with the port its remotes' web URLs name, such as
+/// The allowlist entry for `host` with the port the checkout's web remotes name, such as
 /// `git.example.com:3000` for `https://git.example.com:3000/owner/repo.git`. gh drops a remote's
-/// port, so `repo.host` has none, and the wrapper would call the server's default port.
+/// port, so `host` has none, and the wrapper would call the server's default port.
 ///
-/// Every http(s) remote that leads to `repo` counts, and they must agree, a URL without a port
-/// counting as its scheme's default; otherwise, or for a default port, the entry has none. Which
-/// remote gh picks isn't known here, so a port is written only when it can't be another
-/// remote's. An `ssh://` port is the SSH server's, not the web one, so SSH remotes don't count.
-pub(crate) fn entry_with_web_port(cwd: Option<&Path>, repo: &RepoRef) -> Option<String> {
+/// When in doubt, no port: every http(s) fetch and push URL of every remote on this hostname
+/// counts, whichever repository it leads to and with `www.` dropped as gh drops it, and they
+/// must all name one port, a URL without one counting as its scheme's default (443, or 80). A
+/// default port isn't written. An `ssh://` port is the SSH server's, so SSH URLs don't count.
+pub(crate) fn entry_with_web_port(cwd: Option<&Path>, host: &str) -> Option<String> {
+    let hostname = web_hostname(host);
     let remotes = crate::external::git_output(&["remote"], cwd)?;
-    let mut ports = remotes
+    let mut ports = Vec::new();
+    for name in remotes
         .lines()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .filter_map(|name| {
-            let url = crate::external::git_output(&["remote", "get-url", name], cwd)?;
-            web_port(&url, repo)
-        });
-    let port = ports.next()?;
-    if !ports.all(|other| other == port) || port == 443 || port == 80 {
+    {
+        for args in [
+            &["remote", "get-url", "--all", name][..],
+            &["remote", "get-url", "--push", "--all", name],
+        ] {
+            let urls = crate::external::git_output(args, cwd).unwrap_or_default();
+            ports.extend(urls.lines().filter_map(|url| web_port(url, &hostname)));
+        }
+    }
+    let port = *ports.first()?;
+    if ports.iter().any(|other| *other != port) || port == 443 || port == 80 {
         return None;
     }
-    config::normalized_forgejo_host(&format!("{}:{port}", repo::gh_hostname(&repo.host)))
+    host_with_port(&hostname, port)
 }
 
-/// The web port an http(s) `url` leading to `repo` uses: the one it names, or its scheme's
-/// default (443, or 80 for plain HTTP).
-fn web_port(url: &str, repo: &RepoRef) -> Option<u32> {
+/// `hostname:port` as an allowlist entry; an IPv6 address keeps its brackets (Sol s1#5 on #175).
+fn host_with_port(hostname: &str, port: u32) -> Option<String> {
+    let entry = if hostname.contains(':') {
+        format!("[{hostname}]:{port}")
+    } else {
+        format!("{hostname}:{port}")
+    };
+    config::normalized_forgejo_host(&entry)
+}
+
+/// A host as gh compares remotes: no port, lowercase, and no leading `www.`.
+fn web_hostname(host: &str) -> String {
+    let hostname = repo::gh_hostname(host);
+    hostname
+        .strip_prefix("www.")
+        .map_or_else(|| hostname.clone(), str::to_string)
+}
+
+/// The web port an http(s) `url` on `hostname` uses: the one it names, or its scheme's default
+/// (443, or 80 for plain HTTP).
+fn web_port(url: &str, hostname: &str) -> Option<u32> {
     let (scheme, rest) = url.trim().split_once("://")?;
     let default = match scheme.to_ascii_lowercase().as_str() {
         "https" => 443,
         "http" => 80,
         _ => return None,
     };
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let host_port = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    if repo::gh_hostname(host_port) != repo::gh_hostname(&repo.host) {
-        return None;
-    }
-    // Exactly `owner/repo`, as gh reads a remote's path.
-    let path = path.split(['?', '#']).next().unwrap_or_default();
-    let path = path.trim_end_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    let (owner, name) = path.split_once('/')?;
-    if name.contains('/')
-        || !owner.eq_ignore_ascii_case(&repo.owner)
-        || !name.eq_ignore_ascii_case(&repo.name)
-    {
+    if web_hostname(host_port) != hostname {
         return None;
     }
     let port = match host_port.strip_prefix('[') {
         Some(bracketed) => bracketed.split_once("]:").map(|(_, port)| port),
-        None => host_port.rsplit_once(':').map(|(_, port)| port),
+        None if host_port.matches(':').count() == 1 => {
+            host_port.rsplit_once(':').map(|(_, port)| port)
+        }
+        None => None,
     };
     match port {
         None => Some(default),
@@ -707,7 +724,6 @@ mod tests {
 
     #[test]
     fn a_web_remote_has_a_port_and_an_ssh_one_does_not() {
-        let repo = RepoRef::new("git.example.com", "owner", "repo");
         for (url, port) in [
             ("https://git.example.com:3000/owner/repo.git", Some(3000)),
             ("http://git.example.com:3000/owner/repo", Some(3000)),
@@ -717,20 +733,27 @@ mod tests {
             ),
             ("https://git.example.com/owner/repo.git", Some(443)),
             ("HTTP://git.example.com/owner/repo.git", Some(80)),
+            // gh drops `www.` (Sol s1#2 on #175).
+            ("https://www.git.example.com/owner/repo.git", Some(443)),
+            ("https://git.example.com:3000/any/path/at/all", Some(3000)),
             ("ssh://git@git.example.com:2222/owner/repo.git", None),
             ("git@git.example.com:owner/repo.git", None),
-            ("https://git.example.com:3000/owner/other.git", None),
             ("https://other.example.com:3000/owner/repo.git", None),
             ("https://git.example.com:/owner/repo.git", None),
-            // gh reads exactly `owner/repo` from a remote's path (Opus o1#3 on #175).
-            ("https://git.example.com:3000/forgejo/owner/repo.git", None),
         ] {
-            assert_eq!(web_port(url, &repo), port, "{url}");
+            assert_eq!(web_port(url, "git.example.com"), port, "{url}");
         }
-        let literal = RepoRef::new("[::1]", "owner", "repo");
         assert_eq!(
-            web_port("https://[::1]:3000/owner/repo.git", &literal),
+            web_port("https://[2001:db8::1]:3000/owner/repo.git", "2001:db8::1"),
             Some(3000)
+        );
+        assert_eq!(
+            host_with_port("2001:db8::1", 3000).as_deref(),
+            Some("[2001:db8::1]:3000")
+        );
+        assert_eq!(
+            host_with_port("git.example.com", 3000).as_deref(),
+            Some("git.example.com:3000")
         );
     }
 
