@@ -305,7 +305,6 @@ fn audit_diag_git_trace_multiple_authorization_headers() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D11: fails until gh-forgejo-shim-jko.28 is fixed"]
 fn audit_diag_smoke_redacts_stderr() -> TestResult {
     let f = Fixture::new()?;
     f.tool(
@@ -323,7 +322,6 @@ fn audit_diag_smoke_redacts_stderr() -> TestResult {
 }
 
 #[test]
-#[ignore = "audit D12: fails until gh-forgejo-shim-jko.29 is fixed"]
 fn audit_diag_smoke_utf8_stderr() -> TestResult {
     let f = Fixture::new()?;
     f.tool(

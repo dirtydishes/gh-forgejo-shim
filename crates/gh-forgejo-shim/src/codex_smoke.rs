@@ -200,12 +200,15 @@ fn run_probe(probe: SmokeProbe, cwd: Option<&Path>, env: &HashMap<String, String
     }
 }
 
+/// A probe's stderr as the report shows it: redacted like a trace record (jko.28), on one line,
+/// and cut to 240 characters, never inside one (jko.29).
 fn excerpt(value: &str) -> String {
-    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.len() <= 240 {
+    let redacted = crate::trace::redact_text_with(value, "<redacted>");
+    let compact = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= 240 {
         return compact;
     }
-    format!("{}...", &compact[..237])
+    format!("{}...", compact.chars().take(237).collect::<String>())
 }
 
 #[cfg(test)]
