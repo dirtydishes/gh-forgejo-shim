@@ -500,6 +500,12 @@ fn redact_argv(args: &[String]) -> Vec<String> {
         }
 
         let (key, separator, _) = split_assignment(arg);
+        // An `=` inside a URL, as in a password `pa=ss`, isn't an assignment: the whole URL goes
+        // to the URL rules, which hide its userinfo up to the last `@` (Sol r7#1 on #94).
+        if key.contains("://") {
+            redacted.push(redact_text(arg));
+            continue;
+        }
         if key.starts_with('-') && is_sensitive_key(key) {
             if separator.is_some() {
                 redacted.push(format!("{key}={SECRET_REPLACEMENT}"));
@@ -581,6 +587,20 @@ mod tests {
                 "https://[REDACTED]@example.com/repo.git",
             ]
         );
+    }
+
+    #[test]
+    fn argv_redacts_a_url_password_that_holds_an_equals_sign() {
+        // Git accepts `=` in a password; it isn't an assignment (Sol r7#1).
+        for url in [
+            "https://alice:audit-password=tail@example.com/repo.git",
+            "https://alice:audit=@example.com/repo.git",
+            "https://user=x:audit-secret@example.com/r?ref=main",
+        ] {
+            let redacted = redact_argv(&[url.to_string()]).join(" ");
+            assert!(!redacted.contains("audit"), "{url} -> {redacted}");
+            assert!(redacted.contains("@example.com/"), "{url} -> {redacted}");
+        }
     }
 
     #[test]
