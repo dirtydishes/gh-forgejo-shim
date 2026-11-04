@@ -110,6 +110,34 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     ("issue create", &["title", "body", "body-file", "repo"]),
 ];
 
+/// ChatGPT's PR card and pane (`gh api graphql --hostname <host> -f query=<document>`, variables as
+/// `-f` or `-F`), which the gateway answers since #88. A query only: a document naming `mutation`
+/// or `subscription`, or read from a file the shim can't see (`-F query=@path`), keeps the
+/// built-in path, as does any other `api` flag.
+fn reads_graphql(invocation: &Invocation) -> bool {
+    let fields = |name: &str| invocation.flags.get(name).into_iter().flatten();
+    let query = fields("raw-field")
+        .chain(fields("field").filter(|field| !field.starts_with("query=@")))
+        .filter_map(|field| field.strip_prefix("query="))
+        .collect::<Vec<_>>();
+    let operation = |document: &str| {
+        document
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|word| word == "mutation" || word == "subscription")
+    };
+    invocation.command == "api"
+        && matches!(invocation.positionals.as_slice(), [path] if path == "graphql")
+        && invocation
+            .flags
+            .keys()
+            .all(|flag| ["hostname", "raw-field", "field", "method"].contains(&flag.as_str()))
+        && invocation
+            .flag("method")
+            .is_none_or(|method| method.eq_ignore_ascii_case("POST"))
+        && !fields("field").any(|field| field.starts_with("query=@"))
+        && matches!(query.as_slice(), [document] if !operation(document))
+}
+
 /// `gh api` reads the gateway serves beyond the built-in path's `user`: the rate-limit overview
 /// (C1, `cwe.11`), a GET with the flags traced for it.
 fn reads_rate_limit(invocation: &Invocation) -> bool {
@@ -135,7 +163,7 @@ pub fn launches(invocation: &Invocation) -> bool {
             .flags
             .keys()
             .all(|flag| flags.contains(&flag.as_str())),
-        None => invocation.is_native() || reads_rate_limit(invocation),
+        None => invocation.is_native() || reads_rate_limit(invocation) || reads_graphql(invocation),
     };
     // Without a method, gh's terminal prompts ask whether to delete the branch, and to edit the
     // commit message: the forms kept off above. One method skips both prompts (`merge.go:307-330`).
@@ -306,6 +334,25 @@ mod tests {
             &["issue", "comment", "3", "-F", "notes.md"][..],
             &["api", "rate_limit"][..],
             &["api", "/rate_limit", "--jq", ".rate", "-i", "-X", "GET"][..],
+            // ChatGPT's PR card and pane: a query, with variables.
+            &[
+                "api",
+                "graphql",
+                "--hostname",
+                "h",
+                "-f",
+                "query={viewer{login}}",
+            ][..],
+            &[
+                "api",
+                "graphql",
+                "-f",
+                "query=query($n:Int!){x(n:$n)}",
+                "-F",
+                "n=1",
+                "-X",
+                "POST",
+            ][..],
             &["issue", "list"][..],
             &[
                 "issue", "list", "-s", "all", "-L", "5", "-A", "me", "-l", "bug",
@@ -400,6 +447,16 @@ mod tests {
             &["api", "rate_limit", "-X", "POST"][..],
             &["api", "rate_limit", "--paginate"][..],
             &["api", "repos/o/r/pulls"][..],
+            // Not a query the shim can see, or not ChatGPT's shape.
+            &["api", "graphql", "-f", "query=mutation{x}"][..],
+            &["api", "graphql", "-f", "query=subscription{x}"][..],
+            &["api", "graphql", "-F", "query=@doc.graphql"][..],
+            &["api", "graphql", "-f", "owner=o"][..],
+            &["api", "graphql", "-f", "query={a}", "-f", "query={b}"][..],
+            &["api", "graphql", "-f", "query={a}", "--paginate"][..],
+            &["api", "graphql", "-f", "query={a}", "-X", "GET"][..],
+            &["api", "graphql", "-f", "query={a}", "-H", "Accept: x"][..],
+            &["api", "/graphql", "-f", "query={a}"][..],
             &["issue", "list", "--milestone", "m1"][..],
             &["issue", "list", "--app", "x"][..],
             &["issue", "view", "3", "--web"][..],
