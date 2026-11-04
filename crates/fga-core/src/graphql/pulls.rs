@@ -312,11 +312,18 @@ impl PullRequest {
             return Ok(None);
         }
         let session = ctx.data_unchecked::<Session>();
-        let Some(event) = session
+        // The schedule shows only on the PR's timeline, which Forgejo serves under `read:issue`.
+        // Without that scope the token can't see one, and GitHub answers a reader null rather
+        // than an error; `viewerCan*AutoMerge` then read false.
+        let event = match session
             .auto_merge_event(&self.owner, &self.repo, self.source.number)
             .await
-            .map_err(error)?
-        else {
+        {
+            Ok(event) => event,
+            Err(forgejo::Error::Forbidden | forgejo::Error::Unauthorized) => None,
+            Err(other) => return Err(error(other)),
+        };
+        let Some(event) = event else {
             return Ok(None);
         };
         let repository = session
@@ -351,12 +358,21 @@ impl PullRequest {
     }
     /// GitHub offers auto-merge only while the PR can't merge yet.
     async fn viewer_can_enable_auto_merge(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        if self.source.state != "open"
-            || self.source.draft
-            || !self.viewer_can_merge(ctx).await?
-            || self.auto_merge_request(ctx).await?.is_some()
-        {
+        if self.source.state != "open" || self.source.draft || !self.viewer_can_merge(ctx).await? {
             return Ok(false);
+        }
+        // A token that can't read the timeline can't see an existing schedule either, so it isn't
+        // offered one it might already have.
+        match ctx
+            .data_unchecked::<Session>()
+            .auto_merge_event(&self.owner, &self.repo, self.source.number)
+            .await
+        {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(forgejo::Error::Forbidden | forgejo::Error::Unauthorized) => {
+                return Ok(false);
+            }
+            Err(other) => return Err(error(other)),
         }
         Ok(matches!(
             self.merge_state_status(ctx).await?,
@@ -557,10 +573,17 @@ impl PullRequest {
         before: Option<String>,
     ) -> async_graphql::Result<IssueCommentConnection> {
         let session = ctx.data_unchecked::<Session>();
-        let nodes = session
+        // Forgejo serves a PR's conversation under `read:issue`. Without it the PR still reads, and
+        // its comments read as none, rather than failing the whole document (README: tokens).
+        let comments = match session
             .comments(&self.owner, &self.repo, self.source.number)
             .await
-            .map_err(error)?
+        {
+            Ok(comments) => comments,
+            Err(forgejo::Error::Forbidden | forgejo::Error::Unauthorized) => Vec::new(),
+            Err(other) => return Err(error(other)),
+        };
+        let nodes = comments
             .into_iter()
             .map(|source| IssueComment {
                 source,
