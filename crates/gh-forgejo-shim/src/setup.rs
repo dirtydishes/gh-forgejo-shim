@@ -310,9 +310,26 @@ fn same_location(path: &Path, target: &Path) -> bool {
 /// directories are compared as files (device and inode), so a symlinked directory, a bind mount
 /// or a macOS firmlink is the same one; a directory that doesn't exist yet compares by path.
 fn same_entry(left: &Path, right: &Path) -> bool {
-    left.file_name().is_some()
-        && left.file_name() == right.file_name()
-        && same_directory(directory_of(left), directory_of(right))
+    let (Some(left_name), Some(right_name)) = (left.file_name(), right.file_name()) else {
+        return false;
+    };
+    let names_match = left_name == right_name
+        // A case-insensitive file system (macOS by default) reaches one entry as `GH` and `gh`:
+        // then both names lead to the same file, the link itself where it is one (Sol s2#1).
+        || (left_name.eq_ignore_ascii_case(right_name) && same_link_or_file(left, right));
+    names_match && same_directory(directory_of(left), directory_of(right))
+}
+
+/// Whether two paths reach one file without following a symlink at their last part.
+fn same_link_or_file(left: &Path, right: &Path) -> bool {
+    #[cfg(unix)]
+    if let (Ok(left), Ok(right)) = (left.symlink_metadata(), right.symlink_metadata()) {
+        use std::os::unix::fs::MetadataExt;
+
+        return (left.dev(), left.ino()) == (right.dev(), right.ino());
+    }
+    let _ = (left, right);
+    false
 }
 
 /// The directory `path` is in; a bare name (`gh`) is in the current directory.
@@ -665,6 +682,23 @@ mod tests {
         assert!(!same_location(&elsewhere.join("gh"), &target));
         symlink(elsewhere.join("loop"), elsewhere.join("loop"))?;
         assert!(!same_location(&elsewhere.join("loop"), &target));
+        Ok(())
+    }
+
+    #[test]
+    fn another_case_reaches_the_target_only_where_the_file_system_folds_case() -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let target = fixture.root.join("gh");
+        fs::write(&target, "gh")?;
+        let upper = fixture.root.join("GH");
+        if upper.symlink_metadata().is_ok() {
+            // Case-insensitive (macOS by default): `GH` is the target itself (Sol s2#1).
+            assert!(same_location(&upper, &target));
+        } else {
+            // Case-sensitive: `GH` is a file of its own.
+            fs::write(&upper, "other")?;
+            assert!(!same_location(&upper, &target));
+        }
         Ok(())
     }
 

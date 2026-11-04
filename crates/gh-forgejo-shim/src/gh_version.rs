@@ -107,6 +107,20 @@ pub fn check(real_gh: Option<&ToolPath>, env: &EnvMap, platform: &str) -> GhChec
         };
     };
     let found = format!("{} via {}", real_gh.path.display(), real_gh.source);
+    // A relative path such as `gh` names a file here in the current directory, but the wrapper
+    // runs it through a PATH lookup, which can find the shim itself (Sol s2#2).
+    if real_gh.path.is_relative() {
+        return GhCheck {
+            status: Status::Refused,
+            detail: format!(
+                "found {found}, but a real gh path must be absolute: a relative one is looked up \
+                 on PATH when the wrapper runs it, and can find the wrapper itself"
+            ),
+            repair_commands: vec![
+                "FJ_SHIM_REAL_GH=/absolute/path/to/gh gh-forgejo-shim doctor".to_string(),
+            ],
+        };
+    }
     assess(
         &found,
         is_homebrew(&real_gh.path),
@@ -625,6 +639,24 @@ mod tests {
         assert!(!check.detail.contains('\u{1b}'), "{:?}", check.detail);
         let dev = assess("gh via PATH", false, &parse("gh version de\u{7}v"), true);
         assert!(!dev.detail.contains('\u{7}'), "{:?}", dev.detail);
+    }
+
+    #[test]
+    fn a_relative_gh_path_is_refused_without_running_it() {
+        // The wrapper would look `gh` up on PATH, where it can find itself (Sol s2#2).
+        for path in ["gh", "bin/gh", "./gh"] {
+            let tool = ToolPath {
+                path: Path::new(path).to_path_buf(),
+                source: "FJ_SHIM_REAL_GH".to_string(),
+            };
+            let check = check(Some(&tool), &EnvMap::new(), "linux");
+            assert_eq!(check.status, Status::Refused, "{path}");
+            assert!(
+                check.detail.contains("must be absolute"),
+                "{}",
+                check.detail
+            );
+        }
     }
 
     #[test]
