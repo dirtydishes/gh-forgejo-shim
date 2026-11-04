@@ -1,3 +1,16 @@
+# gh-forgejo-shim v0.2.1
+
+A small follow-up to v0.2.0:
+
+- **Linux downloads run on older systems.** They now need glibc 2.34 or newer, so they run on
+  Ubuntu 22.04 and later, Debian 12 and later, and RHEL 9 and later. v0.2.0's Linux downloads
+  needed glibc 2.39 and didn't start on those systems. macOS is unchanged.
+- **The gateway keeps permission errors as errors.** It treats only Forgejo's refusal for a
+  missing token scope as an empty answer; any other 401 or 403 stays an error (#219).
+- **The README introduces server mode near the top** (#224).
+
+The v0.2.0 notes follow.
+
 # gh-forgejo-shim v0.2.0
 
 ## What's new: a rewrite around real gh
