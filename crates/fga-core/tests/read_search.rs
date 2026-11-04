@@ -204,8 +204,10 @@ async fn project_cards_are_an_empty_connection() {
 /// `refs/pull/N/head` from the base when there's none. The gateway reports a head repository only
 /// while the head branch exists and its tip is the PR's head, so gh never checks out a branch that
 /// isn't there, was recreated, or has moved since (a closed PR; a PR reopened through the API). The
-/// owner stays as GitHub reports it; `isCrossRepository` is true unless the branch is the PR's head,
-/// so `gh pr close -d`/`merge -d` never delete a branch that isn't it. `headRefName` is always Forgejo's own
+/// owner stays as GitHub reports it; an open PR's `isCrossRepository` is true unless the branch is the
+/// PR's head, so `gh pr close -d`/`merge -d` never delete a branch that isn't it. gh deletes no remote
+/// branch for a closed or merged PR, so one from the same repository is not cross-repository, as on
+/// GitHub, and `gh pr list` shows its branch without an owner. `headRefName` is always Forgejo's own
 /// name, so no made-up name can equal a real branch's.
 #[tokio::test]
 async fn a_head_branch_that_is_gone_has_no_head_repository() {
@@ -407,8 +409,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "p5":head("feature", true, Value::Null, "f"),
             // A known limit: a gone branch named `refs/…` keeps its name.
             "p6":head("refs/pull/6/head", true, Value::Null, "o"),
-            "p7":head("feature", true, Value::Null, "o"),
-            "p8":head("feature", true, Value::Null, "o"),
+            "p7":head("feature", false, Value::Null, "o"),
+            "p8":head("feature", false, Value::Null, "o"),
             "p9":head("feature", true, Value::Null, "o"),
             "p10":head("refs/refs/topic", true, Value::Null, "o"),
             "p11":head("feature", true, Value::Null, "o"),
@@ -416,7 +418,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "p12":head("refs/topic", true, Value::Null, "o"),
             "p13":head("topic", false, r.clone(), "o"),
             "p14":head("pull/3/head", false, r, "o"),
-            "p15":head("refs/topic", true, Value::Null, "o"),
+            "p15":head("refs/topic", false, Value::Null, "o"),
             "agit":{"nodes":[{"number":3}]},
             "pull3":{"nodes":[{"number":14}]},
             "topic":{"nodes":[{"number":13}]},

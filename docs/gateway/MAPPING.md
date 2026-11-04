@@ -284,7 +284,7 @@ need not be the PR's head: the PR's own ref `refs/pull/N/head` in the base repos
 | `headRefName` | `head.label`, or `head.ref` for an AGit PR (empty label): always Forgejo's own name |
 | `headRepositoryOwner` | `head.repo.owner`; null only for a deleted fork |
 | `headRepository` | `head.repo`, but null unless the PR is open and unmerged, `head.ref` equals a non-empty `head.label` that doesn't start with `refs/`, **and** `head.sha` equals the commit of `refs/pull/N/head` (`GET repos/{o}/{r}/git/refs/pull/{n}/head`; unreadable counts as different) |
-| `isCrossRepository` | true when `head.repo` differs from the base or is null (a deleted fork); for a same-repository PR, false only when `headRepository` is reported, i.e. the branch is the PR's head |
+| `isCrossRepository` | true when `head.repo` differs from the base or is null (a deleted fork); for an open same-repository PR, false only when `headRepository` is reported, i.e. the branch is the PR's head; false for a closed or merged same-repository PR, as on GitHub |
 
 **A deliberate difference from GitHub.** GitHub keeps `headRepository` when the head branch is
 deleted and nulls it only for a deleted fork. `gh pr checkout` reads `headRepository` alone to
@@ -297,12 +297,16 @@ and gh's fetch, so only its own ref is offered. A PR reopened through Forgejo's 
 The owner stays as GitHub reports it, which keeps gh's `owner:branch` labels and current-branch
 matching.
 
-**`isCrossRepository` follows the same test.** `gh pr close -d` and `gh pr merge -d` delete the head
-branch in the base repository when it's false (`close.go:150-157`, `merge.go:519,592`). A
-same-repository PR whose branch isn't the PR's head would have gh delete whatever branch now
-carries the name: an AGit PR's `refs/pull/N/head`, or a branch deleted and created again for other
-work. So such a PR counts as cross-repository, and gh leaves the branch alone. Before Forgejo has
-caught up after a push, this errs toward keeping the branch.
+**`isCrossRepository` follows the same test for an open PR.** `gh pr close -d` and `gh pr merge -d`
+delete the head branch in the base repository when it's false (`close.go:150-157`,
+`merge.go:519,592`). An open same-repository PR whose branch isn't the PR's head would have gh
+delete whatever branch now carries the name: an AGit PR's `refs/pull/N/head`, or a branch deleted
+and created again for other work. So such a PR counts as cross-repository, and gh leaves the branch
+alone. Before Forgejo has caught up after a push, this errs toward keeping the branch. gh deletes no
+remote branch for a closed or merged PR: `pr close` stops at one (`close.go:77-83`), and `pr merge`
+skips the remote branch of one already merged (`merge.go:523`). So a closed or merged
+same-repository PR is not cross-repository, as on GitHub, and `gh pr list` shows its branch without
+an owner.
 
 `headRefName` is never made up. A made-up name could equal a real branch's, and gh's branch finder
 (`gh pr checkout {branch}`) would then take one PR for the other. A name starting with `refs/` counts
