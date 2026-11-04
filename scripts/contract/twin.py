@@ -38,6 +38,8 @@ TWIN_COMMANDS = {
     ("issue", "view"): {"--json", "--jq"},
     ("issue", "list"): {"--json", "--jq", "--state", "--author", "--assignee", "--label", "--limit"},
     ("issue", "create"): {"--title", "--body"},
+    # ChatGPT's PR card shape: a GraphQL query about the case's own PR (`-F number={pr}`).
+    ("api", "graphql"): {"--hostname", "-f", "-F"},
 }
 BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--delete-branch"}
 PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
@@ -115,6 +117,13 @@ def validate(case):
         # depends on theirs (a count of them would).
         if not any(ISSUE_SELECT in jq for jq in values.get("--jq", [])) or selectors:
             raise ValueError(f"issue list needs a --jq with {ISSUE_SELECT}, and no selector")
+    elif command == ("api", "graphql"):
+        # A query, never a mutation, about the case's own PR on the twin.
+        queries = [v.removeprefix("query=") for v in values.get("-f", []) if v.startswith("query=")]
+        words = set(re.split(r"[^A-Za-z0-9_]+", " ".join(queries)))
+        if (len(queries) != 1 or words & {"mutation", "subscription"} or "number={pr}" not in values.get("-F", [])
+                or values.get("--hostname") != ["forge.test"] or selectors):
+            raise ValueError("api graphql needs one -f query (no mutation), -F number={pr} and --hostname forge.test")
     elif command == ("issue", "create"):
         # The issue it makes names the case, and stdout gives its number as (?P<issue>...).
         titles = values.get("--title", [])

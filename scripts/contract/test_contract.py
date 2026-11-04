@@ -193,6 +193,10 @@ class ContractTests(unittest.TestCase):
             ({"setup": {"branch": "twin/x", "fork": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "fork needs setup.pr"),
             ({"setup": {"branch": "twin/x", "pr": True, "fork": True, "closed": True}}, "no closed or protect_head"),
             ({"setup": {"branch": "twin/x", "pr": True, "fork": "yes"}}, "true or false"),
+            ({"argv": ["api", "graphql", "--hostname", "forge.test", "-f", "query=mutation{x}", "-F", "number={pr}"]},
+             "no mutation"),
+            ({"argv": ["api", "graphql", "--hostname", "forge.test", "-f", "query={x}", "-F", "number=1"]}, "no mutation"),
+            ({"argv": ["api", "graphql", "--hostname", "github.com", "-f", "query={x}", "-F", "number={pr}"]}, "no mutation"),
             ({"setup": {"branch": "twin/x", "agit": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "agit needs setup.pr"),
             ({"setup": {"branch": "twin/x", "pr": True, "agit": True, "fork": True}}, "no fork"),
         ]:

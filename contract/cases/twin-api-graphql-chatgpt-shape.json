@@ -1,0 +1,30 @@
+{
+  "id": "twin-api-graphql-chatgpt-shape",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/api-graphql",
+    "pr": true
+  },
+  "argv": [
+    "api",
+    "graphql",
+    "--hostname",
+    "forge.test",
+    "-f",
+    "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number state isDraft headRefName}}}",
+    "-f",
+    "owner=dirtydishes",
+    "-f",
+    "name=gfj-oracle",
+    "-F",
+    "number={pr}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "\\{\"data\":\\{\"repository\":\\{\"pullRequest\":\\{\"headRefName\":\"twin/api\\-graphql\",\"isDraft\":false,\"number\":{pr},\"state\":\"OPEN\"\\}\\}\\}\\}",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}
