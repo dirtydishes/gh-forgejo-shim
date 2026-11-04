@@ -1919,3 +1919,27 @@ fn without_force_install_checks_the_gh_it_leaves_in_place() -> TestResult {
     assert!(stdout.contains("[fix] shim:"), "{stdout}");
     Ok(())
 }
+
+#[test]
+fn install_refuses_a_relative_real_gh_path() -> TestResult {
+    // `FJ_SHIM_REAL_GH=gh` with a `./gh`: the wrapper would run `gh` through PATH, where it can
+    // find itself, so install refuses rather than leave gh broken (Sol s2#2).
+    let fixture = CliFixture::new()?;
+    write_script_from_child(
+        &fixture.repo().join("gh"),
+        "#!/bin/sh\necho 'gh version 2.103.3'\n",
+    )?;
+    let target_dir = fixture.root().join("target");
+    fs::create_dir(&target_dir)?;
+    let output = fixture
+        .command("gfj")?
+        .env("FJ_SHIM_REAL_GH", "gh")
+        .args(["install-shim", "--bin-dir"])
+        .arg(&target_dir)
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("must be absolute"), "{stderr}");
+    assert!(!target_dir.join("gh").exists());
+    Ok(())
+}
