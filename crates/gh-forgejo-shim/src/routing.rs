@@ -234,7 +234,9 @@ fn decide_invocation_route(
     cwd: Option<&Path>,
 ) -> RouteDecision {
     // gh may run an alias the shim couldn't read (a repeated name), so a command word that could
-    // be one is refused, near a forge or not (Sol r6#2). gh's own commands, `help` aside, can't be.
+    // be one is refused, near a forge or not (Sol r6#2). A one-word alias can't take a gh command's
+    // name, `help` aside; a two-word one under a command group (`issue fj`) can, and isn't covered
+    // yet (#177).
     if let Some(word) = command_word(words).filter(|_| gh_command_word(words).is_none()) {
         if user_gh_aliases_unreadable(env) {
             let file = user_gh_config_dir(env).map_or_else(
@@ -283,7 +285,8 @@ fn decide_invocation_route(
 }
 
 /// Whether the call's words, `GH_HOST`, `GH_REPO`, gh's default host from `hosts.yml`, or any of
-/// the checkout's remotes name a Forgejo host. Every remote: which one gh picks depends on the command, which is what's uncertain.
+/// the checkout's remotes name a Forgejo host. Every remote: which one gh picks depends on the
+/// command, which is what's uncertain.
 fn forgejo_in_reach(
     words: &[String],
     config: &DispatcherConfig,
@@ -953,6 +956,8 @@ mod tests {
         // default is github.com and nothing changes. Sol r6#2: aliases the shim can't read make
         // any word that could be an alias refuse, forge or not.
         let dir = std::env::temp_dir().join(format!("gfj-r6-{}", std::process::id()));
+        // A failed run leaves the directory; start from an empty one either way.
+        let _ = std::fs::remove_dir_all(&dir);
         let route = |argv_words: &[&str], file: &str, text: &str, extra: &[(&str, &str)]| {
             std::fs::create_dir_all(&dir).expect("dir");
             for name in ["hosts.yml", "config.yml"] {
