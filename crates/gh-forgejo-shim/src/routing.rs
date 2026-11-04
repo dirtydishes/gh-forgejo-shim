@@ -689,7 +689,7 @@ fn step_aside_logged_in(
 
 /// Whether plain gh could go somewhere other than `host`, judged from what the call says:
 /// `GH_HOST` naming another host, or a word or `GH_REPO` naming one: another allowlisted forge
-/// anywhere in it, or a URL, an SSH address (`git@host:o/r`) or a `HOST/OWNER/REPO` whose host
+/// anywhere in it, or a URL, an SSH address (`host:o/r`, `git@host:o/r`) or a `HOST/OWNER/REPO` whose host
 /// isn't `host`. Routing doesn't model every argument gh takes a host from (`gh repo clone
 /// forge-b/o/r` in forge-a's checkout routes to forge-a), so stepping aside on the routed host's
 /// login could send the call elsewhere (Sol r1#1). A false match, such as a path `a/b/c`, leaves
@@ -730,14 +730,17 @@ fn names_another_host(
                 .split("://")
                 .skip(1)
                 .any(|rest| other(rest.split(['/', '?', '#']).next().unwrap_or(rest)))
-            || word.match_indices('@').any(|(at, _)| {
-                word[at + 1..].split_once(':').is_some_and(|(name, _)| {
-                    !name.is_empty()
-                        && name
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
-                        && other(name)
-                })
+            // `host:o/r` or `git@host:o/r`: the host starts the word, a value, or follows `@`.
+            || word.match_indices(':').any(|(colon, _)| {
+                let rest = &word[colon + 1..];
+                let name = word[..colon].rsplit(['@', '=']).next().unwrap_or_default();
+                !rest.is_empty()
+                    && !rest.starts_with("//")
+                    && !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                    && other(name)
             })
             || (parts.len() == 3 && parts.iter().all(|part| !part.is_empty()) && other(parts[0]))
     })

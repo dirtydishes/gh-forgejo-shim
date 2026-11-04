@@ -199,7 +199,7 @@ wrapper steps aside and runs plain gh as on the delegate path, for every form, t
 included: those would otherwise answer with the shim's own token, or refuse a form plain gh serves
 there, such as ChatGPT's `gh api graphql --hostname <forge>`. A form that doesn't launch steps
 aside only when nothing in the call names another host: `GH_HOST` naming one, or a word or
-`GH_REPO` naming another allowlisted forge, or holding a URL, an SSH address or a
+`GH_REPO` naming another allowlisted forge, or holding a URL, an SSH address (`host:o/r`, `git@host:o/r`) or a
 `HOST/OWNER/REPO` whose host isn't the forge. Routing doesn't model every argument gh takes a
 host from (`gh repo clone forge-b/o/r` in forge-a's checkout routes to forge-a), so such a call
 keeps the built-in path. That is no run directory, no gateway, and
