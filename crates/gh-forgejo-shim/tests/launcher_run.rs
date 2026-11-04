@@ -916,6 +916,12 @@ fn a_call_naming_another_host_keeps_the_built_in_path() {
         (&["repo", "clone", "forge-b.test/o/r"][..], None),
         (&["repo", "clone", "https://forge-b.test/o/r"][..], None),
         (&["repo", "clone", "git@forge-b.test:o/r"][..], None),
+        // With the user's GH_HOST naming forge-a, gh would keep their token variables (Sol r2#1).
+        (
+            &["repo", "clone", "other.example:o/r"][..],
+            Some("forge-a.test"),
+        ),
+        (&["repo", "clone", "--", "other.example:o/r"][..], None),
         (&["repo", "clone", "other.example/o/r"][..], None),
         (&["pr", "diff", "1"][..], Some("other.example")),
     ] {
