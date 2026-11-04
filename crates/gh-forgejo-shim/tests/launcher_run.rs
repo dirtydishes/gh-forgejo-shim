@@ -718,6 +718,99 @@ fn a_forge_the_users_gh_is_logged_in_to_steps_aside() {
     }
 }
 
+/// ChatGPT's PR card and pane send these (command words and flags from its gh calls): GraphQL
+/// documents through `gh api graphql --hostname <host>`, plus `api user`, `auth status --active`,
+/// `pr list` and `pr view`.
+const CHATGPT_QUERY: &str = "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number state mergeable}}}";
+
+#[test]
+fn chatgpt_s_calls_step_aside_when_logged_in_and_api_graphql_launches_otherwise() {
+    let _serial = serial();
+    let graphql: &[&str] = &[
+        "api",
+        "graphql",
+        "--hostname",
+        "forge.test",
+        "-f",
+        CHATGPT_QUERY,
+        "-f",
+        "owner=o",
+        "-f",
+        "name=r",
+        "-F",
+        "number=1",
+    ];
+    // Server mode: the user's gh is logged in to the forge, so every form runs plain gh with the
+    // user's login, the built-in path's forms too (they used to answer with the shim's token, or
+    // refuse `api graphql`).
+    for args in [
+        graphql,
+        &["api", "user", "--hostname", "forge.test"][..],
+        &["auth", "status", "--active", "--hostname", "forge.test"][..],
+        &[
+            "pr",
+            "list",
+            "--author",
+            "@me",
+            "--head",
+            "h",
+            "--json",
+            "number",
+            "--repo",
+            "forge.test/o/r",
+            "--state",
+            "open",
+        ][..],
+        &[
+            "pr",
+            "view",
+            "1",
+            "--json",
+            "number",
+            "-R",
+            "forge.test/o/r",
+        ][..],
+        &["pr", "diff", "1", "-R", "forge.test/o/r"][..],
+        &["repo", "view", "forge.test/o/r"][..],
+    ] {
+        let fixture = Fixture::new("http://127.0.0.1:9");
+        fixture.user_hosts("forge.test:\n    user: kell\n");
+        let gh = reporting_gh(&fixture);
+        let output = fixture.command(&gh, args).output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let report = fixture.report();
+        assert_eq!(
+            reported(&report, "GH_CONFIG_DIR"),
+            "unset",
+            "{args:?}: {report}"
+        );
+        assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset", "{args:?}");
+        assert!(fixture.parent_is_empty(), "{args:?}: no run directory");
+    }
+    // Client-only: no login there, so ChatGPT's query launches through the in-process gateway.
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let gh = reporting_gh(&fixture);
+    let output = fixture.command(&gh, graphql).output().expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert!(
+        reported(&report, "GH_CONFIG_DIR").starts_with(&fixture.parent.display().to_string()),
+        "launched: {report}"
+    );
+    // A mutation keeps the built-in path, which refuses `gh api` for the forge.
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let gh = reporting_gh(&fixture);
+    let mut mutation = graphql.to_vec();
+    mutation[5] =
+        "query=mutation{addComment(input:{subjectId:\"x\",body:\"b\"}){clientMutationId}}";
+    let output = fixture
+        .command(&gh, &mutation)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fixture.report(), "", "gh never ran");
+}
+
 #[test]
 fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
     let _serial = serial();
