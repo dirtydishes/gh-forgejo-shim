@@ -329,6 +329,37 @@ fn upstream(host: &str, config: &Config, env: &HashMap<String, String>) -> Optio
     Upstream::for_host(host, config, env).ok()
 }
 
+/// Runs plain gh for a call routed to `host` when the user's own gh is logged in there, whatever
+/// the form: the step-aside `launch` makes for a launched form, for the built-in path's forms too
+/// (§2: "when routing picks such a forge"). ChatGPT's `gh api graphql --hostname <forge>` is one.
+/// `None` when gh isn't logged in there, or its `hosts.yml` can't be read; the built-in path
+/// then answers as before.
+pub fn step_aside_if_logged_in(
+    host: &str,
+    routed: &Invocation,
+    args: &[OsString],
+    env: &HashMap<String, String>,
+    real_gh: Option<&Path>,
+) -> Option<i32> {
+    let text = repo::user_gh_config_dir(env)
+        .and_then(|dir| fs::read_to_string(dir.join("hosts.yml")).ok());
+    let user_hosts = ghconfig::user_hosts(text.as_deref()).ok()?;
+    if !logged_in(&user_hosts, host) {
+        return None;
+    }
+    let gh = match find_real_gh(real_gh, env) {
+        Ok(gh) => gh,
+        Err(code) => return Some(code),
+    };
+    let Plan { extra_edits, .. } = Plan::for_invocation(routed, host, env);
+    Some(step_aside(
+        &gh,
+        args,
+        extra_edits,
+        crate::trace::tracing_enabled(env),
+    ))
+}
+
 /// Whether the user's own gh is logged in to `host`: an `oauth_token` or a `user` under the key
 /// gh's API client looks up, the hostname without its port, spelled exactly (§2). A login stored
 /// only under `host:port` doesn't count, since plain gh's requests would never find it.

@@ -193,7 +193,9 @@ serves gh itself. The wrapper reads the entry gh's API client would use: the key
 forge's hostname without its port, spelled exactly, because gh drops the port before looking up a
 token (`gh/api/http_client.go:284-290`). A login stored only under `host:port` doesn't count,
 since plain gh's API requests would never find it. When routing picks such a forge, the
-wrapper steps aside and runs plain gh as on the delegate path: no run directory, no gateway, and
+wrapper steps aside and runs plain gh as on the delegate path, for every form, the built-in path's
+included: those would otherwise answer with the shim's own token, or refuse a form plain gh serves
+there, such as ChatGPT's `gh api graphql --hostname <forge>`. That is no run directory, no gateway, and
 the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and one case. A host-less
 `gh api` or `gh auth token` gets `GH_HOST` set to the forge's portless hostname, exactly as on the
 launch path (above), so decision 4 holds in every Forgejo checkout, server mode or not. Without
