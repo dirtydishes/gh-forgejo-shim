@@ -465,6 +465,56 @@ fn bootstrap_allowlists_a_web_remote_with_its_port() -> TestResult {
 }
 
 #[test]
+fn bootstrap_writes_a_port_only_when_the_routed_repos_remotes_agree() -> TestResult {
+    // The port can't come from a remote gh doesn't route: two remotes on one host with
+    // different ports, or a fork's, leave the entry without one (Opus o1#1 on #175).
+    for (remotes, hosts) in [
+        (
+            &[
+                ("origin", "https://git.example.com:3000/owner/repo.git"),
+                ("backup", "https://git.example.com:8443/owner/repo.git"),
+            ][..],
+            "hosts = [\"git.example.com\"]",
+        ),
+        (
+            &[
+                ("origin", "https://git.example.com/owner/repo.git"),
+                ("mirror", "https://git.example.com:8929/owner/repo.git"),
+            ],
+            "hosts = [\"git.example.com\"]",
+        ),
+        (
+            &[
+                ("origin", "https://git.example.com:3000/me/repo.git"),
+                ("upstream", "https://git.example.com/owner/repo.git"),
+            ],
+            "hosts = [\"git.example.com\"]",
+        ),
+        (
+            &[
+                ("origin", "https://git.example.com:3000/owner/repo.git"),
+                ("upstream", "https://git.example.com:3000/owner/repo.git"),
+                ("ssh", "ssh://git@git.example.com:2222/owner/repo.git"),
+            ],
+            "hosts = [\"git.example.com:3000\"]",
+        ),
+    ] {
+        let fixture = CliFixture::new()?;
+        fixture.init_git_repo()?;
+        fixture.git(["remote", "remove", "origin"])?;
+        for (name, url) in remotes {
+            fixture.git(["remote", "add", name, url])?;
+        }
+        let stdout = bootstrap(&fixture, &[])?;
+        assert!(
+            shim_config(&fixture)?.contains(hosts),
+            "{remotes:?}: {stdout}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn doctor_suggests_the_web_port_for_an_unlisted_remote() -> TestResult {
     let fixture = CliFixture::new()?;
     fixture.init_git_repo()?;
