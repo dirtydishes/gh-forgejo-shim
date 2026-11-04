@@ -107,9 +107,10 @@ result = subprocess.run(['gh', 'run', 'list', '--workflow', 'missing.yml', '-R',
 assert result.returncode != 0 and 'not found' in result.stderr, (result.returncode, result.stderr)
 print('PASS real gh run list --workflow by file name and by name; a missing file is not found', flush=True)
 # The simple JSON form needs only a mapped run, not the unsupported jobs/log APIs.
-actual = gh('run', 'view', str(runs[0]['id']), '--json', 'status,headBranch,displayTitle')
-assert actual['status'] == 'queued' and actual['headBranch'] in ('main', 'probe'), actual
-print('PASS real gh run view with mapped JSON fields', flush=True)
+actual = gh('run', 'view', str(runs[0]['id']), '--json', 'status,headBranch,displayTitle,attempt')
+assert actual['status'] == 'queued' and actual['headBranch'] in ('main', 'probe') and actual['attempt'] == 1, actual
+assert all(r['attempt'] == 1 for r in gh('run', 'list', '--json', 'attempt')), 'run list attempt'
+print('PASS real gh run view with mapped JSON fields; run view and list report attempt 1', flush=True)
 # The default view follows the run's jobs_url and reads its artifacts; both answer empty lists,
 # since Forgejo 15's API has neither per run.
 result = subprocess.run(['gh', 'run', 'view', str(runs[0]['id']), '-R', 'forge.test/' + REPO], capture_output=True, text=True)

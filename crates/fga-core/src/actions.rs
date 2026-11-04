@@ -63,12 +63,15 @@ pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
     } else {
         &run.started
     };
+    // Forgejo 15 reruns a run's jobs in place and keeps no attempt per run (only per job), so
+    // every run is its first attempt; GitHub numbers attempts from 1.
     Ok(
         json!({"id":run.id,"workflow_id":workflow.id,"name":workflow.name,
         "display_title":run.title,"head_branch":run.prettyref.strip_prefix("refs/heads/").unwrap_or(&run.prettyref),
         "head_sha":run.commit_sha,"run_number":run.index_in_repo,"event":run.event,
         "status":status,"conclusion":conclusion,"html_url":run.html_url,"path":workflow.path,
-        "created_at":run.created,"updated_at":run.updated,"run_started_at":started}),
+        "created_at":run.created,"updated_at":run.updated,"run_started_at":started,
+        "run_attempt":1}),
     )
 }
 

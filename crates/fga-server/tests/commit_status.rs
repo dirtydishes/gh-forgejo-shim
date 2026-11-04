@@ -215,12 +215,15 @@ async fn an_unknown_run_lists_as_queued() {
         (
             &listed["status"],
             &listed["conclusion"],
-            &listed["run_started_at"]
+            &listed["run_started_at"],
+            &listed["run_attempt"]
         ),
         (
             &json!("queued"),
             &Value::Null,
-            &json!("2026-11-03T00:00:00Z")
+            &json!("2026-11-03T00:00:00Z"),
+            // gh's `--json attempt`; GitHub numbers attempts from 1.
+            &json!(1)
         )
     );
 }
