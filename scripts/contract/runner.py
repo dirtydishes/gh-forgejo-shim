@@ -113,8 +113,12 @@ def main():
         # Checksum-pinned official gh, as the oracle captures use; a mismatch raises.
         gh_dir = Path(tempfile.mkdtemp(prefix="real-gh-", dir=work_dir))
         real_gh = official_gh(gh_dir)
-    # Twin cases write to the twin, so they run after every case that reads it.
-    for _, case in sorted(cases, key=lambda item: item[1].get("kind") == "twin"):
+    # Twin cases write to the twin, so they run after every case that reads it. Fork cases run
+    # last: reopening a PR whose fork is gone makes Forgejo 15's PR checker panic, and the panic
+    # drops the checks queued with it, so the next case's PR could stay "checking" and refuse
+    # its merge. Fork cases never wait for a check.
+    for _, case in sorted(cases, key=lambda item: (item[1].get("kind") == "twin",
+                                                   bool(item[1].get("setup", {}).get("fork")))):
         try:
             actual = execute(case, binary, seed_home, work_dir,
                              real_gh if launched(case, commands) else None)
