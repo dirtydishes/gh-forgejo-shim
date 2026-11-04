@@ -185,12 +185,13 @@ impl Forgejo {
             base,
             sessions: Arc::default(),
             page_size: Arc::default(),
-            merge_wait: Duration::from_secs(10),
+            merge_wait: Duration::from_secs(5),
         })
     }
 
-    /// The same client, retrying a merge for `wait` while Forgejo is still checking the PR (10 s by
-    /// default, and never into the last 2 s of the request's deadline).
+    /// The same client, retrying a merge for `wait` while Forgejo is still checking the PR, and never
+    /// into the last 2 s of the request's 10 s deadline. The default, 5 s, leaves a merge that
+    /// succeeds on its last attempt at least 5 s to do its git work and read the PR back.
     pub fn with_merge_wait(mut self, wait: Duration) -> Self {
         self.merge_wait = wait;
         self

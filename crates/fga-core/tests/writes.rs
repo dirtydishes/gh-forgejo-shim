@@ -894,9 +894,9 @@ async fn a_pr_from_a_deleted_fork_stays_cross_repository() {
 }
 
 /// Forgejo answers "Please try again later" while it still checks a PR it was just sent, which can
-/// take longer than a second or two on a busy forge. The merge keeps retrying for up to 10 s (and
-/// never past the request's deadline), so a PR pushed moments ago merges instead of reading as a
-/// conflict.
+/// take longer than a second or two on a busy forge. The merge keeps retrying for up to 5 s by
+/// default (its fifth attempt is at 3.75 s), so a PR pushed moments ago merges instead of reading
+/// as a conflict.
 #[tokio::test]
 async fn merge_waits_out_a_slow_mergeability_check() {
     let started = std::time::Instant::now();
