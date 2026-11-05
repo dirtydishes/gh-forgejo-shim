@@ -251,9 +251,10 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # One publish at a time, so two release runs can't race for `latest`.
+    # One publish per version at a time. Different versions never wait on or cancel each other, and
+    # only the newest stable one moves `latest`, so they can't race for it.
     concurrency:
-      group: gateway-image-publish
+      group: gateway-image-publish-${{ needs.version.outputs.version }}
       cancel-in-progress: false
 
     steps:
