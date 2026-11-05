@@ -97,10 +97,13 @@ forwards only one of them. The gateway can't check what the proxy drops. That on
 own token to the forge it connected to.
 
 **nginx.** Define the upstream once, then include the shipped
-[locations snippet](../../packaging/gateway/nginx/fga-locations.conf) in the forge's `server` block:
+[locations snippet](../../packaging/gateway/nginx/fga-locations.conf) in the forge's `server` block.
+The upstream is where nginx reaches the gateway: `fga-server:8080` when nginx runs in a container on
+the gateway's network (the Compose setup), `127.0.0.1:8080` when nginx runs on the host and the
+gateway publishes that port (the `docker run` examples).
 
 ```nginx
-upstream fga { server 127.0.0.1:8080; }
+upstream fga { server 127.0.0.1:8080; }   # or fga-server:8080 on the shared network
 
 server {
     server_name forge.example.com;
@@ -118,7 +121,9 @@ whose first line names a host (`GET https://forge.example.com:8443/api/v3/user`)
 forward it without that host. Clients send such lines only to forward proxies.
 
 **Caddy.** Copy the [site block](../../packaging/gateway/caddy/Caddyfile) and set its hostname and two
-upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. It sends the client's
+upstreams, or export `FORGE_SITE`, `FGA_UPSTREAM` and `FORGEJO_UPSTREAM`. Set `FGA_UPSTREAM` to
+`fga-server:8080` when Caddy runs on the gateway's network, or `127.0.0.1:8080` when it runs on the
+host. It sends the client's
 `Host` to the gateway explicitly, because Caddy rewrites `Host` for an HTTPS upstream, and its site
 block answers only the forge's hostname.
 
