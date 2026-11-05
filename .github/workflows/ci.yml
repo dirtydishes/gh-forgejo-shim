@@ -150,3 +150,52 @@ jobs:
           fi
           test "$(PATH="$shim_bin:$real_bin:$PATH" command -v gh)" = "$shim_bin/gh"
           test "$(PATH="$shim_bin:$real_bin:$PATH" FJ_SHIM_REAL_GH="$real_bin/gh" gh --version)" = "gh version 9.9.9 (ci fake)"
+
+  # The release's gateway image, built for both architectures without pushing, and started once.
+  gateway-image:
+    name: gateway image ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/gateway/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          tags: fga-server:ci
+          load: true
+
+      - name: Start it and check it answers
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name fga-server -p 127.0.0.1:8080:8080 \
+            -e FGA_FORGEJO_URL=http://127.0.0.1:9 \
+            -e FGA_PUBLIC_URL=https://forge.example.com \
+            fga-server:ci
+          # Without a token the gateway answers 401 before it calls Forgejo.
+          for attempt in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: forge.example.com' \
+              http://127.0.0.1:8080/api/v3/meta || true)"
+            [[ "$code" == 401 ]] && exit 0
+            sleep 1
+          done
+          docker logs fga-server
+          echo "expected 401 from /api/v3/meta, got ${code}" >&2
+          exit 1
