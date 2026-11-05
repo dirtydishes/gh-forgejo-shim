@@ -73,7 +73,7 @@ docs/
 Manual install example:
 
 ```sh
-version=0.2.1
+version=0.2.2
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64) target=aarch64-apple-darwin ;;
   Darwin:x86_64) target=x86_64-apple-darwin ;;
