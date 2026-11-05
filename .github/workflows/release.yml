@@ -12,6 +12,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   GATEWAY_IMAGE: ghcr.io/dirtydishes/fga-server
+  # The image's page on GitHub shows these, read from the multi-arch index's annotations.
+  GATEWAY_DOCS: https://github.com/dirtydishes/gh-forgejo-shim/blob/main/docs/gateway/server-mode.md
+  GATEWAY_DESCRIPTION: >-
+    For people who run their own Forgejo: serves GitHub's REST and GraphQL APIs on the forge's own
+    hostname, so gh, Claude and other GitHub tools work with it. Setup:
+    https://github.com/dirtydishes/gh-forgejo-shim/blob/main/docs/gateway/server-mode.md
 
 jobs:
   version:
@@ -224,7 +230,8 @@ jobs:
             org.opencontainers.image.version=${{ needs.version.outputs.version }}
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.title=fga-server
-            org.opencontainers.image.description=GitHub API gateway for a Forgejo instance (gh-forgejo-shim server mode)
+            org.opencontainers.image.url=${{ env.GATEWAY_DOCS }}
+            org.opencontainers.image.description=${{ env.GATEWAY_DESCRIPTION }}
           outputs: type=image,name=${{ env.GATEWAY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Save the digest
@@ -307,6 +314,8 @@ jobs:
             --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --annotation "index:org.opencontainers.image.version=${VERSION}" \
             --annotation "index:org.opencontainers.image.licenses=MIT" \
-            --annotation "index:org.opencontainers.image.description=GitHub API gateway for a Forgejo instance (gh-forgejo-shim server mode)" \
+            --annotation "index:org.opencontainers.image.title=fga-server" \
+            --annotation "index:org.opencontainers.image.url=${GATEWAY_DOCS}" \
+            --annotation "index:org.opencontainers.image.description=${GATEWAY_DESCRIPTION}" \
             "${sources[@]}"
           docker buildx imagetools inspect "${GATEWAY_IMAGE}:${VERSION}"
