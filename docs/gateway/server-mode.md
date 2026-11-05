@@ -10,45 +10,57 @@ by calling `https://<forge>/api/v3` themselves, outside of any `gh` process. Onl
 the forge's hostname can answer them. The client-only wrapper still serves Claude's agent when it runs
 `gh` in a shell.
 
-You need control of the forge's reverse proxy. Hosted forges where you can't add routes, such as
-Codeberg, can't use server mode.
+**You need:**
+
+- your own Forgejo;
+- a reverse proxy in front of it that you control: nginx, Caddy or Nginx Proxy Manager. A hosted
+  forge such as Codeberg, where you can't add routes, can't use server mode;
+- Docker with Compose, on a machine that can reach Forgejo.
 
 ## 1. Run the gateway
 
-Build the image from this repository's root, then run it where it can reach Forgejo. The examples
-below assume Forgejo listens on the host at `127.0.0.1:3000` and the proxy runs on the host:
+Each release publishes the gateway as an image for linux/amd64 and linux/arm64,
+`ghcr.io/dirtydishes/fga-server`, tagged with the release's version.
+
+**With Docker Compose**, next to a Forgejo that runs in a container: copy the example
+[compose file](../../packaging/gateway/compose.yaml) into a folder of its own, set the three values it
+marks, and run `docker compose up -d` in that folder. It puts the gateway on the Docker network Forgejo
+and the proxy share, where the proxy reaches it as `fga-server:8080`; it publishes no port.
+
+- `FGA_FORGEJO_URL` is how the gateway reaches Forgejo, usually its address on that network.
+- `FGA_PUBLIC_URL` is the forge's own address, as users type it. The gateway builds links from it and
+  answers only requests addressed to its host and port.
+- `FGA_WIP_PREFIXES` must match Forgejo's `[repository.pull-request] WORK_IN_PROGRESS_PREFIXES` if you
+  changed them (default `WIP:,[WIP]`).
+
+**With `docker run`**, when Forgejo and the proxy run on the host, with Forgejo at `127.0.0.1:3000`:
 
 ```sh
-docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .
 docker run -d --name fga-server --restart unless-stopped --network host \
     -e FGA_LISTEN=127.0.0.1:8080 \
     -e FGA_FORGEJO_URL=http://127.0.0.1:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
-    fga-server:<version>
+    ghcr.io/dirtydishes/fga-server:<version>
 ```
 
-If Forgejo runs in a container instead, put the gateway on Forgejo's Docker network and publish it
-on the host's loopback for a proxy on the host. Leave `FGA_LISTEN` unset: the image listens on
-`0.0.0.0:8080` inside its container, which a published port or another container needs.
+When Forgejo runs in a container and the proxy on the host, put the gateway on Forgejo's network and
+publish it on the host's loopback. Leave `FGA_LISTEN` unset: the image listens on `0.0.0.0:8080` inside
+its container, which a published port or another container needs.
 
 ```sh
 docker run -d --name fga-server --restart unless-stopped \
     --network <forgejo's network> -p 127.0.0.1:8080:8080 \
     -e FGA_FORGEJO_URL=http://<forgejo container>:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
-    fga-server:<version>
+    ghcr.io/dirtydishes/fga-server:<version>
 ```
 
-- `FGA_FORGEJO_URL` is how the gateway reaches Forgejo, usually its internal address.
-- `FGA_PUBLIC_URL` is the forge's own address, as users type it. The gateway builds links from it and
-  answers only requests addressed to its host and port.
-- `FGA_WIP_PREFIXES` must match Forgejo's `[repository.pull-request] WORK_IN_PROGRESS_PREFIXES` if you
-  changed them (default `WIP:,[WIP]`).
+The [gateway README](README.md) lists every setting. To upgrade, change the image tag to the new
+release and start the gateway again; to roll back, change the tag back. The gateway keeps no state.
 
-The [gateway README](README.md) lists every setting. For Docker Compose, start from the example
-[compose file](../../packaging/gateway/compose.yaml): it runs the gateway on a network it shares with
-Forgejo and the proxy. Tag each image with its release, so the README's
-[upgrade and rollback](../../README.md#upgrade-and-roll-back) is a switch between tags.
+To build the image yourself instead, run
+`docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .` in a checkout of that release,
+and use `fga-server:<version>` as the image.
 
 ## 2. Mount it on the forge's hostname
 
@@ -103,7 +115,7 @@ docker run -d --name fga-server --restart unless-stopped \
     --network <NPM's network> \
     -e FGA_FORGEJO_URL=http://<forgejo container>:3000 \
     -e FGA_PUBLIC_URL=https://forge.example.com \
-    fga-server:<version>
+    ghcr.io/dirtydishes/fga-server:<version>
 ```
 
 Start it before the next step: nginx looks up that name when NPM saves the host, and if it can't, NPM
