@@ -295,3 +295,8 @@ labelled
   default one.
 - In server mode, the gateway refuses any host but the forge's own with `421` before a token is
   used, stores no token, and needs a token on every API route.
+
+## Thanks
+
+[@pikos-apikos](https://github.com/pikos-apikos) contributed private CA support (#30):
+`FJ_SHIM_CA_FILE`, which carries into this release alongside the per-host `ca_file` setting.
