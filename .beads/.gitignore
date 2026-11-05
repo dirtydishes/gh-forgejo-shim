@@ -75,3 +75,10 @@ last_pull
 proxieddb/
 dolt-server-config.yaml
 proxied_server_client_info.json
+
+# Kept local: config.yaml names the private sync server, and the JSONL
+# exports copy tracker data. The repository is public; GitHub issues are
+# the public tracker.
+config.yaml
+issues.jsonl
+interactions.jsonl
