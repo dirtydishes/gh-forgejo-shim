@@ -1,6 +1,6 @@
 # gh-forgejo-shim
 
-`gh-forgejo-shim` is a native Rust CLI that helps Codex.app, T3 Code, and other GitHub-oriented tools work inside Forgejo repositories without putting Python in the installed `gh`, `gfj`, or `gh-forgejo-shim` runtime path.
+`gh-forgejo-shim` is a native Rust CLI that helps Codex.app and other GitHub-oriented tools work inside Forgejo repositories without putting Python in the installed `gh`, `gfj`, or `gh-forgejo-shim` runtime path.
 
 It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`. In allowlisted Forgejo repositories, the pull request, issue, run and API commands that coding tools use run the real `gh` too, against a gateway the wrapper starts for the call; the shim's own code answers the rest of a narrow set of repository, pull request, issue and check commands. The wrapper needs `gh` 2.103.3 or newer ([Requirements](#requirements)).
 
@@ -9,8 +9,8 @@ This is not full `gh` emulation. It is compatibility glue for the `gh` calls and
 ## Two Ways To Run It
 
 - **Client-only:** the `gh` wrapper on each machine. Each `gh` call in a Forgejo repository starts a
-  private gateway for that call alone, and nothing changes on the forge. It covers Codex, T3 Code and
-  any agent or tool that runs `gh`.
+  private gateway for that call alone, and nothing changes on the forge. It covers Codex and any
+  agent or tool that runs `gh`.
 - **Server mode (new in 0.2.0):** the gateway, `fga-server`, runs beside Forgejo on the forge's own
   hostname, so the forge itself answers GitHub's API. Any `gh` logged in to the forge works with no
   wrapper, and so do tools that call the API without `gh`. **Use it if you use Claude Code or Claude
