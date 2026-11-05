@@ -11,11 +11,41 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  GATEWAY_IMAGE: ghcr.io/dirtydishes/fga-server
 
 jobs:
+  version:
+    name: check version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Check the tag names the crate's version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The archives, the Homebrew formula and the gateway image take the version from Cargo.toml.
+          version="$(cargo pkgid -p gh-forgejo-shim | awk -F'[#@]' '{ print $NF }')"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} doesn't match the crate version ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
   build-artifacts:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    needs: version
 
     strategy:
       fail-fast: false
@@ -41,18 +71,6 @@ jobs:
           rustup toolchain install
           rustup show active-toolchain
           rustup target add "${{ matrix.target }}"
-
-      - name: Check the tag names the crate's version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The archives and the Homebrew formula take the version from Cargo.toml.
-          version="$(cargo pkgid -p gh-forgejo-shim | awk -F'[#@]' '{ print $NF }')"
-          if [[ "$GITHUB_REF_NAME" != "v${version}" ]]; then
-            echo "tag ${GITHUB_REF_NAME} doesn't match the crate version ${version}" >&2
-            exit 1
-          fi
 
       - name: Cache cargo build output
         uses: Swatinem/rust-cache@v2
@@ -157,3 +175,120 @@ jobs:
               --notes-file docs/release-notes.md \
               --verify-tag
           fi
+
+  # The gateway image for server mode: each architecture builds on its own runner and pushes by
+  # digest, then gateway-image-publish tags both as one image.
+  gateway-image:
+    name: gateway image ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    needs: [version, build-artifacts]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/gateway/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.title=fga-server
+            org.opencontainers.image.description=GitHub API gateway for a Forgejo instance (gh-forgejo-shim server mode)
+          outputs: type=image,name=${{ env.GATEWAY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Save the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  gateway-image-publish:
+    name: publish gateway image
+    runs-on: ubuntu-24.04
+    needs: [version, gateway-image]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gateway-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the image for both architectures
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        working-directory: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tags=(-t "${GATEWAY_IMAGE}:${VERSION}")
+          # A prerelease such as 0.3.0-rc.1 doesn't move `latest`.
+          if [[ "$VERSION" != *-* ]]; then
+            tags+=(-t "${GATEWAY_IMAGE}:latest")
+          fi
+          sources=()
+          for digest in *; do
+            sources+=("${GATEWAY_IMAGE}@sha256:${digest}")
+          done
+          docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "index:org.opencontainers.image.version=${VERSION}" \
+            --annotation "index:org.opencontainers.image.licenses=MIT" \
+            --annotation "index:org.opencontainers.image.description=GitHub API gateway for a Forgejo instance (gh-forgejo-shim server mode)" \
+            "${sources[@]}"
+          docker buildx imagetools inspect "${GATEWAY_IMAGE}:${VERSION}"
