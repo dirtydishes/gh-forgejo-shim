@@ -260,9 +260,9 @@ labelled
 
 ## Security fixes in this release
 
-- Trace redaction hides credentials in the forms ordinary git and gh commands produce: URL
-  passwords, Authorization headers, `-c http.extraHeader`, JSON bodies, `gh secret set --body`
-  (also after `-R`) and gh's secret flags.
+- Trace redaction hides credentials in common git and gh forms: URL passwords, Authorization
+  headers, `-c http.extraHeader`, JSON bodies, `gh secret set --body` (also after `-R`) and gh's
+  secret flags. Some forms still get through (#232, #233), so read a trace before you share it.
 - Trace files, a new `config.toml` and the token file are owner-only, the directories the shim
   creates are writable only by their owner, and the installed wrapper is never group- or
   world-writable.
