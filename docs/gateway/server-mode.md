@@ -28,16 +28,21 @@ marks, and run `docker compose up -d` in that folder. It puts the gateway on the
 and the proxy share, where the proxy reaches it as `fga-server:8080`; it publishes no port.
 
 The gateway, Forgejo and the proxy must be on one Docker network. If Forgejo and the proxy run in
-separate Compose projects, each has its own network: create a shared one once, then add it to both
-projects and set its name in the gateway's compose file.
+separate Compose projects, each has its own network: create a shared one once, add it to both
+projects, set its name in the gateway's compose file, and run `docker compose up -d` in each project
+you changed before starting the gateway.
 
 ```sh
 docker network create forge
 ```
 
 ```yaml
-# In Forgejo's and the proxy's compose files: list it under each service's `networks:`,
-# then declare it at the bottom.
+# In Forgejo's and the proxy's compose files. Keep `default` in the service's list, so it still
+# reaches the services it reached before, such as a database.
+services:
+  forgejo:
+    networks: [default, forge]
+
 networks:
   forge:
     external: true
