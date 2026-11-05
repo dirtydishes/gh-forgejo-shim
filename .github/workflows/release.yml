@@ -251,8 +251,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # One publish at a time, so two release runs can't race for `latest`.
+    concurrency:
+      group: gateway-image-publish
+      cancel-in-progress: false
 
     steps:
+      # For the repository's release tags, which decide whether this version is the newest.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: source
+
       - name: Download the digests
         uses: actions/download-artifact@v4
         with:
@@ -278,9 +289,14 @@ jobs:
         run: |
           set -euo pipefail
           tags=(-t "${GATEWAY_IMAGE}:${VERSION}")
-          # A prerelease such as 0.3.0-rc.1 doesn't move `latest`.
-          if [[ "$VERSION" != *-* ]]; then
+          # `latest` names the newest stable release: a prerelease such as 0.3.0-rc.1 doesn't move
+          # it, and neither does a rerun for an older release.
+          newest="$(git -C ../source tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname \
+            | grep -v -e '-' | head -n 1)"
+          if [[ "$VERSION" != *-* && "$newest" == "v${VERSION}" ]]; then
             tags+=(-t "${GATEWAY_IMAGE}:latest")
+          else
+            echo "${VERSION} isn't the newest stable release (${newest}); latest stays where it is"
           fi
           sources=()
           for digest in *; do
