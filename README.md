@@ -664,6 +664,8 @@ Code and Claude desktop, which look up a branch's pull request themselves, outsi
 1. Copy [packaging/gateway/compose.yaml](packaging/gateway/compose.yaml) into a folder of its own.
 2. In it, set `FGA_PUBLIC_URL` to the forge's address as users type it, `FGA_FORGEJO_URL` to how the
    gateway reaches Forgejo, and the network name to the Docker network Forgejo and the proxy share.
+   If they don't share one yet, [server-mode.md](docs/gateway/server-mode.md#1-run-the-gateway) shows
+   how to create one and attach them.
 3. In that folder, run `docker compose up -d`. It pulls the published image,
    `ghcr.io/dirtydishes/fga-server`.
 4. Route three paths on the forge's hostname to `fga-server:8080`, and everything else to Forgejo as

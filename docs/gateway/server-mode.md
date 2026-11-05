@@ -27,6 +27,22 @@ Each release publishes the gateway as an image for linux/amd64 and linux/arm64,
 marks, and run `docker compose up -d` in that folder. It puts the gateway on the Docker network Forgejo
 and the proxy share, where the proxy reaches it as `fga-server:8080`; it publishes no port.
 
+The gateway, Forgejo and the proxy must be on one Docker network. If Forgejo and the proxy run in
+separate Compose projects, each has its own network: create a shared one once, then add it to both
+projects and set its name in the gateway's compose file.
+
+```sh
+docker network create forge
+```
+
+```yaml
+# In Forgejo's and the proxy's compose files: list it under each service's `networks:`,
+# then declare it at the bottom.
+networks:
+  forge:
+    external: true
+```
+
 - `FGA_FORGEJO_URL` is how the gateway reaches Forgejo, usually its address on that network.
 - `FGA_PUBLIC_URL` is the forge's own address, as users type it. The gateway builds links from it and
   answers only requests addressed to its host and port.
