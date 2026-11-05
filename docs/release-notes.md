@@ -1,3 +1,15 @@
+# gh-forgejo-shim v0.2.2
+
+- **The gateway ships as a ready-made image.** Each release publishes `fga-server` for
+  linux/amd64 and linux/arm64 as `ghcr.io/dirtydishes/fga-server`, tagged with the version and
+  `latest`. Server mode no longer needs a source checkout or a local `docker build`.
+- **Server-mode setup starts from the image.** The README and `docs/gateway/server-mode.md` list what
+  you need, then the steps: copy the compose file, set two addresses and the network, start it,
+  route three paths, check, log in. Upgrading means changing the image tag; rolling back means
+  changing it back. The example compose file names a real release.
+
+The v0.2.1 notes follow.
+
 # gh-forgejo-shim v0.2.1
 
 A small follow-up to v0.2.0:
