@@ -1,26 +1,29 @@
-# The gateway in server mode, for a Forgejo that runs in a container. See docs/gateway/server-mode.md.
+# The gateway in server mode, next to a Forgejo that runs in a container.
+# See docs/gateway/server-mode.md.
 #
-# Build the image from a checkout of the release you want, and tag it with that version:
-#   docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .
-# Keep each version's image and a copy of this file, so a rollback is a switch back (README, "Upgrade
-# and roll back").
+# Copy this file to a folder of its own, set the three values marked below, then run
+# `docker compose up -d` in that folder. To upgrade, change the image tag and run it again; to roll
+# back, change the tag back.
 services:
   fga-server:
-    image: fga-server:1.0.0 # the tag you built
+    # A release from https://github.com/dirtydishes/gh-forgejo-shim/releases. Pin a version, so an
+    # upgrade happens only when you change it.
+    image: ghcr.io/dirtydishes/fga-server:0.2.2
     container_name: fga-server
     restart: unless-stopped
     environment:
-      # How the gateway reaches Forgejo: its address on the shared network.
+      # 1. How the gateway reaches Forgejo: its address on the shared network.
       FGA_FORGEJO_URL: http://forgejo:3000
-      # The forge's own address, as users type it. The gateway answers only this host and port.
+      # 2. The forge's own address, as users type it. The gateway answers only this host and port.
       FGA_PUBLIC_URL: https://forge.example.com
       # Match Forgejo's [repository.pull-request] WORK_IN_PROGRESS_PREFIXES if you changed them.
       # FGA_WIP_PREFIXES: "WIP:,[WIP]"
-    # The network Forgejo and the reverse proxy share. With Nginx Proxy Manager, that's NPM's network,
-    # and the proxy reaches the gateway as http://fga-server:8080. No port is published.
+    # The network Forgejo and the reverse proxy share, so the proxy reaches the gateway as
+    # http://fga-server:8080. With Nginx Proxy Manager, that's NPM's network. No port is published.
     networks: [forge]
 
 networks:
   forge:
     external: true
-    name: forge # the existing network's name
+    # 3. The existing network's name.
+    name: forge
