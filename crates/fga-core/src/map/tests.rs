@@ -1168,3 +1168,30 @@ fn body_html_bounds_sparse_tables() {
     let ordinary = "|a|b|c|\n|-|-|-|\n".to_owned() + &"|1|2|3|\n".repeat(500);
     assert!(body_html(&ordinary).starts_with("<table>"));
 }
+
+/// A table under the cell bound can still be a hundred times larger as HTML than as Markdown, and a
+/// document can hold many of them. Once the shared budget runs out, the rest come back escaped
+/// without being parsed.
+#[test]
+fn body_html_budget_bounds_repeated_sparse_tables() {
+    let table = format!(
+        "{}\n{}|\n{}",
+        "|".repeat(100),
+        "|-".repeat(99),
+        "x\n".repeat(100)
+    );
+    let forge = "https://forge.example".parse().unwrap();
+    let budget = std::sync::atomic::AtomicUsize::new(1024 * 1024);
+    let started = std::time::Instant::now();
+    let rendered = (0..100)
+        .map(|_| super::body_html_within(&table, Some(&forge), &budget))
+        .filter(|html| html.starts_with("<table>"))
+        .count();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!((1..=12).contains(&rendered), "{rendered} tables rendered");
+    assert_eq!(budget.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
