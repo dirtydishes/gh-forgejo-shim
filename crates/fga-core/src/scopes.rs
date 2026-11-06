@@ -21,7 +21,7 @@ pub const REQUIRED: [Scope; 4] = [
     Scope {
         name: "read:user",
         category: "user",
-        without: "the gateway can't tell whose token it is, so every call fails",
+        without: "every gh call fails, since the gateway can't tell whose token it is",
         read_only: None,
     },
     Scope {
