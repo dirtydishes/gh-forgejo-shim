@@ -46,6 +46,8 @@ impl Fixture {
             repo,
             gh,
         };
+        // A local file for `gh attestation download`, which reads it before any request.
+        fs::write(fixture.repo.join("artifact.bin"), "artifact\n")?;
         fixture.git(&["init", "-q"])?;
         fixture.git(&["remote", "add", "origin", "https://forge.test/o/r.git"])?;
         Ok(fixture)
@@ -163,6 +165,15 @@ fn stepped_aside_calls_reach_only_the_routed_forge() -> io::Result<()> {
     for args in [
         &["repo", "clone", "github.com/o/target"][..],
         &["repo", "delete", "github.com/o/target", "--yes"][..],
+        &[
+            "attestation",
+            "download",
+            "artifact.bin",
+            "--owner",
+            "o",
+            "--hostname",
+            "github.com",
+        ][..],
     ] {
         let (hosts, _, output) = fixture.requests(args)?;
         if hosts.iter().any(|host| !host.ends_with("forge.test")) {

@@ -1062,6 +1062,30 @@ fn a_call_naming_another_host_keeps_the_built_in_path() {
         ),
         (&["repo", "clone", "other.example/o/r"][..], None),
         (&["pr", "diff", "1"][..], Some("other.example")),
+        // `--hostname`'s value names a host on its own (parallax r1#1, #231).
+        (
+            &[
+                "attestation",
+                "download",
+                "artifact.bin",
+                "--owner",
+                "o",
+                "--hostname",
+                "github.com",
+            ][..],
+            None,
+        ),
+        (
+            &[
+                "attestation",
+                "download",
+                "artifact.bin",
+                "--owner",
+                "o",
+                "--hostname=github.com",
+            ][..],
+            None,
+        ),
     ] {
         let mut command = fixture.command(&gh, args);
         command.env("GH_REPO", "forge-a.test/o/r");
