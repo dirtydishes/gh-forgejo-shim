@@ -53,10 +53,24 @@ pub fn required(scope: &str) -> Option<&'static Scope> {
         .find(|required| required.category == category)
 }
 
+/// Forgejo's scope categories (`models/auth/access_token_scope.go`, Forgejo v15).
+const CATEGORIES: [&str; 9] = [
+    "activitypub",
+    "admin",
+    "issue",
+    "misc",
+    "notification",
+    "organization",
+    "package",
+    "repository",
+    "user",
+];
+
 /// The scopes Forgejo's missing-scope 403 names (`token does not have at least one of required
 /// scope(s): [read:issue]`, `routers/api/v1/permissions/token_requires_scopes.go`), space
-/// separated. Only `read:` or `write:` and a lowercase category count, so the text that reaches a
-/// log is one the gateway chose, not the upstream's.
+/// separated. Only `read:` or `write:` and one of Forgejo's own categories count, so a log only
+/// ever gets a scope name the gateway knows, never other text the upstream put there, such as a
+/// token echoed back.
 pub(crate) fn named_in(message: &str) -> String {
     let Some((_, list)) = message.split_once("scope(s):") else {
         return String::new();
@@ -69,9 +83,7 @@ pub(crate) fn named_in(message: &str) -> String {
         .split_whitespace()
         .filter(|scope| {
             scope.split_once(':').is_some_and(|(level, category)| {
-                matches!(level, "read" | "write")
-                    && !category.is_empty()
-                    && category.bytes().all(|byte| byte.is_ascii_lowercase())
+                matches!(level, "read" | "write") && CATEGORIES.contains(&category)
             })
         })
         .collect::<Vec<_>>()
@@ -92,25 +104,33 @@ pub fn set_sink(sink: impl Fn(&str) + Send + Sync + 'static) -> bool {
 }
 
 /// Logs, once per process for each forge and scope, that Forgejo refused `forge`'s token for
-/// missing `scope` and the gateway answered without that data.
-pub(crate) fn warn_hidden(forge: &str, scope: &str) {
-    {
-        let mut warned = WARNED
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if warned.iter().any(|(f, s)| f == forge && s == scope) {
-            return;
+/// missing `scopes` ([`named_in`]) and the gateway answered without that data. Each scope counts
+/// on its own, so the list of those already logged stays as short as Forgejo's scope list.
+pub(crate) fn warn_hidden(forge: &str, scopes: &str) {
+    let scopes: Vec<&str> = if scopes.is_empty() {
+        vec![""]
+    } else {
+        scopes.split(' ').collect()
+    };
+    for scope in scopes {
+        {
+            let mut warned = WARNED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if warned.iter().any(|(f, s)| f == forge && s == scope) {
+                continue;
+            }
+            warned.push((forge.to_owned(), scope.to_owned()));
         }
-        warned.push((forge.to_owned(), scope.to_owned()));
-    }
-    if let Some(sink) = SINK.get() {
-        sink(&warning(forge, scope));
+        if let Some(sink) = SINK.get() {
+            sink(&warning(forge, scope));
+        }
     }
 }
 
 fn warning(forge: &str, scope: &str) -> String {
     let named = if scope.is_empty() { "a scope" } else { scope };
-    match scope.split(' ').find_map(required) {
+    match required(scope) {
         Some(required) => format!(
             "warning: {forge}: the token lacks {named}, so {}; give it {} (README: Token scopes)",
             required.without, required.name
@@ -138,6 +158,12 @@ mod tests {
         // Anything else Forgejo might put there stays out of the log.
         assert_eq!(named_in(&message("[read:issue\nx]")), "read:issue");
         assert_eq!(named_in(&message("[admin:Everything secret:]")), "");
+        // A category Forgejo doesn't have, such as a token echoed back, never reaches a log.
+        assert_eq!(
+            named_in(&message("[read:abcdefabcdef read:issue]")),
+            "read:issue"
+        );
+        assert_eq!(named_in(&message("[read:abcdefabcdef]")), "");
         assert_eq!(named_in("Forbidden"), "");
     }
 
