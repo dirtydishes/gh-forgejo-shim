@@ -128,7 +128,7 @@ When bootstrap changes the macOS GUI PATH, restart already-running GUI apps befo
 1. Install the native package with Homebrew or a GitHub release tarball.
 2. Open a terminal inside your Forgejo repository.
 3. Run `gfj bootstrap`.
-4. Run `gfj auth login HOST`, or use `gfj auth import --from fj|tea --hostname HOST` to copy a token from that tool's config.
+4. Run `gfj auth login HOST` with a token that has the [four scopes](#token-scopes), or use `gfj auth import --from fj|tea --hostname HOST` to copy a token from that tool's config.
 5. Copy and run any repair commands `bootstrap` prints.
 6. On macOS, restart the GUI tool if `bootstrap` reports that it changed the GUI PATH.
 7. Confirm the setup:
@@ -548,6 +548,19 @@ On macOS, the current `fj` CLI stores auth in:
 
 Import also accepts fj's older `Cyborus.forgejo-cli/keys.json` location. On Linux, fj uses `${XDG_DATA_HOME:-~/.local/share}/forgejo-cli/keys.json`. Tea uses `${XDG_CONFIG_HOME}/tea/config.yml`, defaulting to `~/Library/Application Support/tea/config.yml` on macOS or `~/.config/tea/config.yml` on Linux, with `~/.tea/tea.yml` as its legacy fallback.
 
+### Token scopes
+
+Create the Forgejo token under **Settings → Applications** with these four scopes. The wrapper and server mode need the same ones. In Forgejo a `write:` scope includes its `read:` scope, so a token with these four needs no other.
+
+| Scope | Without it |
+|---|---|
+| `read:user` | Every gh call fails, since the gateway can't tell whose token it is. |
+| `write:repository` | Pull requests, branches and checks can't be read. With `read:repository` only, pull requests can't be created, edited or merged. |
+| `write:issue` | Issues can't be read, and a pull request's comments and scheduled auto-merge read as none. With `read:issue` only, issues and comments can't be created or edited. |
+| `read:organization` | A repository an organization owns reads as owned by a user. |
+
+`gfj doctor` asks each configured host's Forgejo which of these its token has, and names any that's missing. Where a missing scope hides data rather than failing a call, as in the last two rows, the gateway answers without that data and logs one warning per scope: in fga-server's log, or, for the wrapper, as a `warning` record in the trace when `FJ_SHIM_TRACE` is set.
+
 ## Configuration
 
 Persistent configuration lives at:
@@ -639,6 +652,7 @@ gfj doctor
 - Whether `fj` can be found for legacy auth-import diagnostics. Missing `fj` is not a GitHub CLI readiness failure.
 - Whether at least one Forgejo host is allowlisted.
 - Whether an auth token can be discovered.
+- Whether each host's token has the [scopes it needs](#token-scopes). doctor asks that host's Forgejo, naming an owner that can't exist, so the check reads and changes nothing. It never prints the token.
 - On macOS, whether the user launchd PATH can expose the shim to new GUI apps.
 
 ## Rollback
@@ -707,14 +721,9 @@ Code and Claude desktop, which look up a branch's pull request themselves, outsi
    ```
 
 6. Log in. gh's browser login doesn't work with Forgejo, so create a token in Forgejo under
-   **Settings → Applications** with `read:user`, `write:repository`, `write:issue` and
-   `read:organization`, run `gh auth login --hostname forge.example.com`, and paste it. Claude and
-   ChatGPT desktop take their token from `gh`.
-
-For full ChatGPT and Claude PR views (comments, labels), give the token `read:issue`; without it the
-gateway shows PRs and hides what Forgejo won't let the token read. A token that can merge but lacks
-`read:issue` can't see or cancel a scheduled auto-merge from ChatGPT; use
-`gh pr merge --disable-auto` or the web UI, or give the token `read:issue`.
+   **Settings → Applications** with the [four scopes](#token-scopes), run
+   `gh auth login --hostname forge.example.com`, and paste it. Claude and ChatGPT desktop take their
+   token from `gh`.
 
 ### Upgrade and roll back
 
