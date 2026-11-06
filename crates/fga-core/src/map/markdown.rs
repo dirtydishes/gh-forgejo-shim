@@ -27,6 +27,15 @@ const MAX_DEPTH: usize = 64;
 /// is shown as text instead of passed to the sanitizer.
 const MAX_RAW_TAGS: usize = 256;
 
+/// A table row with fewer cells than its header is filled out to the header's width, so a short
+/// body can still ask for millions of cells. Past this many possible cells, tables are read as
+/// text. The bound is counted from the source: a table has at most one column more than the pipes
+/// on its delimiter line, and at most as many rows as the body has lines.
+const MAX_TABLE_CELLS: usize = 20_000;
+
+/// Rendered HTML past this size isn't sanitized: the body is shown as escaped paragraphs.
+const MAX_RENDERED_HTML: usize = 1024 * 1024;
+
 /// Tags GitHub keeps in rendered Markdown, apart from the ones it reserves for its own features.
 const TAGS: &[&str] = &[
     "a",
@@ -182,6 +191,9 @@ pub fn body_html(body: &str) -> String {
     }
     let arena = Arena::new();
     let mut options = options();
+    if table_cells_bound(&body) > MAX_TABLE_CELLS {
+        options.extension.table = false;
+    }
     let root = parse_document(&arena, &body, &options);
     let (depth, raw_tags) = shape(root);
     if depth > MAX_DEPTH {
@@ -192,10 +204,21 @@ pub fn body_html(body: &str) -> String {
         options.render.escape = true;
     }
     let mut rendered = String::new();
-    if format_html(root, &options, &mut rendered).is_err() {
+    if format_html(root, &options, &mut rendered).is_err() || rendered.len() > MAX_RENDERED_HTML {
         return escaped_paragraphs(&body);
     }
     SANITIZER.clean(&rendered).to_string().trim().to_owned()
+}
+
+/// At most how many cells the body's tables could hold, filled-out rows included.
+fn table_cells_bound(body: &str) -> usize {
+    let lines = body.lines().count();
+    let widest = body
+        .lines()
+        .map(|line| line.matches('|').count())
+        .max()
+        .unwrap_or(0);
+    (widest + 1).saturating_mul(lines)
 }
 
 /// How deeply the Markdown tree nests, and how many tags its raw HTML holds at most.
