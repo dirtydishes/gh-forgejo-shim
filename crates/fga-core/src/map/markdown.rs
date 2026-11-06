@@ -189,9 +189,10 @@ pub fn body_html(body: &str, forge: Option<&url::Url>) -> String {
     body_html_within(body, forge, &AtomicUsize::new(usize::MAX))
 }
 
-/// [`body_html`], drawing the rendered HTML's size from `budget`. The first body that doesn't fit
-/// empties it, and an empty budget escapes a body before parsing it, so once it runs out the rest
-/// of a document costs almost nothing. A body escaped for another reason draws nothing.
+/// [`body_html`], drawing the rendered HTML's size from `budget`. Every rendered body draws on it,
+/// shown or not; the body that empties it is escaped, and an empty budget escapes a body before
+/// parsing it, so once it runs out the rest of a document costs almost nothing. A body escaped
+/// before rendering draws nothing.
 pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsize) -> String {
     let body = body.replace('\r', "");
     if body.trim().is_empty() {
@@ -215,17 +216,14 @@ pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsi
         options.render.escape = true;
     }
     let mut rendered = String::new();
-    if format_html(root, &options, &mut rendered).is_err()
-        || rendered.len() > MAX_RENDERED_HTML
-        || budget
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(rendered.len())
-            })
-            .is_err()
-    {
-        if rendered.len() <= MAX_RENDERED_HTML {
-            budget.store(0, Ordering::Relaxed);
-        }
+    let failed = format_html(root, &options, &mut rendered).is_err();
+    // The work is done whether or not the HTML is shown, so it is charged either way.
+    let left = budget
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+            Some(left.saturating_sub(rendered.len()))
+        })
+        .unwrap_or_default();
+    if failed || rendered.len() > MAX_RENDERED_HTML || rendered.len() > left {
         return escaped_paragraphs(&body);
     }
     let forge = forge.map(url::Url::origin).filter(url::Origin::is_tuple);

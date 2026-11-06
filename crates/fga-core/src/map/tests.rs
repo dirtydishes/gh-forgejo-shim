@@ -1171,27 +1171,32 @@ fn body_html_bounds_sparse_tables() {
 
 /// A table under the cell bound can still be a hundred times larger as HTML than as Markdown, and a
 /// document can hold many of them. Once the shared budget runs out, the rest come back escaped
-/// without being parsed.
+/// without being parsed. A body too large to show still uses up its share.
 #[test]
 fn body_html_budget_bounds_repeated_sparse_tables() {
-    let table = format!(
-        "{}\n{}|\n{}",
-        "|".repeat(100),
-        "|-".repeat(99),
-        "x\n".repeat(100)
-    );
+    let sparse = |delimiter: &str| {
+        format!(
+            "{}\n{}|\n{}",
+            "|".repeat(98),
+            delimiter.repeat(97),
+            "x\n".repeat(195)
+        )
+    };
     let forge = "https://forge.example".parse().unwrap();
-    let budget = std::sync::atomic::AtomicUsize::new(1024 * 1024);
-    let started = std::time::Instant::now();
-    let rendered = (0..100)
-        .map(|_| super::body_html_within(&table, Some(&forge), &budget))
-        .filter(|html| html.starts_with("<table>"))
-        .count();
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(2),
-        "{:?}",
-        started.elapsed()
-    );
-    assert!((1..=12).contains(&rendered), "{rendered} tables rendered");
-    assert_eq!(budget.load(std::sync::atomic::Ordering::Relaxed), 0);
+    // Each renders to about 190 KB of HTML; centred columns, to about 480 KB, too much to show.
+    for (table, shown) in [(sparse("|-"), 1..=6), (sparse("|:-:"), 0..=0)] {
+        let budget = std::sync::atomic::AtomicUsize::new(1024 * 1024);
+        let started = std::time::Instant::now();
+        let rendered = (0..100)
+            .map(|_| super::body_html_within(&table, Some(&forge), &budget))
+            .filter(|html| html.starts_with("<table>"))
+            .count();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(shown.contains(&rendered), "{rendered} tables rendered");
+        assert_eq!(budget.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 }

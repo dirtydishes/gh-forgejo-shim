@@ -284,10 +284,10 @@ GitHub-flavoured Markdown, then sanitized, as GitHub serves it. Rendering happen
   HTML is shown as text when it holds more than 256 tags, and its tables are read as text when its
   pipes and lines could make more than 20,000 cells (short rows are filled out to the header's
   width). Rendered HTML over 256 KiB is shown as escaped paragraphs, because the sanitizer's time
-  grows faster than its input in some shapes. One request renders at most 1 MiB of HTML: the first
-  body that doesn't fit uses up what is left, and every body after it comes back as escaped
-  paragraphs without being parsed. A body escaped for any other reason draws nothing from that
-  budget.
+  grows faster than its input in some shapes. One request has a budget of 1 MiB of rendered HTML,
+  and every body it renders draws on it, whether or not it is shown. The body that runs it out
+  comes back as escaped paragraphs, and so does every body after it, without being parsed. A body
+  escaped before rendering draws nothing from that budget.
 
 **Differences from GitHub:** `#123` and `@user` aren't linked, headings get no anchors, footnotes
 and emoji shortcodes (`:tada:`) aren't rendered, and `cite` attributes are dropped. Images hosted
