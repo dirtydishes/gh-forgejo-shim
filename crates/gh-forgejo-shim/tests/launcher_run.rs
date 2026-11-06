@@ -1176,7 +1176,79 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
     );
     assert_eq!(fixture.report(), "", "gh never ran");
 
+    // `repo create` without `--push` doesn't push, so the push URL doesn't matter (r2#4).
+    let output = fixture
+        .command(&gh, &["repo", "create", "acme/new", "--private"])
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(reported(&fixture.report(), "GH_HOST"), "forge.test");
+
     git(&["config", "--unset", "remote.origin.pushurl"]);
+    // A rewrite for one owner's repositories still counts (r2#1).
+    git(&[
+        "config",
+        "url.https://github.com/acme/.pushInsteadOf",
+        "https://forge.test/acme/",
+    ]);
+    let _ = fs::remove_file(fixture.dir.join("report"));
+    let output = fixture
+        .command(
+            &gh,
+            &[
+                "repo",
+                "create",
+                "acme/new",
+                "--private",
+                "--source",
+                ".",
+                "--push",
+            ],
+        )
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fixture.report(), "", "gh never ran");
+    git(&["config", "--remove-section", "url.https://github.com/acme/"]);
+
+    // `--source` names the checkout gh pushes from, with its own rewrites (r2#2).
+    let source = fixture.dir.join("source");
+    fs::create_dir_all(&source).expect("source");
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "config",
+            "url.https://github.com/.pushInsteadOf",
+            "https://forge.test/",
+        ][..],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&source)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &fixture.home)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+    let output = fixture
+        .command(
+            &gh,
+            &[
+                "repo",
+                "create",
+                "acme/new",
+                "--private",
+                "--source=source",
+                "--push",
+            ],
+        )
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fixture.report(), "", "gh never ran");
+
     git(&[
         "config",
         "url.git@github.com:.pushInsteadOf",
