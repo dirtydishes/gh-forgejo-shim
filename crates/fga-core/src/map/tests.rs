@@ -816,13 +816,160 @@ fn pull_web_urls_take_githubs_layout() {
     );
 }
 
-/// Bodies are escaped, never rendered: a client may trust bodyHTML as sanitized, as GitHub's is.
+/// Bodies render as GitHub-flavoured Markdown, as GitHub's bodyHTML does.
 #[test]
-fn body_html_escapes_markup_and_keeps_paragraphs() {
-    assert_eq!(body_html(""), "");
-    assert_eq!(
-        body_html("a <script>x</script>\r\n\r\nc & \"d\"\ne"),
-        "<p>a &lt;script&gt;x&lt;/script&gt;</p>\n<p>c &amp; &quot;d&quot;<br>\ne</p>"
+fn body_html_renders_github_flavoured_markdown() {
+    let cases = [
+        ("", ""),
+        ("  \r\n ", ""),
+        ("line one\r\nline two", "<p>line one<br>\nline two</p>"),
+        (
+            "# Title\n\n- a\n- b",
+            "<h1>Title</h1>\n<ul>\n<li>a</li>\n<li>b</li>\n</ul>",
+        ),
+        (
+            "| a | b |\n|---|:-:|\n| 1 | 2 |",
+            "<table>\n<thead>\n<tr>\n<th>a</th>\n<th align=\"center\">b</th>\n</tr>\n</thead>\n\
+             <tbody>\n<tr>\n<td>1</td>\n<td align=\"center\">2</td>\n</tr>\n</tbody>\n</table>",
+        ),
+        (
+            "- [x] done\n- [ ] todo",
+            "<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> done</li>\n\
+             <li><input disabled=\"\" type=\"checkbox\"> todo</li>\n</ul>",
+        ),
+        ("~~gone~~", "<p><del>gone</del></p>"),
+        (
+            "see https://example.com/x and www.example.com",
+            "<p>see <a href=\"https://example.com/x\" rel=\"nofollow noopener noreferrer\">\
+             https://example.com/x</a> and <a href=\"http://www.example.com\" \
+             rel=\"nofollow noopener noreferrer\">www.example.com</a></p>",
+        ),
+        (
+            "```rust\nfn main() {}\n```",
+            "<pre lang=\"rust\"><code>fn main() {}\n</code></pre>",
+        ),
+        (
+            "<details><summary>s</summary>body</details>",
+            "<details><summary>s</summary>body</details>",
+        ),
+        ("a & \"b\" <c>", "<p>a &amp; \"b\" </p>"),
+    ];
+    for (body, html) in cases {
+        assert_eq!(body_html(body), html, "{body:?}");
+    }
+}
+
+/// Clients trust bodyHTML as sanitized, so markup that could run script, restyle the page, submit
+/// a form or load a non-HTTP resource never comes through, whatever the body holds.
+#[test]
+fn body_html_removes_hostile_markup() {
+    let rel = "rel=\"nofollow noopener noreferrer\"";
+    let cases = [
+        ("a <script>alert(1)</script> b", "<p>a  b</p>".to_owned()),
+        ("<img src=x onerror=alert(1)>", "<img>".to_owned()),
+        ("<img src=\"/attachments/a.png\">", "<img>".to_owned()),
+        (
+            "![i](javascript:alert(1))",
+            "<p><img alt=\"i\"></p>".to_owned(),
+        ),
+        (
+            "<img src=\"https://example.com/a.png\" alt=a width=10>",
+            "<img src=\"https://example.com/a.png\" alt=\"a\" width=\"10\">".to_owned(),
+        ),
+        ("[x](javascript:alert(1))", format!("<p><a {rel}>x</a></p>")),
+        ("[x](JaVaScRiPt:alert(1))", format!("<p><a {rel}>x</a></p>")),
+        (
+            "[x](data:text/html;base64,PHNjcmlwdD4=)",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"vbscript:x\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "[ok](https://example.com) [mail](mailto:a@example.com) [rel](../x)",
+            format!(
+                "<p><a href=\"https://example.com\" {rel}>ok</a> \
+                 <a href=\"mailto:a@example.com\" {rel}>mail</a> <a href=\"../x\" {rel}>rel</a></p>"
+            ),
+        ),
+        (
+            "<a href=\"https://e.com\" onclick=\"x()\" style=\"color:red\" target=_blank id=x class=c>l</a>",
+            format!("<p><a href=\"https://e.com\" {rel}>l</a></p>"),
+        ),
+        (
+            "<div><b>unclosed <i>tags",
+            "<div><b>unclosed <i>tags\n</i></b></div>".to_owned(),
+        ),
+        (
+            "<!-- <script>alert(1)</script> --> after",
+            "after".to_owned(),
+        ),
+        ("<!-- <a href=x>hidden", "".to_owned()),
+        (
+            "<input type=text value=x>",
+            "<input type=\"checkbox\">".to_owned(),
+        ),
+        ("<form action=/x><button>b</button></form>", "b".to_owned()),
+        (
+            "<iframe src=https://e.com></iframe><object data=x></object><embed src=x><style>p{}</style>",
+            "".to_owned(),
+        ),
+        (
+            "<svg><script>alert(1)</script></svg><math><mi>x</mi></math>",
+            "<p></p>".to_owned(),
+        ),
+        (
+            "<p style=\"background:url(x)\">s</p>",
+            "<p>s</p>".to_owned(),
+        ),
+        (
+            "<base href=https://evil.example><meta http-equiv=refresh content=0>",
+            "".to_owned(),
+        ),
+    ];
+    for (body, html) in cases {
+        assert_eq!(body_html(body), html, "{body:?}");
+    }
+}
+
+/// A body built to make the renderer or the sanitizer slow, or one too long to render, comes back
+/// quickly, as escaped paragraphs or with its raw HTML shown as text.
+#[test]
+fn body_html_stays_fast_on_pathological_bodies() {
+    let deep_quotes = ">".repeat(60_000);
+    let deep_lists: String = (0..2_000)
+        .map(|i| format!("{}- x\n", "  ".repeat(i)))
+        .collect();
+    let deep_html = "<div>".repeat(12_000);
+    let raw_then_table = "<div>".repeat(200) + "\n\n|a|b|\n|-|-|\n" + &"|x|y|\n".repeat(9_000);
+    let huge = "word ".repeat(1_000_000);
+    for body in [
+        &deep_quotes,
+        &deep_lists,
+        &deep_html,
+        &raw_then_table,
+        &huge,
+    ] {
+        let started = std::time::Instant::now();
+        let html = body_html(body);
+        // Generous, so a slow CI machine passes; the unguarded cases took seconds to minutes.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{} bytes took {:?}",
+            body.len(),
+            started.elapsed()
+        );
+        assert!(!html.contains("<script"), "{html:.80}");
+    }
+    // Past the guards the body still reads, escaped.
+    assert!(body_html(&deep_quotes).starts_with("<p>&gt;&gt;&gt;"));
+    assert!(body_html(&huge).starts_with("<p>word word"));
+    // Too much raw HTML: shown as text.
+    assert!(
+        body_html(&deep_html).starts_with("&lt;div&gt;&lt;div&gt;"),
+        "{:.80}",
+        body_html(&deep_html)
     );
 }
 

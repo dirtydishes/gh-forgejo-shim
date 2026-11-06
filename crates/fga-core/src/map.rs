@@ -106,28 +106,11 @@ pub fn pull_request(pr: &forgejo::PullRequest, prefixes: &WipPrefixes) -> Value 
     })
 }
 
-/// A body as GitHub-shaped HTML without rendering its Markdown: escaped paragraphs and line
-/// breaks. Forgejo's API returns no rendered HTML, rendering through it costs a request per body,
-/// and clients may trust bodyHTML as sanitized, as GitHub's is.
-pub fn body_html(body: &str) -> String {
-    let escaped = body
-        .replace('\r', "")
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;");
-    escaped
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|paragraph| !paragraph.is_empty())
-        .map(|paragraph| format!("<p>{}</p>", paragraph.replace('\n', "<br>\n")))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 mod checks;
+mod markdown;
 mod pulls;
 pub use checks::*;
+pub use markdown::{body_html, escaped_body_html};
 pub use pulls::*;
 
 #[cfg(test)]
