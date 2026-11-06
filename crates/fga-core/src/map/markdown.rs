@@ -135,15 +135,27 @@ static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
         .clean_content_tags(["script", "style"].into_iter().collect())
         .attribute_filter(|tag, attribute, value| {
             if tag == "img" && attribute == "src" {
-                let scheme = value
-                    .split_once(':')
-                    .map(|(scheme, _)| scheme.to_ascii_lowercase());
-                return matches!(scheme.as_deref(), Some("http" | "https")).then(|| value.into());
+                return absolute_http_url(value).map(Into::into);
             }
             Some(value.into())
         });
     builder
 });
+
+/// An image source as an absolute `http` or `https` URL with a host, written out in full and
+/// parsed again, or nothing. `https:/path`, `https:path` and `https:\\path` resolve against the
+/// page that shows the image, which would make the client request its own origin.
+fn absolute_http_url(value: &str) -> Option<String> {
+    let trimmed = value.trim_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control());
+    let lower = trimmed.get(..8).unwrap_or(trimmed).to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return None;
+    }
+    let url = url::Url::parse(trimmed).ok()?;
+    (matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some_and(|host| !host.is_empty()))
+    .then(|| url.into())
+}
 
 fn options() -> Options<'static> {
     let mut options = Options::default();

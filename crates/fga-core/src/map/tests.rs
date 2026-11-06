@@ -1054,3 +1054,36 @@ fn checks_keep_context_order_whatever_forgejo_sends() {
     assert_eq!(names(&[lint.clone(), check.clone()]), expected);
     assert_eq!(names(&[check, lint]), expected);
 }
+
+/// An image source must name its own host: a scheme without `//` resolves against the page showing
+/// it, so the client would request its own origin. Kept sources come back as parsed.
+#[test]
+fn body_html_images_need_an_absolute_http_url() {
+    for src in [
+        "https:/api/logout",
+        "https:api/logout",
+        "https:\\\\api\\\\logout",
+        "https&#58;/api/logout",
+        "https:&#x2F;api/logout",
+        "http:/x",
+        "//evil.example/x",
+        "\\\\evil.example\\x",
+        "javascript:alert(1)",
+        "data:image/png;base64,AAAA",
+    ] {
+        assert_eq!(body_html(&format!("<img src=\"{src}\">")), "<img>", "{src}");
+    }
+    // Extra slashes name a host, as a browser reads them, and come back in that form.
+    assert_eq!(
+        body_html("<img src=\"https:///x\">"),
+        "<img src=\"https://x/\">"
+    );
+    assert_eq!(
+        body_html("<img src=\" HTTPS://Example.COM/a b.png\">"),
+        "<img src=\"https://example.com/a%20b.png\">"
+    );
+    assert_eq!(
+        body_html("![a](https://example.com/i.png)"),
+        "<p><img src=\"https://example.com/i.png\" alt=\"a\"></p>"
+    );
+}
