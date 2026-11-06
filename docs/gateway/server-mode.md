@@ -190,9 +190,10 @@ without a host as an argument. Commands that manage gh itself, such as `gh auth 
 and `gh extension`, run as usual. With `-R` or `GH_REPO`, name the host:
 `-R forge.example.com/OWNER/REPO`; a host-less `-R OWNER/REPO` is refused there. `gh search`
 searches the forge. `gh gist` and other GitHub-only commands fail with the forge's answer; run
-them outside the checkout to reach github.com. `gh pr create` and
-`gh repo create --push` stop with an error when git would push the forge's commits to another host,
-through a remote's push URL or a `pushInsteadOf` rule.
+them outside the checkout to reach github.com. `gh pr create` stops with an error when git would
+push the forge's commits to another host, through a remote's push URL, a `pushInsteadOf` rule or an
+SSH host alias. `gh repo create` with `--push`, or when it prompts, stops too: create the repository
+without `--push`, then push with git.
 
 ## Limits
 

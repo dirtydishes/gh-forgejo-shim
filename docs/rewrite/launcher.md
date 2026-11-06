@@ -223,11 +223,15 @@ reaching github.com. A user `GH_HOST` naming the forge stays; one naming another
 that doesn't launch on the built-in path (above), and gives way to the forge on the launch path,
 where routing already chose it. `GH_HOST` doesn't steer git: `gh pr create` pushes the branch's
 remote and `gh repo create --push` the remote it adds, and a remote's push URL or
-`url.<base>.pushInsteadOf` can send that push to another host. So a forge-routed `pr create`, or
-a `repo create` that pushes (`--push`, or prompting with no name), launched or not, is refused
-before gh runs when, in the checkout it pushes from (`--source` for `repo create`), a forge
-remote's push URL names another host, or an `insteadOf` or `pushInsteadOf` rule whose prefix
-overlaps one of the forge's URL forms rewrites to another host. The trace names the portless
+`url.<base>.pushInsteadOf` can send that push to another host, as can an SSH host alias. So a
+forge-routed `pr create` (or `pr new`), launched or not, is refused before gh runs when a forge
+remote's push URL in the checkout names another host, an `insteadOf` or `pushInsteadOf` rule whose
+prefix overlaps one of the forge's URL forms rewrites to another host, or, unless gh's
+`git_protocol` for the forge is `https`, SSH resolves the forge's hostname to another host for a
+fork remote gh adds. A `repo create` (or `repo new`) that pushes, with `--push` or when it prompts
+(no argument and no flag), is refused outright: it pushes from a `--source` checkout the wrapper
+would have to read as gh does. Without `--push` it creates the repository, and git pushes after.
+The command is found as `pr` or `repo` followed anywhere by `create` or `new`. The trace names the portless
 hostname gh reaches. For a forge entry with a port, that holds only when the call doesn't spell
 the port: gh keeps it for a full name (`-R forge.test:3443/o/r`, `GH_REPO`, `gh api`'s URL or
 `--hostname`) and drops it for a URL or a remote, so a call or `GH_REPO` naming `forge.test:3443`
@@ -1007,8 +1011,9 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     `GH_HOST`: every request goes to the forge and the trace names it (`tests/step_aside_hosts.rs`
     checks the requests real gh sends), and `gh auth token` prints the forge's token from the
     user's own config. `gh attestation download f --owner o --hostname github.com` doesn't step
-    aside. A forge-routed `gh pr create` or `gh repo create` stops before gh runs when the forge
-    remote's push URL, or a `pushInsteadOf` rule, sends git's push to another host. gh's environment then
+    aside. A forge-routed `gh pr create` stops before gh runs when the forge remote's push URL, or
+    a `pushInsteadOf` rule, sends git's push to another host, and `gh repo create --push` always
+    does. gh's environment then
     has `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_GH_HOST` (if the user set one) and `FJ_SHIM_SET_GH_HOST`,
     and no `FJ_SHIM_LAUNCHER`. With `GH_ENTERPRISE_TOKEN=ghe_corp` also set, `gh auth token`
     prints the forge's own token, gh's environment has no `GH_ENTERPRISE_TOKEN`, and
