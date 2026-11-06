@@ -958,9 +958,11 @@ fn body_html_removes_hostile_markup() {
 #[test]
 fn body_html_stays_fast_on_pathological_bodies() {
     let deep_quotes = ">".repeat(60_000);
-    let deep_lists: String = (0..2_000)
+    // 100 levels in under 64 KiB, so the depth guard, not the size cap, decides.
+    let deep_lists: String = (0..100)
         .map(|i| format!("{}- x\n", "  ".repeat(i)))
         .collect();
+    let ampersands = "&".repeat(65_000);
     let deep_html = "<div>".repeat(12_000);
     let raw_then_table = "<div>".repeat(200) + "\n\n|a|b|\n|-|-|\n" + &"|x|y|\n".repeat(9_000);
     let huge = "word ".repeat(1_000_000);
@@ -969,6 +971,7 @@ fn body_html_stays_fast_on_pathological_bodies() {
         &deep_lists,
         &deep_html,
         &raw_then_table,
+        &ampersands,
         &huge,
     ] {
         let started = std::time::Instant::now();
@@ -984,6 +987,12 @@ fn body_html_stays_fast_on_pathological_bodies() {
     }
     // Past the guards the body still reads, escaped.
     assert!(body_html(&deep_quotes).starts_with("<p>&gt;&gt;&gt;"));
+    assert!(
+        body_html(&deep_lists).starts_with("<p>- x"),
+        "{:.80}",
+        body_html(&deep_lists)
+    );
+    assert!(body_html(&ampersands).starts_with("<p>&amp;&amp;"));
     assert!(body_html(&huge).starts_with("<p>word word"));
     // Too much raw HTML: shown as text.
     assert!(

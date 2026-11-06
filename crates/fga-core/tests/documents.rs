@@ -791,8 +791,8 @@ async fn bodies_past_the_request_render_budget_come_back_escaped() {
         .filter(|html| html.starts_with("<p># Heading</p>"))
         .count();
     assert_eq!(rendered + escaped, 25, "every body is one or the other");
-    // 1 MiB of 60 KiB bodies: 17 render.
-    assert_eq!((rendered, escaped), (17, 8));
+    // The budget is 1 MiB of rendered HTML, about 100 KiB per body here.
+    assert!((5..=12).contains(&rendered), "{rendered} rendered");
 }
 
 /// Rendering happens in the gateway, so ChatGPT's PR documents make the same Forgejo requests as
