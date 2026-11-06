@@ -556,6 +556,14 @@ fn audit_diag_doctor_passes_over_a_copied_dispatcher_as_real_gh() -> TestResult 
     fs::create_dir(&copy_dir)?;
     let copy = copy_dir.join("gh");
     fs::copy(env!("CARGO_BIN_EXE_gfj"), &copy)?;
+    // doctor checks the token's scopes with the host's Forgejo; a closed loopback port keeps that
+    // off the network.
+    let config = f.home.join(".config/gh-forgejo-shim");
+    fs::create_dir_all(&config)?;
+    fs::write(
+        config.join("config.toml"),
+        "[host.\"forge.example.test\"]\napi_url = \"http://127.0.0.1:9\"\n",
+    )?;
     let output = output_retrying_busy(
         f.command()
             .arg("doctor")
