@@ -37,9 +37,6 @@ pub fn launch(
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
 ) -> Option<i32> {
-    if let Some(code) = refuse_push_elsewhere(routed, host) {
-        return Some(code);
-    }
     let Plan {
         real_token,
         expect_real,
@@ -340,7 +337,6 @@ fn upstream(host: &str, config: &Config, env: &HashMap<String, String>) -> Optio
 /// then answers as before.
 pub fn step_aside_if_logged_in(
     host: &str,
-    routed: &Invocation,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
@@ -350,9 +346,6 @@ pub fn step_aside_if_logged_in(
     let user_hosts = ghconfig::user_hosts(text.as_deref()).ok()?;
     if !logged_in(&user_hosts, host) {
         return None;
-    }
-    if let Some(code) = refuse_push_elsewhere(routed, host) {
-        return Some(code);
     }
     let gh = match find_real_gh(real_gh, env) {
         Ok(gh) => gh,
@@ -373,25 +366,6 @@ static STEPPED_ASIDE_TO: std::sync::OnceLock<String> = std::sync::OnceLock::new(
 /// The host this process stepped aside to, if it did.
 pub fn stepped_aside_to() -> Option<&'static str> {
     STEPPED_ASIDE_TO.get().map(String::as_str)
-}
-
-/// Refuses a command that pushes with git when git would push the forge's commits to another
-/// host: `gh pr create` pushes the branch's remote and `gh repo create --push` the one it adds,
-/// and a remote's push URL or `pushInsteadOf` can send that elsewhere while the call and its
-/// trace say the forge (#231). gh's API requests follow `GH_HOST`; git's pushes don't.
-fn refuse_push_elsewhere(routed: &Invocation, host: &str) -> Option<i32> {
-    if !matches!(routed.command.as_str(), "pr create" | "repo create") {
-        return None;
-    }
-    let elsewhere = repo::push_leaves(host, None)?;
-    let forge = gh_hostname(host);
-    Some(fail(
-        1,
-        &format!(
-            "{elsewhere}, not {forge}, so `gh {}` would push there; point the push at {forge}",
-            routed.command
-        ),
-    ))
 }
 
 /// Whether the user's own gh is logged in to `host`: an `oauth_token` or a `user` under the key
