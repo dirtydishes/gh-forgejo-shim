@@ -223,10 +223,15 @@ reaching github.com. A user `GH_HOST` naming the forge stays; one naming another
 that doesn't launch on the built-in path (above), and gives way to the forge on the launch path,
 where routing already chose it. `GH_HOST` doesn't steer git: `gh pr create` pushes the branch's
 remote and `gh repo create --push` the remote it adds, and a remote's push URL or
-`url.<base>.pushInsteadOf` can send that push to another host. So a forge-routed `pr create` or
-`repo create`, launched or not, is refused before gh runs when git would push a forge remote, or a
-new remote on the forge, anywhere else. The trace names the portless hostname gh reaches. Here the
-portless value also matters
+`url.<base>.pushInsteadOf` can send that push to another host. So a forge-routed `pr create`, or
+a `repo create` that pushes (`--push`, or prompting with no name), launched or not, is refused
+before gh runs when, in the checkout it pushes from (`--source` for `repo create`), a forge
+remote's push URL names another host, or an `insteadOf` or `pushInsteadOf` rule whose prefix
+overlaps one of the forge's URL forms rewrites to another host. The trace names the portless
+hostname gh reaches. For a forge entry with a port, that holds only when the call doesn't spell
+the port: gh keeps it for a full name (`-R forge.test:3443/o/r`, `GH_REPO`, `gh api`'s URL or
+`--hostname`) and drops it for a URL or a remote, so a call or `GH_REPO` naming `forge.test:3443`
+doesn't step aside. Here the portless value also matters
 for the token: a user's own `hosts.yml` has the login under the portless key only, and
 `GH_HOST=forge.test:3443` gives "no oauth token found for forge.test:3443". For a forge on a
 custom port, stepping aside therefore sends gh to the forge's default port 443, where the user's
