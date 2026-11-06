@@ -107,7 +107,10 @@ impl PullRequest {
     }
     #[graphql(name = "bodyHTML")]
     async fn body_html(&self, ctx: &Context<'_>) -> Html {
-        Html(ctx.data_unchecked::<Session>().body_html(&self.source.body))
+        Html(
+            ctx.data_unchecked::<Session>()
+                .body_html(&self.source.body, ctx.data_opt::<url::Url>()),
+        )
     }
     async fn url(&self) -> Uri {
         Uri(map::pull_web_url(&self.source.html_url))

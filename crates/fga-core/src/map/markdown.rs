@@ -11,7 +11,6 @@ use comrak::arena_tree::NodeEdge;
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, format_html, parse_document};
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Bodies longer than this are shown as escaped paragraphs instead of rendered. GitHub caps a body
@@ -122,7 +121,12 @@ const TAG_ATTRIBUTES: &[(&str, &[&str])] = &[
 /// Link and citation schemes; relative URLs pass. Images allow only absolute http(s), below.
 const URL_SCHEMES: &[&str] = &["http", "https", "mailto"];
 
-static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
+/// The sanitizer, keeping images only from `forge`, the forge's own web origin.
+///
+/// An image loads by itself in the viewer's client, with the viewer's cookies for its host. The
+/// gateway can't know the client's origin, so an image anywhere else (the client's own API, a
+/// service on the viewer's network, a tracker) is dropped; without a forge origin, every image is.
+fn sanitizer(forge: Option<url::Origin>) -> Builder<'static> {
     let mut builder = Builder::empty();
     builder
         .tags(TAGS.iter().copied().collect())
@@ -141,52 +145,28 @@ static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
         .link_rel(Some("nofollow noopener noreferrer"))
         .strip_comments(true)
         .clean_content_tags(["script", "style"].into_iter().collect())
-        .attribute_filter(|tag, attribute, value| {
+        .attribute_filter(move |tag, attribute, value| {
             if tag == "img" && attribute == "src" {
-                return absolute_http_url(value).map(Into::into);
+                return absolute_http_url(value)
+                    .filter(|url| forge.as_ref().is_some_and(|forge| url.origin() == *forge))
+                    .map(|url| String::from(url).into());
             }
             Some(value.into())
         });
     builder
-});
+}
 
-/// An image source as an absolute `http` or `https` URL with a host, written out in full and
-/// parsed again, or nothing. `https:/path`, `https:path` and `https:\\path` resolve against the
-/// page that shows the image, which would make the client request its own origin.
-fn absolute_http_url(value: &str) -> Option<String> {
+/// An image source as an absolute `http` or `https` URL, written out in full, parsed. `https:/path`,
+/// `https:path` and `https:\\path` resolve against the page showing the image, so they aren't
+/// absolute here.
+fn absolute_http_url(value: &str) -> Option<url::Url> {
     let trimmed = value.trim_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control());
     let lower = trimmed.get(..8).unwrap_or(trimmed).to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
         return None;
     }
     let url = url::Url::parse(trimmed).ok()?;
-    let public = match url.host()? {
-        url::Host::Domain(domain) => {
-            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
-            !domain.is_empty()
-                && domain != "localhost"
-                && !domain.ends_with(".localhost")
-                && !domain.ends_with(".local")
-        }
-        url::Host::Ipv4(ip) => {
-            !(ip.is_loopback()
-                || ip.is_private()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast())
-        }
-        url::Host::Ipv6(ip) => {
-            let mapped = ip.to_ipv4_mapped();
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || (ip.segments()[0] & 0xfe00) == 0xfc00
-                || (ip.segments()[0] & 0xffc0) == 0xfe80
-                || mapped.is_some_and(|v4| {
-                    v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-                }))
-        }
-    };
-    (matches!(url.scheme(), "http" | "https") && public).then(|| url.into())
+    matches!(url.scheme(), "http" | "https").then_some(url)
 }
 
 fn options() -> Options<'static> {
@@ -203,14 +183,15 @@ fn options() -> Options<'static> {
     options
 }
 
-/// A body as GitHub-shaped `bodyHTML`: rendered GFM, sanitized. An empty body is empty.
-pub fn body_html(body: &str) -> String {
-    body_html_within(body, &AtomicUsize::new(usize::MAX))
+/// A body as GitHub-shaped `bodyHTML`: rendered GFM, sanitized, keeping images only from `forge`,
+/// the forge's public web URL. An empty body is empty.
+pub fn body_html(body: &str, forge: Option<&url::Url>) -> String {
+    body_html_within(body, forge, &AtomicUsize::new(usize::MAX))
 }
 
 /// [`body_html`], drawing the rendered HTML's size from `budget`: once it runs out, bodies come back
 /// as escaped paragraphs. A body that is escaped anyway draws nothing.
-pub fn body_html_within(body: &str, budget: &AtomicUsize) -> String {
+pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsize) -> String {
     let body = body.replace('\r', "");
     if body.trim().is_empty() {
         return String::new();
@@ -243,7 +224,12 @@ pub fn body_html_within(body: &str, budget: &AtomicUsize) -> String {
     {
         return escaped_paragraphs(&body);
     }
-    SANITIZER.clean(&rendered).to_string().trim().to_owned()
+    let forge = forge.map(url::Url::origin).filter(url::Origin::is_tuple);
+    sanitizer(forge)
+        .clean(&rendered)
+        .to_string()
+        .trim()
+        .to_owned()
 }
 
 /// At most how many cells the body's tables could hold, filled-out rows included.
@@ -275,11 +261,6 @@ fn shape<'a>(root: &'a AstNode<'a>) -> (usize, usize) {
         }
     }
     (deepest, raw_tags)
-}
-
-/// A body as `bodyHTML` without rendering its Markdown: escaped paragraphs and line breaks.
-pub fn escaped_body_html(body: &str) -> String {
-    escaped_paragraphs(&body.replace('\r', ""))
 }
 
 fn escaped_paragraphs(body: &str) -> String {
