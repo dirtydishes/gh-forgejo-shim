@@ -322,9 +322,10 @@ impl Forgejo {
 }
 
 impl Session {
-    /// A body as `bodyHTML`, rendered while this request's render budget lasts and escaped after.
-    pub fn body_html(&self, body: &str) -> String {
-        crate::map::body_html_within(body, &self.render_budget)
+    /// A body as `bodyHTML`, rendered while this request's render budget lasts and escaped after,
+    /// keeping images only from `forge`, the forge's public web URL.
+    pub fn body_html(&self, body: &str, forge: Option<&Url>) -> String {
+        crate::map::body_html_within(body, forge, &self.render_budget)
     }
 
     /// [`Forgejo::send`] under this request's credentials and shared deadline.
