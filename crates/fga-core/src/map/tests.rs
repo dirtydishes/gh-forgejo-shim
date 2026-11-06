@@ -887,6 +887,26 @@ fn body_html_removes_hostile_markup() {
             format!("<p><a {rel}>x</a></p>"),
         ),
         (
+            "<a href=\"&#106;avascript:alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"java&#x09;script:alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\" \u{1}javascript:alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"javascript&colon;alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<blockquote cite=\"javascript:alert(1)\">q</blockquote>",
+            "<blockquote>q</blockquote>".to_owned(),
+        ),
+        (
             "[ok](https://example.com) [mail](mailto:a@example.com) [rel](../x)",
             format!(
                 "<p><a href=\"https://example.com\" {rel}>ok</a> \
