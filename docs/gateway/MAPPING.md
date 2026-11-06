@@ -270,17 +270,23 @@ GitHub-flavoured Markdown, then sanitized, as GitHub serves it. Rendering happen
   links, images, code, quotes, `details`/`summary`, and inline tags such as `kbd`, `sub` and `sup`.
   No `script`, `style`, `iframe`, `object`, `embed`, `form`, `base` or `meta`; no event handlers,
   `style`, `class`, `id`, `name` or `target` attributes; no comments. Links keep only `http`, `https`,
-  `mailto` and relative URLs, and get `rel="nofollow noopener noreferrer"`. Images keep only sources written
-  out as `http://` or `https://` with a host, in their parsed form; `https:/path` and the like would
-  resolve against the client's own page. Every `<input>` becomes a checkbox, as a task list item's is.
+  `mailto` and relative URLs, and get `rel="nofollow noopener noreferrer"`. Images keep only
+  sources written out as `http://` or `https://` with a public host, in their parsed form:
+  `https:/path` and the like would resolve against the client's own page, and `localhost`, `.local`
+  and loopback, private or link-local addresses would point the client at its own network. An image
+  on any other host is fetched by whoever views the body, as on GitHub without its image proxy.
+  Every `<input>` becomes a checkbox, as a task list item's is.
 - **Limits:** the sanitizer's work grows with how deeply elements nest, so a body is shown as escaped
   paragraphs instead when it is over 64 KiB or its Markdown nests more than 64 levels deep, its raw
   HTML is shown as text when it holds more than 256 tags, and its tables are read as text when its
   pipes and lines could make more than 20,000 cells (short rows are filled out to the header's
-  width). Rendered HTML over 1 MiB is shown as escaped paragraphs. One request renders at most
-  1 MiB of bodies; bodies after that come back as escaped paragraphs.
+  width). Rendered HTML over 256 KiB is shown as escaped paragraphs, because the sanitizer's time
+  grows faster than its input in some shapes. One request sanitizes at most 1 MiB of rendered HTML;
+  bodies after that come back as escaped paragraphs, and a body escaped for any other reason draws
+  nothing from that budget.
 
-**Differences from GitHub:** `#123` and `@user` aren't linked, and headings get no anchors. A relative
+**Differences from GitHub:** `#123` and `@user` aren't linked, headings get no anchors, footnotes
+and emoji shortcodes (`:tada:`) aren't rendered, and `cite` attributes are dropped. A relative
 image source, such as a Forgejo attachment's `/attachments/…`, is dropped, because the client would
 resolve it against its own origin.
 
