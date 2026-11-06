@@ -518,6 +518,12 @@ fn token_scopes_check(
                 scope.name,
                 scope.read_only.unwrap_or(scope.without)
             )),
+            Standing::WriteMissing(why) => problems.push(format!(
+                "{} is missing, so {}; read:{} not checked: {why}",
+                scope.name,
+                scope.read_only.unwrap_or(scope.without),
+                scope.category
+            )),
             Standing::Unknown(why) => unknown.push(format!("{} not checked: {why}", scope.name)),
         }
     }
