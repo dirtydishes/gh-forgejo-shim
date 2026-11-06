@@ -10,6 +10,11 @@
   In a forge checkout, `gh repo create` with `--push`, or when it prompts, stops too: create the
   repository without `--push`, then push with git (#231).
 
+- **PR descriptions and comments render as Markdown.** The gateway's `bodyHTML` is now
+  GitHub-flavoured Markdown rendered and sanitized in the gateway, so headings, lists, tables, task
+  lists, links and code blocks show formatted in ChatGPT desktop's PR view, with no extra Forgejo
+  requests (#166).
+
 The v0.2.2 notes follow.
 
 # gh-forgejo-shim v0.2.2

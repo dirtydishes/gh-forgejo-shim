@@ -259,18 +259,27 @@ This replaces DESIGN.md's earlier "emit what Forgejo actually serves" rule for P
 
 ## 9. Bodies (`bodyHTML`)
 
-**Decision (2026-11-02):** `bodyHTML` on pull requests, issue comments and review comments is the body
-as escaped paragraphs: the source text, HTML-escaped, with blank lines as paragraph breaks and single
-newlines as `<br>`. Markdown isn't rendered.
+`bodyHTML` on pull requests, issue comments and review comments is the body rendered as
+GitHub-flavoured Markdown, then sanitized, as GitHub serves it. Rendering happens in the gateway
+(`crates/fga-core/src/map/markdown.rs`), so it costs no Forgejo request.
 
-**Limitation:** ChatGPT's PR pane shows Markdown as written. A heading reads `## Heading`, and links
-and emphasis stay as source text.
+- **Rendering:** comrak, with GFM's tables, task lists, strikethrough, autolinks and fenced code
+  (`<pre lang="…">`). A single newline is a line break, as in GitHub comments. Raw HTML in a body
+  passes to the sanitizer, which decides what stays.
+- **Sanitizing:** ammonia, with an allowlist close to GitHub's: headings, paragraphs, lists, tables,
+  links, images, code, quotes, `details`/`summary`, and inline tags such as `kbd`, `sub` and `sup`.
+  No `script`, `style`, `iframe`, `object`, `embed`, `form`, `base` or `meta`; no event handlers,
+  `style`, `class`, `id`, `name` or `target` attributes; no comments. Links keep only `http`, `https`,
+  `mailto` and relative URLs, and get `rel="nofollow noopener noreferrer"`. Images keep only absolute
+  `http` or `https` sources. Every `<input>` becomes a checkbox, as a task list item's is.
+- **Limits:** the sanitizer's work grows with how deeply elements nest, so a body is shown as escaped
+  paragraphs instead when it is over 64 KiB or its Markdown nests more than 64 levels deep, and its raw
+  HTML is shown as text when it holds more than 256 tags. One request renders at most 1 MiB of bodies;
+  bodies after that come back as escaped paragraphs.
 
-**Why:** Forgejo's API returns no rendered HTML. Rendering through Forgejo's markdown endpoint costs one
-request per body, and the timeline document can carry about 200 bodies. Rendering inside the gateway
-would pass raw HTML from a PR body to clients that trust `bodyHTML` as sanitized, as GitHub's is.
-Escaping costs nothing and can't inject markup. Optional sanitized rendering is
-`gh-forgejo-shim-xml`, if the pane turns out to need it.
+**Differences from GitHub:** `#123` and `@user` aren't linked, and headings get no anchors. A relative
+image source, such as a Forgejo attachment's `/attachments/…`, is dropped, because the client would
+resolve it against its own origin.
 
 ## 10. Head branch (`headRefName`, `headRepository`)
 
