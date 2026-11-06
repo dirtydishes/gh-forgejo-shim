@@ -553,6 +553,11 @@ fn run_gh(
     };
 
     if trace_enabled {
+        // A step-aside sends gh to the forge's portless hostname, its default port included.
+        #[cfg(unix)]
+        if let Some(host) = crate::launcher::start::stepped_aside_to() {
+            decision.host = Some(host.to_string());
+        }
         trace::append_gh_record(
             &env,
             &argv,

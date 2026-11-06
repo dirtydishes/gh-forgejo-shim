@@ -367,6 +367,14 @@ pub fn step_aside_if_logged_in(
     ))
 }
 
+/// The host a step-aside sent gh to, for the trace record: gh's default host, so no port.
+static STEPPED_ASIDE_TO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The host this process stepped aside to, if it did.
+pub fn stepped_aside_to() -> Option<&'static str> {
+    STEPPED_ASIDE_TO.get().map(String::as_str)
+}
+
 /// Refuses a command that pushes with git when git would push the forge's commits to another
 /// host: `gh pr create` pushes the branch's remote and `gh repo create --push` the one it adds,
 /// and a remote's push URL or `pushInsteadOf` can send that elsewhere while the call and its
@@ -429,6 +437,7 @@ fn step_aside(
     trace_enabled: bool,
 ) -> i32 {
     let hostname = gh_hostname(host);
+    let _ = STEPPED_ASIDE_TO.set(hostname.clone());
     let mut edits = Edits::new();
     if env.get("GH_HOST") != Some(&hostname) {
         edits.push(("GH_HOST", Edit::Set(hostname.into())));
