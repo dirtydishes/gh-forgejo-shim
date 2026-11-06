@@ -189,14 +189,15 @@ pub fn body_html(body: &str, forge: Option<&url::Url>) -> String {
     body_html_within(body, forge, &AtomicUsize::new(usize::MAX))
 }
 
-/// [`body_html`], drawing the rendered HTML's size from `budget`: once it runs out, bodies come back
-/// as escaped paragraphs. A body that is escaped anyway draws nothing.
+/// [`body_html`], drawing the rendered HTML's size from `budget`. The first body that doesn't fit
+/// empties it, and an empty budget escapes a body before parsing it, so once it runs out the rest
+/// of a document costs almost nothing. A body escaped for another reason draws nothing.
 pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsize) -> String {
     let body = body.replace('\r', "");
     if body.trim().is_empty() {
         return String::new();
     }
-    if body.len() > MAX_RENDERED_BYTES {
+    if body.len() > MAX_RENDERED_BYTES || budget.load(Ordering::Relaxed) == 0 {
         return escaped_paragraphs(&body);
     }
     let arena = Arena::new();
@@ -222,6 +223,9 @@ pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsi
             })
             .is_err()
     {
+        if rendered.len() <= MAX_RENDERED_HTML {
+            budget.store(0, Ordering::Relaxed);
+        }
         return escaped_paragraphs(&body);
     }
     let forge = forge.map(url::Url::origin).filter(url::Origin::is_tuple);
