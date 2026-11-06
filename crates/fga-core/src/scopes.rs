@@ -71,7 +71,7 @@ const CATEGORIES: [&str; 9] = [
 /// separated. Only `read:` or `write:` and one of Forgejo's own categories count, so a log only
 /// ever gets a scope name the gateway knows, never other text the upstream put there, such as a
 /// token echoed back.
-pub(crate) fn named_in(message: &str) -> String {
+pub fn named_in(message: &str) -> String {
     let Some((_, list)) = message.split_once("scope(s):") else {
         return String::new();
     };
