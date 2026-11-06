@@ -10,6 +10,7 @@ use crate::gui_path;
 use crate::invocation::Invocation;
 use crate::repo::{self, Checkout, GhHosts, RepoRef};
 use crate::routing::DispatcherConfig;
+use crate::scope_check::{self, Outcome, Standing};
 use crate::setup::{self, SetupInspectOptions, TargetMode};
 use crate::Result;
 
@@ -41,6 +42,9 @@ pub struct CheckOptions {
     pub launchd_path: Option<String>,
     pub check_gui_path: Option<bool>,
     pub check_current_repo: Option<bool>,
+    /// Ask each host's Forgejo which required scopes its token has. Defaults, like
+    /// `check_current_repo`, to whether doctor loads the config itself.
+    pub check_token_scopes: Option<bool>,
     pub platform: String,
 }
 
@@ -57,6 +61,7 @@ impl CheckOptions {
             launchd_path: None,
             check_gui_path: None,
             check_current_repo: None,
+            check_token_scopes: None,
             platform: std::env::consts::OS.to_string(),
         }
     }
@@ -65,6 +70,9 @@ impl CheckOptions {
 pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
     let should_check_current_repo = options
         .check_current_repo
+        .unwrap_or(options.config.is_none());
+    let should_check_token_scopes = options
+        .check_token_scopes
         .unwrap_or(options.config.is_none());
     let config = match options.config {
         Some(config) => config,
@@ -144,6 +152,17 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
         },
         ["gh-forgejo-shim auth login HOST"],
     ));
+    if should_check_token_scopes {
+        for host in &config.hosts {
+            checks.push(token_scopes_check(
+                host,
+                &config,
+                &options.env,
+                options.home.as_deref(),
+                &options.platform,
+            ));
+        }
+    }
 
     if should_check_current_repo {
         if let Some(CurrentRepo {
@@ -446,6 +465,80 @@ impl Check {
             status: CheckStatus::Warn,
         }
     }
+}
+
+/// Which of the required scopes `host`'s token has, asked of its Forgejo ([`scope_check`]).
+fn token_scopes_check(
+    host: &str,
+    config: &Config,
+    env: &EnvMap,
+    home: Option<&Path>,
+    platform: &str,
+) -> Check {
+    let name = format!("token scopes ({host})");
+    let login = format!("gh-forgejo-shim auth login {}", setup::shell_quote(host));
+    let Some(token) = auth::resolve_token(host, config, env, home, Some(platform)) else {
+        return Check::warn(name, "no token found, so its scopes weren't checked");
+    };
+    let client = match crate::forgejo::ForgejoClient::for_host_without_redirects(
+        host,
+        Some(token.token),
+        config,
+        env,
+    ) {
+        Ok(client) => client.with_timeout(std::time::Duration::from_secs(5)),
+        Err(error) => return Check::warn(name, format!("not checked: {error}")),
+    };
+    let results = match scope_check::check(&client, &config::normalize_host(host)) {
+        Outcome::Rejected => {
+            return Check::new(
+                name,
+                false,
+                format!("Forgejo rejected the token; log in again with {login}"),
+                [login],
+            )
+        }
+        Outcome::Unchecked(why) => {
+            return Check::warn(name, format!("not checked: Forgejo at {host}: {why}"))
+        }
+        Outcome::Checked(results) => results,
+    };
+    let mut granted = Vec::new();
+    let mut problems = Vec::new();
+    let mut unknown = Vec::new();
+    for (scope, standing) in results {
+        match standing {
+            Standing::Granted => granted.push(scope.name.to_string()),
+            Standing::Missing => {
+                problems.push(format!("{} is missing, so {}", scope.name, scope.without))
+            }
+            Standing::ReadOnly => problems.push(format!(
+                "read:{} without {}, so {}",
+                scope.category,
+                scope.name,
+                scope.read_only.unwrap_or(scope.without)
+            )),
+            Standing::Unknown(why) => unknown.push(format!("{} not checked: {why}", scope.name)),
+        }
+    }
+    if !problems.is_empty() {
+        problems.extend(unknown);
+        problems.push(
+            "create a token with read:user, write:repository, write:issue and \
+             read:organization (README: Token scopes)"
+                .to_string(),
+        );
+        return Check::new(name, false, problems.join("; "), [login]);
+    }
+    if !unknown.is_empty() {
+        let mut parts = Vec::new();
+        if !granted.is_empty() {
+            parts.push(format!("has {}", granted.join(", ")));
+        }
+        parts.extend(unknown);
+        return Check::warn(name, parts.join("; "));
+    }
+    Check::new(name, true, granted.join(", "), Vec::<String>::new())
 }
 
 fn current_path_check(model: &setup::SetupModel) -> Check {
@@ -805,6 +898,7 @@ mod tests {
             launchd_path: None,
             check_gui_path: Some(false),
             check_current_repo: Some(false),
+            check_token_scopes: Some(false),
             platform: "linux".to_string(),
         })?;
 
@@ -854,6 +948,7 @@ mod tests {
             launchd_path: None,
             check_gui_path: Some(false),
             check_current_repo: Some(false),
+            check_token_scopes: Some(false),
             platform: "linux".to_string(),
         })?;
 

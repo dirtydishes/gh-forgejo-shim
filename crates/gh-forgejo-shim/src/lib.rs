@@ -25,6 +25,7 @@ pub mod normalize;
 pub mod read_only;
 pub mod repo;
 pub mod routing;
+mod scope_check;
 pub mod setup;
 pub mod shim;
 pub mod trace;
