@@ -1594,3 +1594,91 @@ fn a_launched_web_open_reaches_a_forge_under_a_path() {
         "https://forge.test/forgejo/o/r/pulls/1"
     );
 }
+
+/// A stub Forgejo 15 for a token without `read:organization`: it serves the user and repository
+/// `o/r`, and refuses `/orgs/…` with Forgejo's missing-scope 403.
+fn forgejo_without_org_scope() -> String {
+    use std::io::{BufRead, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                line.clear();
+            }
+            let path = request.split(' ').nth(1).unwrap_or_default();
+            let user = r#"{"id":1,"login":"o","avatar_url":""}"#;
+            let (status, body) = if path == "/api/v1/user" {
+                ("200 OK", user.to_string())
+            } else if path == "/api/v1/repos/o/r" {
+                (
+                    "200 OK",
+                    format!(
+                        r#"{{"id":1,"name":"r","full_name":"o/r","owner":{user},"private":false,"html_url":"https://forge.test/o/r","default_branch":"main","fork":false,"archived":false}}"#
+                    ),
+                )
+            } else if path.starts_with("/api/v1/orgs/") {
+                ("403 Forbidden", r#"{"message":"token does not have at least one of required scope(s): [read:organization]","url":"https://forge.test/api/swagger"}"#.to_string())
+            } else {
+                ("404 Not Found", r#"{"message":"Not Found"}"#.to_string())
+            };
+            let _ = write!(
+                reader.get_mut(),
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{address}")
+}
+
+/// In a launched call, a scope that hides data goes to the trace once, as a `warning` record
+/// naming it, and never to gh's stdout or stderr.
+#[test]
+fn a_hidden_scope_warns_once_in_the_trace() {
+    let _serial = serial();
+    let fixture = Fixture::new(&forgejo_without_org_scope());
+    let trace = fixture.dir.join("trace.jsonl");
+    let gh = fixture.fake_gh(
+        r#"token=$(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)
+ask() { curl -s --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $token" "http://forge.test/api/v3/repos/o/r"; echo; }
+ask > "$REPORT"
+ask >> "$REPORT""#,
+    );
+    let output = fixture
+        .command(&gh, &["pr", "view", "1", "-R", "forge.test/o/r"])
+        .env("FJ_SHIM_TRACE", &trace)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        fixture.report().matches(r#""type":"User""#).count(),
+        2,
+        "both reads answer, the owner as a user: {}",
+        fixture.report()
+    );
+    let text = fs::read_to_string(&trace).expect("trace");
+    let warnings: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|record| record["kind"] == "warning")
+        .collect();
+    assert_eq!(warnings.len(), 1, "{text}");
+    let message = warnings[0]["message"].as_str().expect("message");
+    assert!(
+        message.contains("the token lacks read:organization")
+            && message.contains("give it read:organization"),
+        "{message}"
+    );
+    assert!(!text.contains("host-secret"), "{text}");
+    for stream in [&output.stdout, &output.stderr] {
+        assert!(
+            !String::from_utf8_lossy(stream).contains("warning"),
+            "{output:?}"
+        );
+    }
+}
