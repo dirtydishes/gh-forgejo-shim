@@ -634,8 +634,10 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
 /// `git remote -v` applies), or an `insteadOf` or `pushInsteadOf` rule that could rewrite a URL
 /// on the forge to another host. A rule counts when its prefix and one of the forge's URL forms
 /// start the same way, whatever owner or name follows (`https://forge/acme/`). A push URL or rule
-/// target gh can't read counts as elsewhere. `None` when every push to the forge stays there.
-pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
+/// target gh can't read counts as elsewhere. With `ssh`, gh may add an SSH remote, so an SSH
+/// host alias resolving the forge's hostname elsewhere (`ssh -G`, as gh translates remotes) counts
+/// too. `None` when every push to the forge stays there.
+pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>, ssh_remote: bool) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
     let mut ssh = SshHosts::default();
     let mut host_of = |url: &str| {
@@ -712,6 +714,12 @@ pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
                 "git rewrites URLs on {hostname} to {}",
                 elsewhere(host)
             ));
+        }
+    }
+    if ssh_remote {
+        let resolved = gh_hostname(&ssh.resolve(&hostname)).to_ascii_lowercase();
+        if resolved != hostname {
+            return Some(format!("ssh resolves {hostname} to {resolved}"));
         }
     }
     None

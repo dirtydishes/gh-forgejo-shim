@@ -537,7 +537,7 @@ fn run_gh(
         }
         RouteKind::Forgejo => {
             let host = decision.trace_host().unwrap_or_default().to_string();
-            if let Some(message) = push_goes_elsewhere(&routed, &words, cwd, &host) {
+            if let Some(message) = push_goes_elsewhere(&words, &env, cwd, &host) {
                 write_error(&mut mode, &format!("gh-forgejo-shim: {message}"));
                 1
             } else {
@@ -709,92 +709,80 @@ fn names_routed_port(
         .any(|word| word.to_ascii_lowercase().contains(&host))
 }
 
-/// Refuses a forge-routed command that pushes with git when git would push the forge's commits to
-/// another host, whatever path then runs gh: `gh pr create` pushes the branch's remote, and
-/// `gh repo create` with `--push`, or interactively, the remote it adds in `--source`. gh's API
-/// requests follow `GH_HOST`; git's pushes follow the remote's push URL and git's URL rewrites
-/// (#231, parallax r1#3).
+/// Refuses a forge-routed command that pushes with git when that push could leave the forge,
+/// whatever path then runs gh (#231, parallax r1#3). gh's API requests follow `GH_HOST`; git's
+/// pushes follow the remote's push URL, git's URL rewrites and SSH's host aliases.
+///
+/// - `gh pr create` pushes the branch from the current checkout, to its remote or to a fork remote
+///   it adds on the forge: refused when one of those could push elsewhere ([`crate::repo::push_leaves`]).
+/// - `gh repo create` pushes, with `--push` or when it prompts, from a `--source` checkout the
+///   wrapper would have to read as gh does, rewrites and SSH aliases included. It is refused
+///   instead; without `--push` it creates the repository, and git pushes after.
+///
+/// The command is found in the words as `pr` or `repo` followed anywhere by `create` or `new`,
+/// gh's alias, so a flag before the subcommand (`gh repo --source x create`) doesn't hide it; a
+/// false match only adds this check.
 fn push_goes_elsewhere(
-    routed: &Invocation,
     words: &[String],
+    env: &HashMap<String, String>,
     cwd: Option<&Path>,
     host: &str,
 ) -> Option<String> {
-    let dir = match routed.command.as_str() {
-        "pr create" => cwd.map(Path::to_path_buf),
-        "repo create" => {
-            let source = repo_create_push_source(words)?;
-            match (source, cwd) {
-                (Some(source), Some(cwd)) => Some(cwd.join(source)),
-                (Some(source), None) => Some(PathBuf::from(source)),
-                (None, cwd) => cwd.map(Path::to_path_buf),
-            }
-        }
-        _ => return None,
+    let creates = |group: &str| {
+        words
+            .iter()
+            .position(|word| word == group)
+            .is_some_and(|at| {
+                words[at + 1..]
+                    .iter()
+                    .any(|word| word == "create" || word == "new")
+            })
     };
-    let elsewhere = crate::repo::push_leaves(host, dir.as_deref())?;
     let forge = gh_hostname(host);
-    Some(format!(
-        "{elsewhere}, not {forge}, so `gh {}` would push there; point the push at {forge}",
-        routed.command
-    ))
+    if creates("repo") && repo_create_pushes(words) {
+        return Some(format!(
+            "`gh repo create` pushes with git when given --push or when it prompts, and the \
+             wrapper can't confine that push to {forge}; create the repository without --push, \
+             then push with git"
+        ));
+    }
+    if creates("pr") {
+        let elsewhere = crate::repo::push_leaves(host, cwd, !gh_protocol_is_https(env, host))?;
+        return Some(format!(
+            "{elsewhere}, not {forge}, so `gh pr create` would push there; point the push at {forge}"
+        ));
+    }
+    None
 }
 
-/// For `gh repo create`, `None` when it can't push, else the `--source` directory it pushes from,
-/// if one is given. It pushes with `--push`, and may when it prompts, with no repository name.
-/// The shim's parser doesn't know `repo create`, so this reads its flags as gh 2.103.3 defines them.
-fn repo_create_push_source(words: &[String]) -> Option<Option<String>> {
-    let start = words
-        .windows(2)
-        .position(|pair| pair[0] == "repo" && pair[1] == "create")?
-        + 2;
-    const VALUES: [&str; 16] = [
-        "-d",
-        "--description",
-        "-h",
-        "--homepage",
-        "-t",
-        "--team",
-        "-p",
-        "--template",
-        "-s",
-        "--source",
-        "-r",
-        "--remote",
-        "-g",
-        "--gitignore",
-        "-l",
-        "--license",
-    ];
-    let mut push = false;
-    let mut named = false;
-    let mut source = None;
-    let mut rest = words[start..].iter();
-    while let Some(word) = rest.next() {
-        if word == "--" {
-            named |= rest.next().is_some();
-            break;
-        }
-        if let Some((flag, value)) = word.split_once('=').filter(|_| word.starts_with("--")) {
-            match flag {
-                "--push" => push = !matches!(value, "false" | "f" | "0" | "F" | "FALSE" | "False"),
-                "--source" => source = Some(value.to_string()),
-                _ => {}
-            }
-        } else if word == "--push" {
-            push = true;
-        } else if VALUES.contains(&word.as_str()) {
-            let value = rest.next();
-            if matches!(word.as_str(), "-s" | "--source") {
-                source = value.cloned();
-            }
-        } else if let Some(value) = word.strip_prefix("-s").filter(|_| !word.starts_with("--")) {
-            source = Some(value.to_string());
-        } else if !word.starts_with('-') {
-            named = true;
-        }
-    }
-    (push || !named).then_some(source)
+/// Whether `gh repo create` pushes: with `--push` (pflag's bool, so not `--push=false`), or when
+/// it prompts, which gh 2.103.3 does only with no argument and no flag (`create.go:126`).
+fn repo_create_pushes(words: &[String]) -> bool {
+    let push = words.iter().any(|word| {
+        word == "--push"
+            || word.strip_prefix("--push=").is_some_and(|value| {
+                !matches!(value, "0" | "f" | "F" | "false" | "FALSE" | "False")
+            })
+    });
+    let prompts = matches!(words, [group, command] if group == "repo" && (command == "create" || command == "new"));
+    push || prompts
+}
+
+/// Whether gh's `git_protocol` for the forge in the user's `hosts.yml` is `https`, so a remote gh
+/// adds there uses an https URL and no SSH host alias.
+fn gh_protocol_is_https(env: &HashMap<String, String>, host: &str) -> bool {
+    let text =
+        user_gh_config_dir(env).and_then(|dir| std::fs::read_to_string(dir.join("hosts.yml")).ok());
+    crate::launcher::ghconfig::user_hosts(text.as_deref())
+        .ok()
+        .and_then(|hosts| {
+            hosts
+                .get(gh_hostname(host).as_str())?
+                .get("git_protocol")?
+                .as_str()
+                .map(|protocol| protocol == "https")
+        })
+        .unwrap_or(false)
 }
 
 /// Plain gh for a forge the user's own gh is logged in to (server mode, spec §2), when the call
@@ -1332,31 +1320,24 @@ mod tests {
 
     #[test]
     fn repo_create_pushes_with_push_or_a_prompt() {
-        let source = |words: &[&str]| repo_create_push_source(&argv(words));
-        assert_eq!(source(&["repo", "create", "o/r", "--private"]), None);
-        assert_eq!(
-            source(&["repo", "create", "o/r", "--push", "--source", "."]),
-            Some(Some(".".into()))
-        );
-        assert_eq!(
-            source(&["repo", "create", "o/r", "-s", "../src", "--push"]),
-            Some(Some("../src".into()))
-        );
-        assert_eq!(
-            source(&["repo", "create", "o/r", "-s../src", "--push=true"]),
-            Some(Some("../src".into()))
-        );
-        assert_eq!(
-            source(&["repo", "create", "o/r", "--source=src", "--push=false"]),
-            None
-        );
-        // A flag's value isn't the name; with no name, gh prompts and may push.
-        assert_eq!(
-            source(&["repo", "create", "--description", "o/r"]),
-            Some(None)
-        );
-        assert_eq!(source(&["repo", "create", "-h", "x", "--", "o/r"]), None);
-        assert_eq!(source(&["repo", "view", "o/r"]), None);
+        let pushes = |words: &[&str]| repo_create_pushes(&argv(words));
+        assert!(!pushes(&["repo", "create", "o/r", "--private"]));
+        assert!(pushes(&["repo", "create", "o/r", "--push", "-s=../src"]));
+        assert!(pushes(&["repo", "new", "o/r", "--push=true"]));
+        assert!(pushes(&[
+            "repo", "--source", "x", "create", "o/r", "--push"
+        ]));
+        assert!(!pushes(&[
+            "repo",
+            "create",
+            "--source",
+            "../src",
+            "--push=false"
+        ]));
+        // gh prompts only with no argument and no flag.
+        assert!(pushes(&["repo", "create"]));
+        assert!(pushes(&["repo", "new"]));
+        assert!(!pushes(&["repo", "create", "--private"]));
     }
 
     #[test]
