@@ -114,10 +114,6 @@ const TAG_ATTRIBUTES: &[(&str, &[&str])] = &[
     ("pre", &["lang"]),
     ("time", &["datetime"]),
     ("input", &["checked", "disabled"]),
-    ("blockquote", &["cite"]),
-    ("q", &["cite"]),
-    ("del", &["cite"]),
-    ("ins", &["cite"]),
 ];
 
 /// Link and citation schemes; relative URLs pass. Images allow only absolute http(s), below.
