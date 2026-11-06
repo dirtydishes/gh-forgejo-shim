@@ -5,9 +5,10 @@
   `gh repo delete OWNER/REPO`, `gh repo clone OWNER/REPO`, `gh search` and `gh gist` went to
   github.com, while the wrapper's trace named the forge. They now go to the forge, and the trace
   names the host gh used. `gh gist` and other GitHub-only commands fail there; run them outside the
-  checkout to reach github.com. `gh pr create` and `gh repo create --push` stop with an error when
-  git would push the forge's commits to another host, through a remote's push URL or a
-  `pushInsteadOf` rule (#231).
+  checkout to reach github.com. `gh pr create` stops with an error when git would push the forge's
+  commits to another host, through a remote's push URL, a `pushInsteadOf` rule or an SSH host alias.
+  In a forge checkout, `gh repo create` with `--push`, or when it prompts, stops too: create the
+  repository without `--push`, then push with git (#231).
 
 The v0.2.2 notes follow.
 
