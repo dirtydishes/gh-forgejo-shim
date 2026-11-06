@@ -26,6 +26,12 @@
   diff, file contents at a commit and `.gitattributes` blobs. `gh pr diff --patch` prints a patch,
   not JSON. MAPPING.md §11 lists what Forgejo can't supply. `gh run view --log` still fails (#161).
 
+- **A missing token scope is named.** `gfj doctor` asks each host's Forgejo which of the four
+  required scopes its token has, and names any that's missing and what breaks without it. Where a
+  missing scope hides data, such as a pull request's comments, the gateway logs one warning per
+  scope, in fga-server's log or the wrapper's trace. The README lists the scopes in one place
+  (#250, #217).
+
 The v0.2.2 notes follow.
 
 # gh-forgejo-shim v0.2.2
