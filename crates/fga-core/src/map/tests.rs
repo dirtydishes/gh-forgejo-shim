@@ -1090,6 +1090,17 @@ fn body_html_images_need_an_absolute_http_url() {
         "\\\\evil.example\\x",
         "javascript:alert(1)",
         "data:image/png;base64,AAAA",
+        "http://localhost:8080/admin",
+        "http://app.localhost/x",
+        "http://printer.local/x",
+        "http://127.0.0.1/x",
+        "http://10.0.0.1/x",
+        "http://192.168.1.1/x",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/x",
+        "http://[fd00::1]/x",
+        "http://[::ffff:127.0.0.1]/x",
+        "http://0.0.0.0/x",
     ] {
         assert_eq!(body_html(&format!("<img src=\"{src}\">")), "<img>", "{src}");
     }

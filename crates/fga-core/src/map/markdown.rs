@@ -157,9 +157,33 @@ fn absolute_http_url(value: &str) -> Option<String> {
         return None;
     }
     let url = url::Url::parse(trimmed).ok()?;
-    (matches!(url.scheme(), "http" | "https")
-        && url.host_str().is_some_and(|host| !host.is_empty()))
-    .then(|| url.into())
+    let public = match url.host()? {
+        url::Host::Domain(domain) => {
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+            !domain.is_empty()
+                && domain != "localhost"
+                && !domain.ends_with(".localhost")
+                && !domain.ends_with(".local")
+        }
+        url::Host::Ipv4(ip) => {
+            !(ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast())
+        }
+        url::Host::Ipv6(ip) => {
+            let mapped = ip.to_ipv4_mapped();
+            !(ip.is_loopback()
+                || ip.is_unspecified()
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+                || mapped.is_some_and(|v4| {
+                    v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                }))
+        }
+    };
+    (matches!(url.scheme(), "http" | "https") && public).then(|| url.into())
 }
 
 fn options() -> Options<'static> {
