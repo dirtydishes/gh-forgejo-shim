@@ -730,3 +730,78 @@ async fn only_a_missing_scope_refusal_reads_as_empty() {
         );
     }
 }
+
+/// A missing scope that hides data logs one warning per process naming it, whichever fields and
+/// requests it hides data from; a full token logs none. The forge's address tells this test's
+/// warnings from other tests'.
+#[tokio::test]
+async fn a_scope_that_hides_data_warns_once_per_process() {
+    use axum::http::StatusCode;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    assert!(fga_core::scopes::set_sink(|message| {
+        SEEN.lock().unwrap().push(message.to_owned())
+    }));
+    let serve = |app: Router| async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    };
+    let ask = |base: String| async move {
+        let session = Forgejo::new(base.parse().unwrap())
+            .unwrap()
+            .authenticate("token disposable")
+            .await
+            .unwrap();
+        let response = fga_core::graphql::schema()
+            .execute(
+                async_graphql::Request::new(SCOPED)
+                    .data(session)
+                    .data("https://forge.test".parse::<url::Url>().unwrap()),
+            )
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+    };
+    // Fields resolve concurrently, so the warnings arrive in either order.
+    let seen = |base: &str| -> Vec<String> {
+        let mut seen: Vec<String> = SEEN
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.contains(base))
+            .cloned()
+            .collect();
+        seen.sort();
+        seen
+    };
+
+    let full = serve(forge_with(true, pull("other", "open"), true)).await;
+    ask(full.clone()).await;
+    assert_eq!(seen(&full), Vec::<String>::new());
+
+    let limited = serve(without_issue_scope(
+        forge_with(true, pull("other", "open"), true),
+        StatusCode::FORBIDDEN,
+    ))
+    .await;
+    // Comments, the auto-merge schedule (read three times) and the owner, in two requests.
+    ask(limited.clone()).await;
+    ask(limited.clone()).await;
+    assert_eq!(
+        seen(&limited),
+        vec![
+            format!(
+                "warning: {limited}: the token lacks read:issue, so issues can't be read, and a \
+                 pull request's comments and scheduled auto-merge read as none; give it \
+                 write:issue (README: Token scopes)"
+            ),
+            format!(
+                "warning: {limited}: the token lacks read:organization, so a repository an \
+                 organization owns reads as owned by a user; give it read:organization (README: \
+                 Token scopes)"
+            ),
+        ],
+        "one warning per scope"
+    );
+}

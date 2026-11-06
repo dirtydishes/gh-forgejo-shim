@@ -204,6 +204,27 @@ impl ForgejoClient {
         config: &crate::config::Config,
         env: &crate::config::EnvMap,
     ) -> ForgejoResult<Self> {
+        Self::for_host_following(host, token, config, env, true)
+    }
+
+    /// [`ForgejoClient::for_host`] for [`ForgejoClient::probe`]: it follows no redirect, so the
+    /// token goes to the configured host only and a redirect reads as the answer it is.
+    pub fn for_host_without_redirects(
+        host: &str,
+        token: Option<String>,
+        config: &crate::config::Config,
+        env: &crate::config::EnvMap,
+    ) -> ForgejoResult<Self> {
+        Self::for_host_following(host, token, config, env, false)
+    }
+
+    fn for_host_following(
+        host: &str,
+        token: Option<String>,
+        config: &crate::config::Config,
+        env: &crate::config::EnvMap,
+        redirects: bool,
+    ) -> ForgejoResult<Self> {
         let host = crate::config::normalize_host(host);
         let settings = config.host.get(&host);
         let mut paths = Vec::new();
@@ -219,7 +240,7 @@ impl ForgejoClient {
             }
             paths.push(path);
         }
-        let mut client = Self::with_ca_files(token, &paths)?;
+        let mut client = Self::with_ca_files(token, &paths, redirects)?;
         client.base_url = Some(
             settings
                 .and_then(|settings| settings.api_url.clone())
@@ -229,11 +250,18 @@ impl ForgejoClient {
     }
 
     pub fn with_ca_file(token: Option<String>, path: &std::path::Path) -> ForgejoResult<Self> {
-        Self::with_ca_files(token, &[path])
+        Self::with_ca_files(token, &[path], true)
     }
 
-    fn with_ca_files(token: Option<String>, paths: &[&std::path::Path]) -> ForgejoResult<Self> {
+    fn with_ca_files(
+        token: Option<String>,
+        paths: &[&std::path::Path],
+        redirects: bool,
+    ) -> ForgejoResult<Self> {
         let mut builder = Client::builder();
+        if !redirects {
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+        }
         for path in paths {
             let pem = std::fs::read(path).map_err(|error| {
                 ForgejoError::new(format!(
@@ -281,6 +309,43 @@ impl ForgejoClient {
     pub fn with_scheme(mut self, scheme: impl Into<String>) -> Self {
         self.scheme = scheme.into();
         self
+    }
+
+    /// One request to `path` below the host's base, answered with its status and JSON body
+    /// (`null` when it isn't JSON) whatever the status. Errors are transport failures only, and
+    /// their text names no token.
+    pub fn probe(&self, host: &str, method: Method, path: &str) -> ForgejoResult<(u16, Value)> {
+        let mut request = self
+            .http
+            .request(
+                method.clone(),
+                format!("{}{path}", self.host_base_url(host)),
+            )
+            .timeout(self.timeout)
+            .header(ACCEPT, "application/json")
+            .header(USER_AGENT, USER_AGENT_VALUE);
+        if let Some(token) = &self.token {
+            request = request.header(AUTHORIZATION, format!("token {token}"));
+        }
+        if method != Method::GET {
+            request = request.header(CONTENT_TYPE, "application/json").body("{}");
+        }
+        let response = request.send().map_err(|error| {
+            ForgejoError::new(if error.is_timeout() {
+                "it didn't answer in time".to_string()
+            } else if error.is_connect() {
+                "it couldn't be reached".to_string()
+            } else {
+                "the request failed".to_string()
+            })
+        })?;
+        let status = response.status().as_u16();
+        let body = response
+            .bytes()
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or(Value::Null);
+        Ok((status, body))
     }
 
     pub fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {

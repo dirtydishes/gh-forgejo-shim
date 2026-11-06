@@ -175,8 +175,9 @@ shows the route reaches it. A `/pull/1` link on any repository should open Forge
 ## 4. Use it
 
 - **gh:** `gh auth login --hostname forge.example.com` with a Forgejo token. Plain `gh` then works in
-  the forge's repositories, with no wrapper. Grant the token `read:user`, `write:repository`,
-  `write:issue` and `read:organization`. Create it in Forgejo under **Settings → Applications**, and
+  the forge's repositories, with no wrapper. Grant the token the
+  [four scopes in the README](../../README.md#token-scopes). Create it in Forgejo under
+  **Settings → Applications**, and
   choose **Paste an authentication token** (or pipe it to `gh auth login --with-token`). gh's browser
   login can't work: its OAuth app isn't registered on the forge, and Forgejo answers "Client ID not
   registered".
