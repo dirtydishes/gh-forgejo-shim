@@ -541,19 +541,32 @@ fn run_gh(
                 write_error(&mut mode, &format!("gh-forgejo-shim: {message}"));
                 1
             } else {
-                launch_listed(&routed, &decision, &original_argv, &env, &config, &mode)
-                    .or_else(|| {
-                        step_aside_logged_in(
-                            &routed,
-                            &decision,
-                            &words,
-                            &original_argv,
-                            &env,
-                            &config,
-                            &mode,
-                        )
-                    })
-                    .unwrap_or_else(|| run_forgejo(&invocation, &env, cwd, &decision, &mut mode))
+                let may_step_aside = !names_routed_port(&host, &routed, &words, &env);
+                launch_listed(
+                    &routed,
+                    &decision,
+                    &original_argv,
+                    &env,
+                    &config,
+                    &mode,
+                    may_step_aside,
+                )
+                .or_else(|| {
+                    may_step_aside
+                        .then(|| {
+                            step_aside_logged_in(
+                                &routed,
+                                &decision,
+                                &words,
+                                &original_argv,
+                                &env,
+                                &config,
+                                &mode,
+                            )
+                        })
+                        .flatten()
+                })
+                .unwrap_or_else(|| run_forgejo(&invocation, &env, cwd, &decision, &mut mode))
             }
         }
     };
@@ -650,6 +663,7 @@ fn launch_listed(
     env: &HashMap<String, String>,
     config: &DispatcherConfig,
     mode: &DelegateMode<'_>,
+    may_step_aside: bool,
 ) -> Option<i32> {
     #[cfg(unix)]
     if matches!(mode, DelegateMode::Inherit) && crate::launcher::launches(routed) {
@@ -661,10 +675,38 @@ fn launch_listed(
             argv,
             env,
             config.real_gh.as_deref(),
+            may_step_aside,
         );
     }
-    let _ = (routed, decision, argv, env, config, mode);
+    let _ = (routed, decision, argv, env, config, mode, may_step_aside);
     None
+}
+
+/// Whether the call or `GH_REPO` spells the routed host with its port (`-R forge.test:3443/o/r`,
+/// `--hostname forge.test:3443`, a URL). gh keeps that port for some forms (a full repository
+/// name, `gh api`'s URL or `--hostname`) and drops it for others (`gh pr view <URL>`, a remote),
+/// so a step-aside, which makes the portless hostname gh's default host, can't say which endpoint
+/// gh reaches. Such a call doesn't step aside (#231, parallax r2#3). `gh api` and `gh auth` take
+/// no host from `GH_REPO`.
+fn names_routed_port(
+    host: &str,
+    routed: &Invocation,
+    words: &[String],
+    env: &HashMap<String, String>,
+) -> bool {
+    let host = normalize_host(host);
+    if !host.contains(':') || host.starts_with('[') {
+        return false;
+    }
+    let gh_repo = if routed.command == "api" || routed.command.starts_with("auth ") {
+        None
+    } else {
+        env.get("GH_REPO")
+    };
+    words
+        .iter()
+        .chain(gh_repo)
+        .any(|word| word.to_ascii_lowercase().contains(&host))
 }
 
 /// Refuses a forge-routed command that pushes with git when git would push the forge's commits to
