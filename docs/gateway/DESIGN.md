@@ -128,8 +128,8 @@ client ──https──▶ reverse proxy (git.example.com)
   GitHub's `401 {"message":"Bad credentials"}` shape.
 - **Scopes:** gh checks `X-OAuth-Scopes` on `GET /api/v3/` and warns if `repo`/`read:org` are missing.
   Forgejo doesn't expose a token's scopes, so the gateway **claims `repo, read:org, workflow`** and lets
-  Forgejo enforce the real permissions. The README tells users which Forgejo token scopes to grant:
-  `read:user`, `write:repository`, `write:issue`, `read:organization`.
+  Forgejo enforce the real permissions. [The README](../../README.md#token-scopes) lists the Forgejo
+  token scopes to grant.
 
 ## Identity and IDs
 
