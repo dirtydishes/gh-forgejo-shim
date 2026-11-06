@@ -207,11 +207,20 @@ The token rule below already keeps every token variable from leaving; this check
 the call where routing and the trace say it goes.
 `gh api` and `gh auth` skip the word check: gh sends them where routing says, and their other
 words are data, such as a GraphQL document. That is no run directory, no gateway, and
-the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and two cases. A host-less
-`gh api` or `gh auth token` gets `GH_HOST` set to the forge's portless hostname, exactly as on the
-launch path (above), so decision 4 holds in every Forgejo checkout, server mode or not. Without
-it, plain gh would send these to its default host, github.com whenever the user is also logged in
-there, and `gh auth token` would print the GitHub token. Here the portless value also matters
+the user's environment unchanged apart from `FJ_SHIM_DEPTH` (§8) and two cases. Every form
+gets `GH_HOST` set to the forge's portless hostname, the default host gh then uses: for a host-less
+`gh api` or `gh auth token` that is decision 4, as on the launch path (above), and for the rest it
+covers what routing doesn't model. Without it, plain gh would send to its default host, github.com
+whenever the user is also logged in there, every host-less `OWNER/REPO` (`gh repo delete o/r`,
+`gh repo clone o/r`) and every command that only uses the default host (`gh search`, `gh gist`,
+`gh status`), while routing and the trace named the forge; `gh auth token` would print the GitHub
+token. gh still sends a call that names a host (`-R host/o/r`, a URL, `--hostname`) there, and
+with `GH_HOST` set it uses only the checkout's remotes on the forge, the ones routing chose from.
+Commands that only make sense on github.com reach the forge too: `gh search` searches the forge,
+and `gh gist`, which Forgejo doesn't have, fails with the forge's answer instead of silently
+reaching github.com. A user `GH_HOST` naming the forge stays; one naming another host keeps a form
+that doesn't launch on the built-in path (above), and gives way to the forge on the launch path,
+where routing already chose it. Here the portless value also matters
 for the token: a user's own `hosts.yml` has the login under the portless key only, and
 `GH_HOST=forge.test:3443` gives "no oauth token found for forge.test:3443". For a forge on a
 custom port, stepping aside therefore sends gh to the forge's default port 443, where the user's
@@ -221,8 +230,8 @@ variable, if set, for the forge ahead of the user's login there (fact 3): `GH_EN
 or `GITHUB_ENTERPRISE_TOKEN` for most forges, and `GH_TOKEN` or `GITHUB_TOKEN` for a forge named
 `github.localhost` or `*.ghe.com`. Either would send another site's login to the forge, the
 enterprise ones whatever `GH_HOST` says. So stepping aside removes those of the four token
-variables that are set, as a launch does, whether or not it sets `GH_HOST`, and even when the
-user's own `GH_HOST` already names the forge, where it sets nothing. Stepping aside needs the
+variables that are set, as a launch does, even when the user's own `GH_HOST` already names
+the forge, where it sets nothing. Stepping aside needs the
 user's stored login for the forge, so gh never needs the variables there, and without them a call
 that reaches another host carries only the user's own login for it, as plain gh would.
 It records the `GH_HOST` change with §7's
@@ -763,8 +772,8 @@ thread at the edit point. Building gh's environment by hand and spawning it with
 | `FJ_SHIM_ORIG_<NAME>` | the user's original value of each changed variable that was set |
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
 
-The table is the launch path. Stepping aside (§2) sets `GH_HOST` only for a host-less `gh api`
-or `gh auth token`, recorded with `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and
+The table is the launch path. Stepping aside (§2) sets `GH_HOST` to the forge's portless hostname
+on every form, unless the user's own `GH_HOST` has that value, recorded with `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and
 `FJ_SHIM_SET_<NAME>`. It removes the four token variables on every form, unrecorded, so no
 nested call gets them back. It never sets `FJ_SHIM_LAUNCHER`.
 

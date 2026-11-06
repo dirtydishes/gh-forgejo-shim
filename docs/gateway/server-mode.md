@@ -184,6 +184,11 @@ shows the route reaches it. A `/pull/1` link on any repository should open Forge
   the branch's pull request on the forge directly.
 - **ChatGPT desktop:** it drives `gh`, so the same login serves it.
 
+With the wrapper installed, every `gh` command in a checkout of the forge's repositories goes to the
+forge, including `gh repo delete OWNER/REPO` and other commands given a repository without a host.
+`gh search` searches the forge. `gh gist` and other GitHub-only commands fail with the forge's
+answer; run them outside the checkout to reach github.com.
+
 ## Limits
 
 - One gateway serves one forge.

@@ -1,3 +1,14 @@
+# Unreleased
+
+- **Server mode no longer sends host-less commands to github.com.** In a checkout of a forge's
+  repository, with gh logged in to both the forge and github.com, commands such as
+  `gh repo delete OWNER/REPO`, `gh repo clone OWNER/REPO`, `gh search` and `gh gist` went to
+  github.com, while the wrapper's trace named the forge. They now go to the forge, and the trace
+  names the host gh used. `gh gist` and other GitHub-only commands fail there; run them outside the
+  checkout to reach github.com (#231).
+
+The v0.2.2 notes follow.
+
 # gh-forgejo-shim v0.2.2
 
 - **The gateway ships as a ready-made image.** Each release publishes `fga-server` for
