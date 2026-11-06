@@ -628,6 +628,92 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
         .collect()
 }
 
+/// Where git would push instead of `forge`, for a command that pushes (`gh pr create` pushes the
+/// branch's remote, `gh repo create --push` the remote it adds): a remote fetched from the forge
+/// whose push URL names another host (`remote.<name>.pushurl`, `url.<base>.pushInsteadOf`), or a
+/// new remote on the forge that `pushInsteadOf` or `insteadOf` sends elsewhere. A push URL gh can't
+/// read counts as elsewhere. `None` when every push to the forge stays there, or outside a checkout.
+pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
+    let hostname = gh_hostname(forge).to_ascii_lowercase();
+    let mut ssh = SshHosts::default();
+    let mut host_of = |url: &str| {
+        let url = GitUrl::parse(url)?;
+        let host = if url.scheme == "ssh" {
+            ssh.resolve(&url.host)
+        } else {
+            url.host
+        };
+        Some(gh_hostname(&host).to_ascii_lowercase())
+    };
+    let elsewhere = |host: Option<String>| match host {
+        Some(host) => host,
+        None => "a location gh-forgejo-shim can't read".to_string(),
+    };
+    let listing = git_output(&["remote", "-v"], cwd).unwrap_or_default();
+    let mut fetch = HashMap::<String, String>::new();
+    let mut push = Vec::<(String, String)>::new();
+    for line in listing.lines() {
+        let Some((rest, kind)) = line.trim_end().rsplit_once(' ') else {
+            continue;
+        };
+        let Some((name, url)) = rest.trim_end().rsplit_once(char::is_whitespace) else {
+            continue;
+        };
+        match kind {
+            "(fetch)" => {
+                fetch.insert(name.trim().to_string(), url.to_string());
+            }
+            "(push)" => push.push((name.trim().to_string(), url.to_string())),
+            _ => {}
+        }
+    }
+    for (name, url) in push {
+        let on_forge = fetch
+            .get(&name)
+            .is_some_and(|fetch| host_of(fetch).as_deref() == Some(hostname.as_str()));
+        let host = host_of(&url);
+        if on_forge && host.as_deref() != Some(hostname.as_str()) {
+            return Some(format!("remote {name} pushes to {}", elsewhere(host)));
+        }
+    }
+    // git's own rule (`remote.c` `alias_url`): the longest matching `pushInsteadOf` prefix, else
+    // the longest `insteadOf`. `git remote get-url` doesn't see a remote given with `-c`.
+    let rules = git_output(
+        &["config", "--get-regexp", r"^url\..*\.(push)?insteadof$"],
+        cwd,
+    )
+    .unwrap_or_default();
+    let rewrite = |url: &str, key: &str| {
+        rules
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter_map(|(name, prefix)| {
+                let base = name.strip_prefix("url.")?.strip_suffix(key)?;
+                url.starts_with(prefix).then_some((prefix.len(), base))
+            })
+            .max_by_key(|(length, _)| *length)
+            .map(|(length, base)| format!("{base}{}", &url[length..]))
+    };
+    for url in [
+        format!("https://{forge}/o/r.git"),
+        format!("ssh://git@{forge}/o/r.git"),
+        format!("git@{hostname}:o/r.git"),
+    ] {
+        let Some(pushed) = rewrite(&url, ".pushinsteadof").or_else(|| rewrite(&url, ".insteadof"))
+        else {
+            continue;
+        };
+        let host = host_of(&pushed);
+        if host.as_deref() != Some(hostname.as_str()) {
+            return Some(format!(
+                "git rewrites pushes to {hostname} to {}",
+                elsewhere(host)
+            ));
+        }
+    }
+    None
+}
+
 fn remote_rank(name: &str) -> u8 {
     match name.to_ascii_lowercase().as_str() {
         "upstream" => 3,

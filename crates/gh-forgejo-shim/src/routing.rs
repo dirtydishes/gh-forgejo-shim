@@ -681,6 +681,7 @@ fn step_aside_logged_in(
         }
         return crate::launcher::start::step_aside_if_logged_in(
             host,
+            routed,
             argv,
             env,
             config.real_gh.as_deref(),
