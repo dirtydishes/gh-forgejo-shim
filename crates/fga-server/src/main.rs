@@ -4,8 +4,12 @@ use fga_server::{AppState, Host, app, config::Config};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
-    // The gateway's warnings, such as a token scope that hid data, go to the server's log.
-    fga_core::scopes::set_sink(|message| eprintln!("{message}"));
+    // The gateway's warnings, such as a token scope that hid data, go to the server's log. A log
+    // that can't be written loses the warning, never the request it came from.
+    fga_core::scopes::set_sink(|message| {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "{message}");
+    });
     // Server mode serves one forge and lets Forgejo judge every user's token.
     let host = Host::new(
         config.public_url,
