@@ -627,6 +627,7 @@ fn run_doctor(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) ->
         launchd_path: None,
         check_gui_path: None,
         check_current_repo: None,
+        check_token_scopes: None,
         platform: runtime.platform().to_string(),
     })?;
     writeln!(stdout, "{}", doctor::format_checks(&checks))?;
