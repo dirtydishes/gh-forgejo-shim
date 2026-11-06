@@ -184,10 +184,13 @@ shows the route reaches it. A `/pull/1` link on any repository should open Forge
   the branch's pull request on the forge directly.
 - **ChatGPT desktop:** it drives `gh`, so the same login serves it.
 
-With the wrapper installed, every `gh` command in a checkout of the forge's repositories goes to the
-forge, including `gh repo delete OWNER/REPO` and other commands given a repository without a host.
-`gh search` searches the forge. `gh gist` and other GitHub-only commands fail with the forge's
-answer; run them outside the checkout to reach github.com. `gh pr create` and
+With the wrapper installed, `gh` commands that talk to a host go to the forge in a checkout of the
+forge's repositories, including `gh repo delete OWNER/REPO` and other commands given a repository
+without a host as an argument. Commands that manage gh itself, such as `gh auth login`, `gh config`
+and `gh extension`, run as usual. With `-R` or `GH_REPO`, name the host:
+`-R forge.example.com/OWNER/REPO`; a host-less `-R OWNER/REPO` is refused there. `gh search`
+searches the forge. `gh gist` and other GitHub-only commands fail with the forge's answer; run
+them outside the checkout to reach github.com. `gh pr create` and
 `gh repo create --push` stop with an error when git would push the forge's commits to another host,
 through a remote's push URL or a `pushInsteadOf` rule.
 
