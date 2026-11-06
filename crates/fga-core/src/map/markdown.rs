@@ -12,6 +12,7 @@ use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, format_html, parse_document};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Bodies longer than this are shown as escaped paragraphs instead of rendered. GitHub caps a body
 /// at 65,536 characters; a larger one only reaches the gateway from Forgejo.
@@ -33,8 +34,10 @@ const MAX_RAW_TAGS: usize = 256;
 /// on its delimiter line, and at most as many rows as the body has lines.
 const MAX_TABLE_CELLS: usize = 20_000;
 
-/// Rendered HTML past this size isn't sanitized: the body is shown as escaped paragraphs.
-const MAX_RENDERED_HTML: usize = 1024 * 1024;
+/// Rendered HTML past this size isn't sanitized: the body is shown as escaped paragraphs. The
+/// sanitizer's time grows faster than the HTML in some shapes (a run of `&`, each written
+/// `&amp;`), so the cap is on what it reads, not on the body.
+const MAX_RENDERED_HTML: usize = 256 * 1024;
 
 /// Tags GitHub keeps in rendered Markdown, apart from the ones it reserves for its own features.
 const TAGS: &[&str] = &[
@@ -202,6 +205,12 @@ fn options() -> Options<'static> {
 
 /// A body as GitHub-shaped `bodyHTML`: rendered GFM, sanitized. An empty body is empty.
 pub fn body_html(body: &str) -> String {
+    body_html_within(body, &AtomicUsize::new(usize::MAX))
+}
+
+/// [`body_html`], drawing the rendered HTML's size from `budget`: once it runs out, bodies come back
+/// as escaped paragraphs. A body that is escaped anyway draws nothing.
+pub fn body_html_within(body: &str, budget: &AtomicUsize) -> String {
     let body = body.replace('\r', "");
     if body.trim().is_empty() {
         return String::new();
@@ -224,7 +233,14 @@ pub fn body_html(body: &str) -> String {
         options.render.escape = true;
     }
     let mut rendered = String::new();
-    if format_html(root, &options, &mut rendered).is_err() || rendered.len() > MAX_RENDERED_HTML {
+    if format_html(root, &options, &mut rendered).is_err()
+        || rendered.len() > MAX_RENDERED_HTML
+        || budget
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(rendered.len())
+            })
+            .is_err()
+    {
         return escaped_paragraphs(&body);
     }
     SANITIZER.clean(&rendered).to_string().trim().to_owned()

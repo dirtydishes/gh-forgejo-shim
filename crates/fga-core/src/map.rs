@@ -110,7 +110,7 @@ mod checks;
 mod markdown;
 mod pulls;
 pub use checks::*;
-pub use markdown::{body_html, escaped_body_html};
+pub use markdown::{body_html, body_html_within, escaped_body_html};
 pub use pulls::*;
 
 #[cfg(test)]
