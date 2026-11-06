@@ -742,7 +742,7 @@ fn stepping_aside_makes_the_forge_gh_s_default_host() {
         assert!(status.success(), "git {args:?}");
     }
     let gh = fixture.fake_gh(
-        r#"for name in GH_HOST FJ_SHIM_ORIG_GH_HOST FJ_SHIM_SAVED GH_CONFIG_DIR; do
+        r#"for name in GH_HOST FJ_SHIM_ORIG_GH_HOST FJ_SHIM_SET_GH_HOST FJ_SHIM_SAVED GH_CONFIG_DIR; do
   eval "printf '%s=%s\n' $name \"\${$name-unset}\""
 done > "$REPORT""#,
     );
@@ -770,6 +770,11 @@ done > "$REPORT""#,
         );
         assert_eq!(reported(&report, "FJ_SHIM_SAVED"), "GH_HOST", "{args:?}");
         assert_eq!(
+            reported(&report, "FJ_SHIM_SET_GH_HOST"),
+            "forge.test",
+            "{args:?}"
+        );
+        assert_eq!(
             reported(&report, "FJ_SHIM_ORIG_GH_HOST"),
             "unset",
             "{args:?}"
@@ -789,6 +794,20 @@ done > "$REPORT""#,
             "{args:?}: {report}"
         );
         assert_eq!(reported(&report, "FJ_SHIM_SAVED"), "unset", "{args:?}");
+    }
+    // A host-less `-R` or `GH_REPO` means gh's default host, github.com: refused, never run.
+    for (args, gh_repo) in [
+        (&["repo", "delete", "-R", "o/target", "--yes"][..], None),
+        (&["repo", "delete", "--yes"][..], Some("o/target")),
+    ] {
+        let mut command = fixture.command(&gh, args);
+        if let Some(gh_repo) = gh_repo {
+            command.env("GH_REPO", gh_repo);
+        }
+        let _ = fs::remove_file(fixture.dir.join("report"));
+        let output = command.output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert_eq!(fixture.report(), "", "{args:?}: gh never ran");
     }
     // A user GH_HOST naming the forge with its port gives way to the portless name gh looks the
     // login up under, and a nested call gets the user's value back.
