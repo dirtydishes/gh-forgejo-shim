@@ -34,6 +34,8 @@ pub enum Standing {
     Missing,
     /// A write scope's read half only.
     ReadOnly,
+    /// A write scope without its write half, whose read half couldn't be checked, with why.
+    WriteMissing(String),
     Unknown(String),
 }
 
@@ -132,7 +134,8 @@ fn write_standing(write: Answer, read: impl FnOnce() -> Answer) -> Standing {
         Answer::Unknown(why) => Standing::Unknown(why),
         Answer::Missing => match read() {
             Answer::Granted => Standing::ReadOnly,
-            _ => Standing::Missing,
+            Answer::Missing => Standing::Missing,
+            Answer::Unknown(why) => Standing::WriteMissing(why),
         },
     }
 }
@@ -177,6 +180,11 @@ mod tests {
         assert_eq!(
             write_standing(Answer::Missing, || Answer::Missing),
             Standing::Missing
+        );
+        // The write half is missing for certain; the read half stays unjudged.
+        assert_eq!(
+            write_standing(Answer::Missing, || Answer::Unknown("timed out".into())),
+            Standing::WriteMissing("timed out".into())
         );
         assert_eq!(
             write_standing(Answer::Granted, || unreachable!("no read asked")),
