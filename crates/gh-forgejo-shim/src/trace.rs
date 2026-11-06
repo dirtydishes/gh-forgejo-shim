@@ -94,6 +94,23 @@ pub fn append_gh_record(
     append_jsonl(&path, &record).is_ok()
 }
 
+/// Where a launched call's gateway sends its warnings, such as a token scope that hid data: a
+/// `warning` record in the trace, redacted like the rest. `None` when tracing is off, so they go
+/// nowhere: gh owns the call's stdout and stderr.
+pub(crate) fn warning_sink(
+    env: &HashMap<String, String>,
+) -> Option<impl Fn(&str) + Send + Sync + 'static> {
+    let path = trace_path(env)?;
+    Some(move |message: &str| {
+        let record = json!({
+            "kind": "warning",
+            "timestamp_unix_ms": timestamp_unix_ms(),
+            "message": redact_text(message),
+        });
+        let _ = append_jsonl(&path, &record);
+    })
+}
+
 fn build_gh_record(
     argv: &[String],
     cwd: Option<&Path>,

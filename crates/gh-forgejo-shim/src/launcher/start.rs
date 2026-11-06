@@ -250,6 +250,10 @@ pub fn launch(
         )),
     ));
     let credentials = ghconfig::credentials(&served);
+    // The gateway's warnings go to the trace, if there is one.
+    if let Some(sink) = crate::trace::warning_sink(env) {
+        fga_core::scopes::set_sink(sink);
+    }
 
     Some(run::run(Launch {
         gh,
