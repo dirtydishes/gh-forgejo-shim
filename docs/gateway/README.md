@@ -58,7 +58,7 @@ The gateway reads at most 16 MiB of each upstream reply and 64 MiB across one in
 either, the request fails with `502` (REST) or an `INTERNAL` GraphQL error saying so, which is what
 a very large `gh pr diff` gets.
 
-Use a Forgejo token with `read:user`, `write:repository`, `write:issue`, and `read:organization`.
+Use a Forgejo token with the scopes in [the README's token scopes](../../README.md#token-scopes).
 The gateway accepts `token` and `bearer` authorization schemes. It advertises the GitHub scopes
 `repo, read:org, workflow` for gh login; Forgejo enforces the token's actual permissions.
 A bounded cache holds up to 256 viewer identities for 60 seconds, keyed by SHA-256 of the token.
@@ -78,11 +78,12 @@ refuses).
 search qualifiers return an error. A pull request search that filters only by repository, state,
 head, base, author or review request reads Forgejo's pull list alone, so it works with a token that
 has no issue scope, such as ChatGPT's `pr list --head … --author @me`. Labels, keywords, assignee
-and other orders read the issue list, which needs `read:issue`. Without that scope a pull request
-still reads: its conversation `comments` read as none, and `autoMergeRequest` as null with both
-`viewerCan*AutoMerge` false, since Forgejo shows a scheduled merge only on the PR's timeline.
-Without `read:organization`, a repository's owner reads as a user. Forgejo's other errors stay
-errors. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the
+and other orders read the issue list, which Forgejo serves under issue scope. A token without it
+still reads a pull request: its conversation `comments` read as none, and `autoMergeRequest` as null
+with both `viewerCan*AutoMerge` false, since Forgejo shows a scheduled merge only on the PR's
+timeline. Without `read:organization`, a repository's owner reads as a user. Each such answer logs
+one warning per scope (see [token scopes](../../README.md#token-scopes)). Forgejo's other errors
+stay errors. The [trimmed GitHub SDL](../../fixtures/github-g1.graphql) pins the
 source commit and checksum. Its contract test checks type kinds, fields, nullability, arguments,
 defaults, enums, interfaces, and unions. [The schema
 example](../../crates/fga-core/examples/schema.rs) emits the implemented SDL, and
