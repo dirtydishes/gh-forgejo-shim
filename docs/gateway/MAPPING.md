@@ -270,12 +270,15 @@ GitHub-flavoured Markdown, then sanitized, as GitHub serves it. Rendering happen
   links, images, code, quotes, `details`/`summary`, and inline tags such as `kbd`, `sub` and `sup`.
   No `script`, `style`, `iframe`, `object`, `embed`, `form`, `base` or `meta`; no event handlers,
   `style`, `class`, `id`, `name` or `target` attributes; no comments. Links keep only `http`, `https`,
-  `mailto` and relative URLs, and get `rel="nofollow noopener noreferrer"`. Images keep only absolute
-  `http` or `https` sources. Every `<input>` becomes a checkbox, as a task list item's is.
+  `mailto` and relative URLs, and get `rel="nofollow noopener noreferrer"`. Images keep only sources written
+  out as `http://` or `https://` with a host, in their parsed form; `https:/path` and the like would
+  resolve against the client's own page. Every `<input>` becomes a checkbox, as a task list item's is.
 - **Limits:** the sanitizer's work grows with how deeply elements nest, so a body is shown as escaped
-  paragraphs instead when it is over 64 KiB or its Markdown nests more than 64 levels deep, and its raw
-  HTML is shown as text when it holds more than 256 tags. One request renders at most 1 MiB of bodies;
-  bodies after that come back as escaped paragraphs.
+  paragraphs instead when it is over 64 KiB or its Markdown nests more than 64 levels deep, its raw
+  HTML is shown as text when it holds more than 256 tags, and its tables are read as text when its
+  pipes and lines could make more than 20,000 cells (short rows are filled out to the header's
+  width). Rendered HTML over 1 MiB is shown as escaped paragraphs. One request renders at most
+  1 MiB of bodies; bodies after that come back as escaped paragraphs.
 
 **Differences from GitHub:** `#123` and `@user` aren't linked, and headings get no anchors. A relative
 image source, such as a Forgejo attachment's `/attachments/…`, is dropped, because the client would
