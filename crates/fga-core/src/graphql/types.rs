@@ -385,7 +385,10 @@ impl IssueComment {
     }
     #[graphql(name = "bodyHTML")]
     async fn body_html(&self, ctx: &Context<'_>) -> Html {
-        Html(ctx.data_unchecked::<Session>().body_html(&self.source.body))
+        Html(
+            ctx.data_unchecked::<Session>()
+                .body_html(&self.source.body, ctx.data_opt::<url::Url>()),
+        )
     }
     async fn created_at(&self) -> DateTime {
         DateTime(self.source.created_at.clone())

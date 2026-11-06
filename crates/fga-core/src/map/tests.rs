@@ -2,6 +2,11 @@ use super::*;
 use crate::forgejo::{CommitStatus, CommitStatusState as S, Protection, PullRequest, Review};
 use serde_json::json;
 
+/// `bodyHTML` as a forge at `https://forge.example` serves it.
+fn body_html(body: &str) -> String {
+    super::body_html(body, Some(&"https://forge.example".parse().unwrap()))
+}
+
 fn pr() -> PullRequest {
     serde_json::from_value(json!({"number":1,"title":"scenario","state":"open","merged":false,"draft":false,"mergeable":true,"html_url":"https://forge.test/o/r/pulls/1","head":{"label":"s/pass","ref":"s/pass","sha":"abc","repo":null},"base":{"label":"main","ref":"main","sha":"def","repo":null},"user":{"id":1,"login":"o","avatar_url":""},"merged_at":null})).unwrap()
 }
@@ -873,8 +878,8 @@ fn body_html_removes_hostile_markup() {
             "<p><img alt=\"i\"></p>".to_owned(),
         ),
         (
-            "<img src=\"https://example.com/a.png\" alt=a width=10>",
-            "<img src=\"https://example.com/a.png\" alt=\"a\" width=\"10\">".to_owned(),
+            "<img src=\"https://forge.example/a.png\" alt=a width=10>",
+            "<img src=\"https://forge.example/a.png\" alt=\"a\" width=\"10\">".to_owned(),
         ),
         ("[x](javascript:alert(1))", format!("<p><a {rel}>x</a></p>")),
         ("[x](JaVaScRiPt:alert(1))", format!("<p><a {rel}>x</a></p>")),
@@ -1084,8 +1089,9 @@ fn checks_keep_context_order_whatever_forgejo_sends() {
     assert_eq!(names(&[check, lint]), expected);
 }
 
-/// An image source must name its own host: a scheme without `//` resolves against the page showing
-/// it, so the client would request its own origin. Kept sources come back as parsed.
+/// An image loads by itself in the viewer's client, so only the forge's own images stay: an image
+/// anywhere else could be the client's own API, a service on the viewer's network or a tracker. A
+/// scheme without `//` resolves against the page showing it. Kept sources come back as parsed.
 #[test]
 fn body_html_images_need_an_absolute_http_url() {
     for src in [
@@ -1110,21 +1116,29 @@ fn body_html_images_need_an_absolute_http_url() {
         "http://[fd00::1]/x",
         "http://[::ffff:127.0.0.1]/x",
         "http://0.0.0.0/x",
+        // Another origin, even an ordinary one: the client's own API, or a tracker.
+        "https://chatgpt.com/backend-api/me",
+        "https://example.com/i.png",
+        "https:///x",
+        "http://forge.example/i.png",
+        "https://forge.example:8443/i.png",
+        "https://forge.example.evil.example/i.png",
     ] {
         assert_eq!(body_html(&format!("<img src=\"{src}\">")), "<img>", "{src}");
     }
-    // Extra slashes name a host, as a browser reads them, and come back in that form.
+    // The forge's own images stay, in parsed form.
     assert_eq!(
-        body_html("<img src=\"https:///x\">"),
-        "<img src=\"https://x/\">"
+        body_html("<img src=\" HTTPS://Forge.Example/a b.png\">"),
+        "<img src=\"https://forge.example/a%20b.png\">"
     );
     assert_eq!(
-        body_html("<img src=\" HTTPS://Example.COM/a b.png\">"),
-        "<img src=\"https://example.com/a%20b.png\">"
+        body_html("![a](https://forge.example/attachments/1)"),
+        "<p><img src=\"https://forge.example/attachments/1\" alt=\"a\"></p>"
     );
+    // Without a forge, no image stays.
     assert_eq!(
-        body_html("![a](https://example.com/i.png)"),
-        "<p><img src=\"https://example.com/i.png\" alt=\"a\"></p>"
+        super::body_html("![a](https://forge.example/i.png)", None),
+        "<p><img alt=\"a\"></p>"
     );
 }
 
