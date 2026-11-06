@@ -1133,14 +1133,16 @@ fn a_call_naming_another_host_keeps_the_built_in_path() {
 }
 
 /// `gh pr create` and `gh repo create --push` push with git, which follows the remote's push URL
-/// and `pushInsteadOf`, not `GH_HOST`. A push those send off the forge is refused before gh runs
-/// (parallax r1#3, #231).
+/// and git's URL rewrites, not `GH_HOST` (#231). A `pr create` push that could leave the forge is
+/// refused before gh runs (parallax r1#3, r2#1); a `repo create` that pushes always is, however
+/// it's spelled (r2#2, r3#1, r3#2), and one that can't push steps aside (r2#4, r3#4).
 #[test]
 fn a_push_git_would_send_off_the_forge_is_refused() {
     let _serial = serial();
     let fixture = Fixture::new("http://127.0.0.1:9");
     fixture.user_hosts(
-        "forge.test:\n    oauth_token: forge-login\ngithub.com:\n    oauth_token: github-login\n",
+        "forge.test:\n    oauth_token: forge-login\n    git_protocol: https\n\
+         github.com:\n    oauth_token: github-login\n",
     );
     let git = |args: &[&str]| {
         let status = Command::new("git")
@@ -1156,130 +1158,106 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
     git(&["init", "-q"]);
     git(&["remote", "add", "origin", "https://forge.test/o/r.git"]);
     let gh = reporting_gh(&fixture);
-    let pr_create = ["pr", "create", "--title", "t", "--body", "b"];
-    let repo_create = [
-        "repo",
-        "create",
-        "o/new",
-        "--private",
-        "--source",
-        ".",
-        "--push",
-    ];
+    let refused = |args: &[&str], why: &str| {
+        let _ = fs::remove_file(fixture.dir.join("report"));
+        let output = fixture.command(&gh, args).output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(why),
+            "{args:?}: {output:?}"
+        );
+        assert_eq!(fixture.report(), "", "{args:?}: gh never ran");
+    };
+    let steps_aside = |args: &[&str]| {
+        let output = fixture.command(&gh, args).output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert_eq!(
+            reported(&fixture.report(), "GH_HOST"),
+            "forge.test",
+            "{args:?}"
+        );
+    };
 
+    // A `repo create` that pushes, in any spelling, whatever git's configuration says.
+    for args in [
+        &[
+            "repo",
+            "create",
+            "acme/new",
+            "--private",
+            "--source",
+            ".",
+            "--push",
+        ][..],
+        &[
+            "repo",
+            "create",
+            "acme/new",
+            "--private",
+            "-s=../source",
+            "--push",
+        ][..],
+        &[
+            "repo",
+            "new",
+            "acme/new",
+            "--private",
+            "--source",
+            ".",
+            "--push",
+        ][..],
+        &[
+            "repo",
+            "--source",
+            ".",
+            "create",
+            "acme/new",
+            "--private",
+            "--push",
+        ][..],
+        &["repo", "create"][..],
+    ] {
+        refused(args, "create the repository without --push");
+    }
+    // One that can't push steps aside, even when a push would leave the forge.
     git(&[
         "config",
         "remote.origin.pushurl",
         "https://github.com/o/r.git",
     ]);
-    let output = fixture
-        .command(&gh, &pr_create)
-        .output()
-        .expect("run wrapper");
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("remote origin pushes to github.com"),
-        "{output:?}"
-    );
-    assert_eq!(fixture.report(), "", "gh never ran");
+    steps_aside(&["repo", "create", "acme/new", "--private"]);
+    steps_aside(&[
+        "repo",
+        "create",
+        "--private",
+        "--source",
+        ".",
+        "--push=false",
+    ]);
 
-    // `repo create` without `--push` doesn't push, so the push URL doesn't matter (r2#4).
-    let output = fixture
-        .command(&gh, &["repo", "create", "acme/new", "--private"])
-        .output()
-        .expect("run wrapper");
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_eq!(reported(&fixture.report(), "GH_HOST"), "forge.test");
-
+    // `pr create` pushes the checkout's remote: refused when its push URL leaves the forge.
+    for args in [
+        &["pr", "create", "--title", "t", "--body", "b"][..],
+        &["pr", "new", "--title", "t", "--body", "b"][..],
+    ] {
+        refused(args, "remote origin pushes to github.com");
+    }
     git(&["config", "--unset", "remote.origin.pushurl"]);
-    // A rewrite for one owner's repositories still counts (r2#1).
+    // A rewrite for one owner's repositories still counts.
     git(&[
         "config",
         "url.https://github.com/acme/.pushInsteadOf",
         "https://forge.test/acme/",
     ]);
-    let _ = fs::remove_file(fixture.dir.join("report"));
-    let output = fixture
-        .command(
-            &gh,
-            &[
-                "repo",
-                "create",
-                "acme/new",
-                "--private",
-                "--source",
-                ".",
-                "--push",
-            ],
-        )
-        .output()
-        .expect("run wrapper");
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(fixture.report(), "", "gh never ran");
+    refused(
+        &["pr", "create", "--title", "t", "--body", "b"],
+        "git rewrites URLs on forge.test to github.com",
+    );
     git(&["config", "--remove-section", "url.https://github.com/acme/"]);
 
-    // `--source` names the checkout gh pushes from, with its own rewrites (r2#2).
-    let source = fixture.dir.join("source");
-    fs::create_dir_all(&source).expect("source");
-    for args in [
-        &["init", "-q"][..],
-        &[
-            "config",
-            "url.https://github.com/.pushInsteadOf",
-            "https://forge.test/",
-        ][..],
-    ] {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(&source)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", &fixture.home)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?}");
-    }
-    let output = fixture
-        .command(
-            &gh,
-            &[
-                "repo",
-                "create",
-                "acme/new",
-                "--private",
-                "--source=source",
-                "--push",
-            ],
-        )
-        .output()
-        .expect("run wrapper");
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(fixture.report(), "", "gh never ran");
-
-    git(&[
-        "config",
-        "url.git@github.com:.pushInsteadOf",
-        "https://forge.test/",
-    ]);
-    for args in [&pr_create[..], &repo_create[..]] {
-        let output = fixture.command(&gh, args).output().expect("run wrapper");
-        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("github.com"),
-            "{args:?}: {output:?}"
-        );
-        assert_eq!(fixture.report(), "", "{args:?}: gh never ran");
-    }
-
     // Pushes that stay on the forge step aside as before.
-    git(&["config", "--remove-section", "url.git@github.com:"]);
     git(&["config", "remote.origin.pushurl", "git@forge.test:o/r.git"]);
-    let output = fixture
-        .command(&gh, &pr_create)
-        .output()
-        .expect("run wrapper");
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_eq!(reported(&fixture.report(), "GH_HOST"), "forge.test");
+    steps_aside(&["pr", "create", "--title", "t", "--body", "b"]);
 }
 
 #[test]
