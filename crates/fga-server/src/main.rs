@@ -4,6 +4,8 @@ use fga_server::{AppState, Host, app, config::Config};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
+    // The gateway's warnings, such as a token scope that hid data, go to the server's log.
+    fga_core::scopes::set_sink(|message| eprintln!("{message}"));
     // Server mode serves one forge and lets Forgejo judge every user's token.
     let host = Host::new(
         config.public_url,

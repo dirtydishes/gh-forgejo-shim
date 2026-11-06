@@ -207,11 +207,8 @@ impl Issue {
         for (owner, repo, number) in references {
             match session.pull_request(&owner, &repo, number).await {
                 Ok(source) => pulls.push(PullRequest::new(source, &owner, &repo)),
-                Err(
-                    forgejo::Error::NotFound
-                    | forgejo::Error::Forbidden
-                    | forgejo::Error::MissingScope,
-                ) => {}
+                Err(forgejo::Error::NotFound | forgejo::Error::Forbidden) => {}
+                Err(forgejo::Error::MissingScope(scope)) => session.hidden(&scope),
                 Err(e) => return Err(error(e)),
             }
         }
