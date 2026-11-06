@@ -320,7 +320,10 @@ impl PullRequest {
             .await
         {
             Ok(event) => event,
-            Err(forgejo::Error::MissingScope) => None,
+            Err(forgejo::Error::MissingScope(scope)) => {
+                session.hidden(&scope);
+                None
+            }
             Err(other) => return Err(error(other)),
         };
         let Some(event) = event else {
@@ -363,13 +366,15 @@ impl PullRequest {
         }
         // A token that can't read the timeline can't see an existing schedule either, so it isn't
         // offered one it might already have.
-        match ctx
-            .data_unchecked::<Session>()
+        let session = ctx.data_unchecked::<Session>();
+        match session
             .auto_merge_event(&self.owner, &self.repo, self.source.number)
             .await
         {
             Ok(None) => {}
-            Ok(Some(_)) | Err(forgejo::Error::MissingScope) => {
+            Ok(Some(_)) => return Ok(false),
+            Err(forgejo::Error::MissingScope(scope)) => {
+                session.hidden(&scope);
                 return Ok(false);
             }
             Err(other) => return Err(error(other)),
@@ -580,7 +585,10 @@ impl PullRequest {
             .await
         {
             Ok(comments) => comments,
-            Err(forgejo::Error::MissingScope) => Vec::new(),
+            Err(forgejo::Error::MissingScope(scope)) => {
+                session.hidden(&scope);
+                Vec::new()
+            }
             Err(other) => return Err(error(other)),
         };
         let nodes = comments
