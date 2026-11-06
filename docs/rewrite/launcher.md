@@ -200,7 +200,8 @@ included: those would otherwise answer with the shim's own token, or refuse a fo
 there, such as ChatGPT's `gh api graphql --hostname <forge>`. A form that doesn't launch steps
 aside only when nothing in the call names another host: `GH_HOST` naming one, or a word or
 `GH_REPO` naming another allowlisted forge, or holding a URL, an SSH address (`host:o/r`, `git@host:o/r`) or a
-`HOST/OWNER/REPO` whose host isn't the forge. Any `x:` counts as an SSH host, whatever its
+`HOST/OWNER/REPO` whose host isn't the forge, or a `--hostname` value that isn't (`gh attestation
+download --hostname github.com`). Any `x:` counts as an SSH host, whatever its
 characters. Routing doesn't model every argument gh takes a host from (`gh repo clone
 forge-b/o/r` in forge-a's checkout routes to forge-a), so such a call keeps the built-in path.
 The token rule below already keeps every token variable from leaving; this check also keeps
@@ -220,7 +221,12 @@ Commands that only make sense on github.com reach the forge too: `gh search` sea
 and `gh gist`, which Forgejo doesn't have, fails with the forge's answer instead of silently
 reaching github.com. A user `GH_HOST` naming the forge stays; one naming another host keeps a form
 that doesn't launch on the built-in path (above), and gives way to the forge on the launch path,
-where routing already chose it. Here the portless value also matters
+where routing already chose it. `GH_HOST` doesn't steer git: `gh pr create` pushes the branch's
+remote and `gh repo create --push` the remote it adds, and a remote's push URL or
+`url.<base>.pushInsteadOf` can send that push to another host. So a forge-routed `pr create` or
+`repo create`, launched or not, is refused before gh runs when git would push a forge remote, or a
+new remote on the forge, anywhere else. The trace names the portless hostname gh reaches. Here the
+portless value also matters
 for the token: a user's own `hosts.yml` has the login under the portless key only, and
 `GH_HOST=forge.test:3443` gives "no oauth token found for forge.test:3443". For a forge on a
 custom port, stepping aside therefore sends gh to the forge's default port 443, where the user's

@@ -187,7 +187,9 @@ shows the route reaches it. A `/pull/1` link on any repository should open Forge
 With the wrapper installed, every `gh` command in a checkout of the forge's repositories goes to the
 forge, including `gh repo delete OWNER/REPO` and other commands given a repository without a host.
 `gh search` searches the forge. `gh gist` and other GitHub-only commands fail with the forge's
-answer; run them outside the checkout to reach github.com.
+answer; run them outside the checkout to reach github.com. `gh pr create` and
+`gh repo create --push` stop with an error when git would push the forge's commits to another host,
+through a remote's push URL or a `pushInsteadOf` rule.
 
 ## Limits
 
