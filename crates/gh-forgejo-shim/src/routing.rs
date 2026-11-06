@@ -693,9 +693,10 @@ fn step_aside_logged_in(
 /// Whether plain gh could go somewhere other than `host`, judged from what the call says:
 /// `GH_HOST` naming another host, or a word or `GH_REPO` naming one: another allowlisted forge
 /// anywhere in it, or a URL, a `HOST/OWNER/REPO` or an SSH address (`host:o/r`, `git@host:o/r`)
-/// whose host isn't `host`. Routing doesn't model every argument gh takes a host from (`gh repo
-/// clone forge-b/o/r` in forge-a's checkout routes to forge-a), so stepping aside on the routed
-/// host's login could send the call elsewhere (Sol r1#1). Any `x:` counts as a host, whatever its
+/// whose host isn't `host`, or a `--hostname` value that isn't. Routing doesn't model every
+/// argument gh takes a host from (`gh repo clone forge-b/o/r` in forge-a's checkout routes to
+/// forge-a), so stepping aside on the routed host's login could send the call elsewhere (Sol
+/// r1#1). Any `x:` counts as a host, whatever its
 /// characters (Sol r3#1): a false match, such as a path `a/b/c` or `--search is:open`, leaves the
 /// call to the built-in path, as before.
 fn names_another_host(
@@ -723,13 +724,22 @@ fn names_another_host(
         .map(|entry| gh_hostname(entry).to_ascii_lowercase())
         .filter(|entry| *entry != forge)
         .collect::<Vec<_>>();
-    words.iter().chain(env.get("GH_REPO")).any(|word| {
-        let word = word.to_ascii_lowercase();
-        let value = word
-            .rsplit_once('=')
-            .map_or(word.as_str(), |(_, value)| value);
-        let parts = value.split('/').collect::<Vec<_>>();
-        forges.iter().any(|entry| word.contains(entry.as_str()))
+    // `--hostname` names a host on its own (`gh attestation download --hostname github.com`),
+    // which none of the shapes below matches.
+    let hostname_flag = words.iter().zip(words.iter().skip(1)).any(|(flag, value)| {
+        flag == "--hostname" && !value.trim().is_empty() && other(value.trim())
+    }) || words.iter().any(|word| {
+        word.strip_prefix("--hostname=")
+            .is_some_and(|value| !value.trim().is_empty() && other(value.trim()))
+    });
+    hostname_flag
+        || words.iter().chain(env.get("GH_REPO")).any(|word| {
+            let word = word.to_ascii_lowercase();
+            let value = word
+                .rsplit_once('=')
+                .map_or(word.as_str(), |(_, value)| value);
+            let parts = value.split('/').collect::<Vec<_>>();
+            forges.iter().any(|entry| word.contains(entry.as_str()))
             || word
                 .split("://")
                 .skip(1)
@@ -740,7 +750,7 @@ fn names_another_host(
                     && other(word[..colon].rsplit(['@', '=']).next().unwrap_or_default())
             })
             || (parts.len() == 3 && parts.iter().all(|part| !part.is_empty()) && other(parts[0]))
-    })
+        })
 }
 
 fn run_forgejo(
