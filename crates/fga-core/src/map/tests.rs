@@ -1087,3 +1087,30 @@ fn body_html_images_need_an_absolute_http_url() {
         "<p><img src=\"https://example.com/i.png\" alt=\"a\"></p>"
     );
 }
+
+/// A table's short rows are filled out to the header's width, so a few kilobytes of pipes could
+/// ask for millions of cells. Past the bound, the pipes read as text, and the body stays small and
+/// quick.
+#[test]
+fn body_html_bounds_sparse_tables() {
+    let table = format!(
+        "{}\n{}|\n{}\n",
+        "|".repeat(708),
+        "|-".repeat(707),
+        "x\n".repeat(708)
+    );
+    for body in [table.repeat(2), table.repeat(9)] {
+        let started = std::time::Instant::now();
+        let html = body_html(&body);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(html.len() < 4 * body.len(), "{} bytes of HTML", html.len());
+        assert!(!html.contains("<table>"));
+    }
+    // An ordinary table still renders.
+    let ordinary = "|a|b|c|\n|-|-|-|\n".to_owned() + &"|1|2|3|\n".repeat(500);
+    assert!(body_html(&ordinary).starts_with("<table>"));
+}
