@@ -709,13 +709,98 @@ fn a_forge_the_users_gh_is_logged_in_to_steps_aside() {
             "{login}: {report}"
         );
         assert_eq!(reported(&report, "FJ_SHIM_LAUNCHER"), "unset", "{login}");
-        assert_eq!(
-            reported(&report, "FJ_SHIM_SAVED"),
-            "unset",
-            "nothing changed"
-        );
+        // The forge becomes gh's default host (#231), the one change, recorded for nested calls.
+        assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{login}");
+        assert_eq!(reported(&report, "FJ_SHIM_SAVED"), "GH_HOST", "{login}");
         assert!(fixture.parent_is_empty(), "no run directory");
     }
+}
+
+/// In a checkout whose remote is the forge, with gh logged in to github.com as well, gh's default
+/// host would be github.com: a host-less `OWNER/REPO` and the commands that only use the default
+/// host went there while the trace named the forge (#231). Stepping aside makes the forge gh's
+/// default host. `step_aside_hosts.rs` checks the requests real gh then sends.
+#[test]
+fn stepping_aside_makes_the_forge_gh_s_default_host() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.user_hosts(
+        "forge.test:\n    oauth_token: forge-login\ngithub.com:\n    oauth_token: github-login\n",
+    );
+    for args in [
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "https://forge.test/o/r.git"][..],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &fixture.home)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+    let gh = fixture.fake_gh(
+        r#"for name in GH_HOST FJ_SHIM_ORIG_GH_HOST FJ_SHIM_SAVED GH_CONFIG_DIR; do
+  eval "printf '%s=%s\n' $name \"\${$name-unset}\""
+done > "$REPORT""#,
+    );
+    let commands: [&[&str]; 5] = [
+        &["repo", "delete", "o/target", "--yes"],
+        &["repo", "clone", "o/target"],
+        &["search", "prs", "foo"],
+        &["gist", "list"],
+        // A launched form, which steps aside on the launch path.
+        &["pr", "view", "1"],
+    ];
+    for args in commands {
+        let output = fixture.command(&gh, args).output().expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let report = fixture.report();
+        assert_eq!(
+            reported(&report, "GH_CONFIG_DIR"),
+            "unset",
+            "{args:?}: stepped aside"
+        );
+        assert_eq!(
+            reported(&report, "GH_HOST"),
+            "forge.test",
+            "{args:?}: {report}"
+        );
+        assert_eq!(reported(&report, "FJ_SHIM_SAVED"), "GH_HOST", "{args:?}");
+        assert_eq!(
+            reported(&report, "FJ_SHIM_ORIG_GH_HOST"),
+            "unset",
+            "{args:?}"
+        );
+
+        // The user's own GH_HOST naming the forge stays, unrecorded.
+        let output = fixture
+            .command(&gh, args)
+            .env("GH_HOST", "forge.test")
+            .output()
+            .expect("run wrapper");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let report = fixture.report();
+        assert_eq!(
+            reported(&report, "GH_HOST"),
+            "forge.test",
+            "{args:?}: {report}"
+        );
+        assert_eq!(reported(&report, "FJ_SHIM_SAVED"), "unset", "{args:?}");
+    }
+    // A user GH_HOST naming the forge with its port gives way to the portless name gh looks the
+    // login up under, and a nested call gets the user's value back.
+    let output = fixture
+        .command(&gh, &["pr", "view", "1", "-R", "forge.test/o/r"])
+        .env("GH_HOST", "forge.test:3443")
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = fixture.report();
+    assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{report}");
+    assert_eq!(reported(&report, "FJ_SHIM_ORIG_GH_HOST"), "forge.test:3443");
 }
 
 /// ChatGPT's PR card and pane send these (command words and flags from its gh calls): GraphQL
@@ -896,7 +981,12 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
             .expect("run wrapper");
         assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
         let report = fixture.report();
-        assert_eq!(reported(&report, "GH_HOST"), "unset", "{args:?}: {report}");
+        // Portless, as gh looks up the login under that key (#231).
+        assert_eq!(
+            reported(&report, "GH_HOST"),
+            "forge.test",
+            "{args:?}: {report}"
+        );
         assert_eq!(
             reported(&report, "GH_ENTERPRISE_TOKEN"),
             "unset",

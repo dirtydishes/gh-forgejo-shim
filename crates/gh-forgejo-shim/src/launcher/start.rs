@@ -106,7 +106,8 @@ pub fn launch(
         return Some(step_aside(
             &gh,
             args,
-            extra_edits,
+            host,
+            env,
             crate::trace::tracing_enabled(env),
         ));
     }
@@ -336,7 +337,6 @@ fn upstream(host: &str, config: &Config, env: &HashMap<String, String>) -> Optio
 /// then answers as before.
 pub fn step_aside_if_logged_in(
     host: &str,
-    routed: &Invocation,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
@@ -351,11 +351,11 @@ pub fn step_aside_if_logged_in(
         Ok(gh) => gh,
         Err(code) => return Some(code),
     };
-    let Plan { extra_edits, .. } = Plan::for_invocation(routed, host, env);
     Some(step_aside(
         &gh,
         args,
-        extra_edits,
+        host,
+        env,
         crate::trace::tracing_enabled(env),
     ))
 }
@@ -375,16 +375,38 @@ fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
         .is_some_and(|entry| has(entry, "oauth_token") || has(entry, "user"))
 }
 
-/// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but for a
-/// host-less `api` or `auth token` the forge as `GH_HOST`, and without the token variables, which
-/// would otherwise beat the user's login there: the enterprise ones for most forges, `GH_TOKEN`
-/// and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). They go even when the user's
-/// own `GH_HOST` names the forge: gh has the user's stored login there, and a call naming another
-/// host would carry them there too. The other changes are recorded for nested calls (§7), with no
-/// `FJ_SHIM_LAUNCHER`; the token variables aren't, so a nested call, such as git's credential
-/// helper, never gets them back either (Sol r4#1). As on the delegate path, gh replaces this
-/// process, unless tracing is on, when the wrapper waits so it can write the trace record.
-fn step_aside(gh: &Path, args: &[OsString], edits: Edits, trace_enabled: bool) -> i32 {
+/// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but with the
+/// forge's portless hostname as `GH_HOST`, and without the token variables.
+///
+/// `GH_HOST` makes the forge gh's default host, so gh sends every call routing picked the forge
+/// for there: a host-less `OWNER/REPO` (`gh repo delete o/r`), and commands that only use the
+/// default host (`gh search`, `gh gist`), which would otherwise go to github.com while the trace
+/// named the forge (#231). gh still takes a host the call names (`-R host/o/r`, a URL,
+/// `--hostname`) from the call itself, and with `GH_HOST` set it uses only the checkout's remotes
+/// on the forge. Portless, because gh drops the port from remotes and looks up the login under
+/// the portless key. A user `GH_HOST` with that value stays as it is; any other value gives way
+/// to the forge routing chose.
+///
+/// The token variables would otherwise beat the user's login there: the enterprise ones for most
+/// forges, `GH_TOKEN` and `GITHUB_TOKEN` for `github.localhost` and `*.ghe.com` (§2). They go
+/// even when the user's own `GH_HOST` names the forge: gh has the user's stored login there, and
+/// a call naming another host would carry them there too. The `GH_HOST` change is recorded for
+/// nested calls (§7), with no `FJ_SHIM_LAUNCHER`; the token variables aren't, so a nested call,
+/// such as git's credential helper, never gets them back either (Sol r4#1). As on the delegate
+/// path, gh replaces this process, unless tracing is on, when the wrapper waits so it can write
+/// the trace record.
+fn step_aside(
+    gh: &Path,
+    args: &[OsString],
+    host: &str,
+    env: &HashMap<String, String>,
+    trace_enabled: bool,
+) -> i32 {
+    let hostname = gh_hostname(host);
+    let mut edits = Edits::new();
+    if env.get("GH_HOST") != Some(&hostname) {
+        edits.push(("GH_HOST", Edit::Set(hostname.into())));
+    }
     // Still single-threaded: nothing in the wrapper has started a thread yet.
     crate::launcher::env::apply(&edits);
     crate::launcher::env::remove_unrecorded(&TOKEN_VARIABLES);
