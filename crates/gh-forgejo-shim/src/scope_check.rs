@@ -53,14 +53,15 @@ pub fn check(client: &ForgejoClient, host: &str) -> Outcome {
         Err(error) => return Outcome::Unchecked(error.to_string()),
         Ok((401, _)) => return Outcome::Rejected,
         Ok((200, _)) => Standing::Granted,
-        Ok((status, body)) => match refusal(status, &body) {
+        Ok((status, body)) => match refusal(status, &body, "user") {
             Some(Answer::Missing) => Standing::Missing,
             _ => return Outcome::Unchecked(format!("Forgejo answered HTTP {status}")),
         },
     };
-    let ask = |method: Method, path: String| match client.probe(host, method, &path) {
+    let ask = |method: Method, path: String, category: &str| match client.probe(host, method, &path)
+    {
         Err(error) => Answer::Unknown(error.to_string()),
-        Ok((status, body)) => refusal(status, &body)
+        Ok((status, body)) => refusal(status, &body, category)
             .unwrap_or_else(|| Answer::Unknown(format!("Forgejo answered HTTP {status}"))),
     };
     let repo = format!("/api/v1/repos/{NOWHERE}/{NOWHERE}");
@@ -68,13 +69,19 @@ pub fn check(client: &ForgejoClient, host: &str) -> Outcome {
     for scope in &REQUIRED {
         let standing = match scope.category {
             "user" => user.clone(),
-            "organization" => standing(ask(Method::GET, format!("/api/v1/orgs/{NOWHERE}"))),
-            "repository" => write_standing(ask(Method::POST, format!("{repo}/pulls")), || {
-                ask(Method::GET, repo.clone())
-            }),
-            "issue" => write_standing(ask(Method::POST, format!("{repo}/issues")), || {
-                ask(Method::GET, format!("{repo}/issues"))
-            }),
+            "organization" => standing(ask(
+                Method::GET,
+                format!("/api/v1/orgs/{NOWHERE}"),
+                scope.category,
+            )),
+            "repository" => write_standing(
+                ask(Method::POST, format!("{repo}/pulls"), scope.category),
+                || ask(Method::GET, repo.clone(), scope.category),
+            ),
+            "issue" => write_standing(
+                ask(Method::POST, format!("{repo}/issues"), scope.category),
+                || ask(Method::GET, format!("{repo}/issues"), scope.category),
+            ),
             _ => Standing::Unknown("doctor has no check for it".to_string()),
         };
         results.push((scope, standing));
@@ -82,15 +89,28 @@ pub fn check(client: &ForgejoClient, host: &str) -> Outcome {
     Outcome::Checked(results)
 }
 
-/// How Forgejo answered a request for [`NOWHERE`]: its lookup's 404 means the scope is there, its
-/// missing-scope 403 that it isn't. Anything else, a proxy's 404 or another 403 included, is
-/// neither.
-fn refusal(status: u16, body: &Value) -> Option<Answer> {
+/// How Forgejo answered a request for [`NOWHERE`] about a scope in `category`: its lookup's 404
+/// means the scope is there, its missing-scope 403 naming that category that it isn't. A 403 for
+/// another category says nothing about this one. Anything else, a proxy's 404 or another 403
+/// included, is neither.
+fn refusal(status: u16, body: &Value, category: &str) -> Option<Answer> {
     let message = body["message"].as_str().unwrap_or_default();
     match status {
         404 if matches!(message, "GetUserByName" | "GetOrgByName") => Some(Answer::Granted),
         403 if message.starts_with("token does not have at least one of required scope(s)") => {
-            Some(Answer::Missing)
+            let named = fga_core::scopes::named_in(message);
+            if named
+                .split(' ')
+                .any(|scope| scope.split_once(':').is_some_and(|(_, c)| c == category))
+            {
+                Some(Answer::Missing)
+            } else if named.is_empty() {
+                Some(Answer::Unknown(
+                    "Forgejo refused it for a scope it didn't name".to_string(),
+                ))
+            } else {
+                Some(Answer::Unknown(format!("Forgejo refused it for {named}")))
+            }
         }
         _ => None,
     }
@@ -125,20 +145,27 @@ mod tests {
     #[test]
     fn only_forgejos_own_answers_count() {
         let scope = json!({"message":"token does not have at least one of required scope(s): [write:issue]"});
-        assert_eq!(refusal(403, &scope), Some(Answer::Missing));
+        assert_eq!(refusal(403, &scope, "issue"), Some(Answer::Missing));
         assert_eq!(
-            refusal(404, &json!({"message":"GetUserByName"})),
+            refusal(404, &json!({"message":"GetUserByName"}), "issue"),
             Some(Answer::Granted)
         );
         assert_eq!(
-            refusal(404, &json!({"message":"GetOrgByName"})),
+            refusal(404, &json!({"message":"GetOrgByName"}), "organization"),
             Some(Answer::Granted)
+        );
+        // A refusal for another scope says nothing about this one.
+        assert_eq!(
+            refusal(403, &scope, "repository"),
+            Some(Answer::Unknown(
+                "Forgejo refused it for write:issue".to_string()
+            ))
         );
         // A proxy's 404, another refusal, a route this Forgejo lacks: none says either way.
-        assert_eq!(refusal(404, &Value::Null), None);
-        assert_eq!(refusal(404, &json!({"message":"Not Found"})), None);
-        assert_eq!(refusal(403, &json!({"message":"forbidden"})), None);
-        assert_eq!(refusal(405, &scope), None);
+        assert_eq!(refusal(404, &Value::Null, "issue"), None);
+        assert_eq!(refusal(404, &json!({"message":"Not Found"}), "issue"), None);
+        assert_eq!(refusal(403, &json!({"message":"forbidden"}), "issue"), None);
+        assert_eq!(refusal(405, &scope, "issue"), None);
     }
 
     #[test]
