@@ -1,3 +1,10 @@
+# Unreleased
+
+- **PR descriptions and comments render as Markdown.** The gateway's `bodyHTML` is now
+  GitHub-flavoured Markdown rendered and sanitized in the gateway, so headings, lists, tables, task
+  lists, links and code blocks show formatted in ChatGPT desktop's PR view, with no extra Forgejo
+  requests (#166).
+
 # gh-forgejo-shim v0.2.2
 
 - **The gateway ships as a ready-made image.** Each release publishes `fga-server` for
