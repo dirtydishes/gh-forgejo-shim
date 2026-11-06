@@ -1193,8 +1193,10 @@ fn only_a_login_under_the_portless_key_steps_aside() {
     let pr_view = ["pr", "view", "1", "-R", "forge.test:3443/o/r"];
 
     fixture.user_hosts("forge.test:\n    oauth_token: user-login\n");
+    let trace = fixture.dir.join("trace.jsonl");
     let output = fixture
         .command(&gh, &pr_view)
+        .env("FJ_SHIM_TRACE", &trace)
         .output()
         .expect("run wrapper");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -1203,6 +1205,11 @@ fn only_a_login_under_the_portless_key_steps_aside() {
         "unset",
         "stepped aside"
     );
+    // gh goes to the portless host, port 443, and the trace says so (parallax r1#2, #231).
+    let record = fs::read_to_string(&trace).expect("trace");
+    let record: serde_json::Value =
+        serde_json::from_str(record.lines().last().expect("a record")).expect("json");
+    assert_eq!(record["host"], "forge.test", "{record}");
 
     fixture.user_hosts(
         "forge.test:3443:\n    oauth_token: user-login\nother.test:\n    git_protocol: ssh\n",
