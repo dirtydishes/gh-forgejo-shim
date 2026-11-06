@@ -979,19 +979,26 @@ fn stepping_aside_keeps_decision_4_and_drops_token_variables() {
         "not recorded"
     );
 
-    // Forms that set no GH_HOST drop them too, launched or not: gh would otherwise send another
-    // host's enterprise token to the forge ahead of the user's login there (Sol r1#2).
+    // Other forms drop them too, launched or not: gh would otherwise send another host's
+    // enterprise token to the forge ahead of the user's login there (Sol r1#2). In a checkout on
+    // the ported entry, as a call spelling the port doesn't step aside (parallax r2#3).
     for args in [
-        &["pr", "diff", "1", "-R", "forge.test:3443/o/r"][..],
-        &[
-            "pr",
-            "view",
-            "1",
-            "--json",
-            "number",
-            "-R",
-            "forge.test:3443/o/r",
-        ][..],
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "https://forge.test:3443/o/r.git"][..],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &fixture.home)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+    for args in [
+        &["pr", "diff", "1"][..],
+        &["pr", "view", "1", "--json", "number"][..],
     ] {
         let output = fixture
             .command(&gh, args)
@@ -1284,9 +1291,25 @@ fn only_a_login_under_the_portless_key_steps_aside() {
     let pr_view = ["pr", "view", "1", "-R", "forge.test:3443/o/r"];
 
     fixture.user_hosts("forge.test:\n    oauth_token: user-login\n");
+    // A checkout on the ported entry: gh drops the port from remotes and goes to the portless
+    // host on port 443, and the trace says so (parallax r1#2, #231).
+    for args in [
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "https://forge.test:3443/o/r.git"][..],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &fixture.home)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
     let trace = fixture.dir.join("trace.jsonl");
     let output = fixture
-        .command(&gh, &pr_view)
+        .command(&gh, &["pr", "view", "1"])
         .env("FJ_SHIM_TRACE", &trace)
         .output()
         .expect("run wrapper");
@@ -1296,11 +1319,22 @@ fn only_a_login_under_the_portless_key_steps_aside() {
         "unset",
         "stepped aside"
     );
-    // gh goes to the portless host, port 443, and the trace says so (parallax r1#2, #231).
     let record = fs::read_to_string(&trace).expect("trace");
     let record: serde_json::Value =
         serde_json::from_str(record.lines().last().expect("a record")).expect("json");
     assert_eq!(record["host"], "forge.test", "{record}");
+    // A call spelling the port: gh would keep it for a full name, so it doesn't step aside
+    // (parallax r2#3).
+    let _ = fs::remove_file(fixture.dir.join("report"));
+    let output = fixture
+        .command(&gh, &pr_view)
+        .output()
+        .expect("run wrapper");
+    assert_ne!(
+        reported(&fixture.report(), "GH_CONFIG_DIR"),
+        "unset",
+        "didn't step aside: {output:?}"
+    );
 
     fixture.user_hosts(
         "forge.test:3443:\n    oauth_token: user-login\nother.test:\n    git_protocol: ssh\n",

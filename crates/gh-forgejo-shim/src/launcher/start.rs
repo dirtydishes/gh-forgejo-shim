@@ -28,7 +28,8 @@ const TOKEN_VARIABLES: [&str; 4] = [
 ];
 
 /// Launches real gh for `host`, or returns `None` when the built-in path should serve the call:
-/// an IPv6 host, or settings the built-in client would refuse, which it then reports.
+/// an IPv6 host, settings the built-in client would refuse, which it then reports, or a forge the
+/// user's gh is logged in to when `may_step_aside` is false (routing found the call can't step aside).
 pub fn launch(
     host: &str,
     routed: &Invocation,
@@ -36,6 +37,7 @@ pub fn launch(
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
+    may_step_aside: bool,
 ) -> Option<i32> {
     let Plan {
         real_token,
@@ -99,6 +101,9 @@ pub fn launch(
 
     // A forge the user's own gh is logged in to serves gh itself (server mode): plain gh (§2).
     if logged_in(&user_hosts, host) {
+        if !may_step_aside {
+            return None;
+        }
         let gh = match find_real_gh(real_gh, env) {
             Ok(gh) => gh,
             Err(code) => return Some(code),
