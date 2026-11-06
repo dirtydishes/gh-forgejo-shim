@@ -995,10 +995,15 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     once as an `oauth_token` and once as a `user` alone, as gh's secure-storage login writes it,
     `gh pr view`, `gh api --hostname <forge> repos/{owner}/{repo}` and the alias `co` = `pr view`
     in that forge's checkout all run plain gh: no run directory is created, no socket is bound,
-    and gh's environment equals the wrapper's apart from `FJ_SHIM_DEPTH`. With github.com also
-    logged in, a host-less `gh api repos/{owner}/{repo}` and `gh auth token` there run plain gh
-    with `GH_HOST` set to the forge's portless hostname: the request goes to the forge, and
-    `gh auth token` prints the forge's token from the user's own config. gh's environment then
+    and gh's environment equals the wrapper's apart from `FJ_SHIM_DEPTH` and `GH_HOST`, set to the
+    forge's portless hostname. With github.com also logged in, a host-less
+    `gh api repos/{owner}/{repo}`, `gh auth token`, `gh repo delete o/target`,
+    `gh repo clone o/target`, `gh search prs foo` and `gh gist list` there run plain gh with that
+    `GH_HOST`: every request goes to the forge and the trace names it (`tests/step_aside_hosts.rs`
+    checks the requests real gh sends), and `gh auth token` prints the forge's token from the
+    user's own config. `gh attestation download f --owner o --hostname github.com` doesn't step
+    aside. A forge-routed `gh pr create` or `gh repo create` stops before gh runs when the forge
+    remote's push URL, or a `pushInsteadOf` rule, sends git's push to another host. gh's environment then
     has `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_GH_HOST` (if the user set one) and `FJ_SHIM_SET_GH_HOST`,
     and no `FJ_SHIM_LAUNCHER`. With `GH_ENTERPRISE_TOKEN=ghe_corp` also set, `gh auth token`
     prints the forge's own token, gh's environment has no `GH_ENTERPRISE_TOKEN`, and
@@ -1006,8 +1011,8 @@ user's screen. Cases that need one, such as SIGQUIT in §6, run only on Linux.
     never carries `ghe_corp`. With the allowlist entry `forge.test:3443` and the checkout's
     origin `https://forge.test:3443/o/r.git`, gh gets `GH_HOST=forge.test`, and both commands
     succeed: the request arrives at `forge.test` on port 443, so the forge stub listens there
-    too, and nothing reaches port 3443. A user `GH_HOST=forge.test` is left as it is, and with
-    it `GH_ENTERPRISE_TOKEN` stays in gh's environment, as plain gh would have it. The same holds when that forge
+    too, nothing reaches port 3443, and the trace names `forge.test`. A user `GH_HOST=forge.test`
+    is left as it is, unrecorded, and `GH_ENTERPRISE_TOKEN` still goes. The same holds when that forge
     is the user's only host, and when the allowlist entry is `forge.test:3443` while the login
     sits under `forge.test`. A login stored only under `forge.test:3443` doesn't step aside: the
     call launches. A host-less `gh auth status` in another forge's checkout leaves the logged-in
