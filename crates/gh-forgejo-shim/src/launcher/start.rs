@@ -255,7 +255,7 @@ pub fn launch(
         fga_core::scopes::set_sink(sink);
     }
 
-    Some(run::run(Launch {
+    let code = run::run(Launch {
         gh,
         args: args.to_vec(),
         parent,
@@ -299,7 +299,10 @@ pub fn launch(
             edits.extend(extra_edits);
             edits
         }),
-    }))
+    });
+    // What the gateway lacked during the call, kept for the next usage report if reports are on.
+    crate::telemetry::keep_unsupported(&|name| env.get(name).cloned());
+    Some(code)
 }
 
 /// Real gh, or §6's exit code: 126 for a configured path that exists but can't run (`~` expanded

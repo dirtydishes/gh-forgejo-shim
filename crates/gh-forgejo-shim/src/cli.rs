@@ -9,7 +9,7 @@ use crate::config::{self, EnvMap};
 use crate::routing;
 use crate::{
     auth, bootstrap, codex_smoke, doctor, external, gh_version, git_recorder, gui_path, setup,
-    shim, trace_summary, Result, ShimError, VERSION,
+    shim, telemetry, trace_summary, Result, ShimError, VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +107,7 @@ where
     } else if is_one_of(&args, &["--version", "-V", "version"]) {
         print_version(stdout)
     } else if args.first().is_some_and(|arg| arg == "install-shim") {
-        run_install_shim(&args[1..], stdout, runtime)
+        run_install_shim(&args[1..], stdout, runtime).and_then(|code| notice(code, stdout, runtime))
     } else if args.first().is_some_and(|arg| arg == "uninstall-shim") {
         run_uninstall_shim(&args[1..], stdout, runtime)
     } else if args.first().is_some_and(|arg| arg == "install-gui-path") {
@@ -115,9 +115,11 @@ where
     } else if args.first().is_some_and(|arg| arg == "uninstall-gui-path") {
         run_uninstall_gui_path(&args[1..], stdout, stderr, runtime)
     } else if args.first().is_some_and(|arg| arg == "doctor") {
-        run_doctor(&args[1..], stdout, runtime)
+        run_doctor(&args[1..], stdout, runtime).and_then(|code| notice(code, stdout, runtime))
     } else if args.first().is_some_and(|arg| arg == "bootstrap") {
-        run_bootstrap(&args[1..], stdout, runtime)
+        run_bootstrap(&args[1..], stdout, runtime).and_then(|code| notice(code, stdout, runtime))
+    } else if args.first().is_some_and(|arg| arg == "telemetry") {
+        run_telemetry(&args[1..], stdout, runtime)
     } else if args.first().is_some_and(|arg| arg == "trace") {
         run_trace(&args[1..], stdout, runtime)
     } else if args.first().is_some_and(|arg| arg == "config") {
@@ -264,6 +266,7 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "    {name} trace <summarize|smoke|git-recorder>")?;
     writeln!(stdout, "    {name} config <add-host|remove-host|list>")?;
     writeln!(stdout, "    {name} auth <login|import|status|logout>")?;
+    writeln!(stdout, "    {name} telemetry <on|off|status|show>")?;
     writeln!(stdout)?;
     writeln!(stdout, "STATUS:")?;
     writeln!(
@@ -295,6 +298,10 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(
         stdout,
         "    uninstall-gui-path  remove the macOS GUI PATH LaunchAgent"
+    )?;
+    writeln!(
+        stdout,
+        "    telemetry  the anonymous daily usage report: on, off, status, show"
     )?;
     writeln!(stdout, "    version    print version")?;
     writeln!(
@@ -719,6 +726,45 @@ fn run_bootstrap(
 
     writeln!(stdout, "{}", bootstrap::format_bootstrap(&result))?;
     Ok(if result.ok() { 0 } else { 1 })
+}
+
+/// The usage-report notice, the first time a setup command runs with reports on. Never from the gh
+/// wrapper, whose output agents read.
+fn notice(code: i32, stdout: &mut dyn Write, runtime: &dyn Runtime) -> Result<i32> {
+    telemetry::notice(runtime.env(), stdout)?;
+    Ok(code)
+}
+
+fn run_telemetry(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) -> Result<i32> {
+    let env = runtime.env();
+    let get = |name: &str| env.get(name).cloned();
+    let status = |stdout: &mut dyn Write| -> Result<()> {
+        match telemetry::status(&get) {
+            telemetry::Status::On(url) => writeln!(
+                stdout,
+                "on: one anonymous usage report a day to {url}; `gfj telemetry show` prints it"
+            )?,
+            telemetry::Status::Off(reason) => writeln!(stdout, "off: {reason}")?,
+        }
+        Ok(())
+    };
+    let words = args.iter().map(String::as_str).collect::<Vec<_>>();
+    match words.as_slice() {
+        ["on"] | ["off"] => {
+            config::set_telemetry(&config::config_path(runtime.home()), words[0] == "on")?;
+            status(stdout)?;
+        }
+        ["status"] => status(stdout)?,
+        ["show"] => writeln!(stdout, "{}", telemetry::show(env))?,
+        // The wrapper's background sender; not in help.
+        ["send", "--caller", caller] => telemetry::send(env, caller.parse().ok()),
+        _ => {
+            return Err(ShimError::new(
+                "usage: gh-forgejo-shim telemetry <on|off|status|show>",
+            ))
+        }
+    }
+    Ok(0)
 }
 
 fn parse_bootstrap_target(value: &str) -> Result<setup::TargetMode> {

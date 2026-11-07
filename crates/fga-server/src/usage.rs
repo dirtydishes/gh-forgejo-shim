@@ -16,6 +16,8 @@ pub const ENDPOINT: &str = "https://telemetry.dirtydishes.dev/v1/report";
 pub const PRODUCT_VERSION: &str = env!("FGA_PRODUCT_VERSION");
 /// The longest a report's request may take.
 pub const TIMEOUT: Duration = Duration::from_secs(2);
+/// The largest count a report carries for one name; the collector refuses more.
+pub const MAX_COUNT: u64 = 1_000_000;
 
 /// One day's report. Nothing else is ever sent: no host, repository, path, argument, address or
 /// identifier of any kind.
@@ -128,11 +130,11 @@ pub fn take_unsupported() -> BTreeMap<String, u64> {
 }
 
 fn count(name: String) {
-    *UNSUPPORTED
+    let mut counts = UNSUPPORTED
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .entry(name)
-        .or_default() += 1;
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let count = counts.entry(name).or_default();
+    *count = (*count + 1).min(MAX_COUNT);
 }
 
 /// Counts a REST path the gateway has no route or method for.
@@ -189,6 +191,11 @@ pub fn graphql_name(message: &str) -> Option<String> {
 
 fn known(name: String) -> Option<String> {
     contract().unsupported.contains(&name).then_some(name)
+}
+
+/// `name`, if it's in the vocabulary.
+pub fn known_name(name: &str) -> Option<String> {
+    known(name.to_string())
 }
 
 /// The forge's software and major version, from its `/api/forgejo/v1/version` answer (Forgejo

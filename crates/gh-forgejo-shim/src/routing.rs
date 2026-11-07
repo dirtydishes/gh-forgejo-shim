@@ -156,6 +156,9 @@ where
         crate::launcher::env::increment_depth(crate::launcher::depth(&entry_env));
     }
     let env = routing_env();
+    // The day's usage report, if it's on and not yet sent: started in the background, never
+    // waited for, and silent (docs/telemetry.md).
+    crate::telemetry::daily(&|name| env.get(name).cloned());
     let cwd = std::env::current_dir().ok();
     run_gh(
         argv,
