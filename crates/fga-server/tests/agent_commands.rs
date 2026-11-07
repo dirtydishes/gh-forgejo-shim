@@ -459,3 +459,21 @@ async fn pull_files_reviews_commits_and_conversation_read_as_on_github() {
     assert_eq!(page.json()[0]["path"], "README.md");
     assert!(page.headers.contains("rel=\"prev\""), "{}", page.headers);
 }
+
+/// `gh pr diff --patch` asks for the pull request as a patch.
+#[tokio::test]
+async fn a_pull_request_reads_as_a_patch() {
+    let addr = gateway().await;
+    let reply = send(
+        addr,
+        "GET",
+        "/api/v3/repos/e2e/demo/pulls/1",
+        "application/vnd.github.v3.patch",
+        None,
+    )
+    .await;
+    assert_eq!(
+        reply.body,
+        FIXTURE["routes"]["/api/v1/repos/e2e/demo/pulls/1.patch"]
+    );
+}

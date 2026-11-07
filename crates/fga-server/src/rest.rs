@@ -223,31 +223,45 @@ pub(crate) fn invalid_query() -> Response {
         .into_response()
 }
 
-// gh pr status reads this REST resource for its mergeability detail.
+// gh pr status reads this REST resource for its mergeability detail; gh pr diff asks for it as a
+// diff, and `--patch` as a patch.
 pub async fn pull(
     Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo, number)): Path<(String, String, i32)>,
     headers: HeaderMap,
 ) -> Response {
-    if headers
-        .get(axum::http::header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(',').any(|v| {
-                v.trim().starts_with("application/vnd.github.v3.diff")
-                    || v.trim().starts_with("application/vnd.github.diff")
+    let accepts = |media: &[&str]| {
+        headers
+            .get(axum::http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.split(',')
+                    .any(|v| media.iter().any(|m| v.trim().starts_with(m)))
             })
-        })
-    {
+    };
+    let raw = if accepts(&[
+        "application/vnd.github.v3.diff",
+        "application/vnd.github.diff",
+    ]) {
+        Some("diff")
+    } else if accepts(&[
+        "application/vnd.github.v3.patch",
+        "application/vnd.github.patch",
+    ]) {
+        Some("patch")
+    } else {
+        None
+    };
+    if let Some(kind) = raw {
         return match session
             .text(
-                &["repos", &owner, &repo, "pulls", &format!("{number}.diff")],
+                &["repos", &owner, &repo, "pulls", &format!("{number}.{kind}")],
                 &[],
             )
             .await
         {
-            Ok(diff) => ([("content-type", "text/plain; charset=utf-8")], diff).into_response(),
+            Ok(text) => ([("content-type", "text/plain; charset=utf-8")], text).into_response(),
             Err(e) => rest_error(e),
         };
     }
