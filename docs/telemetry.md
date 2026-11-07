@@ -15,8 +15,10 @@ Turn them off with `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`. S
   slowed, changed or made to fail, and nothing is printed, whether the report goes or not.
 - **fga-server** sends one report a day while it runs, from ten minutes after it starts, so a
   server restarting in a loop sends nothing.
-- **A debug build** (`cargo build` without `--release`) sends nothing unless `GFJ_TELEMETRY_URL` or
-  `FGA_TELEMETRY_URL` names an address. Tests and development runs never reach the collector.
+- **Only release builds report.** The release archives, the Homebrew formula's downloads and the
+  gateway image are built with `GFJ_TELEMETRY_RELEASE` set. Any other build, from `cargo build`,
+  `cargo install` or `cargo test --release`, sends nothing unless `GFJ_TELEMETRY_URL` or
+  `FGA_TELEMETRY_URL` names an address, so tests and development runs never reach the collector.
 
 `gfj telemetry show` prints the report the wrapper would send today, as it would send it, with one
 difference: its `client` names whatever ran `show`, where the day's report names whatever ran `gh`.

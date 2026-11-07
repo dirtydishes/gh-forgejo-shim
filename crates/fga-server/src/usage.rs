@@ -11,7 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The report's shape. A change to it is a new schema, which the collector must accept first.
 pub const SCHEMA: u32 = 1;
-/// Where reports go: release builds only, unless an override names another address.
+/// Where reports go: from a release build only ([`endpoint`]), unless an override names another
+/// address.
 pub const ENDPOINT: &str = "https://telemetry.dirtydishes.dev/v1/report";
 /// The release's version (the workspace's), which fga-server's own crate version isn't.
 pub const PRODUCT_VERSION: &str = env!("FGA_PRODUCT_VERSION");
@@ -132,13 +133,18 @@ pub fn off_by_env(get: impl Fn(&str) -> Option<String>, own: &str) -> Option<Str
     None
 }
 
-/// Where this build sends reports: `override_url` if set, else [`ENDPOINT`] in release builds. A
-/// debug build sends nothing on its own, so tests and development runs never reach the collector.
+/// Whether this build may send to [`ENDPOINT`]: only one the release script or the gateway image
+/// built, which set `GFJ_TELEMETRY_RELEASE` while compiling. Tests, `cargo build --release` and
+/// builds from source never reach the collector.
+const RELEASE_BUILD: bool = option_env!("GFJ_TELEMETRY_RELEASE").is_some();
+
+/// Where this build sends reports: `override_url` if set, else [`ENDPOINT`] in a release build,
+/// else nowhere.
 pub fn endpoint(override_url: Option<String>) -> Option<String> {
     match override_url.filter(|url| !url.trim().is_empty()) {
         Some(url) => Some(url),
-        None if cfg!(debug_assertions) => None,
-        None => Some(ENDPOINT.to_string()),
+        None if RELEASE_BUILD => Some(ENDPOINT.to_string()),
+        None => None,
     }
 }
 

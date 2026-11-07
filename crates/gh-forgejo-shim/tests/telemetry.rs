@@ -1,5 +1,6 @@
 //! The gh wrapper's daily usage report (docs/telemetry.md), against a stand-in collector and forge
-//! on loopback. A debug build sends only to `GFJ_TELEMETRY_URL`, which every test here names.
+//! on loopback. A build the release script didn't make sends only to `GFJ_TELEMETRY_URL`, which every
+//! test here names.
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -573,7 +574,7 @@ fn a_stopped_sender_stays_stopped_when_reports_come_back_on() {
     );
 }
 
-/// A debug build that sends nothing still clears what was kept once the config turns reports off.
+/// A build that sends nothing still clears what was kept once the config turns reports off.
 #[test]
 fn a_config_opt_out_clears_state_in_a_build_that_sends_nothing() {
     let fixture = Fixture::new(collector);
