@@ -452,8 +452,17 @@ impl Session {
 
     /// An unmemoized read of a raw body, such as a diff.
     pub async fn text(&self, segments: &[&str], query: &[(&str, String)]) -> Result<String, Error> {
+        Ok(String::from_utf8_lossy(&self.bytes(segments, query).await?).into_owned())
+    }
+
+    /// An unmemoized read of a raw body as bytes, such as a file.
+    pub async fn bytes(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+    ) -> Result<Vec<u8>, Error> {
         let reply = ok(self.send::<()>(Method::GET, segments, query, None).await?)?;
-        Ok(String::from_utf8_lossy(&reply.body).into_owned())
+        Ok(reply.body)
     }
 
     pub async fn statuses(

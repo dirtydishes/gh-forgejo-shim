@@ -116,6 +116,83 @@ impl Session {
         )
         .await
     }
+    /// The files a pull request changes, with line counts.
+    pub async fn pull_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i32,
+    ) -> Result<Vec<ChangedFile>, Error> {
+        self.pages(
+            &["repos", owner, repo, "pulls", &number.to_string(), "files"],
+            &[],
+        )
+        .await
+    }
+
+    /// A pull request's diff from its merge base, as `git diff` writes it.
+    pub async fn pull_diff(&self, owner: &str, repo: &str, number: i32) -> Result<String, Error> {
+        self.text(
+            &["repos", owner, repo, "pulls", &format!("{number}.diff")],
+            &[],
+        )
+        .await
+    }
+
+    /// The commits in `head` and not in `base`, newest first. Forgejo answers 404 when either
+    /// isn't a commit of the repository.
+    pub async fn compare(
+        &self,
+        owner: &str,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<Comparison, Error> {
+        self.get(
+            &["repos", owner, repo, "compare", &format!("{base}...{head}")],
+            &[],
+        )
+        .await
+    }
+
+    /// One commit by SHA or ref; 404 when there is none.
+    pub async fn git_commit(&self, owner: &str, repo: &str, rev: &str) -> Result<GitCommit, Error> {
+        self.get(
+            &["repos", owner, repo, "git", "commits", rev],
+            &[("stat", "false".into()), ("files", "false".into())],
+        )
+        .await
+    }
+
+    /// The entry at `path` in `rev`, or the default branch: one object for a file, an array for a
+    /// directory, 404 for no such path or revision. An empty `path` is the root directory.
+    pub async fn contents(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        rev: Option<&str>,
+    ) -> Result<serde_json::Value, Error> {
+        let mut segments = vec!["repos", owner, repo, "contents"];
+        segments.extend(path.split('/').filter(|segment| !segment.is_empty()));
+        let query: Vec<_> = rev.map(|rev| ("ref", rev.to_owned())).into_iter().collect();
+        self.get(&segments, &query).await
+    }
+
+    /// A file's bytes at `rev`, or the default branch, however large.
+    pub async fn raw_file(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        rev: Option<&str>,
+    ) -> Result<Vec<u8>, Error> {
+        let mut segments = vec!["repos", owner, repo, "raw"];
+        segments.extend(path.split('/').filter(|segment| !segment.is_empty()));
+        let query: Vec<_> = rev.map(|rev| ("ref", rev.to_owned())).into_iter().collect();
+        self.bytes(&segments, &query).await
+    }
+
     pub async fn issue(&self, owner: &str, repo: &str, number: i32) -> Result<Issue, Error> {
         let issue: Issue = self
             .get(&["repos", owner, repo, "issues", &number.to_string()], &[])

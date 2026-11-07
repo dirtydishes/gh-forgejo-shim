@@ -520,6 +520,7 @@ impl PullRequest {
                 owner: self.owner.clone(),
                 repo: self.repo.clone(),
                 number: self.source.number,
+                head_sha: self.source.head.sha.clone(),
             })
             .collect();
         Ok(Some(page(nodes, first, last, after, before)?.into()))
@@ -544,6 +545,7 @@ impl PullRequest {
                 owner: self.owner.clone(),
                 repo: self.repo.clone(),
                 number: self.source.number,
+                head_sha: self.source.head.sha.clone(),
             })
             .collect();
         Ok(Some(page(nodes, first, last, after, before)?.into()))
@@ -626,6 +628,74 @@ impl PullRequest {
             .collect();
         Ok(page(nodes, first, last, after, before)?.into())
     }
+    /// The files the pull request changes, with line counts, in Forgejo's order.
+    async fn files(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+    ) -> async_graphql::Result<Option<PullRequestChangedFileConnection>> {
+        let files = ctx
+            .data_unchecked::<Session>()
+            .pull_files(&self.owner, &self.repo, self.source.number)
+            .await
+            .map_err(error)?;
+        let nodes = files
+            .into_iter()
+            .map(PullRequestChangedFile::from)
+            .collect();
+        Ok(Some(page(nodes, first, last, after, before)?.into()))
+    }
+    async fn merge_commit(&self) -> Option<Commit> {
+        self.source
+            .merge_commit_sha
+            .as_deref()
+            .filter(|sha| self.source.merged && !sha.is_empty())
+            .map(|sha| Commit::head(&self.owner, &self.repo, sha))
+    }
+    /// The issues the body's closing keywords name (`Fixes #12`, `closes owner/repo#3`), which
+    /// Forgejo closes when the PR merges. Forgejo has no manually linked issues, so
+    /// `userLinkedOnly` lists none; issues the viewer can't read are left out.
+    #[allow(clippy::too_many_arguments)]
+    async fn closing_issues_references(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+        order_by: Option<super::query::IssueOrder>,
+        #[graphql(default_with = "Some(false)")] user_linked_only: Option<bool>,
+    ) -> async_graphql::Result<Option<IssueConnection>> {
+        let _ = order_by;
+        let session = ctx.data_unchecked::<Session>();
+        let mut nodes = Vec::new();
+        let references = if user_linked_only.unwrap_or(false) {
+            Vec::new()
+        } else {
+            map::closing_references(&self.source.body)
+        };
+        for (repository, number) in references {
+            let (owner, repo) =
+                repository.unwrap_or_else(|| (self.owner.clone(), self.repo.clone()));
+            match session.issue(&owner, &repo, number).await {
+                Ok(issue) => nodes.push(Issue::new(issue, &owner, &repo)),
+                Err(
+                    forgejo::Error::NotFound
+                    | forgejo::Error::Forbidden
+                    | forgejo::Error::MissingScope,
+                ) => {}
+                Err(e) => return Err(error(e)),
+            }
+        }
+        Ok(Some(page(nodes, first, last, after, before)?.into()))
+    }
+    /// GitHub's test merge of an open pull request. Forgejo makes one but doesn't expose it.
+    async fn potential_merge_commit(&self) -> Option<Commit> {
+        None
+    }
     async fn project_items(
         &self,
         first: Option<i32>,
@@ -669,8 +739,11 @@ impl Commit {
 }
 #[Object]
 impl Commit {
-    async fn oid(&self) -> GitObjectId {
+    pub(super) async fn oid(&self) -> GitObjectId {
         GitObjectId(self.sha.clone())
+    }
+    pub(super) async fn abbreviated_oid(&self) -> String {
+        self.sha.chars().take(7).collect()
     }
     /// Forgejo's commit page has GitHub's layout, under the forge's public base.
     async fn url(&self, ctx: &Context<'_>) -> Uri {

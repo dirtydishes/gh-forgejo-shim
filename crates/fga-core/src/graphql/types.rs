@@ -85,12 +85,7 @@ impl Bot {
 /// shows site admins other users' pending reviews, which GitHub shows no one
 /// (`services/convert/pull_review.go:74-77`).
 pub(super) fn listed(review: &forgejo::Review, viewer: &str) -> bool {
-    review.state != "REQUEST_REVIEW"
-        && (review.state != "PENDING"
-            || review
-                .user
-                .as_ref()
-                .is_some_and(|user| user.login.eq_ignore_ascii_case(viewer)))
+    crate::map::listed(review, viewer)
 }
 
 /// Whether the viewer may write to the repository, which is what lets them edit or close others'
@@ -257,6 +252,8 @@ pub struct PullRequestReview {
     pub owner: String,
     pub repo: String,
     pub number: i32,
+    /// The pull request's head commit: a code comment's line is current only on it.
+    pub head_sha: String,
 }
 #[Object]
 impl PullRequestReview {

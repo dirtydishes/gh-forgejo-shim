@@ -228,6 +228,27 @@ impl Repository {
     ) -> async_graphql::Result<IssueConnection> {
         super::issues::list(ctx, &self.source, states, filter_by, first, after, order_by).await
     }
+    /// A blob (`REV:PATH`) or a commit (`REV`); null when there is none. Look-ups by `oid`
+    /// aren't served.
+    async fn object(
+        &self,
+        ctx: &Context<'_>,
+        expression: Option<String>,
+        oid: Option<GitObjectId>,
+    ) -> async_graphql::Result<Option<GitObject>> {
+        let _ = oid;
+        let Some(expression) = expression else {
+            return Ok(None);
+        };
+        super::git::object(
+            ctx,
+            &self.source.owner.login,
+            &self.source.name,
+            &self.source.default_branch,
+            &expression,
+        )
+        .await
+    }
     async fn default_branch_ref(&self) -> Option<Ref> {
         Some(Ref {
             name: self.source.default_branch.clone(),

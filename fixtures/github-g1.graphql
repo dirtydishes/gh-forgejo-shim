@@ -30,6 +30,15 @@ type AutoMergeRequest {
 
 scalar BigInt
 
+type Blob implements GitObject {
+  oid: GitObjectID!
+  abbreviatedOid: String!
+  byteSize: Int!
+  isBinary: Boolean
+  isTruncated: Boolean!
+  text: String
+}
+
 type Bot implements Actor & Node {
   login: String!
   avatarUrl( size: Int ): URI!
@@ -120,7 +129,7 @@ enum CommentAuthorAssociation {
   OWNER
 }
 
-type Commit implements Node {
+type Commit implements Node & GitObject {
   oid: GitObjectID!
   url: URI!
   statusCheckRollup: StatusCheckRollup
@@ -129,6 +138,7 @@ type Commit implements Node {
   authoredDate: DateTime!
   committedDate: DateTime!
   authors( after: String before: String first: Int last: Int ): GitActorConnection!
+  abbreviatedOid: String!
 }
 
 input ConvertPullRequestToDraftInput {
@@ -200,6 +210,12 @@ type EnablePullRequestAutoMergePayload {
   pullRequest: PullRequest
 }
 
+enum FileViewedState {
+  DISMISSED
+  UNVIEWED
+  VIEWED
+}
+
 type GitActor {
   name: String
   email: String
@@ -210,6 +226,11 @@ type GitActorConnection {
   nodes: [GitActor]
   totalCount: Int!
   pageInfo: PageInfo!
+}
+
+interface GitObject {
+  oid: GitObjectID!
+  abbreviatedOid: String!
 }
 
 scalar GitObjectID
@@ -429,6 +450,15 @@ type PageInfo {
   endCursor: String
 }
 
+enum PatchStatus {
+  ADDED
+  CHANGED
+  COPIED
+  DELETED
+  MODIFIED
+  RENAMED
+}
+
 type Project implements Node {
   name: String!
 }
@@ -527,6 +557,24 @@ type PullRequest implements Node {
   commits( after: String before: String first: Int last: Int ): PullRequestCommitConnection!
   projectItems( after: String before: String first: Int includeArchived: Boolean = true last: Int ): ProjectV2ItemConnection!
   projectCards( after: String archivedStates: [ProjectCardArchivedState] = [ARCHIVED, NOT_ARCHIVED] before: String first: Int last: Int ): ProjectCardConnection!
+  files( after: String before: String first: Int last: Int ): PullRequestChangedFileConnection
+  mergeCommit: Commit
+  closingIssuesReferences( after: String before: String first: Int last: Int orderBy: IssueOrder userLinkedOnly: Boolean = false ): IssueConnection
+  potentialMergeCommit: Commit
+}
+
+type PullRequestChangedFile {
+  path: String!
+  additions: Int!
+  deletions: Int!
+  changeType: PatchStatus!
+  viewerViewedState: FileViewedState!
+}
+
+type PullRequestChangedFileConnection {
+  nodes: [PullRequestChangedFile]
+  totalCount: Int!
+  pageInfo: PageInfo!
 }
 
 type PullRequestCommit implements Node {
@@ -584,6 +632,17 @@ type PullRequestReviewComment implements Node {
   url: URI!
   viewerCanUpdate: Boolean!
   viewerCanDelete: Boolean!
+  databaseId: Int
+  fullDatabaseId: BigInt
+  path: String!
+  line: Int
+  originalLine: Int
+  startLine: Int
+  originalStartLine: Int
+  outdated: Boolean!
+  subjectType: PullRequestReviewThreadSubjectType!
+  commit: Commit
+  originalCommit: Commit
 }
 
 type PullRequestReviewCommentConnection {
@@ -630,12 +689,21 @@ type PullRequestReviewThread implements Node {
   isResolved: Boolean!
   viewerCanResolve: Boolean!
   viewerCanUnresolve: Boolean!
+  isOutdated: Boolean!
+  subjectType: PullRequestReviewThreadSubjectType!
+  isCollapsed: Boolean!
+  resolvedBy: User
 }
 
 type PullRequestReviewThreadConnection {
   nodes: [PullRequestReviewThread]
   totalCount: Int!
   pageInfo: PageInfo!
+}
+
+enum PullRequestReviewThreadSubjectType {
+  FILE
+  LINE
 }
 
 enum PullRequestState {
@@ -716,6 +784,7 @@ type Repository implements Node {
   defaultBranchRef: Ref
   pullRequest( number: Int! ): PullRequest
   pullRequests( after: String baseRefName: String before: String first: Int headRefName: String labels: [String!] last: Int orderBy: IssueOrder states: [PullRequestState!] ): PullRequestConnection!
+  object( expression: String oid: GitObjectID ): GitObject
 }
 
 interface RepositoryOwner {

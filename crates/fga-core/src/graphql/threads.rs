@@ -12,6 +12,11 @@ pub enum DiffSide {
     Right,
 }
 #[derive(Clone, Copy, Enum, Eq, PartialEq)]
+pub enum PullRequestReviewThreadSubjectType {
+    Line,
+    File,
+}
+#[derive(Clone, Copy, Enum, Eq, PartialEq)]
 pub enum PullRequestReviewCommentState {
     Pending,
     Submitted,
@@ -23,6 +28,11 @@ pub struct PullRequestReviewComment {
     review: Arc<PullRequestReview>,
 }
 impl PullRequestReviewComment {
+    /// Whether a push since the review moved the head. Forgejo's API doesn't say whether that push
+    /// touched the commented line, so any later head makes the comment outdated.
+    fn is_outdated(&self) -> bool {
+        self.review.source.commit_id != self.review.head_sha
+    }
     /// Forgejo lets the poster or a repository writer edit, delete or resolve a code comment.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let viewer = &ctx.data_unchecked::<Session>().viewer.login;
@@ -58,6 +68,50 @@ impl PullRequestReviewComment {
     }
     async fn diff_hunk(&self) -> &str {
         &self.source.diff_hunk
+    }
+    async fn database_id(&self) -> Option<i32> {
+        i32::try_from(self.source.id).ok()
+    }
+    async fn full_database_id(&self) -> Option<BigInt> {
+        Some(BigInt(self.source.id.to_string()))
+    }
+    async fn path(&self) -> &str {
+        &self.source.path
+    }
+    /// The line on the comment's side, null once the comment is outdated, as on GitHub.
+    async fn line(&self) -> Option<i32> {
+        crate::map::commented_line(&self.source).filter(|_| !self.is_outdated())
+    }
+    async fn original_line(&self) -> Option<i32> {
+        crate::map::commented_line(&self.source)
+    }
+    /// Forgejo comments cover one line, never a range.
+    async fn start_line(&self) -> Option<i32> {
+        None
+    }
+    async fn original_start_line(&self) -> Option<i32> {
+        None
+    }
+    async fn outdated(&self) -> bool {
+        self.is_outdated()
+    }
+    async fn subject_type(&self) -> PullRequestReviewThreadSubjectType {
+        PullRequestReviewThreadSubjectType::Line
+    }
+    /// The commit the comment was made on: the review's.
+    async fn commit(&self) -> Option<Commit> {
+        Some(Commit::head(
+            &self.review.owner,
+            &self.review.repo,
+            &self.review.source.commit_id,
+        ))
+    }
+    async fn original_commit(&self) -> Option<Commit> {
+        Some(Commit::head(
+            &self.review.owner,
+            &self.review.repo,
+            &self.review.source.commit_id,
+        ))
     }
     async fn state(&self) -> PullRequestReviewCommentState {
         if self.review.source.state == "PENDING" {
@@ -113,9 +167,6 @@ pub struct PullRequestReviewThread {
     comments: Vec<PullRequestReviewComment>,
     /// The pull request's author, who may resolve any of its conversations.
     pr_author: Arc<str>,
-    /// The pull request's head commit, which the thread's review must have been made on for its
-    /// line to be current.
-    head_sha: Arc<str>,
 }
 impl PullRequestReviewThread {
     /// Forgejo lets the PR's author or a repository writer resolve a conversation
@@ -134,7 +185,7 @@ impl PullRequestReviewThread {
         self.comments.iter().any(|c| c.source.resolver.is_some())
     }
     fn line_number(&self) -> Option<i32> {
-        commented_line(&self.first().source)
+        crate::map::commented_line(&self.first().source)
     }
 }
 #[Object]
@@ -171,8 +222,23 @@ impl PullRequestReviewThread {
     /// a later push moved or deleted the line, so the line is current only while the PR's head is
     /// still the commit its review was made on.
     async fn line(&self) -> Option<i32> {
-        self.line_number()
-            .filter(|_| self.first().review.source.commit_id == *self.head_sha)
+        self.line_number().filter(|_| !self.first().is_outdated())
+    }
+    async fn is_outdated(&self) -> bool {
+        self.first().is_outdated()
+    }
+    async fn subject_type(&self) -> PullRequestReviewThreadSubjectType {
+        PullRequestReviewThreadSubjectType::Line
+    }
+    /// GitHub collapses a resolved conversation.
+    async fn is_collapsed(&self) -> bool {
+        self.resolved()
+    }
+    async fn resolved_by(&self) -> Option<User> {
+        self.comments
+            .iter()
+            .find_map(|c| c.source.resolver.clone())
+            .map(User)
     }
     async fn original_line(&self) -> Option<i32> {
         self.line_number()
@@ -198,48 +264,6 @@ impl PullRequestReviewThread {
     }
 }
 
-/// The commented line as the reviewer saw it: the last line of the comment's diff hunk, which
-/// Forgejo cuts to end there (`CutDiffAroundLine`, Forgejo v15.0.0 `modules/git/diff.go`). Without
-/// a hunk (Forgejo's `CODE_COMMENT_LINES = 0`, or one that can't be read) a new-side line is
-/// unknown: its `position` is the line in the commit that last changed it (`LineBlame`), which can
-/// be another line entirely. An old-side position is never blamed, so it stands.
-fn commented_line(source: &forgejo::ReviewComment) -> Option<i32> {
-    // Forgejo blames only new-side lines, so an old-side position is the line the reviewer chose.
-    let old = source.line() < 0;
-    let line = hunk_end(&source.diff_hunk, old).or(old.then_some(source.original_position))?;
-    i32::try_from(line).ok().filter(|line| *line != 0)
-}
-
-/// The number, on the old or new side, of a diff hunk's last line.
-fn hunk_end(hunk: &str, old: bool) -> Option<u64> {
-    let mut lines = hunk.lines();
-    let header = lines.next()?.strip_prefix("@@ -")?;
-    let (old_start, rest) = header.split_once(" +")?;
-    let new_start = rest.split_once(' ')?.0;
-    let start = |range: &str| range.split(',').next()?.parse::<u64>().ok();
-    let (mut old_line, mut new_line) = (start(old_start)?, start(new_start)?);
-    let mut last = None;
-    for line in lines {
-        match line.as_bytes().first() {
-            Some(b'+') => {
-                last = (!old).then_some(new_line);
-                new_line += 1;
-            }
-            Some(b'-') => {
-                last = old.then_some(old_line);
-                old_line += 1;
-            }
-            Some(b'\\') => {}
-            _ => {
-                last = Some(if old { old_line } else { new_line });
-                old_line += 1;
-                new_line += 1;
-            }
-        }
-    }
-    last
-}
-
 /// Every review's code comments, grouped into conversations, oldest conversation first.
 pub(super) async fn review_threads(
     ctx: &Context<'_>,
@@ -252,7 +276,6 @@ pub(super) async fn review_threads(
     let session = ctx.data_unchecked::<Session>();
     let reviews = session.reviews(owner, repo, number).await.map_err(error)?;
     let pr_author: Arc<str> = pr_author.into();
-    let head_sha: Arc<str> = head_sha.into();
     let mut threads: Vec<PullRequestReviewThread> = Vec::new();
     for source in reviews
         .into_iter()
@@ -263,6 +286,7 @@ pub(super) async fn review_threads(
             owner: owner.into(),
             repo: repo.into(),
             number,
+            head_sha: head_sha.to_string(),
         };
         for comment in review_comments(ctx, &review).await? {
             let key = |c: &PullRequestReviewComment| {
@@ -278,43 +302,10 @@ pub(super) async fn review_threads(
                 None => threads.push(PullRequestReviewThread {
                     comments: vec![comment],
                     pr_author: pr_author.clone(),
-                    head_sha: head_sha.clone(),
                 }),
             }
         }
     }
     threads.sort_by_key(|t| t.first().source.id);
     Ok(threads)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn comment(diff_hunk: &str, position: u64, original_position: u64) -> forgejo::ReviewComment {
-        serde_json::from_value(
-            serde_json::json!({"id":1,"body":"","user":null,"resolver":null,
-            "pull_request_review_id":1,"created_at":"","path":"a.rs","diff_hunk":diff_hunk,
-            "position":position,"original_position":original_position,"html_url":""}),
-        )
-        .unwrap()
-    }
-
-    /// Forgejo blames a comment's line to the commit that last changed it, so its `position` is
-    /// no stand-in for the line the reviewer saw: without a hunk, the line is unknown.
-    #[test]
-    fn a_comment_without_a_hunk_has_no_line() {
-        assert_eq!(
-            commented_line(&comment("@@ -5,2 +5,3 @@\n a\n+b\n c", 3, 0)),
-            Some(7)
-        );
-        assert_eq!(
-            commented_line(&comment("@@ -5,1 +5,0 @@\n-x", 0, 5)),
-            Some(5)
-        );
-        assert_eq!(commented_line(&comment("", 3, 0)), None);
-        assert_eq!(commented_line(&comment("not a hunk", 3, 0)), None);
-        // Forgejo blames only new-side lines: an old-side position is the reviewer's own line.
-        assert_eq!(commented_line(&comment("", 0, 5)), Some(5));
-    }
 }
