@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -53,6 +54,29 @@ pub const CLIENTS: [&str; 6] = [
     "other",
 ];
 
+/// The version a report names: `X.Y.Z`, with a pre-release suffix only of the form `-alpha.N`,
+/// `-beta.N` or `-rc.N`. Any other suffix or build text is dropped, so a custom build's version
+/// string never leaves the machine.
+pub fn report_version(version: &str) -> String {
+    let without_build = version.split('+').next().unwrap_or_default();
+    let (core, suffix) = without_build.split_once('-').unwrap_or((without_build, ""));
+    let numbers: Vec<&str> = core.split('.').collect();
+    let numeric = |part: &str| {
+        !part.is_empty() && part.len() <= 3 && part.bytes().all(|b| b.is_ascii_digit())
+    };
+    if numbers.len() != 3 || !numbers.iter().all(|part| numeric(part)) {
+        return "0.0.0".to_string();
+    }
+    let pre_release = suffix
+        .split_once('.')
+        .is_some_and(|(stage, number)| matches!(stage, "alpha" | "beta" | "rc") && numeric(number));
+    if pre_release {
+        format!("{core}-{suffix}")
+    } else {
+        core.to_string()
+    }
+}
+
 pub fn os() -> &'static str {
     match std::env::consts::OS {
         "macos" => "macos",
@@ -85,7 +109,7 @@ fn contract() -> &'static Contract {
 
 /// Why reports are off, if they are: `name=value` of the variable that turned them off. `own` is
 /// the program's own switch, `GFJ_TELEMETRY` or `FGA_TELEMETRY`; `DO_NOT_TRACK` and `CI` count for
-/// both.
+/// both. `CI` turns them off whenever it's set, even empty.
 pub fn off_by_env(get: impl Fn(&str) -> Option<String>, own: &str) -> Option<String> {
     let set = |name: &str| {
         get(name)
@@ -102,7 +126,7 @@ pub fn off_by_env(get: impl Fn(&str) -> Option<String>, own: &str) -> Option<Str
     {
         return Some(format!("DO_NOT_TRACK={value}"));
     }
-    if set("CI").is_some_and(|value| !matches!(value.as_str(), "0" | "false")) {
+    if get("CI").is_some() {
         return Some("CI is set".to_string());
     }
     None
@@ -119,6 +143,14 @@ pub fn endpoint(override_url: Option<String>) -> Option<String> {
 }
 
 static UNSUPPORTED: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+/// Whether the gateway counts what it lacks: only once reports are on.
+static COUNTING: AtomicBool = AtomicBool::new(false);
+
+/// Starts counting what the gateway lacks, for a process whose reports are on. Until then, nothing
+/// is counted.
+pub fn count_unsupported() {
+    COUNTING.store(true, Ordering::Relaxed);
+}
 
 /// What the gateway lacked since the last call, emptying the count.
 pub fn take_unsupported() -> BTreeMap<String, u64> {
@@ -130,6 +162,9 @@ pub fn take_unsupported() -> BTreeMap<String, u64> {
 }
 
 fn count(name: String) {
+    if !COUNTING.load(Ordering::Relaxed) {
+        return;
+    }
     let mut counts = UNSUPPORTED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -286,8 +321,9 @@ pub fn is_week(week: &str) -> bool {
 }
 
 /// fga-server's reporter: once a day while it runs, from ten minutes after it starts, so a server
-/// restarting in a loop sends nothing. With `FGA_STATE_DIR` the first week and the last day sent
-/// survive a restart; without it they last as long as the process.
+/// restarting in a loop sends nothing. The first week and the last day sent are kept in its state
+/// directory ([`server_state_dir`]), so a restart neither sends twice in a day nor starts a new
+/// first week; with none writable, they last as long as the process.
 pub fn spawn_server_reporter(forgejo_url: url::Url) {
     let get = |name: &str| std::env::var(name).ok();
     if off_by_env(get, "FGA_TELEMETRY").is_some() {
@@ -296,7 +332,8 @@ pub fn spawn_server_reporter(forgejo_url: url::Url) {
     let Some(endpoint) = endpoint(get("FGA_TELEMETRY_URL")) else {
         return;
     };
-    let state = get("FGA_STATE_DIR").map(std::path::PathBuf::from);
+    let state = server_state_dir(get);
+    count_unsupported();
     log(
         "fga-server sends one anonymous usage report a day (version, OS, forge; no hosts, \
          repositories or IDs). FGA_TELEMETRY=0 turns it off. See docs/telemetry.md.",
@@ -360,7 +397,7 @@ async fn server_report(
     let (forge, forge_major) = forge(forgejo_route.as_deref(), api.as_deref());
     Report {
         schema: SCHEMA,
-        version: PRODUCT_VERSION.to_string(),
+        version: report_version(PRODUCT_VERSION),
         os: os(),
         arch: arch(),
         mode: "server",
@@ -371,6 +408,22 @@ async fn server_report(
         first_week: first_week(state),
         unsupported: take_unsupported(),
     }
+}
+
+/// Where fga-server keeps its report state: `FGA_STATE_DIR` (the image sets
+/// `/var/lib/fga-server`), else `$XDG_STATE_HOME/fga-server` or `~/.local/state/fga-server`,
+/// whichever can be created. `None` when none can.
+fn server_state_dir(get: impl Fn(&str) -> Option<String>) -> Option<std::path::PathBuf> {
+    let absolute = |value: Option<String>| {
+        value
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let dir = absolute(get("FGA_STATE_DIR"))
+        .or_else(|| absolute(get("XDG_STATE_HOME")).map(|base| base.join("fga-server")))
+        .or_else(|| absolute(get("HOME")).map(|home| home.join(".local/state/fga-server")))?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// The week of the first report, read from `state` or written there now.
@@ -446,6 +499,17 @@ mod tests {
     }
 
     #[test]
+    fn a_version_keeps_only_numbers_and_a_plain_pre_release() {
+        assert_eq!(report_version("0.3.0"), "0.3.0");
+        assert_eq!(report_version("0.3.0-rc.1"), "0.3.0-rc.1");
+        assert_eq!(report_version("0.3.0-alice.private.forge"), "0.3.0");
+        assert_eq!(report_version("0.3.0+build.acme"), "0.3.0");
+        assert_eq!(report_version("0.3.0-rc.1+acme"), "0.3.0-rc.1");
+        assert_eq!(report_version("acme-build"), "0.0.0");
+        assert_eq!(report_version("1.2"), "0.0.0");
+    }
+
+    #[test]
     fn the_forge_comes_from_its_version_answers() {
         assert_eq!(
             forge(Some("15.0.11+gitea-1.22.0"), None),
@@ -491,7 +555,14 @@ mod tests {
             off_by_env(env(&[("CI", "true")]), "GFJ_TELEMETRY"),
             Some("CI is set".to_string())
         );
-        assert_eq!(off_by_env(env(&[("CI", "")]), "GFJ_TELEMETRY"), None);
+        // Set at all, even empty or "false", it turns reports off.
+        for set in [
+            off_by_env(env(&[("CI", "")]), "GFJ_TELEMETRY"),
+            off_by_env(env(&[("CI", "0")]), "GFJ_TELEMETRY"),
+            off_by_env(env(&[("CI", "false")]), "GFJ_TELEMETRY"),
+        ] {
+            assert_eq!(set, Some("CI is set".to_string()));
+        }
     }
 
     #[test]

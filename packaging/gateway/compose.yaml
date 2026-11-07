@@ -18,9 +18,17 @@ services:
       FGA_PUBLIC_URL: https://forge.example.com
       # Match Forgejo's [repository.pull-request] WORK_IN_PROGRESS_PREFIXES if you changed them.
       # FGA_WIP_PREFIXES: "WIP:,[WIP]"
+      # One anonymous usage report a day; "0" turns it off. See docs/telemetry.md.
+      # FGA_TELEMETRY: "0"
+    # Keeps the usage report's first week and last day sent across restarts and upgrades.
+    volumes:
+      - fga-state:/var/lib/fga-server
     # The network Forgejo and the reverse proxy share, so the proxy reaches the gateway as
     # http://fga-server:8080. With Nginx Proxy Manager, that's NPM's network. No port is published.
     networks: [forge]
+
+volumes:
+  fga-state:
 
 networks:
   forge:

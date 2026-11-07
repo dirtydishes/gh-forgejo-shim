@@ -38,7 +38,18 @@ async fn unsupported_requests_are_counted_by_github_s_names_only() {
         }
         async move { request.send().await.unwrap().status().as_u16() }
     };
-    usage::take_unsupported();
+    // Nothing is counted until reports are on.
+    assert_eq!(
+        send(
+            reqwest::Method::GET,
+            "/api/v3/repos/acme/secret-repo/releases/7",
+            None
+        )
+        .await,
+        404
+    );
+    assert!(usage::take_unsupported().is_empty());
+    usage::count_unsupported();
     // No route: a GitHub resource, and a path that names nothing GitHub has.
     assert_eq!(
         send(
