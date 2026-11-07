@@ -105,8 +105,9 @@ fn read_state(path: &Path) -> Option<String> {
 }
 
 /// The wrapper's hook, before gh runs: on the first call of a UTC day, starts the sender. Cheap
-/// on every other call: the switches, then one check for today's marker. While reports are off,
-/// it deletes whatever was kept for them.
+/// on every other call: the switches, the config's setting, then one check for today's marker.
+/// While reports are off, it deletes whatever was kept for them, today's marker too, which also
+/// stops a sender already running.
 pub fn daily(env: Env) {
     if usage::off_by_env(env, SWITCH).is_some() {
         forget(env);
@@ -118,12 +119,12 @@ pub fn daily(env: Env) {
     let Some(dir) = state_dir(env) else {
         return;
     };
-    let marker = dir.join(format!("sent-{}", usage::utc_day(usage::now())));
-    if fs::symlink_metadata(&marker).is_ok() {
-        return;
-    }
     if config::telemetry_off(&config_path(env)) {
         forget(env);
+        return;
+    }
+    let marker = dir.join(format!("sent-{}", usage::utc_day(usage::now())));
+    if fs::symlink_metadata(&marker).is_ok() {
         return;
     }
     // Created only if absent, so of several calls at once just one starts a sender.
@@ -167,7 +168,8 @@ fn caller_pid() -> u32 {
 /// `gfj telemetry send`: builds today's report and posts it. Silent whatever happens.
 ///
 /// Reports are checked again after the report is built, which can take a few seconds, and only
-/// then is anything written or sent: a `gfj telemetry off` meanwhile wins.
+/// then is anything written or sent: a `gfj telemetry off` meanwhile wins, and so does an opt-out
+/// in another call's environment, which deletes today's marker ([`daily`]).
 pub fn send(env: &EnvMap, caller: Option<u32>) {
     let get = |name: &str| env.get(name).cloned();
     if !matches!(status(&get), Status::On(_)) {
@@ -177,6 +179,10 @@ pub fn send(env: &EnvMap, caller: Option<u32>) {
     // First, while the processes that ran gh are most likely still there.
     let client = caller.and_then(detect_client).unwrap_or("other");
     let dir = state_dir(&get);
+    // The marker of the day this started, which an opt-out elsewhere deletes.
+    let marker = dir
+        .as_ref()
+        .map(|dir| dir.join(format!("sent-{}", usage::utc_day(usage::now()))));
     // Moved aside, so counts kept from now on go to the next report.
     let taken = dir.as_deref().and_then(|dir| {
         let taken = dir.join("unsupported.sending");
@@ -185,10 +191,15 @@ pub fn send(env: &EnvMap, caller: Option<u32>) {
             .map(|()| taken)
     });
     let report = build(env, client, dir.as_deref(), taken.as_deref());
+    let cancelled = marker.is_none_or(|marker| fs::symlink_metadata(marker).is_err());
     let Status::On(url) = status(&get) else {
         forget(&get);
         return;
     };
+    if cancelled {
+        forget(&get);
+        return;
+    }
     if let Some(taken) = &taken {
         let _ = fs::remove_file(taken);
     }

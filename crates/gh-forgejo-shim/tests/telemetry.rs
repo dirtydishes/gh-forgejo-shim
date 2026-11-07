@@ -499,3 +499,37 @@ fn a_pipe_in_the_state_directory_never_holds_up_gh() {
         "the call finished"
     );
 }
+
+/// An opt-out in another call's environment stops a sender already running: that call deletes
+/// today's marker, and the sender checks for it before it sends.
+#[test]
+fn an_opt_out_elsewhere_stops_a_report_being_built() {
+    let fixture = Fixture::with_forge(collector, slow_forge);
+    fixture.run(&["gh", "--version"], &[]);
+    std::thread::sleep(Duration::from_millis(500));
+    fixture.run(&["gh", "--version"], &[("DO_NOT_TRACK", "1")]);
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(fixture.reports(1, Duration::ZERO), Vec::<Value>::new());
+    assert!(!fixture.state().exists());
+}
+
+/// A config set to `telemetry = false` by hand clears what was kept on the next call, even on a day
+/// whose report already went.
+#[test]
+fn a_config_opt_out_clears_state_the_same_day() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(
+        fixture.state().join("unsupported"),
+        "rest:repos.releases 1\n",
+    )
+    .expect("counts");
+    let config = fixture.home.join(".config/gh-forgejo-shim/config.toml");
+    let mut text = fs::read_to_string(&config).expect("config");
+    text.insert_str(0, "telemetry = false\n");
+    fs::write(&config, text).expect("config");
+    fixture.run(&["gh", "--version"], &[]);
+    assert!(!fixture.state().exists());
+}
