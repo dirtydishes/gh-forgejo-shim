@@ -80,6 +80,14 @@ fn forge(path: &str) -> Option<(u16, String)> {
     })
 }
 
+/// The same forge, three seconds slow to say its version.
+fn slow_forge(path: &str) -> Option<(u16, String)> {
+    if path.ends_with("/version") {
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    forge(path)
+}
+
 struct Fixture {
     dir: PathBuf,
     home: PathBuf,
@@ -90,6 +98,13 @@ struct Fixture {
 
 impl Fixture {
     fn new(answer: fn(&str) -> Option<(u16, String)>) -> Self {
+        Self::with_forge(answer, forge)
+    }
+
+    fn with_forge(
+        answer: fn(&str) -> Option<(u16, String)>,
+        forge_answer: fn(&str) -> Option<(u16, String)>,
+    ) -> Self {
         let mut bytes = [0u8; 6];
         fs::File::open("/dev/urandom")
             .and_then(|mut random| random.read_exact(&mut bytes))
@@ -100,7 +115,7 @@ impl Fixture {
         let home = dir.join("home");
         fs::create_dir_all(home.join(".config/gh-forgejo-shim")).expect("config dir");
         fs::create_dir_all(dir.join("p")).expect("run dir parent");
-        let (forge, _) = serve(forge);
+        let (forge, _) = serve(forge_answer);
         fs::write(
             home.join(".config/gh-forgejo-shim/config.toml"),
             format!(
@@ -267,6 +282,7 @@ fn every_off_switch_sends_nothing_and_keeps_nothing() {
         ("GFJ_TELEMETRY", "0"),
         ("DO_NOT_TRACK", "1"),
         ("CI", "true"),
+        ("CI", ""),
         ("config", ""),
     ] {
         let fixture = Fixture::new(collector);
@@ -386,5 +402,100 @@ fn unsupported_requests_reach_the_next_report() {
     assert!(
         !state.contains("acme") && !state.contains("secret"),
         "{state}"
+    );
+}
+
+/// Turning reports off, by command or by variable, deletes what was kept for them.
+#[test]
+fn turning_reports_off_deletes_what_was_kept() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(
+        fixture.state().join("unsupported"),
+        "rest:repos.releases 1\n",
+    )
+    .expect("counts");
+    assert!(fixture.state().join("first-week").exists());
+    fixture.run(&["telemetry", "off"], &[]);
+    assert!(!fixture.state().exists(), "off keeps nothing");
+
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(fixture.state().exists());
+    fixture.run(&["gh", "--version"], &[("DO_NOT_TRACK", "1")]);
+    assert!(!fixture.state().exists(), "DO_NOT_TRACK keeps nothing");
+}
+
+/// A config the shim can't parse never undoes `gfj telemetry off`.
+#[test]
+fn a_broken_config_keeps_reports_off() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["telemetry", "off"], &[]);
+    let config = fixture.home.join(".config/gh-forgejo-shim/config.toml");
+    let mut text = fs::read_to_string(&config).expect("config");
+    text.push_str("\n[broken\n");
+    fs::write(&config, text).expect("config");
+    let status = stdout(&fixture.run(&["telemetry", "status"], &[]));
+    assert!(status.starts_with("off: "), "{status}");
+    fixture.run(&["gh", "--version"], &[]);
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(fixture.reports(1, Duration::ZERO), Vec::<Value>::new());
+}
+
+/// A `gfj telemetry off` while a report is being built wins: nothing goes and nothing stays.
+#[test]
+fn turning_reports_off_while_one_is_built_sends_nothing() {
+    let fixture = Fixture::with_forge(collector, slow_forge);
+    fixture.run(&["gh", "--version"], &[]);
+    // The sender now waits on the forge's version answer.
+    std::thread::sleep(Duration::from_millis(500));
+    fixture.run(&["telemetry", "off"], &[]);
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(fixture.reports(1, Duration::ZERO), Vec::<Value>::new());
+    assert!(
+        !fixture.state().exists(),
+        "{:?}",
+        fs::read_dir(fixture.state()).map(|d| d.count())
+    );
+}
+
+/// No file in the state directory can hold up a gh call: a pipe with no reader where the counts go
+/// is passed over.
+#[test]
+fn a_pipe_in_the_state_directory_never_holds_up_gh() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    let pipe = fixture.state().join("unsupported");
+    let made = Command::new("mkfifo").arg(&pipe).status().expect("mkfifo");
+    assert!(made.success());
+    let body = r#"curl -s -o /dev/null --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)" "http://forge.test/api/v3/repos/acme/secret-repo/releases/1""#;
+    let mut child = fixture
+        .command(&["gh", "pr", "view", "1", "-R", "forge.test/acme/secret-repo"])
+        .env("GH_BODY", body)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("run shim");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(
+        status.and_then(|status| status.code()),
+        Some(0),
+        "the call finished"
     );
 }

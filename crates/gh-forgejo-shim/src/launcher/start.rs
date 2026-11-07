@@ -255,6 +255,13 @@ pub fn launch(
         fga_core::scopes::set_sink(sink);
     }
 
+    // The in-process gateway counts what it lacks only while reports are on.
+    if matches!(
+        crate::telemetry::status(&|name| env.get(name).cloned()),
+        crate::telemetry::Status::On(_)
+    ) {
+        fga_server::usage::count_unsupported();
+    }
     let code = run::run(Launch {
         gh,
         args: args.to_vec(),

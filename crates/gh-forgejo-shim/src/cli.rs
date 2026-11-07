@@ -752,6 +752,9 @@ fn run_telemetry(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime)
     match words.as_slice() {
         ["on"] | ["off"] => {
             config::set_telemetry(&config::config_path(runtime.home()), words[0] == "on")?;
+            if words[0] == "off" {
+                telemetry::forget(&get);
+            }
             status(stdout)?;
         }
         ["status"] => status(stdout)?,
