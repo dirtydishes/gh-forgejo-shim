@@ -168,6 +168,16 @@ impl Fixture {
         self.home.join(".local/state/gh-forgejo-shim/telemetry")
     }
 
+    /// What today's marker holds: the ticket its sender was given.
+    fn ticket(&self) -> String {
+        fs::read_dir(self.state())
+            .expect("state")
+            .flatten()
+            .find(|entry| entry.file_name().to_string_lossy().starts_with("sent-"))
+            .map(|entry| fs::read_to_string(entry.path()).expect("marker"))
+            .expect("today's marker")
+    }
+
     /// The report bodies the collector got, waiting up to `wait` for `count` of them.
     fn reports(&self, count: usize, wait: Duration) -> Vec<Value> {
         let deadline = Instant::now() + wait;
@@ -384,7 +394,11 @@ fn unsupported_requests_reach_the_next_report() {
         shown["unsupported"],
         serde_json::json!({"rest:repos.releases": 1})
     );
-    let send = fixture.run(&["telemetry", "send", "--caller", "1"], &[]);
+    let ticket = fixture.ticket();
+    let send = fixture.run(
+        &["telemetry", "send", "--caller", "1", "--ticket", &ticket],
+        &[],
+    );
     assert_eq!((send.stdout.len(), send.stderr.len()), (0, 0), "{send:?}");
     let reports = fixture.reports(2, Duration::from_secs(5));
     assert_eq!(
@@ -531,5 +545,38 @@ fn a_config_opt_out_clears_state_the_same_day() {
     text.insert_str(0, "telemetry = false\n");
     fs::write(&config, text).expect("config");
     fixture.run(&["gh", "--version"], &[]);
+    assert!(!fixture.state().exists());
+}
+
+/// A marker made again after an opt-out belongs to the new sender alone: the one the opt-out
+/// stopped stays stopped, so the day still gets one report.
+#[test]
+fn a_stopped_sender_stays_stopped_when_reports_come_back_on() {
+    let fixture = Fixture::with_forge(collector, slow_forge);
+    fixture.run(&["gh", "--version"], &[]);
+    std::thread::sleep(Duration::from_millis(500));
+    fixture.run(&["gh", "--version"], &[("DO_NOT_TRACK", "1")]);
+    fixture.run(&["gh", "--version"], &[]);
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(fixture.reports(2, Duration::ZERO).len(), 1);
+}
+
+/// A debug build that sends nothing still clears what was kept once the config turns reports off.
+#[test]
+fn a_config_opt_out_clears_state_in_a_build_that_sends_nothing() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(500));
+    let config = fixture.home.join(".config/gh-forgejo-shim/config.toml");
+    let mut text = fs::read_to_string(&config).expect("config");
+    text.insert_str(0, "telemetry = false\n");
+    fs::write(&config, text).expect("config");
+    let output = fixture
+        .command(&["gh", "--version"])
+        .env_remove("GFJ_TELEMETRY_URL")
+        .output()
+        .expect("run shim");
+    assert_eq!(stdout(&output), format!("{GH_VERSION}\n"));
     assert!(!fixture.state().exists());
 }
