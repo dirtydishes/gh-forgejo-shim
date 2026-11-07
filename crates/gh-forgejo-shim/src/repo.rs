@@ -961,7 +961,12 @@ impl SshHosts {
                     .map(str::to_string)
             })
             .filter(|resolved| !resolved.is_empty())
-            .unwrap_or_else(|| host.to_string());
+            // Without ssh, the hostname as given: `ssh -G` prints none with a user.
+            .unwrap_or_else(|| {
+                host.rsplit_once('@')
+                    .map_or(host, |(_, host)| host)
+                    .to_string()
+            });
         let resolved = if resolved.eq_ignore_ascii_case("ssh.github.com") {
             GITHUB.to_string()
         } else {

@@ -1372,6 +1372,26 @@ printf 'GH_HOST=%s\n' "${GH_HOST-unset}" > "$REPORT""#,
         "{output:?}"
     );
     assert_eq!(fixture.report(), "", "gh never ran");
+
+    // Without ssh on PATH, the user@host given stays on the forge's hostname.
+    let git_only = fixture.dir.join("git-only");
+    fs::create_dir_all(&git_only).expect("git-only");
+    let git = [
+        "/usr/bin/git",
+        "/opt/homebrew/bin/git",
+        "/usr/local/bin/git",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).exists())
+    .expect("git");
+    std::os::unix::fs::symlink(git, git_only.join("git")).expect("symlink git");
+    let output = fixture
+        .command(&gh, &pr_create)
+        .env("PATH", &git_only)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(reported(&fixture.report(), "GH_HOST"), "forge.test");
 }
 
 #[test]
