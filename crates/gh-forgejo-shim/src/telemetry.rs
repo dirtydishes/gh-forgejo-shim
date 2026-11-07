@@ -18,7 +18,8 @@ use crate::config::{self, EnvMap};
 
 /// The wrapper's off switch; `DO_NOT_TRACK` and `CI` count too.
 pub const SWITCH: &str = "GFJ_TELEMETRY";
-/// Another address for reports, for testing a collector. A debug build sends only here.
+/// Another address for reports, for testing a collector. A build the release script didn't make
+/// sends only here.
 pub const URL_ENV: &str = "GFJ_TELEMETRY_URL";
 
 /// What the notice says, once, from `bootstrap`, `install-shim` or `doctor`.
@@ -48,7 +49,7 @@ pub fn status(env: Env) -> Status {
     match usage::endpoint(env(URL_ENV)) {
         Some(url) => Status::On(url),
         None => Status::Off(format!(
-            "this is a debug build, which sends reports only to {URL_ENV}"
+            "this build wasn't made by the release script, so it sends reports only to {URL_ENV}"
         )),
     }
 }
@@ -207,6 +208,17 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     let marker = dir
         .as_ref()
         .map(|dir| dir.join(format!("sent-{}", usage::utc_day(usage::now()))));
+    // Only while today's marker is still this sender's; checked again below, since an opt-out and
+    // a new sender may come between.
+    let owns = |marker: &Option<PathBuf>| {
+        marker
+            .as_deref()
+            .and_then(read_state)
+            .is_some_and(|held| held == ticket)
+    };
+    if !owns(&marker) {
+        return;
+    }
     // Moved aside, under this sender's own name, so counts kept from now on go to the next report
     // and no other sender's cleanup can touch them.
     let taken = dir.as_deref().and_then(|dir| {
@@ -216,17 +228,21 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
             .map(|()| taken)
     });
     let report = build(env, client, dir.as_deref(), taken.as_deref());
-    let cancelled = marker
-        .and_then(|marker| read_state(&marker))
-        .is_none_or(|held| held != ticket);
+    let cancelled = !owns(&marker);
     let Status::On(url) = status(&get) else {
         forget(&get);
         return;
     };
     // Stopped: the opt-out that deleted the marker deleted the rest, and a marker made since
-    // belongs to another sender, whose state stays.
+    // belongs to another sender. Counts this one took were kept after that opt-out, so they go
+    // back for the next report; if reports are off again, the next call deletes them.
     if cancelled {
-        if let Some(taken) = &taken {
+        if let (Some(dir), Some(taken)) = (&dir, &taken) {
+            if let Some(text) = read_state(taken) {
+                if let Some(mut file) = open_state(&dir.join("unsupported"), true) {
+                    let _ = file.write_all(text.as_bytes());
+                }
+            }
             let _ = fs::remove_file(taken);
         }
         return;
