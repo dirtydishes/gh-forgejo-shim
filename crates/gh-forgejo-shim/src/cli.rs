@@ -760,7 +760,9 @@ fn run_telemetry(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime)
         ["status"] => status(stdout)?,
         ["show"] => writeln!(stdout, "{}", telemetry::show(env))?,
         // The wrapper's background sender; not in help.
-        ["send", "--caller", caller] => telemetry::send(env, caller.parse().ok()),
+        ["send", "--caller", caller, "--ticket", ticket] => {
+            telemetry::send(env, caller.parse().ok(), ticket)
+        }
         _ => {
             return Err(ShimError::new(
                 "usage: gh-forgejo-shim telemetry <on|off|status|show>",

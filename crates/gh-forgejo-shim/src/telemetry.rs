@@ -113,28 +113,31 @@ pub fn daily(env: Env) {
         forget(env);
         return;
     }
+    if config::telemetry_off(&config_path(env)) {
+        forget(env);
+        return;
+    }
     if usage::endpoint(env(URL_ENV)).is_none() {
         return;
     }
     let Some(dir) = state_dir(env) else {
         return;
     };
-    if config::telemetry_off(&config_path(env)) {
-        forget(env);
-        return;
-    }
     let marker = dir.join(format!("sent-{}", usage::utc_day(usage::now())));
     if fs::symlink_metadata(&marker).is_ok() {
         return;
     }
-    // Created only if absent, so of several calls at once just one starts a sender.
-    if crate::shim::create_dirs(&dir, 0o700).is_err()
-        || OpenOptions::new()
+    // Created only if absent, so of several calls at once just one starts a sender. It holds a
+    // ticket only that sender knows, so a marker made again after an opt-out doesn't revive it.
+    let ticket = ticket();
+    let created = crate::shim::create_dirs(&dir, 0o700).is_ok()
+        && OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&marker)
-            .is_err()
-    {
+            .and_then(|mut file| file.write_all(ticket.as_bytes()))
+            .is_ok();
+    if !created {
         return;
     }
     let Ok(exe) = std::env::current_exe() else {
@@ -142,7 +145,14 @@ pub fn daily(env: Env) {
     };
     let mut command = Command::new(exe);
     command
-        .args(["telemetry", "send", "--caller", &caller_pid().to_string()])
+        .args([
+            "telemetry",
+            "send",
+            "--caller",
+            &caller_pid().to_string(),
+            "--ticket",
+            &ticket,
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -151,6 +161,15 @@ pub fn daily(env: Env) {
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let _ = command.spawn();
+}
+
+/// A value no other call will write to a marker: this process's ID and the time. It stays on this
+/// machine, in the marker and the sender's arguments.
+fn ticket() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{}-{nanos}", std::process::id())
 }
 
 /// The process that ran this one: for the wrapper, the agent's shell or the agent itself.
@@ -169,8 +188,9 @@ fn caller_pid() -> u32 {
 ///
 /// Reports are checked again after the report is built, which can take a few seconds, and only
 /// then is anything written or sent: a `gfj telemetry off` meanwhile wins, and so does an opt-out
-/// in another call's environment, which deletes today's marker ([`daily`]).
-pub fn send(env: &EnvMap, caller: Option<u32>) {
+/// in another call's environment, which deletes today's marker ([`daily`]). The marker must still
+/// hold this sender's `ticket`: one made again since belongs to another sender.
+pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     let get = |name: &str| env.get(name).cloned();
     if !matches!(status(&get), Status::On(_)) {
         forget(&get);
@@ -191,13 +211,19 @@ pub fn send(env: &EnvMap, caller: Option<u32>) {
             .map(|()| taken)
     });
     let report = build(env, client, dir.as_deref(), taken.as_deref());
-    let cancelled = marker.is_none_or(|marker| fs::symlink_metadata(marker).is_err());
+    let cancelled = marker
+        .and_then(|marker| read_state(&marker))
+        .is_none_or(|held| held != ticket);
     let Status::On(url) = status(&get) else {
         forget(&get);
         return;
     };
+    // Stopped: the opt-out that deleted the marker deleted the rest, and a marker made since
+    // belongs to another sender, whose state stays.
     if cancelled {
-        forget(&get);
+        if let Some(taken) = &taken {
+            let _ = fs::remove_file(taken);
+        }
         return;
     }
     if let Some(taken) = &taken {
