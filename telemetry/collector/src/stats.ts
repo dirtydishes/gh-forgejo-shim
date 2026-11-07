@@ -11,6 +11,12 @@ export interface Row {
   arch: string;
   version: string;
   gh: string;
+  count: number;
+}
+
+/** One `cohorts` row: a day, a first week, and how many reports that day named it. */
+export interface CohortRow {
+  day: string;
   first_week: string;
   count: number;
 }
@@ -87,7 +93,7 @@ export function suppress(cells: Cell[], groups: Group[]): void {
  * that day. A week's `reports` sums its days; its `installs` is its busiest day's, the most installs
  * the counts can prove ran that week. An absent value reads `none`.
  */
-export function stats(rows: Row[], unsupported: UnsupportedRow[], today: string) {
+export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: UnsupportedRow[], today: string) {
   const firstDay = daysBefore(today, DAYS - 1);
   const firstWeek = isoWeek(daysBefore(today, WEEKS * 7 - 1));
   const label = (row: Row, field: string): string | number => {
@@ -173,7 +179,7 @@ export function stats(rows: Row[], unsupported: UnsupportedRow[], today: string)
 
   // Retention: for each first week, the installs the counts prove ran in each later week.
   const cohortDays = new Map<string, number>();
-  for (const row of rows) {
+  for (const row of cohortRows) {
     const key = JSON.stringify([row.first_week, row.day]);
     cohortDays.set(key, (cohortDays.get(key) ?? 0) + row.count);
   }

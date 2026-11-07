@@ -34,7 +34,7 @@ const rows = async (table: string) =>
 
 // Each test starts from empty counters.
 beforeEach(async () => {
-  await env.DB.batch([env.DB.prepare("DELETE FROM reports"), env.DB.prepare("DELETE FROM unsupported")]);
+  await env.DB.batch(["reports", "cohorts", "unsupported"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)));
 });
 
 describe("POST /v1/report", () => {
@@ -57,10 +57,10 @@ describe("POST /v1/report", () => {
         arch: "aarch64",
         version: "0.3.0",
         gh: "2.103",
-        first_week: isoWeek(today),
         count: 2,
       },
     ]);
+    expect(await rows("cohorts")).toEqual([{ day: today, first_week: isoWeek(today), count: 2 }]);
     expect(await rows("unsupported")).toEqual([
       { day: today, name: "graphql:Repository.projectsV2", reports: 2, total: 4 },
     ]);
@@ -126,16 +126,18 @@ describe("retention", () => {
   it("deletes counters older than 400 days", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO reports VALUES ('2025-01-01', 'client', 'codex', '', -1, 'linux', 'x86_64', '0.3.0', '', '2026-W45', 5)",
+        "INSERT INTO reports VALUES ('2025-01-01', 'client', 'codex', '', -1, 'linux', 'x86_64', '0.3.0', '', 5)",
       ),
       env.DB.prepare(
-        "INSERT INTO reports VALUES ('2026-11-01', 'client', 'codex', '', -1, 'linux', 'x86_64', '0.3.0', '', '2026-W45', 5)",
+        "INSERT INTO reports VALUES ('2026-11-01', 'client', 'codex', '', -1, 'linux', 'x86_64', '0.3.0', '', 5)",
       ),
+      env.DB.prepare("INSERT INTO cohorts VALUES ('2025-01-01', '2026-W45', 5)"),
       env.DB.prepare("INSERT INTO unsupported VALUES ('2025-01-01', 'rest:other', 3, 3)"),
     ]);
     await expire(env, "2026-11-07");
     expect((await rows("reports")).map((row) => row.day)).toEqual(["2026-11-01"]);
     expect(await rows("unsupported")).toEqual([]);
+    expect(await rows("cohorts")).toEqual([]);
   });
 });
 
