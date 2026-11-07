@@ -537,7 +537,7 @@ fn run_gh(
         }
         RouteKind::Forgejo => {
             let host = decision.trace_host().unwrap_or_default().to_string();
-            if let Some(message) = push_goes_elsewhere(&routed, &words, &config, &env, cwd, &host) {
+            if let Some(message) = push_goes_elsewhere(&routed, &words, &env, cwd, &host) {
                 write_error(&mut mode, &format!("gh-forgejo-shim: {message}"));
                 1
             } else {
@@ -715,15 +715,14 @@ fn names_routed_port(
 ///
 /// - `gh pr create` pushes the branch from the current checkout, to its remote or to a fork remote
 ///   it adds on the forge: refused when one of those could push elsewhere ([`crate::repo::push_leaves`]).
-///   A fork remote uses gh's `git_protocol` for the forge, asked of gh itself, which reads
-///   every place it can be set; when that isn't `https`, the SSH destination counts too.
+///   A fork remote uses gh's `git_protocol` for the forge, read from gh's files
+///   ([`gh_uses_https`]); when that isn't `https`, the SSH destination counts too.
 /// - `gh repo create` pushes, with `--push` or when it prompts, from a `--source` checkout the
 ///   wrapper would have to read as gh does, rewrites and SSH aliases included. It is refused
 ///   instead; without `--push` it creates the repository, and git pushes after.
 fn push_goes_elsewhere(
     routed: &Invocation,
     words: &[String],
-    config: &DispatcherConfig,
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     host: &str,
@@ -737,33 +736,8 @@ fn push_goes_elsewhere(
         ));
     }
     if creates(routed, words, "pr") {
-        // gh is asked only when the checkout's remotes and rewrites pass, and only when its own
-        // hosts.yml has the forge, where the call steps aside and plain gh runs anyway. Otherwise
-        // gh would run with the user's config while a launched gh runs with its own; the SSH
-        // destination then counts whatever the protocol.
-        let ssh_protocol = || {
-            if !crate::repo::user_gh_hosts(env)
-                .iter()
-                .any(|key| key.eq_ignore_ascii_case(&forge))
-            {
-                return true;
-            }
-            !find_program("gh", config.real_gh.as_deref(), env)
-                .and_then(|gh| {
-                    std::process::Command::new(gh)
-                        .args(["config", "get", "git_protocol", "--host", &forge])
-                        .stdin(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .output()
-                        .ok()
-                })
-                .is_some_and(|output| {
-                    output.status.success()
-                        && String::from_utf8_lossy(&output.stdout).trim() == "https"
-                })
-        };
         let elsewhere = crate::repo::push_leaves(host, cwd).or_else(|| {
-            ssh_protocol()
+            (!gh_uses_https(env, host))
                 .then(|| crate::repo::ssh_push_leaves(host))
                 .flatten()
         })?;
@@ -772,6 +746,57 @@ fn push_goes_elsewhere(
         ));
     }
     None
+}
+
+/// Whether gh uses `https` for a remote it adds on the forge, read from the user's gh files as
+/// gh reads them (`internal/config/config.go`: the host's `git_protocol`, then the top-level one,
+/// then `https`). A launched gh gets the user's `hosts.yml` entries and `config.yml` without its
+/// `hosts` key; plain gh, after a step-aside, reads a legacy `hosts` key in `config.yml` ahead of
+/// `hosts.yml`, which go-gh adds as a second `hosts` entry. Both must say `https`. The forge's key
+/// is its portless hostname, as gh's remotes have it. A file that can't be read counts as not
+/// `https`.
+fn gh_uses_https(env: &HashMap<String, String>, host: &str) -> bool {
+    let Some(dir) = user_gh_config_dir(env) else {
+        return true;
+    };
+    let read = |name: &str| -> Option<Option<serde_yaml::Mapping>> {
+        match std::fs::read_to_string(dir.join(name)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Some(None),
+            Err(_) => None,
+            Ok(text) => match serde_yaml::from_str::<serde_yaml::Value>(&text) {
+                Ok(serde_yaml::Value::Mapping(mapping)) => Some(Some(mapping)),
+                Ok(serde_yaml::Value::Null) => Some(None),
+                _ => None,
+            },
+        }
+    };
+    let (Some(config), Some(hosts)) = (read("config.yml"), read("hosts.yml")) else {
+        return false;
+    };
+    let hostname = gh_hostname(host).to_ascii_lowercase();
+    let protocol = |entries: Option<&serde_yaml::Value>| {
+        entries?
+            .get(hostname.as_str())?
+            .get("git_protocol")?
+            .as_str()
+            .map(str::to_string)
+    };
+    let global = config
+        .as_ref()
+        .and_then(|config| config.get("git_protocol"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_string);
+    let hosts_yml = hosts.map(serde_yaml::Value::Mapping);
+    let legacy = config.as_ref().and_then(|config| config.get("hosts"));
+    let launched = protocol(hosts_yml.as_ref()).or_else(|| global.clone());
+    let plain = match legacy {
+        Some(legacy) => protocol(Some(legacy)),
+        None => protocol(hosts_yml.as_ref()),
+    }
+    .or(global);
+    [launched, plain]
+        .iter()
+        .all(|protocol| protocol.as_deref().unwrap_or("https") == "https")
 }
 
 /// gh 2.103.3's subcommands of `repo` and `pr`, with their aliases (`pkg/cmd/repo`, `pkg/cmd/pr`).
