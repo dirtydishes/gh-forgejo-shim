@@ -267,17 +267,21 @@ pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
     Ok(config)
 }
 
-/// Rewrites the `hosts` allowlist in the file at `config.path`, and drops the `[host.…]` table
-/// for `removed`. Everything else stays as the user wrote it: comments, `[paths]`, and keys and
-/// tables this version doesn't know.
-/// The `telemetry` setting in the config at `path`: `Some(false)` after `gfj telemetry off`. A
-/// missing or unreadable file, or no such key, is `None`.
-pub fn telemetry_setting(path: &Path) -> Option<bool> {
-    let text = fs::read_to_string(path).ok()?;
-    text.parse::<toml::Table>()
-        .ok()?
-        .get("telemetry")?
-        .as_bool()
+/// Whether the config at `path` turns usage reports off: `telemetry = false` after
+/// `gfj telemetry off`, or any `telemetry` value but `true`. A file that exists but can't be read
+/// or parsed counts as off too, so a broken config never undoes an opt-out. No file, or no such
+/// key, is on.
+pub fn telemetry_off(path: &Path) -> bool {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => return error.kind() != io::ErrorKind::NotFound,
+    };
+    match text.parse::<toml::Table>() {
+        Ok(table) => table
+            .get("telemetry")
+            .is_some_and(|value| value.as_bool() != Some(true)),
+        Err(_) => true,
+    }
 }
 
 /// Sets `telemetry = on` in the config at `path`, keeping the rest of the file as it is.
@@ -307,6 +311,9 @@ pub fn set_telemetry(path: &Path, on: bool) -> Result<()> {
     replace_config_file(path, document.to_string().as_bytes())
 }
 
+/// Rewrites the `hosts` allowlist in the file at `config.path`, and drops the `[host.…]` table
+/// for `removed`. Everything else stays as the user wrote it: comments, `[paths]`, and keys and
+/// tables this version doesn't know.
 fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
     let path = &config.path;
     let parent = path.parent().ok_or_else(|| {

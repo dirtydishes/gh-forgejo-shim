@@ -42,7 +42,7 @@ pub fn status(env: Env) -> Status {
     if let Some(reason) = usage::off_by_env(env, SWITCH) {
         return Status::Off(reason);
     }
-    if config::telemetry_setting(&config_path(env)) == Some(false) {
+    if config::telemetry_off(&config_path(env)) {
         return Status::Off("turned off with `gfj telemetry off`".to_string());
     }
     match usage::endpoint(env(URL_ENV)) {
@@ -71,17 +71,59 @@ fn state_dir(env: Env) -> Option<PathBuf> {
     Some(base.join("gh-forgejo-shim/telemetry"))
 }
 
+/// Deletes everything kept for reports: once they're off, nothing stays.
+pub fn forget(env: Env) {
+    if let Some(dir) = state_dir(env) {
+        if fs::symlink_metadata(&dir).is_ok() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+/// Opens a state file without following a link or waiting on a pipe, and only if it's a regular
+/// file, so no file put there can hold up the process. `append` creates it if absent.
+fn open_state(path: &Path, append: bool) -> Option<fs::File> {
+    let mut options = OpenOptions::new();
+    if append {
+        options.create(true).append(true);
+    } else {
+        options.read(true);
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
+    );
+    let file = options.open(path).ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+fn read_state(path: &Path) -> Option<String> {
+    let mut text = String::new();
+    io::Read::read_to_string(&mut open_state(path, false)?, &mut text).ok()?;
+    Some(text)
+}
+
 /// The wrapper's hook, before gh runs: on the first call of a UTC day, starts the sender. Cheap
-/// on every other call: the switches, then one check for today's marker.
+/// on every other call: the switches, then one check for today's marker. While reports are off,
+/// it deletes whatever was kept for them.
 pub fn daily(env: Env) {
-    if usage::off_by_env(env, SWITCH).is_some() || usage::endpoint(env(URL_ENV)).is_none() {
+    if usage::off_by_env(env, SWITCH).is_some() {
+        forget(env);
+        return;
+    }
+    if usage::endpoint(env(URL_ENV)).is_none() {
         return;
     }
     let Some(dir) = state_dir(env) else {
         return;
     };
     let marker = dir.join(format!("sent-{}", usage::utc_day(usage::now())));
-    if marker.exists() || config::telemetry_setting(&config_path(env)) == Some(false) {
+    if fs::symlink_metadata(&marker).is_ok() {
+        return;
+    }
+    if config::telemetry_off(&config_path(env)) {
+        forget(env);
         return;
     }
     // Created only if absent, so of several calls at once just one starts a sender.
@@ -123,12 +165,43 @@ fn caller_pid() -> u32 {
 }
 
 /// `gfj telemetry send`: builds today's report and posts it. Silent whatever happens.
+///
+/// Reports are checked again after the report is built, which can take a few seconds, and only
+/// then is anything written or sent: a `gfj telemetry off` meanwhile wins.
 pub fn send(env: &EnvMap, caller: Option<u32>) {
     let get = |name: &str| env.get(name).cloned();
+    if !matches!(status(&get), Status::On(_)) {
+        forget(&get);
+        return;
+    }
+    // First, while the processes that ran gh are most likely still there.
+    let client = caller.and_then(detect_client).unwrap_or("other");
+    let dir = state_dir(&get);
+    // Moved aside, so counts kept from now on go to the next report.
+    let taken = dir.as_deref().and_then(|dir| {
+        let taken = dir.join("unsupported.sending");
+        fs::rename(dir.join("unsupported"), &taken)
+            .ok()
+            .map(|()| taken)
+    });
+    let report = build(env, client, dir.as_deref(), taken.as_deref());
     let Status::On(url) = status(&get) else {
+        forget(&get);
         return;
     };
-    let report = build(env, caller, true);
+    if let Some(taken) = &taken {
+        let _ = fs::remove_file(taken);
+    }
+    if let Some(dir) = &dir {
+        // Written once, the first time a report goes.
+        if let Ok(mut file) = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join("first-week"))
+        {
+            let _ = file.write_all(report.first_week.as_bytes());
+        }
+    }
     if let Ok(client) = reqwest::blocking::Client::builder()
         .timeout(usage::TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
@@ -148,11 +221,15 @@ pub fn send(env: &EnvMap, caller: Option<u32>) {
     }
 }
 
-/// The report [`send`] posts. `sending` keeps it: it records the first week and takes the
-/// unsupported counts; `gfj telemetry show` leaves both as they are.
-pub fn build(env: &EnvMap, caller: Option<u32>, sending: bool) -> Report {
+/// The report for `client`, from `dir`'s first week and the unsupported counts in `unsupported`.
+/// It writes nothing.
+fn build(
+    env: &EnvMap,
+    client: &'static str,
+    dir: Option<&Path>,
+    unsupported: Option<&Path>,
+) -> Report {
     let get = |name: &str| env.get(name).cloned();
-    let dir = state_dir(&get);
     let config = config::load_config_with_env(Some(&config_path(&get)), env).ok();
     let (forge, forge_major) = config
         .as_ref()
@@ -160,19 +237,20 @@ pub fn build(env: &EnvMap, caller: Option<u32>, sending: bool) -> Report {
         .unwrap_or((None, None));
     Report {
         schema: usage::SCHEMA,
-        version: crate::VERSION.to_string(),
+        version: usage::report_version(crate::VERSION),
         os: usage::os(),
         arch: usage::arch(),
         mode: "client",
-        client: Some(caller.and_then(detect_client).unwrap_or("other")),
+        client: Some(client),
         forge,
         forge_major,
         gh: config.as_ref().and_then(|config| gh_version(config, env)),
-        first_week: first_week(dir.as_deref(), sending),
-        unsupported: dir
-            .as_deref()
-            .map(|dir| unsupported(dir, sending))
-            .unwrap_or_default(),
+        first_week: dir
+            .and_then(|dir| read_state(&dir.join("first-week")))
+            .map(|week| week.trim().to_string())
+            .filter(|week| usage::is_week(week))
+            .unwrap_or_else(|| usage::iso_week(usage::now())),
+        unsupported: unsupported.map(counts).unwrap_or_default(),
     }
 }
 
@@ -216,32 +294,22 @@ fn gh_version(config: &config::Config, env: &EnvMap) -> Option<String> {
 
 /// `gfj telemetry show`: today's report, byte for byte as [`send`] would post it.
 pub fn show(env: &EnvMap) -> String {
-    serde_json::to_string(&build(env, Some(caller_pid()), false)).unwrap_or_default()
+    let get = |name: &str| env.get(name).cloned();
+    let dir = state_dir(&get);
+    let client = detect_client(caller_pid()).unwrap_or("other");
+    let kept = dir.as_ref().map(|dir| dir.join("unsupported"));
+    serde_json::to_string(&build(env, client, dir.as_deref(), kept.as_deref())).unwrap_or_default()
 }
 
-/// The week of the first report, from `dir/first-week`, written there when `sending`.
-fn first_week(dir: Option<&Path>, sending: bool) -> String {
-    let this_week = usage::iso_week(usage::now());
-    let Some(dir) = dir else {
-        return this_week;
-    };
-    let path = dir.join("first-week");
-    match fs::read_to_string(&path) {
-        Ok(week) if usage::is_week(week.trim()) => week.trim().to_string(),
-        _ => {
-            if sending && crate::shim::create_dirs(dir, 0o700).is_ok() {
-                let _ = fs::write(&path, &this_week);
-            }
-            this_week
-        }
-    }
-}
-
-/// Keeps the unsupported counts a launched call's gateway gathered, for the next report. Nothing
-/// is kept while reports are off.
+/// Keeps the unsupported counts a launched call's gateway gathered, for the next report. It counts
+/// only while reports are on ([`usage::count_unsupported`]).
 pub fn keep_unsupported(env: Env) {
     let counts = usage::take_unsupported();
-    if counts.is_empty() || !matches!(status(env), Status::On(_)) {
+    if counts.is_empty() {
+        return;
+    }
+    if !matches!(status(env), Status::On(_)) {
+        forget(env);
         return;
     }
     let Some(dir) = state_dir(env) else {
@@ -253,35 +321,16 @@ pub fn keep_unsupported(env: Env) {
         .collect::<String>();
     // One append-mode write, so calls at once each add whole lines.
     if crate::shim::create_dirs(&dir, 0o700).is_ok() {
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("unsupported"))
-        {
+        if let Some(mut file) = open_state(&dir.join("unsupported"), true) {
             let _ = file.write_all(lines.as_bytes());
         }
     }
 }
 
-/// The unsupported counts kept since the last report, vocabulary names only. When `sending`, they
-/// move aside first, so counts kept meanwhile go to the next report.
-fn unsupported(dir: &Path, sending: bool) -> BTreeMap<String, u64> {
-    let kept = dir.join("unsupported");
-    let path = if sending {
-        let taken = dir.join("unsupported.sending");
-        if fs::rename(&kept, &taken).is_err() {
-            return BTreeMap::new();
-        }
-        taken
-    } else {
-        kept
-    };
-    let text = fs::read_to_string(&path).unwrap_or_default();
-    if sending {
-        let _ = fs::remove_file(&path);
-    }
+/// The counts in a file [`keep_unsupported`] wrote, vocabulary names only.
+fn counts(path: &Path) -> BTreeMap<String, u64> {
     let mut counts = BTreeMap::new();
-    for line in text.lines() {
+    for line in read_state(path).unwrap_or_default().lines() {
         let Some((name, count)) = line.split_once(' ') else {
             continue;
         };
@@ -303,14 +352,16 @@ pub fn notice(env: &EnvMap, out: &mut dyn Write) -> io::Result<()> {
     let Some(dir) = state_dir(&get) else {
         return Ok(());
     };
-    let marker = dir.join("notice-shown");
-    if marker.exists()
-        || crate::shim::create_dirs(&dir, 0o700).is_err()
-        || fs::write(&marker, "").is_err()
-    {
-        return Ok(());
+    let shown = crate::shim::create_dirs(&dir, 0o700).is_ok()
+        && OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join("notice-shown"))
+            .is_ok();
+    if shown {
+        writeln!(out, "\n{NOTICE}")?;
     }
-    writeln!(out, "\n{NOTICE}")
+    Ok(())
 }
 
 /// The agent or app that ran gh, from the processes above `pid`: the nearest one this knows.
