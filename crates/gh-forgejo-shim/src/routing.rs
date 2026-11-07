@@ -737,8 +737,17 @@ fn push_goes_elsewhere(
         ));
     }
     if creates(routed, words, "pr") {
-        // gh is asked only when the checkout's remotes and rewrites pass.
+        // gh is asked only when the checkout's remotes and rewrites pass, and only when its own
+        // hosts.yml has the forge, where the call steps aside and plain gh runs anyway. Otherwise
+        // gh would run with the user's config while a launched gh runs with its own; the SSH
+        // destination then counts whatever the protocol.
         let ssh_protocol = || {
+            if !crate::repo::user_gh_hosts(env)
+                .iter()
+                .any(|key| key.eq_ignore_ascii_case(&forge))
+            {
+                return true;
+            }
             !find_program("gh", config.real_gh.as_deref(), env)
                 .and_then(|gh| {
                     std::process::Command::new(gh)
