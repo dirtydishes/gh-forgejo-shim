@@ -634,10 +634,9 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
 /// `git remote -v` applies), or an `insteadOf` or `pushInsteadOf` rule that could rewrite a URL
 /// on the forge to another host. A rule counts when its prefix and one of the forge's URL forms
 /// start the same way, whatever owner or name follows (`https://forge/acme/`). A push URL or rule
-/// target gh can't read counts as elsewhere. With `ssh`, gh may add an SSH remote, so an SSH
-/// host alias resolving the forge's hostname elsewhere (`ssh -G`, as gh translates remotes) counts
-/// too. `None` when every push to the forge stays there.
-pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>, ssh_remote: bool) -> Option<String> {
+/// target gh can't read counts as elsewhere. With `ssh_remote`, gh may add an SSH remote, so SSH
+/// resolving `git@<forge>` to another hostname (`ssh -G`, as gh translates remotes) counts too. `None` when every push to the forge stays there.
+pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
     let mut ssh = SshHosts::default();
     let mut host_of = |url: &str| {
@@ -716,13 +715,17 @@ pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>, ssh_remote: bool) -> 
             ));
         }
     }
-    if ssh_remote {
-        let resolved = gh_hostname(&ssh.resolve(&hostname)).to_ascii_lowercase();
-        if resolved != hostname {
-            return Some(format!("ssh resolves {hostname} to {resolved}"));
-        }
-    }
     None
+}
+
+/// Where SSH would take a remote gh adds on `forge` with its SSH protocol, when that isn't the
+/// forge: gh's SSH remote is `git@<host>:<owner>/<repo>.git`, so SSH resolves `git@<host>`
+/// (`ssh -G`, as gh translates remotes), which a `Match user git` rule can change.
+pub(crate) fn ssh_push_leaves(forge: &str) -> Option<String> {
+    let hostname = gh_hostname(forge).to_ascii_lowercase();
+    let resolved =
+        gh_hostname(&SshHosts::default().resolve(&format!("git@{hostname}"))).to_ascii_lowercase();
+    (resolved != hostname).then(|| format!("ssh resolves git@{hostname} to {resolved}"))
 }
 
 fn remote_rank(name: &str) -> u8 {

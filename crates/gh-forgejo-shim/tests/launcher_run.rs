@@ -1135,7 +1135,7 @@ fn a_call_naming_another_host_keeps_the_built_in_path() {
 /// `gh pr create` and `gh repo create --push` push with git, which follows the remote's push URL
 /// and git's URL rewrites, not `GH_HOST` (#231). A `pr create` push that could leave the forge is
 /// refused before gh runs (parallax r1#3, r2#1); a `repo create` that pushes always is, however
-/// it's spelled (r2#2, r3#1, r3#2), and one that can't push steps aside (r2#4, r3#4).
+/// it's spelled (r2#2, r3#1, r3#2, r4#1), and one that can't push steps aside (r2#4, r3#4).
 #[test]
 fn a_push_git_would_send_off_the_forge_is_refused() {
     let _serial = serial();
@@ -1216,6 +1216,9 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
             "--push",
         ][..],
         &["repo", "create"][..],
+        // cobra drops `--`, so gh prompts (r4#1).
+        &["repo", "create", "--"][..],
+        &["repo", "new", "--"][..],
     ] {
         refused(args, "create the repository without --push");
     }
@@ -1234,6 +1237,8 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
         ".",
         "--push=false",
     ]);
+    // `new` here is an argument, not `pr create`'s alias: nothing pushes (r4#4).
+    steps_aside(&["pr", "view", "new"]);
 
     // `pr create` pushes the checkout's remote: refused when its push URL leaves the forge.
     for args in [
@@ -1258,6 +1263,69 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
     // Pushes that stay on the forge step aside as before.
     git(&["config", "remote.origin.pushurl", "git@forge.test:o/r.git"]);
     steps_aside(&["pr", "create", "--title", "t", "--body", "b"]);
+}
+
+/// `gh pr create` may add a fork remote with gh's `git_protocol` for the forge. When gh says
+/// that isn't `https`, SSH's destination for `git@<forge>`, the remote gh writes, counts too: a
+/// `Match user git` rule can send it elsewhere while the bare host resolves to the forge
+/// (parallax r4#2), and gh's answer covers every place the protocol can be set (r4#3).
+#[test]
+fn a_fork_remote_s_ssh_destination_counts_unless_gh_uses_https() {
+    let _serial = serial();
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    fixture.user_hosts(
+        "forge.test:\n    oauth_token: forge-login\ngithub.com:\n    oauth_token: github-login\n",
+    );
+    for args in [
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "https://forge.test/o/r.git"][..],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &fixture.home)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+    let bin = fixture.dir.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let ssh = bin.join("ssh");
+    fs::write(
+        &ssh,
+        "#!/bin/sh\ncase \"$3\" in git@forge.test) echo 'hostname github.com' ;; \
+         *) echo \"hostname $3\" ;; esac\n",
+    )
+    .expect("fake ssh");
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let pr_create = ["pr", "create", "--title", "t", "--body", "b"];
+    for (protocol, refused) in [("ssh", true), ("https", false)] {
+        let gh = fixture.fake_gh(&format!(
+            r#"if [ "$1" = config ]; then echo {protocol}; exit 0; fi
+printf 'GH_HOST=%s\n' "${{GH_HOST-unset}}" > "$REPORT""#
+        ));
+        let _ = fs::remove_file(fixture.dir.join("report"));
+        let output = fixture
+            .command(&gh, &pr_create)
+            .env("PATH", &path)
+            .output()
+            .expect("run wrapper");
+        if refused {
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("ssh resolves git@forge.test to github.com"),
+                "{output:?}"
+            );
+            assert_eq!(fixture.report(), "", "gh never ran");
+        } else {
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert_eq!(reported(&fixture.report(), "GH_HOST"), "forge.test");
+        }
+    }
 }
 
 #[test]
