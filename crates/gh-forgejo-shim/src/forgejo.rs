@@ -343,6 +343,19 @@ impl ForgejoClient {
         Ok((status, body))
     }
 
+    /// The `version` a version route below the host's base answers, such as
+    /// `/api/forgejo/v1/version`, or `None` when it doesn't answer with one.
+    pub fn version_at(&self, host: &str, path: &str) -> Option<String> {
+        let value = self
+            .request_json(
+                Method::GET,
+                format!("{}{path}", self.host_base_url(host)),
+                None,
+            )
+            .ok()?;
+        value["version"].as_str().map(str::to_string)
+    }
+
     pub fn get_current_user(&self, host: &str) -> ForgejoResult<Value> {
         self.request_json(
             Method::GET,

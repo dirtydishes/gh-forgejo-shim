@@ -270,6 +270,43 @@ pub fn remove_host(host: &str, path: Option<&Path>) -> Result<Config> {
 /// Rewrites the `hosts` allowlist in the file at `config.path`, and drops the `[host.…]` table
 /// for `removed`. Everything else stays as the user wrote it: comments, `[paths]`, and keys and
 /// tables this version doesn't know.
+/// The `telemetry` setting in the config at `path`: `Some(false)` after `gfj telemetry off`. A
+/// missing or unreadable file, or no such key, is `None`.
+pub fn telemetry_setting(path: &Path) -> Option<bool> {
+    let text = fs::read_to_string(path).ok()?;
+    text.parse::<toml::Table>()
+        .ok()?
+        .get("telemetry")?
+        .as_bool()
+}
+
+/// Sets `telemetry = on` in the config at `path`, keeping the rest of the file as it is.
+pub fn set_telemetry(path: &Path, on: bool) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        ShimError::new(format!(
+            "could not determine parent directory for {}",
+            path.display()
+        ))
+    })?;
+    crate::shim::create_dirs(parent, 0o700).map_err(|error| {
+        ShimError::new(format!("could not create {}: {error}", parent.display()))
+    })?;
+    let mut document = match fs::read_to_string(path) {
+        Ok(text) => text
+            .parse::<DocumentMut>()
+            .map_err(|_| ShimError::new(format!("could not parse {}", path.display())))?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(error) => {
+            return Err(ShimError::new(format!(
+                "could not read {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    document["telemetry"] = toml_edit::value(on);
+    replace_config_file(path, document.to_string().as_bytes())
+}
+
 fn write_hosts(config: &Config, removed: Option<&str>) -> Result<()> {
     let path = &config.path;
     let parent = path.parent().ok_or_else(|| {

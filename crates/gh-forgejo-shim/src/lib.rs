@@ -28,6 +28,7 @@ pub mod routing;
 mod scope_check;
 pub mod setup;
 pub mod shim;
+pub mod telemetry;
 pub mod trace;
 pub mod trace_summary;
 
