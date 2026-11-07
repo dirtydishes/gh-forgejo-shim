@@ -43,7 +43,9 @@ export function validate(body: unknown, today: string): Report | string {
     if (!FIELDS.has(key)) return `unknown field ${JSON.stringify(key)}`;
   }
   if (report.schema !== contract.schema) return "schema must be 1";
-  if (typeof report.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,3}(-[0-9A-Za-z.]{1,20})?$/.test(report.version)) {
+  // Numbers, and only a plain pre-release suffix, as the client sends it: a custom build's text
+  // never reaches a counter.
+  if (typeof report.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,3}(-(alpha|beta|rc)\.\d{1,3})?$/.test(report.version)) {
     return "bad version";
   }
   if (!isIn(contract.os, report.os)) return "bad os";
