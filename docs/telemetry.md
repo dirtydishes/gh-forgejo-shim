@@ -40,7 +40,7 @@ From fga-server:
 | Field | Values | Where it comes from |
 |---|---|---|
 | `schema` | `1` | The report's format. |
-| `version` | `0.3.0` | The shim's release. |
+| `version` | `0.3.0` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
 | `os` | `macos`, `linux`, `other` | The build. |
 | `arch` | `x86_64`, `aarch64`, `other` | The build. |
 | `mode` | `client`, `server` | The gh wrapper, or fga-server. |
@@ -69,11 +69,14 @@ The wrapper keeps a few small files in `$XDG_STATE_HOME/gh-forgejo-shim/telemetr
 - `unsupported`: names and counts waiting for the next report.
 - `notice-shown`: `bootstrap`, `install-shim` or `doctor` has printed the notice.
 
-While reports are off, nothing is written there.
+Turning reports off, in any of the ways below, deletes these files, and while reports are off
+nothing is written there. Each file is opened only if it's a regular file, so nothing put there can
+hold up a `gh` call.
 
-fga-server keeps its first week and last day sent in memory. Set `FGA_STATE_DIR` to a writable
-directory to keep them across restarts. Otherwise each restart counts as a new install from that
-week.
+fga-server keeps its first week and last day sent in `FGA_STATE_DIR`. The image sets that to
+`/var/lib/fga-server`, and the example `compose.yaml` keeps it on a volume. Without it, the server
+uses `$XDG_STATE_HOME/fga-server` or `~/.local/state/fga-server`. If none can be written, it keeps
+them in memory, so each restart counts as a new install from that week.
 
 ## Turning reports off
 
@@ -83,7 +86,7 @@ Any of these turns the wrapper's reports off:
   `gfj telemetry on` turns them back on.
 - `GFJ_TELEMETRY=0` (or `false`, `off`, `no`).
 - `DO_NOT_TRACK=1`.
-- `CI` set to anything but `0` or `false`, as continuous-integration services set it.
+- `CI` set to any value, as continuous-integration services set it.
 
 `gfj telemetry status` says whether reports are on, and if not, why.
 
@@ -110,10 +113,11 @@ off. It deletes counters older than 400 days.
 - `combinations`: the same, for each combination of `mode`, `client`, `forge`, `forge_major`, `os`,
   `arch`, `version` and `gh`.
 - `retention`: for each `first_week`, the installs seen in each later week.
-- `unsupported`: per week, how many reports named each unsupported name, and how many times in all.
+- `unsupported`: per week, the installs that named each unsupported name (its busiest day's
+  reports, since an install names it at most once a day), and how many times they counted it.
 
 Each install sends at most one report a day, so a day's reports count the installs that ran that
 day. A week's `installs` is its busiest day's count, the most the counts can prove ran that week.
 
-Any count below 3 is left out, with its labels, so no published figure can describe just one or two
-installs. The rule applies to every figure in every section.
+Any count below 3 is left out, with its labels. So are enough other counts that a left-out count
+can't be worked out by subtracting what's shown from a total.
