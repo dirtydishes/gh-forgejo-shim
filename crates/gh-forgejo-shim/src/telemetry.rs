@@ -196,6 +196,10 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
         forget(&get);
         return;
     }
+    // [`ticket`]'s form only, since it names a file.
+    if ticket.is_empty() || !ticket.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        return;
+    }
     // First, while the processes that ran gh are most likely still there.
     let client = caller.and_then(detect_client).unwrap_or("other");
     let dir = state_dir(&get);
@@ -203,9 +207,10 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     let marker = dir
         .as_ref()
         .map(|dir| dir.join(format!("sent-{}", usage::utc_day(usage::now()))));
-    // Moved aside, so counts kept from now on go to the next report.
+    // Moved aside, under this sender's own name, so counts kept from now on go to the next report
+    // and no other sender's cleanup can touch them.
     let taken = dir.as_deref().and_then(|dir| {
-        let taken = dir.join("unsupported.sending");
+        let taken = dir.join(format!("unsupported.sending-{ticket}"));
         fs::rename(dir.join("unsupported"), &taken)
             .ok()
             .map(|()| taken)
