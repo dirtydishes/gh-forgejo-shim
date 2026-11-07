@@ -54,6 +54,15 @@ fn hunk_end(hunk: &str, old: bool) -> Option<u64> {
     last
 }
 
+/// A review's commit in full. Forgejo keeps the commit ID a client sent with the review, which may
+/// be abbreviated; one of at least 7 characters that starts the head's ID is the head.
+pub fn review_commit<'a>(review: &'a str, head: &'a str) -> &'a str {
+    let abbreviates = review.len() >= 7
+        && review.len() <= head.len()
+        && head[..review.len()].eq_ignore_ascii_case(review);
+    if abbreviates { head } else { review }
+}
+
 /// At most this many closing references are read from one body.
 const MAX_CLOSING_REFERENCES: usize = 50;
 
@@ -89,6 +98,17 @@ pub fn closing_references(body: &str) -> Vec<(Option<(String, String)>, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_abbreviated_review_commit_is_the_head_it_starts() {
+        let head = "12bed172f74e3b63ba5a1eea79d68062644203cb";
+        assert_eq!(review_commit("12bed17", head), head);
+        assert_eq!(review_commit("12BED172F", head), head);
+        assert_eq!(review_commit(head, head), head);
+        assert_eq!(review_commit("12bed1", head), "12bed1");
+        assert_eq!(review_commit("abcdef0", head), "abcdef0");
+        assert_eq!(review_commit("", head), "");
+    }
 
     #[test]
     fn closing_references_follow_forgejos_keywords() {

@@ -28,10 +28,14 @@ pub struct PullRequestReviewComment {
     review: Arc<PullRequestReview>,
 }
 impl PullRequestReviewComment {
+    /// The review's commit in full.
+    fn commit_id(&self) -> &str {
+        crate::map::review_commit(&self.review.source.commit_id, &self.review.head_sha)
+    }
     /// Whether a push since the review moved the head. Forgejo's API doesn't say whether that push
     /// touched the commented line, so any later head makes the comment outdated.
     fn is_outdated(&self) -> bool {
-        self.review.source.commit_id != self.review.head_sha
+        self.commit_id() != self.review.head_sha
     }
     /// Forgejo lets the poster or a repository writer edit, delete or resolve a code comment.
     async fn viewer_can_change(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
@@ -103,14 +107,14 @@ impl PullRequestReviewComment {
         Some(Commit::head(
             &self.review.owner,
             &self.review.repo,
-            &self.review.source.commit_id,
+            self.commit_id(),
         ))
     }
     async fn original_commit(&self) -> Option<Commit> {
         Some(Commit::head(
             &self.review.owner,
             &self.review.repo,
-            &self.review.source.commit_id,
+            self.commit_id(),
         ))
     }
     async fn state(&self) -> PullRequestReviewCommentState {

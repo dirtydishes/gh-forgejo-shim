@@ -330,7 +330,7 @@ impl PullRequestReview {
         Some(Commit::head(
             &self.owner,
             &self.repo,
-            &self.source.commit_id,
+            crate::map::review_commit(&self.source.commit_id, &self.head_sha),
         ))
     }
     async fn comments(
