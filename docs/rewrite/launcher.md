@@ -226,12 +226,14 @@ remote and `gh repo create --push` the remote it adds, and a remote's push URL o
 `url.<base>.pushInsteadOf` can send that push to another host, as can an SSH host alias. So a
 forge-routed `pr create` (or `pr new`), launched or not, is refused before gh runs when a forge
 remote's push URL in the checkout names another host, an `insteadOf` or `pushInsteadOf` rule whose
-prefix overlaps one of the forge's URL forms rewrites to another host, or, unless gh's
-`git_protocol` for the forge is `https`, SSH resolves the forge's hostname to another host for a
-fork remote gh adds. A `repo create` (or `repo new`) that pushes, with `--push` or when it prompts
-(no argument and no flag), is refused outright: it pushes from a `--source` checkout the wrapper
-would have to read as gh does. Without `--push` it creates the repository, and git pushes after.
-The command is found as `pr` or `repo` followed anywhere by `create` or `new`. The trace names the portless
+prefix overlaps one of the forge's URL forms rewrites to another host, or, unless
+`gh config get git_protocol --host <forge>` answers `https`, SSH resolves `git@<forge>`, the
+remote gh adds for a fork, to another host. A `repo create` (or `repo new`) that pushes, with
+`--push` or when it prompts (no argument and no flag; a lone `--` counts as none), is refused
+outright: it pushes from a `--source` checkout the wrapper would have to read as gh does. Without
+`--push` it creates the repository, and git pushes after. The subcommand is the first word after
+`pr` or `repo` that is one of that group's subcommands, so `gh repo --source x create` is
+`create` and `gh pr view new` is `view`. The trace names the portless
 hostname gh reaches. For a forge entry with a port, that holds only when the call doesn't spell
 the port: gh keeps it for a full name (`-R forge.test:3443/o/r`, `GH_REPO`, `gh api`'s URL or
 `--hostname`) and drops it for a URL or a remote, so a call or `GH_REPO` naming `forge.test:3443`
