@@ -778,6 +778,9 @@ fn gh_uses_https(env: &HashMap<String, String>, host: &str) -> bool {
         match std::fs::read_to_string(dir.join(name)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Some(None),
             Err(_) => None,
+            // gh's YAML reader returns an alias's own name (`git_protocol: *ssh` is `ssh`),
+            // where serde_yaml returns the anchored value; a file using one counts as unread.
+            Ok(text) if text.lines().any(yaml_alias_value) => None,
             Ok(text) => match serde_yaml::from_str::<serde_yaml::Value>(&text) {
                 Ok(serde_yaml::Value::Mapping(mapping)) => Some(Some(mapping)),
                 Ok(serde_yaml::Value::Null) => Some(None),
@@ -812,6 +815,18 @@ fn gh_uses_https(env: &HashMap<String, String>, host: &str) -> bool {
     [launched, plain]
         .iter()
         .all(|protocol| protocol.as_deref().unwrap_or("https") == "https")
+}
+
+/// Whether a YAML line uses an alias as a value: `key: *name`, `- *name`, or a flow form such as
+/// `{key: *name}`. A false match only keeps the SSH check.
+fn yaml_alias_value(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("- *")
+        || line.match_indices(':').any(|(at, _)| {
+            line[at + 1..]
+                .trim_start_matches([' ', '\t'])
+                .starts_with('*')
+        })
 }
 
 /// gh 2.103.3's subcommands of `repo` and `pr`, with their aliases (`pkg/cmd/repo`, `pkg/cmd/pr`).
@@ -1470,6 +1485,18 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("cleanup");
         assert_eq!(decision.kind, RouteKind::Delegate);
         assert_eq!(decision.reason, "a command gh runs on its own");
+    }
+
+    #[test]
+    fn a_yaml_alias_value_is_seen() {
+        assert!(yaml_alias_value("git_protocol: *ssh"));
+        assert!(yaml_alias_value("    git_protocol:  *proto"));
+        assert!(yaml_alias_value("<<: *defaults"));
+        assert!(yaml_alias_value("- *item"));
+        assert!(yaml_alias_value("forge.test: {git_protocol: *ssh}"));
+        assert!(!yaml_alias_value("saved: &ssh https"));
+        assert!(!yaml_alias_value("git_protocol: https"));
+        assert!(!yaml_alias_value("    co: \"!git log && echo *\""));
     }
 
     #[test]
