@@ -556,9 +556,21 @@ fn a_stopped_sender_stays_stopped_when_reports_come_back_on() {
     fixture.run(&["gh", "--version"], &[]);
     std::thread::sleep(Duration::from_millis(500));
     fixture.run(&["gh", "--version"], &[("DO_NOT_TRACK", "1")]);
+    // Counts kept after the opt-out belong to the next report, whatever the stopped sender does.
+    fs::create_dir_all(fixture.state()).expect("state");
+    fs::write(
+        fixture.state().join("unsupported"),
+        "rest:repos.releases 7\n",
+    )
+    .expect("counts");
     fixture.run(&["gh", "--version"], &[]);
     std::thread::sleep(Duration::from_secs(7));
-    assert_eq!(fixture.reports(2, Duration::ZERO).len(), 1);
+    let reports = fixture.reports(2, Duration::ZERO);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0]["unsupported"],
+        serde_json::json!({"rest:repos.releases": 7})
+    );
 }
 
 /// A debug build that sends nothing still clears what was kept once the config turns reports off.
