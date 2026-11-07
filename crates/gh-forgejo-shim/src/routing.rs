@@ -736,16 +736,31 @@ fn push_goes_elsewhere(
         ));
     }
     if creates(routed, words, "pr") {
-        let elsewhere = crate::repo::push_leaves(host, cwd).or_else(|| {
-            (!gh_uses_https(env, host))
-                .then(|| crate::repo::ssh_push_leaves(host))
-                .flatten()
-        })?;
+        let ssh_command = git_ssh_command(env, cwd);
+        let elsewhere =
+            crate::repo::push_leaves(host, cwd, ssh_command.as_deref()).or_else(|| {
+                (!gh_uses_https(env, host))
+                    .then(|| crate::repo::ssh_push_leaves(host, ssh_command.as_deref()))
+                    .flatten()
+            })?;
         return Some(format!(
             "{elsewhere}, not {forge}, so `gh pr create` would push there; point the push at {forge}"
         ));
     }
     None
+}
+
+/// The SSH command git connects through instead of `ssh` on PATH, by the name that sets it:
+/// `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`. ssh on PATH doesn't see its configuration.
+fn git_ssh_command(env: &HashMap<String, String>, cwd: Option<&Path>) -> Option<String> {
+    ["GIT_SSH_COMMAND", "GIT_SSH"]
+        .into_iter()
+        .find(|name| env.get(*name).is_some_and(|value| !value.trim().is_empty()))
+        .map(str::to_string)
+        .or_else(|| {
+            crate::external::git_output(&["config", "--get", "core.sshCommand"], cwd)
+                .map(|_| "core.sshCommand".to_string())
+        })
 }
 
 /// Whether gh uses `https` for a remote it adds on the forge, read from the user's gh files as

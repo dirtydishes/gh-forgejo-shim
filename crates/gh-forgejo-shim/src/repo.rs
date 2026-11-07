@@ -634,16 +634,35 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
 /// `git remote -v` applies), or an `insteadOf` or `pushInsteadOf` rule that could rewrite a URL
 /// on the forge to another host. A rule counts when its prefix and one of the forge's URL forms
 /// start the same way, whatever owner or name follows (`https://forge/acme/`). A push URL or rule
-/// target gh can't read counts as elsewhere. With `ssh_remote`, gh may add an SSH remote, so SSH
-/// resolving `git@<forge>` to another hostname (`ssh -G`, as gh translates remotes) counts too. `None` when every push to the forge stays there.
-pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
+/// target gh can't read counts as elsewhere. An SSH push URL that `ssh -G` can't resolve counts
+/// as elsewhere when git connects through its own SSH command (`ssh_command`, such as
+/// `GIT_SSH_COMMAND`), whose configuration ssh on PATH wouldn't see; without either, git can't
+/// push over SSH at all. `None` when every push to the forge stays there.
+pub(crate) fn push_leaves(
+    forge: &str,
+    cwd: Option<&Path>,
+    ssh_command: Option<&str>,
+) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
     let mut ssh = SshHosts::default();
-    let mut host_of = |raw: &str| {
+    let mut host_of = |raw: &str, push: bool| {
         let url = GitUrl::parse(raw)?;
         // SSH resolves the push's own `user@host`, which a `Match user` rule can send elsewhere.
         let host = if url.scheme == "ssh" {
-            ssh.resolve(&ssh_user_host(raw).unwrap_or(url.host))
+            let target = ssh_user_host(raw).unwrap_or(url.host);
+            match (ssh.try_resolve(&target), ssh_command) {
+                (Some(resolved), _) => resolved,
+                (None, Some(command)) if push => {
+                    return Some(format!(
+                        "an SSH host it can't resolve (git connects through {command}, and ssh \
+                         isn't on PATH)"
+                    ));
+                }
+                (None, _) => target
+                    .rsplit_once('@')
+                    .map_or(target.as_str(), |(_, host)| host)
+                    .to_string(),
+            }
         } else {
             url.host
         };
@@ -674,8 +693,8 @@ pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
     for (name, url) in push {
         let on_forge = fetch
             .get(&name)
-            .is_some_and(|fetch| host_of(fetch).as_deref() == Some(hostname.as_str()));
-        let host = host_of(&url);
+            .is_some_and(|fetch| host_of(fetch, false).as_deref() == Some(hostname.as_str()));
+        let host = host_of(&url, true);
         if on_forge && host.as_deref() != Some(hostname.as_str()) {
             return Some(format!("remote {name} pushes to {}", elsewhere(host)));
         }
@@ -708,7 +727,7 @@ pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
         let overlaps = forms
             .iter()
             .any(|form| form.starts_with(&prefix) || prefix.starts_with(form.as_str()));
-        let host = host_of(base);
+        let host = host_of(base, true);
         if overlaps && host.as_deref() != Some(hostname.as_str()) {
             return Some(format!(
                 "git rewrites URLs on {hostname} to {}",
@@ -734,11 +753,23 @@ fn ssh_user_host(raw: &str) -> Option<String> {
 /// Where SSH would take a remote gh adds on `forge` with its SSH protocol, when that isn't the
 /// forge: gh's SSH remote is `git@<host>:<owner>/<repo>.git`, so SSH resolves `git@<host>`
 /// (`ssh -G`, as gh translates remotes), which a `Match user git` rule can change.
-pub(crate) fn ssh_push_leaves(forge: &str) -> Option<String> {
+/// When ssh can't resolve it and git connects through its own SSH command (`ssh_command`), that
+/// command's configuration decides, so it counts as elsewhere; without either, git can't push
+/// over SSH at all.
+pub(crate) fn ssh_push_leaves(forge: &str, ssh_command: Option<&str>) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
-    let resolved =
-        gh_hostname(&SshHosts::default().resolve(&format!("git@{hostname}"))).to_ascii_lowercase();
-    (resolved != hostname).then(|| format!("ssh resolves git@{hostname} to {resolved}"))
+    match SshHosts::default().try_resolve(&format!("git@{hostname}")) {
+        Some(resolved) => {
+            let resolved = gh_hostname(&resolved).to_ascii_lowercase();
+            (resolved != hostname).then(|| format!("ssh resolves git@{hostname} to {resolved}"))
+        }
+        None => ssh_command.map(|command| {
+            format!(
+                "git connects to git@{hostname} through {command}, which gh-forgejo-shim can't \
+                 resolve without ssh on PATH"
+            )
+        }),
+    }
 }
 
 fn remote_rank(name: &str) -> u8 {
@@ -938,11 +969,13 @@ fn is_possible_protocol(value: &str) -> bool {
 /// the host as it was.
 #[derive(Default)]
 struct SshHosts {
-    resolved: HashMap<String, String>,
+    resolved: HashMap<String, Option<String>>,
 }
 
 impl SshHosts {
-    fn resolve(&mut self, host: &str) -> String {
+    /// The hostname `ssh -G` resolves `host` (or `user@host`) to, or `None` when ssh can't run
+    /// or answers nothing.
+    fn try_resolve(&mut self, host: &str) -> Option<String> {
         if let Some(resolved) = self.resolved.get(&host.to_ascii_lowercase()) {
             return resolved.clone();
         }
@@ -961,20 +994,26 @@ impl SshHosts {
                     .map(str::to_string)
             })
             .filter(|resolved| !resolved.is_empty())
-            // Without ssh, the hostname as given: `ssh -G` prints none with a user.
-            .unwrap_or_else(|| {
-                host.rsplit_once('@')
-                    .map_or(host, |(_, host)| host)
-                    .to_string()
+            .map(|resolved| {
+                if resolved.eq_ignore_ascii_case("ssh.github.com") {
+                    GITHUB.to_string()
+                } else {
+                    resolved
+                }
             });
-        let resolved = if resolved.eq_ignore_ascii_case("ssh.github.com") {
-            GITHUB.to_string()
-        } else {
-            resolved
-        };
         self.resolved
             .insert(host.to_ascii_lowercase(), resolved.clone());
         resolved
+    }
+
+    /// As [`SshHosts::try_resolve`], or without ssh the hostname as given: `ssh -G` prints none
+    /// with a user.
+    fn resolve(&mut self, host: &str) -> String {
+        self.try_resolve(host).unwrap_or_else(|| {
+            host.rsplit_once('@')
+                .map_or(host, |(_, host)| host)
+                .to_string()
+        })
     }
 }
 
