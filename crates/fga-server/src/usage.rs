@@ -327,6 +327,12 @@ pub fn is_week(week: &str) -> bool {
 pub fn spawn_server_reporter(forgejo_url: url::Url) {
     let get = |name: &str| std::env::var(name).ok();
     if off_by_env(get, "FGA_TELEMETRY").is_some() {
+        // Off: nothing kept for reports stays.
+        if let Some(dir) = server_state_path(get) {
+            for name in ["telemetry-first-week", "telemetry-sent"] {
+                let _ = std::fs::remove_file(dir.join(name));
+            }
+        }
         return;
     }
     let Some(endpoint) = endpoint(get("FGA_TELEMETRY_URL")) else {
@@ -425,16 +431,21 @@ fn below(base: &url::Url, segments: &[&str]) -> Option<url::Url> {
 /// `/var/lib/fga-server`), else `$XDG_STATE_HOME/fga-server` or `~/.local/state/fga-server`,
 /// whichever can be created. `None` when none can.
 fn server_state_dir(get: impl Fn(&str) -> Option<String>) -> Option<std::path::PathBuf> {
+    let dir = server_state_path(get)?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// [`server_state_dir`]'s path, created or not.
+fn server_state_path(get: impl Fn(&str) -> Option<String>) -> Option<std::path::PathBuf> {
     let absolute = |value: Option<String>| {
         value
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_absolute())
     };
-    let dir = absolute(get("FGA_STATE_DIR"))
+    absolute(get("FGA_STATE_DIR"))
         .or_else(|| absolute(get("XDG_STATE_HOME")).map(|base| base.join("fga-server")))
-        .or_else(|| absolute(get("HOME")).map(|home| home.join(".local/state/fga-server")))?;
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
+        .or_else(|| absolute(get("HOME")).map(|home| home.join(".local/state/fga-server")))
 }
 
 /// The week of the first report, read from `state` or written there now.
