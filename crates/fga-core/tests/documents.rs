@@ -730,3 +730,98 @@ async fn only_a_missing_scope_refusal_reads_as_empty() {
         );
     }
 }
+
+/// A forge whose PR and its 24 comments each hold a 60 KiB Markdown body.
+fn forge_with_long_bodies() -> Router {
+    let body = "# Heading\n\nsome *text*\n\n".repeat(60 * 1024 / 25);
+    let mut long_pull = pull("other", "open");
+    long_pull["body"] = json!(body);
+    let comments: Vec<Value> = (1..=24)
+        .map(|id| {
+            json!({"id":id,"user":user("other"),"body":body,"created_at":"2026-11-01T00:00:00Z",
+                "html_url":format!("https://forge.test/e2e/oracle/pulls/1#issuecomment-{id}")})
+        })
+        .collect();
+    forge_with(true, long_pull, false).layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let comments = comments.clone();
+            async move {
+                if request.uri().path() == "/api/v1/repos/e2e/oracle/issues/1/comments" {
+                    Json(json!(comments)).into_response()
+                } else {
+                    next.run(request).await
+                }
+            }
+        },
+    ))
+}
+
+/// The forge ChatGPT's documents run against: a writer's open PR with a merge the viewer
+/// scheduled, a comment thread, reviews and a commit.
+fn chatgpt_forge() -> Router {
+    forge_with(true, pull("other", "open"), true).route(
+        "/api/v1/repos/e2e/oracle/pulls/1/commits",
+        get(|| async {
+            let author = json!({"name":"T","email":"t@example.invalid","date":"2026-11-01T00:00:00Z"});
+            Json(json!([{"sha":"abc","author":user("e2e"),"commit":{"message":"m","author":author,"committer":author}}]))
+        }),
+    )
+}
+
+/// A document's bodies share one render budget: past it, bodies come back escaped instead of
+/// rendered, so a long timeline can't make one request expensive.
+#[tokio::test]
+async fn bodies_past_the_request_render_budget_come_back_escaped() {
+    let pull = query(
+        forge_with_long_bodies(),
+        r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
+            bodyHTML comments(first:30){nodes{bodyHTML}}}}}"#,
+    )
+    .await;
+    let mut bodies = vec![pull["bodyHTML"].as_str().unwrap().to_owned()];
+    for comment in pull["comments"]["nodes"].as_array().unwrap() {
+        bodies.push(comment["bodyHTML"].as_str().unwrap().to_owned());
+    }
+    let rendered = bodies
+        .iter()
+        .filter(|html| html.starts_with("<h1>Heading</h1>"))
+        .count();
+    let escaped = bodies
+        .iter()
+        .filter(|html| html.starts_with("<p># Heading</p>"))
+        .count();
+    assert_eq!(rendered + escaped, 25, "every body is one or the other");
+    // The budget is 1 MiB; each body here draws about 220 KiB: its length, 4 bytes for each of
+    // its nodes, and its rendered HTML.
+    assert!((3..=6).contains(&rendered), "{rendered} rendered");
+}
+
+/// Rendering happens in the gateway, so ChatGPT's PR documents make the same Forgejo requests as
+/// when bodies were only escaped.
+#[tokio::test]
+async fn rendering_bodies_makes_no_extra_upstream_requests() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut counts = Vec::new();
+    for n in [1, 4] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let forge = chatgpt_forge().layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    next.run(request).await
+                }
+            },
+        ));
+        let (document, variables) = chatgpt_document(n);
+        let response = run_with(forge, &document, variables).await;
+        assert!(response.errors.is_empty(), "doc{n}: {:?}", response.errors);
+        counts.push(requests.load(Ordering::Relaxed));
+    }
+    // doc1 (body) and doc4 (the timeline), counted on the escaping gateway before rendering.
+    assert_eq!(counts, [3, 8]);
+}

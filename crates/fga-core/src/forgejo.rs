@@ -96,6 +96,8 @@ pub struct Session {
     deadline: tokio::time::Instant,
     /// Bytes this request may still read from Forgejo, shared by its memoized and concurrent reads.
     budget: Arc<AtomicUsize>,
+    /// Markdown work this request may still do (see [`Session::body_html`]).
+    render_budget: Arc<AtomicUsize>,
 }
 
 /// Paged reads ask Forgejo for this many items per page.
@@ -106,6 +108,11 @@ pub(crate) const MAX_PAGES: usize = 200;
 /// incoming request reads; the messages in [`Error::TooLarge`] name both.
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+/// Markdown work one request does, shared by every `bodyHTML` it serves: each body's length and
+/// parsed nodes, and the HTML rendered from it (see [`crate::map::body_html_within`]). A document
+/// with more, such as a long timeline, shows the rest as escaped paragraphs, so its cost stays
+/// bounded however many bodies it holds.
+const MAX_REQUEST_RENDERED_BYTES: usize = 1024 * 1024;
 
 /// Map Forgejo's error statuses onto the gateway's errors; success passes through.
 fn ok(reply: Reply) -> Result<Reply, Error> {
@@ -251,6 +258,7 @@ impl Forgejo {
             memo: Arc::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
             budget,
+            render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
         })
     }
 
@@ -315,6 +323,12 @@ impl Forgejo {
 }
 
 impl Session {
+    /// A body as `bodyHTML`, rendered while this request's render budget lasts and escaped after,
+    /// keeping images only from `forge`, the forge's public web URL.
+    pub fn body_html(&self, body: &str, forge: Option<&Url>) -> String {
+        crate::map::body_html_within(body, forge, &self.render_budget)
+    }
+
     /// [`Forgejo::send`] under this request's credentials and shared deadline.
     async fn send<B: serde::Serialize + ?Sized>(
         &self,
@@ -717,6 +731,7 @@ mod tests {
             memo: Memo::default(),
             deadline: tokio::time::Instant::now() + Duration::from_millis(50),
             budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
+            render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
         };
         let result = session.get::<serde_json::Value>(&["slow"], &[]).await;
         assert!(matches!(result, Err(Error::Timeout)), "{result:?}");
@@ -749,6 +764,7 @@ mod tests {
             memo: Memo::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(2),
             budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
+            render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
         };
         let result = session.text(&["big.diff"], &[]).await;
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
@@ -788,6 +804,7 @@ mod tests {
             memo: Memo::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
             budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
+            render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
         };
         let result = session.text(&["big.diff"], &[]).await;
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
@@ -1045,6 +1062,7 @@ mod tests {
             memo: Memo::default(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
             budget: Arc::new(AtomicUsize::new(20)),
+            render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
         };
         let other = session.clone();
         let (a, b) = tokio::join!(

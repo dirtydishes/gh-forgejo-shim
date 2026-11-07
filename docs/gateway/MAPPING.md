@@ -259,18 +259,43 @@ This replaces DESIGN.md's earlier "emit what Forgejo actually serves" rule for P
 
 ## 9. Bodies (`bodyHTML`)
 
-**Decision (2026-11-02):** `bodyHTML` on pull requests, issue comments and review comments is the body
-as escaped paragraphs: the source text, HTML-escaped, with blank lines as paragraph breaks and single
-newlines as `<br>`. Markdown isn't rendered.
+`bodyHTML` on pull requests, issue comments and review comments is the body rendered as
+GitHub-flavoured Markdown, then sanitized, as GitHub serves it. Rendering happens in the gateway
+(`crates/fga-core/src/map/markdown.rs`), so it costs no Forgejo request.
 
-**Limitation:** ChatGPT's PR pane shows Markdown as written. A heading reads `## Heading`, and links
-and emphasis stay as source text.
+- **Rendering:** comrak, with GFM's tables, task lists, strikethrough, autolinks and fenced code
+  (`<pre lang="…">`). A single newline is a line break, as in GitHub comments. Raw HTML in a body
+  passes to the sanitizer, which decides what stays.
+- **Sanitizing:** ammonia, with an allowlist close to GitHub's: headings, paragraphs, lists, tables,
+  links, images, code, quotes, `details`/`summary`, and inline tags such as `kbd`, `sub` and `sup`.
+  No `script`, `style`, `iframe`, `object`, `embed`, `form`, `base` or `meta`; no event handlers,
+  `style`, `class`, `id`, `name` or `target` attributes; no comments. Links keep only `http`, `https`,
+  `mailto` and relative URLs, and get `rel="nofollow noopener noreferrer"`. Images keep their
+  source only when it is written out as `http://` or `https://` and has the forge's own origin
+  (`FGA_PUBLIC_URL`'s scheme, host and port), in its parsed form; any other image keeps its `alt`
+  and loses its `src`. An image loads by itself as soon as the client shows the body, with the
+  viewer's cookies for its host, and the gateway can't know the client's own origin: a source
+  elsewhere could be the client's own API, a service on the viewer's network or a tracker.
+  `https:/path` and the like resolve against the client's page, so they don't count as the forge's.
+  Without a public URL, no image keeps its source. Every `<input>` becomes a checkbox, as a task
+  list item's is.
+- **Limits:** the sanitizer's work grows with how deeply elements nest, so a body is shown as escaped
+  paragraphs instead when it is over 64 KiB or its Markdown nests more than 64 levels deep, its raw
+  HTML is shown as text when it holds more than 256 tags, and its tables are read as text when its
+  pipes and lines could make more than 20,000 cells (short rows are filled out to the header's
+  width). Rendered HTML over 256 KiB is shown as escaped paragraphs, because the sanitizer's time
+  grows faster than its input in some shapes. One request has a 1 MiB budget for this work: each
+  body it parses draws its length plus 4 bytes for every node of its parsed tree (a short sparse
+  table parses into thousands of cells), and then the size of the HTML rendered from it, whether or
+  not that HTML is shown. The body that runs the budget out comes back as escaped paragraphs, and
+  so does every body after it, without being parsed. A body over 64 KiB draws nothing, since it
+  isn't parsed.
 
-**Why:** Forgejo's API returns no rendered HTML. Rendering through Forgejo's markdown endpoint costs one
-request per body, and the timeline document can carry about 200 bodies. Rendering inside the gateway
-would pass raw HTML from a PR body to clients that trust `bodyHTML` as sanitized, as GitHub's is.
-Escaping costs nothing and can't inject markup. Optional sanitized rendering is
-`gh-forgejo-shim-xml`, if the pane turns out to need it.
+**Differences from GitHub:** `#123` and `@user` aren't linked, headings get no anchors, footnotes
+and emoji shortcodes (`:tada:`) aren't rendered, and `cite` attributes are dropped. Images hosted
+anywhere but the forge don't show, where GitHub would fetch them through its image proxy. A
+relative image source, such as a Forgejo attachment's `/attachments/…`, is dropped too, because the
+client would resolve it against its own origin.
 
 ## 10. Head branch (`headRefName`, `headRepository`)
 

@@ -2,6 +2,11 @@ use super::*;
 use crate::forgejo::{CommitStatus, CommitStatusState as S, Protection, PullRequest, Review};
 use serde_json::json;
 
+/// `bodyHTML` as a forge at `https://forge.example` serves it.
+fn body_html(body: &str) -> String {
+    super::body_html(body, Some(&"https://forge.example".parse().unwrap()))
+}
+
 fn pr() -> PullRequest {
     serde_json::from_value(json!({"number":1,"title":"scenario","state":"open","merged":false,"draft":false,"mergeable":true,"html_url":"https://forge.test/o/r/pulls/1","head":{"label":"s/pass","ref":"s/pass","sha":"abc","repo":null},"base":{"label":"main","ref":"main","sha":"def","repo":null},"user":{"id":1,"login":"o","avatar_url":""},"merged_at":null})).unwrap()
 }
@@ -816,13 +821,189 @@ fn pull_web_urls_take_githubs_layout() {
     );
 }
 
-/// Bodies are escaped, never rendered: a client may trust bodyHTML as sanitized, as GitHub's is.
+/// Bodies render as GitHub-flavoured Markdown, as GitHub's bodyHTML does.
 #[test]
-fn body_html_escapes_markup_and_keeps_paragraphs() {
-    assert_eq!(body_html(""), "");
-    assert_eq!(
-        body_html("a <script>x</script>\r\n\r\nc & \"d\"\ne"),
-        "<p>a &lt;script&gt;x&lt;/script&gt;</p>\n<p>c &amp; &quot;d&quot;<br>\ne</p>"
+fn body_html_renders_github_flavoured_markdown() {
+    let cases = [
+        ("", ""),
+        ("  \r\n ", ""),
+        ("line one\r\nline two", "<p>line one<br>\nline two</p>"),
+        (
+            "# Title\n\n- a\n- b",
+            "<h1>Title</h1>\n<ul>\n<li>a</li>\n<li>b</li>\n</ul>",
+        ),
+        (
+            "| a | b |\n|---|:-:|\n| 1 | 2 |",
+            "<table>\n<thead>\n<tr>\n<th>a</th>\n<th align=\"center\">b</th>\n</tr>\n</thead>\n\
+             <tbody>\n<tr>\n<td>1</td>\n<td align=\"center\">2</td>\n</tr>\n</tbody>\n</table>",
+        ),
+        (
+            "- [x] done\n- [ ] todo",
+            "<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> done</li>\n\
+             <li><input disabled=\"\" type=\"checkbox\"> todo</li>\n</ul>",
+        ),
+        ("~~gone~~", "<p><del>gone</del></p>"),
+        (
+            "see https://example.com/x and www.example.com",
+            "<p>see <a href=\"https://example.com/x\" rel=\"nofollow noopener noreferrer\">\
+             https://example.com/x</a> and <a href=\"http://www.example.com\" \
+             rel=\"nofollow noopener noreferrer\">www.example.com</a></p>",
+        ),
+        (
+            "```rust\nfn main() {}\n```",
+            "<pre lang=\"rust\"><code>fn main() {}\n</code></pre>",
+        ),
+        (
+            "<details><summary>s</summary>body</details>",
+            "<details><summary>s</summary>body</details>",
+        ),
+        ("a & \"b\" <c>", "<p>a &amp; \"b\" </p>"),
+    ];
+    for (body, html) in cases {
+        assert_eq!(body_html(body), html, "{body:?}");
+    }
+}
+
+/// Clients trust bodyHTML as sanitized, so markup that could run script, restyle the page, submit
+/// a form or load a non-HTTP resource never comes through, whatever the body holds.
+#[test]
+fn body_html_removes_hostile_markup() {
+    let rel = "rel=\"nofollow noopener noreferrer\"";
+    let cases = [
+        ("a <script>alert(1)</script> b", "<p>a  b</p>".to_owned()),
+        ("<img src=x onerror=alert(1)>", "<img>".to_owned()),
+        ("<img src=\"/attachments/a.png\">", "<img>".to_owned()),
+        (
+            "![i](javascript:alert(1))",
+            "<p><img alt=\"i\"></p>".to_owned(),
+        ),
+        (
+            "<img src=\"https://forge.example/a.png\" alt=a width=10>",
+            "<img src=\"https://forge.example/a.png\" alt=\"a\" width=\"10\">".to_owned(),
+        ),
+        ("[x](javascript:alert(1))", format!("<p><a {rel}>x</a></p>")),
+        ("[x](JaVaScRiPt:alert(1))", format!("<p><a {rel}>x</a></p>")),
+        (
+            "[x](data:text/html;base64,PHNjcmlwdD4=)",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"vbscript:x\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"&#106;avascript:alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"java&#x09;script:alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\" \u{1}javascript:alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<a href=\"javascript&colon;alert(1)\">x</a>",
+            format!("<p><a {rel}>x</a></p>"),
+        ),
+        (
+            "<blockquote cite=\"javascript:alert(1)\">q</blockquote>",
+            "<blockquote>q</blockquote>".to_owned(),
+        ),
+        (
+            "[ok](https://example.com) [mail](mailto:a@example.com) [rel](../x)",
+            format!(
+                "<p><a href=\"https://example.com\" {rel}>ok</a> \
+                 <a href=\"mailto:a@example.com\" {rel}>mail</a> <a href=\"../x\" {rel}>rel</a></p>"
+            ),
+        ),
+        (
+            "<a href=\"https://e.com\" onclick=\"x()\" style=\"color:red\" target=_blank id=x class=c>l</a>",
+            format!("<p><a href=\"https://e.com\" {rel}>l</a></p>"),
+        ),
+        (
+            "<div><b>unclosed <i>tags",
+            "<div><b>unclosed <i>tags\n</i></b></div>".to_owned(),
+        ),
+        (
+            "<!-- <script>alert(1)</script> --> after",
+            "after".to_owned(),
+        ),
+        ("<!-- <a href=x>hidden", "".to_owned()),
+        (
+            "<input type=text value=x>",
+            "<input type=\"checkbox\">".to_owned(),
+        ),
+        ("<form action=/x><button>b</button></form>", "b".to_owned()),
+        (
+            "<iframe src=https://e.com></iframe><object data=x></object><embed src=x><style>p{}</style>",
+            "".to_owned(),
+        ),
+        (
+            "<svg><script>alert(1)</script></svg><math><mi>x</mi></math>",
+            "<p></p>".to_owned(),
+        ),
+        (
+            "<p style=\"background:url(x)\">s</p>",
+            "<p>s</p>".to_owned(),
+        ),
+        (
+            "<base href=https://evil.example><meta http-equiv=refresh content=0>",
+            "".to_owned(),
+        ),
+    ];
+    for (body, html) in cases {
+        assert_eq!(body_html(body), html, "{body:?}");
+    }
+}
+
+/// A body built to make the renderer or the sanitizer slow, or one too long to render, comes back
+/// quickly, as escaped paragraphs or with its raw HTML shown as text.
+#[test]
+fn body_html_stays_fast_on_pathological_bodies() {
+    let deep_quotes = ">".repeat(60_000);
+    // 100 levels in under 64 KiB, so the depth guard, not the size cap, decides.
+    let deep_lists: String = (0..100)
+        .map(|i| format!("{}- x\n", "  ".repeat(i)))
+        .collect();
+    let ampersands = "&".repeat(65_000);
+    let deep_html = "<div>".repeat(12_000);
+    let raw_then_table = "<div>".repeat(200) + "\n\n|a|b|\n|-|-|\n" + &"|x|y|\n".repeat(9_000);
+    let huge = "word ".repeat(1_000_000);
+    for body in [
+        &deep_quotes,
+        &deep_lists,
+        &deep_html,
+        &raw_then_table,
+        &ampersands,
+        &huge,
+    ] {
+        let started = std::time::Instant::now();
+        let html = body_html(body);
+        // Generous, so a slow CI machine passes; the unguarded cases took seconds to minutes.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{} bytes took {:?}",
+            body.len(),
+            started.elapsed()
+        );
+        assert!(!html.contains("<script"), "{html:.80}");
+    }
+    // Past the guards the body still reads, escaped.
+    assert!(body_html(&deep_quotes).starts_with("<p>&gt;&gt;&gt;"));
+    assert!(
+        body_html(&deep_lists).starts_with("<p>- x"),
+        "{:.80}",
+        body_html(&deep_lists)
+    );
+    assert!(body_html(&ampersands).starts_with("<p>&amp;&amp;"));
+    assert!(body_html(&huge).starts_with("<p>word word"));
+    // Too much raw HTML: shown as text.
+    assert!(
+        body_html(&deep_html).starts_with("&lt;div&gt;&lt;div&gt;"),
+        "{:.80}",
+        body_html(&deep_html)
     );
 }
 
@@ -906,4 +1087,124 @@ fn checks_keep_context_order_whatever_forgejo_sends() {
     let expected = ["ci / check (push)", "ci / lint (push)"];
     assert_eq!(names(&[lint.clone(), check.clone()]), expected);
     assert_eq!(names(&[check, lint]), expected);
+}
+
+/// An image loads by itself in the viewer's client, so only the forge's own images stay: an image
+/// anywhere else could be the client's own API, a service on the viewer's network or a tracker. A
+/// scheme without `//` resolves against the page showing it. Kept sources come back as parsed.
+#[test]
+fn body_html_images_need_an_absolute_http_url() {
+    for src in [
+        "https:/api/logout",
+        "https:api/logout",
+        "https:\\\\api\\\\logout",
+        "https&#58;/api/logout",
+        "https:&#x2F;api/logout",
+        "http:/x",
+        "//evil.example/x",
+        "\\\\evil.example\\x",
+        "javascript:alert(1)",
+        "data:image/png;base64,AAAA",
+        "http://localhost:8080/admin",
+        "http://app.localhost/x",
+        "http://printer.local/x",
+        "http://127.0.0.1/x",
+        "http://10.0.0.1/x",
+        "http://192.168.1.1/x",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/x",
+        "http://[fd00::1]/x",
+        "http://[::ffff:127.0.0.1]/x",
+        "http://0.0.0.0/x",
+        // Another origin, even an ordinary one: the client's own API, or a tracker.
+        "https://chatgpt.com/backend-api/me",
+        "https://example.com/i.png",
+        "https:///x",
+        "http://forge.example/i.png",
+        "https://forge.example:8443/i.png",
+        "https://forge.example.evil.example/i.png",
+    ] {
+        assert_eq!(body_html(&format!("<img src=\"{src}\">")), "<img>", "{src}");
+    }
+    // The forge's own images stay, in parsed form.
+    assert_eq!(
+        body_html("<img src=\" HTTPS://Forge.Example/a b.png\">"),
+        "<img src=\"https://forge.example/a%20b.png\">"
+    );
+    assert_eq!(
+        body_html("![a](https://forge.example/attachments/1)"),
+        "<p><img src=\"https://forge.example/attachments/1\" alt=\"a\"></p>"
+    );
+    // Without a forge, no image stays.
+    assert_eq!(
+        super::body_html("![a](https://forge.example/i.png)", None),
+        "<p><img alt=\"a\"></p>"
+    );
+}
+
+/// A table's short rows are filled out to the header's width, so a few kilobytes of pipes could
+/// ask for millions of cells. Past the bound, the pipes read as text, and the body stays small and
+/// quick.
+#[test]
+fn body_html_bounds_sparse_tables() {
+    let table = format!(
+        "{}\n{}|\n{}\n",
+        "|".repeat(708),
+        "|-".repeat(707),
+        "x\n".repeat(708)
+    );
+    for body in [table.repeat(2), table.repeat(9)] {
+        let started = std::time::Instant::now();
+        let html = body_html(&body);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(html.len() < 4 * body.len(), "{} bytes of HTML", html.len());
+        assert!(!html.contains("<table>"));
+    }
+    // An ordinary table still renders.
+    let ordinary = "|a|b|c|\n|-|-|-|\n".to_owned() + &"|1|2|3|\n".repeat(500);
+    assert!(body_html(&ordinary).starts_with("<table>"));
+}
+
+/// A table under the cell bound can still be a hundred times larger as HTML than as Markdown, and a
+/// document can hold many of them. Once the shared budget runs out, the rest come back escaped
+/// without being parsed. A body too large to show, or too deep once parsed, still uses up its
+/// share.
+#[test]
+fn body_html_budget_bounds_repeated_sparse_tables() {
+    let sparse = |delimiter: &str| {
+        format!(
+            "{}\n{}|\n{}",
+            "|".repeat(98),
+            delimiter.repeat(97),
+            "x\n".repeat(195)
+        )
+    };
+    let forge = "https://forge.example".parse().unwrap();
+    // The first renders to about 190 KB of HTML; centred columns, to about 480 KB, too much to show.
+    // The last two parse into tens of thousands of nodes and are then too deep to render. Escaping
+    // costs only in proportion to the bytes Forgejo sent, so the longest body is repeated less.
+    for (body, shown, calls) in [
+        (sparse("|-"), 1..=6, 1000),
+        (sparse("|:-:"), 0..=0, 1000),
+        (sparse("|:-:") + "\n" + &">".repeat(65), 0..=0, 1000),
+        (">".repeat(64 * 1024), 0..=0, 100),
+    ] {
+        let budget = std::sync::atomic::AtomicUsize::new(1024 * 1024);
+        let started = std::time::Instant::now();
+        let rendered = (0..calls)
+            .map(|_| super::body_html_within(&body, Some(&forge), &budget))
+            .filter(|html| html.starts_with("<table>"))
+            .count();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(shown.contains(&rendered), "{rendered} tables rendered");
+        assert_eq!(budget.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 }
