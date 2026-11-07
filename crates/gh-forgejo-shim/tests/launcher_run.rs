@@ -1287,7 +1287,8 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
 /// `gh pr create` may add a fork remote with gh's `git_protocol` for the forge. When gh says
 /// that isn't `https`, SSH's destination for `git@<forge>`, the remote gh writes, counts too: a
 /// `Match user git` rule can send it elsewhere while the bare host resolves to the forge
-/// (parallax r4#2), and gh's answer covers every place the protocol can be set (r4#3).
+/// (parallax r4#2), and gh's answer covers every place the protocol can be set (r4#3). A push URL
+/// that's already SSH resolves with its own user too (r5#1).
 #[test]
 fn a_fork_remote_s_ssh_destination_counts_unless_gh_uses_https() {
     let _serial = serial();
@@ -1345,6 +1346,32 @@ printf 'GH_HOST=%s\n' "${{GH_HOST-unset}}" > "$REPORT""#
             assert_eq!(reported(&fixture.report(), "GH_HOST"), "forge.test");
         }
     }
+    // An existing SSH push URL resolves with its own user, whatever the protocol (r5#1).
+    let status = Command::new("git")
+        .args(["config", "remote.origin.pushurl", "git@forge.test:o/r.git"])
+        .current_dir(&fixture.dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", &fixture.home)
+        .status()
+        .expect("git");
+    assert!(status.success());
+    let gh = fixture.fake_gh(
+        r#"if [ "$1" = config ]; then echo https; exit 0; fi
+printf 'GH_HOST=%s\n' "${GH_HOST-unset}" > "$REPORT""#,
+    );
+    let _ = fs::remove_file(fixture.dir.join("report"));
+    let output = fixture
+        .command(&gh, &pr_create)
+        .env("PATH", &path)
+        .output()
+        .expect("run wrapper");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("remote origin pushes to github.com"),
+        "{output:?}"
+    );
+    assert_eq!(fixture.report(), "", "gh never ran");
 }
 
 #[test]
