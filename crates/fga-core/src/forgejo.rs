@@ -96,7 +96,7 @@ pub struct Session {
     deadline: tokio::time::Instant,
     /// Bytes this request may still read from Forgejo, shared by its memoized and concurrent reads.
     budget: Arc<AtomicUsize>,
-    /// Rendered HTML this request may still sanitize (see [`Session::body_html`]).
+    /// Markdown work this request may still do (see [`Session::body_html`]).
     render_budget: Arc<AtomicUsize>,
 }
 
@@ -108,9 +108,10 @@ pub(crate) const MAX_PAGES: usize = 200;
 /// incoming request reads; the messages in [`Error::TooLarge`] name both.
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
-/// Rendered HTML one request sanitizes, shared by every `bodyHTML` it serves. A document with
-/// more, such as a long timeline, shows the rest as escaped paragraphs, so its cost stays bounded
-/// however many bodies it holds.
+/// Markdown work one request does, shared by every `bodyHTML` it serves: each body's length and
+/// parsed nodes, and the HTML rendered from it (see [`crate::map::body_html_within`]). A document
+/// with more, such as a long timeline, shows the rest as escaped paragraphs, so its cost stays
+/// bounded however many bodies it holds.
 const MAX_REQUEST_RENDERED_BYTES: usize = 1024 * 1024;
 
 /// Map Forgejo's error statuses onto the gateway's errors; success passes through.

@@ -38,6 +38,12 @@ const MAX_TABLE_CELLS: usize = 20_000;
 /// `&amp;`), so the cap is on what it reads, not on the body.
 const MAX_RENDERED_HTML: usize = 256 * 1024;
 
+/// What one node of a parsed body draws from the render budget, in bytes, for building and walking
+/// it. A short body can parse into tens of thousands of nodes (a sparse table's filled-out cells)
+/// and be escaped afterwards, so parsing is charged as well as rendering. A node costs about as
+/// much time as sanitizing two bytes of HTML; this charges twice that.
+const NODE_COST: usize = 4;
+
 /// Tags GitHub keeps in rendered Markdown, apart from the ones it reserves for its own features.
 const TAGS: &[&str] = &[
     "a",
@@ -189,10 +195,10 @@ pub fn body_html(body: &str, forge: Option<&url::Url>) -> String {
     body_html_within(body, forge, &AtomicUsize::new(usize::MAX))
 }
 
-/// [`body_html`], drawing the rendered HTML's size from `budget`. Every rendered body draws on it,
-/// shown or not; the body that empties it is escaped, and an empty budget escapes a body before
-/// parsing it, so once it runs out the rest of a document costs almost nothing. A body escaped
-/// before rendering draws nothing.
+/// [`body_html`], drawing its work from `budget`: once parsed, a body draws its length and
+/// [`NODE_COST`] per node, and once rendered, its HTML's length, shown or not. The body that empties
+/// the budget is escaped, and an empty budget escapes a body before parsing it, so once it runs out
+/// the rest of a document costs almost nothing. A body too long to parse draws nothing.
 pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsize) -> String {
     let body = body.replace('\r', "");
     if body.trim().is_empty() {
@@ -207,8 +213,9 @@ pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsi
         options.extension.table = false;
     }
     let root = parse_document(&arena, &body, &options);
-    let (depth, raw_tags) = shape(root);
-    if depth > MAX_DEPTH {
+    let (depth, raw_tags, nodes) = shape(root);
+    let parsed = body.len().saturating_add(nodes.saturating_mul(NODE_COST));
+    if !draw(budget, parsed) || depth > MAX_DEPTH {
         return escaped_paragraphs(&body);
     }
     if raw_tags > MAX_RAW_TAGS {
@@ -218,12 +225,7 @@ pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsi
     let mut rendered = String::new();
     let failed = format_html(root, &options, &mut rendered).is_err();
     // The work is done whether or not the HTML is shown, so it is charged either way.
-    let left = budget
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-            Some(left.saturating_sub(rendered.len()))
-        })
-        .unwrap_or_default();
-    if failed || rendered.len() > MAX_RENDERED_HTML || rendered.len() > left {
+    if !draw(budget, rendered.len()) || failed || rendered.len() > MAX_RENDERED_HTML {
         return escaped_paragraphs(&body);
     }
     let forge = forge.map(url::Url::origin).filter(url::Origin::is_tuple);
@@ -232,6 +234,16 @@ pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsi
         .to_string()
         .trim()
         .to_owned()
+}
+
+/// Takes `amount` from `budget`, or empties it when less is left; whether it all fit.
+fn draw(budget: &AtomicUsize, amount: usize) -> bool {
+    let left = budget
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+            Some(left.saturating_sub(amount))
+        })
+        .unwrap_or_default();
+    amount <= left
 }
 
 /// At most how many cells the body's tables could hold, filled-out rows included.
@@ -245,13 +257,15 @@ fn table_cells_bound(body: &str) -> usize {
     (widest + 1).saturating_mul(lines)
 }
 
-/// How deeply the Markdown tree nests, and how many tags its raw HTML holds at most.
-fn shape<'a>(root: &'a AstNode<'a>) -> (usize, usize) {
-    let (mut depth, mut deepest, mut raw_tags) = (0usize, 0usize, 0usize);
+/// How deeply the Markdown tree nests, how many tags its raw HTML holds at most, and how many nodes
+/// it has.
+fn shape<'a>(root: &'a AstNode<'a>) -> (usize, usize, usize) {
+    let (mut depth, mut deepest, mut raw_tags, mut nodes) = (0usize, 0usize, 0usize, 0usize);
     for edge in root.traverse() {
         match edge {
             NodeEdge::Start(node) => {
                 depth += 1;
+                nodes += 1;
                 deepest = deepest.max(depth);
                 raw_tags += match &node.data.borrow().value {
                     NodeValue::HtmlBlock(block) => block.literal.matches('<').count(),
@@ -262,7 +276,7 @@ fn shape<'a>(root: &'a AstNode<'a>) -> (usize, usize) {
             NodeEdge::End(_) => depth -= 1,
         }
     }
-    (deepest, raw_tags)
+    (deepest, raw_tags, nodes)
 }
 
 fn escaped_paragraphs(body: &str) -> String {
