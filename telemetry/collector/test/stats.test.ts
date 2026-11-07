@@ -12,7 +12,6 @@ const row = (day: string, count: number, values: Partial<Row> = {}): Row => ({
   arch: "aarch64",
   version: "0.3.0",
   gh: "2.103",
-  first_week: "2026-W45",
   count,
   ...values,
 });
@@ -25,7 +24,7 @@ describe("stats", () => {
 
   it("counts installs per day and proves installs per week from the busiest day", () => {
     const rows = [row("2026-11-02", 3), row("2026-11-03", 5), row("2026-11-04", 4)];
-    const result = stats(rows, [], today);
+    const result = stats(rows, [], [], today);
     expect(result.minimum_count).toBe(3);
     expect(result.totals.days).toEqual([
       { day: "2026-11-02", installs: 3, reports: 3 },
@@ -44,6 +43,7 @@ describe("stats", () => {
     const result = stats(
       [row("2026-11-02", 3), row("2026-11-02", 1, { mode: "server", client: "", gh: "" })],
       [],
+      [],
       today,
     );
     expect(result.totals.days).toEqual([{ day: "2026-11-02", installs: 4, reports: 4 }]);
@@ -59,6 +59,7 @@ describe("stats", () => {
         row("2026-11-02", 1, { client: "claude-code" }),
       ],
       [],
+      [],
       today,
     );
     expect(result.by_field.client.days).toEqual([
@@ -68,7 +69,7 @@ describe("stats", () => {
 
   it("never lets a week minus its shown days give away a small day", () => {
     // codex: 5 on Monday, 2 on Tuesday. The week's 7 less Monday's 5 would show Tuesday's 2.
-    const result = stats([row("2026-11-02", 5), row("2026-11-03", 2)], [], today);
+    const result = stats([row("2026-11-02", 5), row("2026-11-03", 2)], [], [], today);
     const shown = (cells: Figure[]) => cells.map((cell) => cell.day ?? cell.week);
     expect(shown(result.totals.weeks)).toEqual(["2026-W45"]);
     expect(shown(result.totals.days)).toEqual([]);
@@ -76,19 +77,19 @@ describe("stats", () => {
 
   it("names an absent value none", () => {
     const rows = [row("2026-11-02", 3, { mode: "server", client: "", gh: "", forge_major: -1 })];
-    expect(stats(rows, [], today).by_field.client.days).toEqual([
+    expect(stats(rows, [], [], today).by_field.client.days).toEqual([
       { day: "2026-11-02", client: "none", installs: 3, reports: 3 },
     ]);
   });
 
   it("follows each first week's installs into later weeks", () => {
-    const rows = [
-      row("2026-11-02", 4),
-      row("2026-11-03", 6),
-      row("2026-11-10", 3),
-      row("2026-11-11", 2, { first_week: "2026-W46" }),
+    const cohorts = [
+      { day: "2026-11-02", first_week: "2026-W45", count: 4 },
+      { day: "2026-11-03", first_week: "2026-W45", count: 6 },
+      { day: "2026-11-10", first_week: "2026-W45", count: 3 },
+      { day: "2026-11-11", first_week: "2026-W46", count: 2 },
     ];
-    expect(stats(rows, [], "2026-11-12").retention).toEqual([
+    expect(stats([], cohorts, [], "2026-11-12").retention).toEqual([
       { first_week: "2026-W45", week: "2026-W45", installs: 6 },
       { first_week: "2026-W45", week: "2026-W46", installs: 3 },
     ]);
@@ -97,15 +98,15 @@ describe("stats", () => {
   it("counts an unsupported name by its busiest day, so one install can't pass for three", () => {
     const days = ["2026-11-02", "2026-11-03", "2026-11-04"];
     const once = days.map((day) => ({ day, name: "rest:repos.releases", reports: 1, total: 5 }));
-    expect(stats([], once, today).unsupported).toEqual([]);
+    expect(stats([], [], once, today).unsupported).toEqual([]);
     const three = [{ day: "2026-11-02", name: "rest:repos.releases", reports: 3, total: 4 }];
-    expect(stats([], three, today).unsupported).toEqual([
+    expect(stats([], [], three, today).unsupported).toEqual([
       { week: "2026-W45", name: "rest:repos.releases", installs: 3, total: 4 },
     ]);
   });
 
   it("publishes 90 days and 26 weeks", () => {
-    const result = stats([row("2026-05-01", 9), row("2026-11-02", 3)], [], today);
+    const result = stats([row("2026-05-01", 9), row("2026-11-02", 3)], [], [], today);
     expect(result.totals.days.map((cell) => cell.day)).toEqual(["2026-11-02"]);
     expect(result.totals.weeks.map((cell) => cell.week)).toEqual(["2026-W45"]);
   });
@@ -137,7 +138,7 @@ describe("stats", () => {
           }),
         );
       }
-      const result = stats(rows, [], today);
+      const result = stats(rows, [], [], today);
       const all: Figure[] = [
         ...result.totals.days, ...result.totals.weeks,
         ...result.combinations.days, ...result.combinations.weeks,

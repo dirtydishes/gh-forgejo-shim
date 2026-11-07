@@ -7,7 +7,7 @@
  * body, and logs nothing.
  */
 import { validate } from "./report";
-import { DAYS, WEEKS, stats, type Row, type UnsupportedRow } from "./stats";
+import { DAYS, WEEKS, stats, type CohortRow, type Row, type UnsupportedRow } from "./stats";
 import { daysBefore, utcDay } from "./week";
 
 export interface Env {
@@ -58,9 +58,9 @@ async function report(request: Request, env: Env): Promise<Response> {
   if (typeof checked === "string") return json({ error: checked }, 400);
   const statements = [
     env.DB.prepare(
-      `INSERT INTO reports (day, mode, client, forge, forge_major, os, arch, version, gh, first_week, count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-       ON CONFLICT (day, mode, client, forge, forge_major, os, arch, version, gh, first_week)
+      `INSERT INTO reports (day, mode, client, forge, forge_major, os, arch, version, gh, count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+       ON CONFLICT (day, mode, client, forge, forge_major, os, arch, version, gh)
        DO UPDATE SET count = count + 1`,
     ).bind(
       day,
@@ -72,8 +72,11 @@ async function report(request: Request, env: Env): Promise<Response> {
       checked.arch,
       checked.version,
       checked.gh ?? "",
-      checked.first_week,
     ),
+    env.DB.prepare(
+      `INSERT INTO cohorts (day, first_week, count) VALUES (?, ?, 1)
+       ON CONFLICT (day, first_week) DO UPDATE SET count = count + 1`,
+    ).bind(day, checked.first_week),
     ...Object.entries(checked.unsupported).map(([name, count]) =>
       env.DB.prepare(
         `INSERT INTO unsupported (day, name, reports, total) VALUES (?, ?, 1, ?)
@@ -89,11 +92,12 @@ async function publish(env: Env): Promise<Response> {
   const today = utcDay(new Date());
   // Enough days for the oldest published week.
   const since = daysBefore(today, Math.max(DAYS, WEEKS * 7 + 7));
-  const [rows, unsupported] = await Promise.all([
+  const [rows, cohorts, unsupported] = await Promise.all([
     env.DB.prepare("SELECT * FROM reports WHERE day >= ?").bind(since).all<Row>(),
+    env.DB.prepare("SELECT * FROM cohorts WHERE day >= ?").bind(since).all<CohortRow>(),
     env.DB.prepare("SELECT * FROM unsupported WHERE day >= ?").bind(since).all<UnsupportedRow>(),
   ]);
-  return json(stats(rows.results, unsupported.results, today), 200, {
+  return json(stats(rows.results, cohorts.results, unsupported.results, today), 200, {
     "access-control-allow-origin": "*",
     "cache-control": "public, max-age=3600",
   });
@@ -104,6 +108,7 @@ export async function expire(env: Env, today: string): Promise<void> {
   const cutoff = daysBefore(today, RETENTION_DAYS);
   await env.DB.batch([
     env.DB.prepare("DELETE FROM reports WHERE day < ?").bind(cutoff),
+    env.DB.prepare("DELETE FROM cohorts WHERE day < ?").bind(cutoff),
     env.DB.prepare("DELETE FROM unsupported WHERE day < ?").bind(cutoff),
   ]);
 }
