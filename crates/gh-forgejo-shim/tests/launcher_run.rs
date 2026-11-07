@@ -1291,13 +1291,24 @@ struct PushFixture {
     fixture: Fixture,
     gh: PathBuf,
     ssh_path: String,
+    git_only: String,
 }
 
 impl PushFixture {
     fn new() -> Self {
         let fixture = Fixture::new("http://127.0.0.1:9");
+        let git_binary = [
+            "/usr/bin/git",
+            "/opt/homebrew/bin/git",
+            "/usr/local/bin/git",
+        ]
+        .into_iter()
+        .find(|path| Path::new(path).exists())
+        .expect("git");
         let bin = fixture.dir.join("bin");
+        let git_only = fixture.dir.join("git-only");
         fs::create_dir_all(&bin).expect("bin");
+        fs::create_dir_all(&git_only).expect("git-only");
         let ssh = bin.join("ssh");
         fs::write(
             &ssh,
@@ -1306,12 +1317,14 @@ impl PushFixture {
         )
         .expect("fake ssh");
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod");
+        std::os::unix::fs::symlink(git_binary, git_only.join("git")).expect("symlink git");
         let gh = fixture.fake_gh(
             r#"if [ "$1" = config ]; then exit 1; fi
 printf 'GH_HOST=%s\n' "${GH_HOST-unset}" > "$REPORT""#,
         );
         let push = Self {
             ssh_path: format!("{}:/usr/bin:/bin", bin.display()),
+            git_only: git_only.display().to_string(),
             fixture,
             gh,
         };
@@ -1432,6 +1445,41 @@ fn a_forge_without_its_own_entry_uses_gh_s_top_level_protocol() {
         push.gh_files(hosts, config);
         push.ran(&push.pr_create(&push.ssh_path, &[]), hosts);
     }
+}
+
+/// Without ssh on PATH, the push check can't resolve an SSH host. git can't push over SSH then
+/// either, unless it connects through its own SSH command, whose configuration decides where the
+/// push goes: then the push is refused.
+#[test]
+fn without_ssh_git_s_own_ssh_command_is_refused() {
+    let _serial = serial();
+    let push = PushFixture::new();
+    push.gh_files(&format!("{FORGE_LOGIN}    git_protocol: https\n"), None);
+    push.git(&["config", "remote.origin.pushurl", "git@forge.test:o/r.git"]);
+    push.ran(&push.pr_create(&push.git_only, &[]), "no ssh");
+    for transport in ["GIT_SSH_COMMAND", "GIT_SSH"] {
+        push.refused(
+            &push.pr_create(&push.git_only, &[(transport, "/usr/bin/ssh -F /dev/null")]),
+            &format!("git connects through {transport}"),
+        );
+    }
+    push.git(&["config", "core.sshCommand", "/usr/bin/ssh -F /dev/null"]);
+    push.refused(
+        &push.pr_create(&push.git_only, &[]),
+        "git connects through core.sshCommand",
+    );
+    push.git(&["config", "--unset", "core.sshCommand"]);
+    // The same for the fork remote gh adds over SSH.
+    push.git(&["config", "--unset", "remote.origin.pushurl"]);
+    push.gh_files(&format!("{FORGE_LOGIN}    git_protocol: ssh\n"), None);
+    push.ran(&push.pr_create(&push.git_only, &[]), "fork remote, no ssh");
+    push.refused(
+        &push.pr_create(
+            &push.git_only,
+            &[("GIT_SSH_COMMAND", "/usr/bin/ssh -F /dev/null")],
+        ),
+        "git connects to git@forge.test through GIT_SSH_COMMAND",
+    );
 }
 
 #[test]
