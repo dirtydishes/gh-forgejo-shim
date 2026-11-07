@@ -38,7 +38,7 @@ The v0.3.0 notes follow.
   major version, gh's version, the week of the first report, and GitHub names the gateway lacked.
   No hosts, repositories, commands or IDs. The wrapper sends it in the background and never slows
   or changes a `gh` call. `gfj telemetry off`, `GFJ_TELEMETRY=0`, `DO_NOT_TRACK=1` or `CI` turns it
-  off (`FGA_TELEMETRY=0` for fga-server), and `gfj telemetry show` prints the exact report. The
+  off (`FGA_TELEMETRY=0` for fga-server), and `gfj telemetry show` prints the report. The
   totals are public; see [docs/telemetry.md](telemetry.md).
 
 - **Server mode no longer sends host-less commands to github.com.** In a checkout of a forge's
