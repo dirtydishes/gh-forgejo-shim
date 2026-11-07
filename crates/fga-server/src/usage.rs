@@ -301,9 +301,6 @@ pub fn spawn_server_reporter(forgejo_url: url::Url) {
         "fga-server sends one anonymous usage report a day (version, OS, forge; no hosts, \
          repositories or IDs). FGA_TELEMETRY=0 turns it off. See docs/telemetry.md.",
     );
-    let first_wait = get("FGA_TELEMETRY_FIRST_WAIT")
-        .and_then(|seconds| seconds.parse().ok())
-        .map_or(Duration::from_secs(600), Duration::from_secs);
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .timeout(TIMEOUT)
@@ -313,7 +310,7 @@ pub fn spawn_server_reporter(forgejo_url: url::Url) {
             Ok(client) => client,
             Err(_) => return,
         };
-        tokio::time::sleep(first_wait).await;
+        tokio::time::sleep(Duration::from_secs(600)).await;
         let mut sent: Option<String> = None;
         loop {
             let today = utc_day(now());
