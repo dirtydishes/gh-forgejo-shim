@@ -77,7 +77,7 @@ docker run -d --name fga-server --restart unless-stopped \
 ```
 
 The [gateway README](README.md) lists every setting. To upgrade, change the image tag to the new
-release and start the gateway again; to roll back, change the tag back. The gateway keeps no state.
+release and start the gateway again; to roll back, change the tag back. The gateway keeps no state but two dates for its [usage report](../telemetry.md).
 
 To build the image yourself instead, run
 `docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .` in a checkout of that release,

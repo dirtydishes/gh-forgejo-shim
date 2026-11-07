@@ -187,7 +187,7 @@ used `curl` instead. Codex used `gh` without help. Two lines in your repository'
 Pass `--hostname <your forge host>` to every `gh api` call; without it, `gh api` can go to github.com.
 ```
 
-The gateway keeps no state. To upgrade or roll back, change the image tag in `compose.yaml` and run
+The gateway keeps no state but two dates for its [usage report](docs/telemetry.md). To upgrade or roll back, change the image tag in `compose.yaml` and run
 `docker compose up -d` again. [server-mode.md](docs/gateway/server-mode.md#1-run-the-gateway) also
 shows how to build the image yourself.
 
