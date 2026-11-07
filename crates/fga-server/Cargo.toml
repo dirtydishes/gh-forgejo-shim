@@ -11,6 +11,7 @@ axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 base64.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 fga-core = { path = "../fga-core" }
+reqwest.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde.workspace = true
 serde_json.workspace = true

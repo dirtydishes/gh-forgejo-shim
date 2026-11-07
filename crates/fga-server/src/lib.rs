@@ -6,6 +6,7 @@ mod git;
 mod pull_parts;
 mod rest;
 mod runs;
+pub mod usage;
 
 use async_graphql::Request;
 use axum::{
@@ -247,6 +248,7 @@ pub fn app(state: AppState) -> Router {
             post(graphql_request).layer(DefaultBodyLimit::max(MAX_GRAPHQL_REQUEST_BYTES)),
         )
         .fallback(|| async { rest_error(Error::NotFound) })
+        .layer(middleware::from_fn(count_unsupported))
         .layer(middleware::from_fn(authenticate));
     Router::new()
         // Browsers follow these links without a token.
@@ -450,6 +452,7 @@ async fn graphql_request(
         .into_iter()
         .take(MAX_GRAPHQL_ERRORS)
         .map(|error| {
+            usage::graphql_unsupported(&error.message);
             let mut error = serde_json::to_value(error).expect("GraphQL error is serializable");
             let kind = error
                 .pointer("/extensions/type")
@@ -533,6 +536,22 @@ fn sorted<S: serde::Serializer>(
         }
         other => serde::Serialize::serialize(other, serializer),
     }
+}
+
+/// Counts a REST request the gateway has no route for (the fallback's 404) or no method for (405),
+/// by GitHub's name for its resource ([`usage::rest_name`]).
+async fn count_unsupported(request: HttpRequest, next: Next) -> Response {
+    let routed = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .is_some();
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+    let status = response.status();
+    if status == StatusCode::METHOD_NOT_ALLOWED || (status == StatusCode::NOT_FOUND && !routed) {
+        usage::rest_unsupported(&path);
+    }
+    response
 }
 
 fn rest_error(error: Error) -> Response {
