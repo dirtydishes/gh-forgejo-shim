@@ -226,9 +226,14 @@ remote and `gh repo create --push` the remote it adds, and a remote's push URL o
 `url.<base>.pushInsteadOf` can send that push to another host, as can an SSH host alias. So a
 forge-routed `pr create` (or `pr new`), launched or not, is refused before gh runs when a forge
 remote's push URL in the checkout names another host, an `insteadOf` or `pushInsteadOf` rule whose
-prefix overlaps one of the forge's URL forms rewrites to another host, or, unless
-`gh config get git_protocol --host <forge>` answers `https`, SSH resolves `git@<forge>`, the
-remote gh adds for a fork, to another host. A `repo create` (or `repo new`) that pushes, with
+prefix overlaps one of the forge's URL forms rewrites to another host, or, unless gh uses
+`https` there, SSH resolves `git@<forge>`, the remote gh adds for a fork, to another host. gh's
+protocol is read from its files, without running gh: the forge's portless entry, then the
+top-level `git_protocol`, then `https`, both as the launched gh reads them (`hosts.yml`) and as
+plain gh does (a legacy `hosts` key in `config.yml` first); both must say `https`. When ssh
+can't resolve an SSH host and git connects through its own SSH command (`GIT_SSH_COMMAND`,
+`GIT_SSH` or `core.sshCommand`), the push is refused; with neither, git can't push over SSH.
+A `repo create` (or `repo new`) that pushes, with
 `--push` or when it prompts (no argument and no flag; a lone `--` counts as none), is refused
 outright: it pushes from a `--source` checkout the wrapper would have to read as gh does. Without
 `--push` it creates the repository, and git pushes after. The command is found as cobra finds
