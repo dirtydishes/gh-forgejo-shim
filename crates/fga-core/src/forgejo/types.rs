@@ -157,6 +157,12 @@ pub struct PullRequest {
     #[serde(default)]
     pub requested_reviewers: Option<Vec<User>>,
     pub requested_reviewers_teams: Option<Vec<RequestedTeam>>,
+    /// The merge commit, once merged (`merge_commit_sha`).
+    #[serde(default)]
+    pub merge_commit_sha: Option<String>,
+    /// The commit the head branched from, which the PR's diff starts at.
+    #[serde(default)]
+    pub merge_base: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -293,6 +299,8 @@ pub struct ReviewComment {
     /// The old-side line, or 0 when the comment is on the new side.
     pub original_position: u64,
     pub html_url: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 impl ReviewComment {
@@ -354,6 +362,8 @@ pub struct Comment {
     pub body: String,
     pub created_at: String,
     pub html_url: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -389,6 +399,12 @@ pub struct PullCommit {
     pub sha: String,
     pub commit: CommitMetadata,
     pub author: Option<User>,
+    #[serde(default)]
+    pub committer: Option<User>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub parents: Vec<CommitParent>,
+    #[serde(default)]
+    pub html_url: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct CommitMetadata {
@@ -401,6 +417,68 @@ pub struct CommitAuthor {
     pub name: String,
     pub email: String,
     pub date: String,
+}
+
+/// A file a pull request or a comparison changes (`modules/structs/pull.go` ChangedFile). A
+/// comparison's files carry no line counts.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangedFile {
+    pub filename: String,
+    #[serde(default)]
+    pub previous_filename: Option<String>,
+    /// `added`, `deleted` or `removed`, `modified` or `changed`, `renamed`, `copied`.
+    pub status: String,
+    #[serde(default)]
+    pub additions: Option<i64>,
+    #[serde(default)]
+    pub deletions: Option<i64>,
+    /// The file's page and raw bytes at the head, under Forgejo's root URL.
+    #[serde(default)]
+    pub html_url: Option<String>,
+    #[serde(default)]
+    pub raw_url: Option<String>,
+}
+
+/// Commits reachable from a head and not from a base, newest first, and the files they change
+/// (`modules/structs/repo_compare.go`). It names no merge base.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Comparison {
+    pub total_commits: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub commits: Vec<GitCommit>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub files: Vec<ChangedFile>,
+}
+/// A commit as `/git/commits/{sha}` and `/compare` give it (`modules/structs/repo_commit.go`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct GitCommit {
+    pub sha: String,
+    pub commit: CommitMetadata,
+    pub author: Option<User>,
+    pub committer: Option<User>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub parents: Vec<CommitParent>,
+    #[serde(default)]
+    pub html_url: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct CommitParent {
+    pub sha: String,
+}
+
+/// One entry of `/contents/{path}` (`modules/structs/repo_file.go` ContentsResponse). A file's
+/// `content` is base64.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Contents {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub size: u64,
+    #[serde(default)]
+    pub content: Option<String>,
+    /// A symlink's target.
+    #[serde(default)]
+    pub target: Option<String>,
+    pub sha: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

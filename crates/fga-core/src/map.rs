@@ -109,9 +109,11 @@ pub fn pull_request(pr: &forgejo::PullRequest, prefixes: &WipPrefixes) -> Value 
 mod checks;
 mod markdown;
 mod pulls;
+mod reviews;
 pub use checks::*;
 pub use markdown::{body_html, body_html_within};
 pub use pulls::*;
+pub use reviews::*;
 
 #[cfg(test)]
 mod tests;
