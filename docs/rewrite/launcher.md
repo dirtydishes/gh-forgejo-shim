@@ -231,9 +231,11 @@ prefix overlaps one of the forge's URL forms rewrites to another host, or, unles
 remote gh adds for a fork, to another host. A `repo create` (or `repo new`) that pushes, with
 `--push` or when it prompts (no argument and no flag; a lone `--` counts as none), is refused
 outright: it pushes from a `--source` checkout the wrapper would have to read as gh does. Without
-`--push` it creates the repository, and git pushes after. The subcommand is the first word after
-`pr` or `repo` that is one of that group's subcommands, so `gh repo --source x create` is
-`create` and `gh pr view new` is `view`. The trace names the portless
+`--push` it creates the repository, and git pushes after. The command is found as cobra finds
+it: a flag without `=` takes the next word as its value unless it's `--help`, `-h` or `--version`,
+so `gh --source x repo create` and `gh repo --source view create` are `repo create`, and
+`gh pr view new` is `pr view`. An SSH push URL resolves with its own user (`ssh -G git@forge`),
+which a `Match user` rule can change. The trace names the portless
 hostname gh reaches. For a forge entry with a port, that holds only when the call doesn't spell
 the port: gh keeps it for a full name (`-R forge.test:3443/o/r`, `GH_REPO`, `gh api`'s URL or
 `--hostname`) and drops it for a URL or a remote, so a call or `GH_REPO` naming `forge.test:3443`
