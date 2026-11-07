@@ -658,10 +658,7 @@ pub(crate) fn push_leaves(
                          isn't on PATH)"
                     ));
                 }
-                (None, _) => target
-                    .rsplit_once('@')
-                    .map_or(target.as_str(), |(_, host)| host)
-                    .to_string(),
+                (None, _) => unresolved_host(&target),
             }
         } else {
             url.host
@@ -994,27 +991,32 @@ impl SshHosts {
                     .map(str::to_string)
             })
             .filter(|resolved| !resolved.is_empty())
-            .map(|resolved| {
-                if resolved.eq_ignore_ascii_case("ssh.github.com") {
-                    GITHUB.to_string()
-                } else {
-                    resolved
-                }
-            });
+            .map(|resolved| github_ssh_alias(&resolved));
         self.resolved
             .insert(host.to_ascii_lowercase(), resolved.clone());
         resolved
     }
 
-    /// As [`SshHosts::try_resolve`], or without ssh the hostname as given: `ssh -G` prints none
-    /// with a user.
+    /// As [`SshHosts::try_resolve`], or without ssh the hostname as given ([`unresolved_host`]).
     fn resolve(&mut self, host: &str) -> String {
-        self.try_resolve(host).unwrap_or_else(|| {
-            host.rsplit_once('@')
-                .map_or(host, |(_, host)| host)
-                .to_string()
-        })
+        self.try_resolve(host)
+            .unwrap_or_else(|| unresolved_host(host))
     }
+}
+
+/// GitHub's SSH-over-443 host, `ssh.github.com`, is github.com to gh.
+fn github_ssh_alias(host: &str) -> String {
+    if host.eq_ignore_ascii_case("ssh.github.com") {
+        GITHUB.to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+/// A `host` or `user@host` ssh couldn't resolve, taken as given: without the user, as `ssh -G`
+/// prints none, and with `ssh.github.com` read as github.com, as for a resolved host.
+fn unresolved_host(host: &str) -> String {
+    github_ssh_alias(host.rsplit_once('@').map_or(host, |(_, host)| host))
 }
 
 /// The user's gh config directory, found the way go-gh's `ConfigDir` does.
@@ -1186,6 +1188,14 @@ fn looks_like_host(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unresolved_ssh_host_drops_its_user_and_reads_ssh_github_com_as_github() {
+        assert_eq!(unresolved_host("git@forge.test"), "forge.test");
+        assert_eq!(unresolved_host("forge.test"), "forge.test");
+        assert_eq!(unresolved_host("git@ssh.github.com"), GITHUB);
+        assert_eq!(unresolved_host("SSH.GitHub.com"), GITHUB);
+    }
+
     use super::*;
 
     fn repo_tuple(repo: Option<RepoRef>) -> Option<(String, String, String)> {

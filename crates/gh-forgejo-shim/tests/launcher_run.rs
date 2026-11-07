@@ -1447,6 +1447,44 @@ fn a_forge_without_its_own_entry_uses_gh_s_top_level_protocol() {
     }
 }
 
+/// Without ssh on PATH, a remote on `ssh.github.com`, GitHub's SSH-over-443 host, is still
+/// github.com to routing, as gh reads it: a checkout with that remote and a forge remote doesn't
+/// route to the forge.
+#[test]
+fn without_ssh_ssh_github_com_is_still_github() {
+    let _serial = serial();
+    let push = PushFixture::new();
+    push.gh_files(
+        &format!("{FORGE_LOGIN}github.com:\n    oauth_token: github-login\n"),
+        None,
+    );
+    push.git(&["remote", "rename", "origin", "forge"]);
+    push.git(&[
+        "remote",
+        "add",
+        "origin",
+        "ssh://git@ssh.github.com:443/o/r.git",
+    ]);
+    let trace = push.fixture.dir.join("trace.jsonl");
+    let _ = fs::remove_file(push.fixture.dir.join("report"));
+    let output = push
+        .fixture
+        .command(&push.gh, &["pr", "view", "1"])
+        .env("PATH", &push.git_only)
+        .env("FJ_SHIM_TRACE", &trace)
+        .output()
+        .expect("run wrapper");
+    let record = fs::read_to_string(&trace).unwrap_or_default();
+    let record: serde_json::Value =
+        serde_json::from_str(record.lines().last().unwrap_or("{}")).expect("json");
+    assert_ne!(record["host"], "forge.test", "{record} {output:?}");
+    assert!(
+        !push.fixture.report().contains("GH_HOST=forge.test"),
+        "{} {output:?}",
+        push.fixture.report()
+    );
+}
+
 /// Without ssh on PATH, the push check can't resolve an SSH host. git can't push over SSH then
 /// either, unless it connects through its own SSH command, whose configuration decides where the
 /// push goes: then the push is refused.
