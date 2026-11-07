@@ -1171,7 +1171,8 @@ fn body_html_bounds_sparse_tables() {
 
 /// A table under the cell bound can still be a hundred times larger as HTML than as Markdown, and a
 /// document can hold many of them. Once the shared budget runs out, the rest come back escaped
-/// without being parsed. A body too large to show still uses up its share.
+/// without being parsed. A body too large to show, or too deep once parsed, still uses up its
+/// share.
 #[test]
 fn body_html_budget_bounds_repeated_sparse_tables() {
     let sparse = |delimiter: &str| {
@@ -1183,12 +1184,19 @@ fn body_html_budget_bounds_repeated_sparse_tables() {
         )
     };
     let forge = "https://forge.example".parse().unwrap();
-    // Each renders to about 190 KB of HTML; centred columns, to about 480 KB, too much to show.
-    for (table, shown) in [(sparse("|-"), 1..=6), (sparse("|:-:"), 0..=0)] {
+    // The first renders to about 190 KB of HTML; centred columns, to about 480 KB, too much to show.
+    // The last two parse into tens of thousands of nodes and are then too deep to render. Escaping
+    // costs only in proportion to the bytes Forgejo sent, so the longest body is repeated less.
+    for (body, shown, calls) in [
+        (sparse("|-"), 1..=6, 1000),
+        (sparse("|:-:"), 0..=0, 1000),
+        (sparse("|:-:") + "\n" + &">".repeat(65), 0..=0, 1000),
+        (">".repeat(64 * 1024), 0..=0, 100),
+    ] {
         let budget = std::sync::atomic::AtomicUsize::new(1024 * 1024);
         let started = std::time::Instant::now();
-        let rendered = (0..100)
-            .map(|_| super::body_html_within(&table, Some(&forge), &budget))
+        let rendered = (0..calls)
+            .map(|_| super::body_html_within(&body, Some(&forge), &budget))
             .filter(|html| html.starts_with("<table>"))
             .count();
         assert!(
