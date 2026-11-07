@@ -1,6 +1,8 @@
 //! GitHub's REST shapes for a pull request's review comments, reviews, conversation, files and
 //! commits, from Forgejo's (MAPPING §11).
-use super::{PullRequestReviewState, commented_line, pull_web_url, review_state, user};
+use super::{
+    PullRequestReviewState, commented_line, pull_web_url, review_commit, review_state, user,
+};
 use crate::{forgejo, ids::node_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -48,7 +50,8 @@ pub fn review_comments(
         .map(|(review, comment)| {
             let key = (comment.pull_request_review_id, comment.path.as_str(), comment.line());
             let root = *roots.entry(key).or_insert(comment.id);
-            let current = review.commit_id == head_sha;
+            let commit_id = review_commit(&review.commit_id, head_sha);
+            let current = commit_id == head_sha;
             let line = commented_line(comment);
             let url = api_url(public, owner, repo, &["pulls", "comments", &comment.id.to_string()]);
             let html_url = pull_web_url(&comment.html_url);
@@ -61,8 +64,8 @@ pub fn review_comments(
                 "path": comment.path,
                 "position": null,
                 "original_position": null,
-                "commit_id": review.commit_id,
-                "original_commit_id": review.commit_id,
+                "commit_id": commit_id,
+                "original_commit_id": commit_id,
                 "user": comment.user.as_ref().map(|u| user(u, public)),
                 "body": comment.body,
                 "created_at": comment.created_at,
@@ -97,6 +100,7 @@ pub fn reviews(
     owner: &str,
     repo: &str,
     number: i32,
+    head_sha: &str,
     public: &Url,
 ) -> Vec<Value> {
     let full_name = format!("{owner}/{repo}");
@@ -131,7 +135,7 @@ pub fn reviews(
                 "submitted_at": (state != PullRequestReviewState::Pending)
                     .then_some(review.submitted_at.as_deref())
                     .flatten(),
-                "commit_id": review.commit_id,
+                "commit_id": review_commit(&review.commit_id, head_sha),
             })
         })
         .collect()
@@ -327,6 +331,25 @@ pub fn diff_patches(diff: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Forgejo keeps the commit ID a client sent with its review, abbreviated or not.
+    #[test]
+    fn a_review_on_the_head_under_an_abbreviated_id_is_current() {
+        let head = "12bed172f74e3b63ba5a1eea79d68062644203cb";
+        let review: forgejo::Review = serde_json::from_value(json!({"id": 3, "user": null,
+            "body": "", "state": "COMMENT", "submitted_at": null, "commit_id": "12bed17"}))
+        .unwrap();
+        let comment: forgejo::ReviewComment = serde_json::from_value(json!({"id": 974,
+            "body": "b", "user": null, "resolver": null, "pull_request_review_id": 3,
+            "created_at": "", "path": "src/cli/commands.ts", "position": 45,
+            "original_position": 0, "html_url": "",
+            "diff_hunk": "@@ -42,3 +42,4 @@\n a\n b\n \n+c"}))
+        .unwrap();
+        let public = "https://forge.test".parse().unwrap();
+        let comments = review_comments(&[(review, vec![comment])], "o", "r", 1, head, &public);
+        assert_eq!(comments[0]["line"], 45);
+        assert_eq!(comments[0]["commit_id"], head);
+    }
 
     #[test]
     fn each_file_gets_its_own_hunks() {

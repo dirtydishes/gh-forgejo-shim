@@ -102,7 +102,7 @@ pub async fn reviews(
         &["pulls", &n, "reviews"],
         paging,
         async {
-            session.pull_request(&owner, &repo, number).await?;
+            let pr = session.pull_request(&owner, &repo, number).await?;
             let mut reviews = session.reviews(&owner, &repo, number).await?;
             reviews.retain(|review| map::listed(review, &session.viewer.login));
             Ok(map::reviews(
@@ -110,6 +110,7 @@ pub async fn reviews(
                 &owner,
                 &repo,
                 number,
+                &pr.head.sha,
                 &host.public_url,
             ))
         },
