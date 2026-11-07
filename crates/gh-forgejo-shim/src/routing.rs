@@ -813,12 +813,45 @@ const PR_SUBCOMMANDS: &[&str] = &[
     "view",
 ];
 
-/// Where `group` (`repo` or `pr`) leads the words, its subcommand and the index of each: the
-/// first later word that is one of its subcommands, so a flag before the subcommand (`gh repo
-/// --source x create`) doesn't hide it and an argument after it (`gh pr view new`) isn't taken
-/// for it.
+/// The indices of the words cobra takes for command names, as `stripFlags` does (cobra v1.10.2,
+/// `command.go`): `--` ends them, and a `--flag` without `=`, or a two-letter `-f`, takes the next
+/// word as its value unless it's a boolean. At gh's root and group levels the booleans are
+/// `--help`, `-h` and `--version`. `skip` is a word already taken for a command.
+fn cobra_commands(words: &[String], skip: Option<usize>) -> Vec<usize> {
+    let mut commands = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        let at = index;
+        let word = words[at].as_str();
+        index += 1;
+        if Some(at) == skip {
+            continue;
+        }
+        if word == "--" {
+            break;
+        }
+        let takes_value = (word.starts_with("--")
+            && !word.contains('=')
+            && !matches!(word, "--help" | "--version"))
+            || (word.starts_with('-') && !word.contains('=') && word.len() == 2 && word != "-h");
+        if takes_value {
+            if Some(index) == skip {
+                index += 1;
+            }
+            index += 1;
+        } else if !word.is_empty() && !word.starts_with('-') {
+            commands.push(at);
+        }
+    }
+    commands
+}
+
+/// Where `group` (`repo` or `pr`) leads the call, the index of the group and of its subcommand,
+/// found as cobra finds them: the first command word, then the first command word of the rest,
+/// when it's one of the group's subcommands. So `gh repo --source x create` and
+/// `gh --source x repo create` are `repo create`, and `gh pr view new` is `pr view`.
 fn subcommand(words: &[String], group: &str) -> Option<(usize, usize)> {
-    let at = words.iter().position(|word| !word.starts_with('-'))?;
+    let at = *cobra_commands(words, None).first()?;
     if words[at] != group {
         return None;
     }
@@ -827,10 +860,8 @@ fn subcommand(words: &[String], group: &str) -> Option<(usize, usize)> {
     } else {
         PR_SUBCOMMANDS
     };
-    let sub = words[at + 1..]
-        .iter()
-        .position(|word| names.contains(&word.as_str()))?;
-    Some((at, at + 1 + sub))
+    let sub = *cobra_commands(words, Some(at)).first()?;
+    names.contains(&words[sub].as_str()).then_some((at, sub))
 }
 
 /// Whether the call is `<group> create` or its alias `new`, as the parser or [`subcommand`] reads it.
@@ -1432,6 +1463,20 @@ mod tests {
             sub(&["pr", "new", "--title", "t"], "pr").as_deref(),
             Some("new")
         );
+        // A flag's value is never a command name, before the group or after it (parallax r5#2).
+        assert_eq!(
+            sub(&["repo", "--source", "view", "create", "o/r"], "repo").as_deref(),
+            Some("create")
+        );
+        assert_eq!(
+            sub(&["--source", "../src", "repo", "create", "o/r"], "repo").as_deref(),
+            Some("create")
+        );
+        assert_eq!(
+            sub(&["--help", "repo", "create"], "repo").as_deref(),
+            Some("create")
+        );
+        assert_eq!(sub(&["repo", "--", "create"], "repo"), None);
     }
 
     #[test]
