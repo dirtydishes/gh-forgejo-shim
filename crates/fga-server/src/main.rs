@@ -10,6 +10,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use std::io::Write;
         let _ = writeln!(std::io::stderr(), "{message}");
     });
+    // One anonymous usage report a day, unless FGA_TELEMETRY=0 (docs/telemetry.md).
+    fga_server::usage::spawn_server_reporter(config.forgejo_url.clone());
     // Server mode serves one forge and lets Forgejo judge every user's token.
     let host = Host::new(
         config.public_url,

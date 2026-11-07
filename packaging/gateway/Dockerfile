@@ -4,6 +4,8 @@ FROM rust:1.97.1-slim-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+# The usage report's allowed values, which the gateway embeds.
+COPY contract/telemetry.json ./contract/telemetry.json
 RUN cargo build --release --locked -p fga-server
 
 FROM debian:trixie-slim
