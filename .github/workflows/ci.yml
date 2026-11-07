@@ -220,3 +220,31 @@ jobs:
           docker logs fga-server
           echo "expected 401 from /api/v3/meta, got ${code}" >&2
           exit 1
+
+  collector:
+    name: telemetry collector
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: telemetry/collector
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: telemetry/collector/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run check
+
+      # Miniflare runs the Worker and its D1 database locally; nothing reaches Cloudflare.
+      - name: Test
+        run: npm test
