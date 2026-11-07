@@ -1135,7 +1135,7 @@ fn a_call_naming_another_host_keeps_the_built_in_path() {
 /// `gh pr create` and `gh repo create --push` push with git, which follows the remote's push URL
 /// and git's URL rewrites, not `GH_HOST` (#231). A `pr create` push that could leave the forge is
 /// refused before gh runs (parallax r1#3, r2#1); a `repo create` that pushes always is, however
-/// it's spelled (r2#2, r3#1, r3#2, r4#1), and one that can't push steps aside (r2#4, r3#4).
+/// it's spelled (r2#2, r3#1, r3#2, r4#1, r5#2), and one that can't push steps aside (r2#4, r3#4).
 #[test]
 fn a_push_git_would_send_off_the_forge_is_refused() {
     let _serial = serial();
@@ -1219,6 +1219,25 @@ fn a_push_git_would_send_off_the_forge_is_refused() {
         // cobra drops `--`, so gh prompts (r4#1).
         &["repo", "create", "--"][..],
         &["repo", "new", "--"][..],
+        // A flag's value isn't a command name, wherever the flag sits (r5#2).
+        &[
+            "repo",
+            "--source",
+            "view",
+            "create",
+            "acme/new",
+            "--private",
+            "--push",
+        ][..],
+        &[
+            "--source",
+            ".",
+            "repo",
+            "create",
+            "acme/new",
+            "--private",
+            "--push",
+        ][..],
     ] {
         refused(args, "create the repository without --push");
     }
