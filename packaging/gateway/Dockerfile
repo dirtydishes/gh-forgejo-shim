@@ -6,7 +6,8 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 # The usage report's allowed values, which the gateway embeds.
 COPY contract/telemetry.json ./contract/telemetry.json
-RUN cargo build --release --locked -p fga-server
+# Only a release build reports usage to the project's collector (docs/telemetry.md).
+RUN GFJ_TELEMETRY_RELEASE=1 cargo build --release --locked -p fga-server
 
 FROM debian:trixie-slim
 # CA certificates for an HTTPS upstream Forgejo.

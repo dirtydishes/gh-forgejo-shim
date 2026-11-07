@@ -43,7 +43,8 @@ else
   release_dir="$target_dir/$target_triple/release"
 fi
 
-cargo "${build_args[@]}"
+# Only a release build reports usage to the project's collector (docs/telemetry.md).
+GFJ_TELEMETRY_RELEASE=1 cargo "${build_args[@]}"
 
 bin_suffix=""
 case "$target_triple" in
