@@ -90,6 +90,7 @@ describe("POST /v1/report", () => {
       ["a forge major without a forge", (r) => delete r.forge],
       ["a fractional forge major", (r) => (r.forge_major = 1.5)],
       ["a bad version", (r) => (r.version = "0.3.0; DROP TABLE reports")],
+      ["free text in the version", (r) => (r.version = "0.3.0-alice.private.forge")],
       ["a bad gh", (r) => (r.gh = "2.103.3")],
       ["a future first week", (r) => (r.first_week = "2999-W01")],
       ["a week before reports began", (r) => (r.first_week = "2025-W52")],
@@ -149,13 +150,12 @@ describe("GET /v1/stats", () => {
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
     const body = (await response.json()) as Record<string, any>;
     expect(body.totals.days).toEqual([{ day: today, installs: 4, reports: 4 }]);
-    expect(body.by_field.client.days).toEqual([
-      { day: today, client: "codex", installs: 3, reports: 3 },
-    ]);
+    // codex's 3 would give away cursor's 1 by subtraction, so neither shows.
+    expect(body.by_field.client.days).toEqual([]);
     expect(JSON.stringify(body)).not.toContain("cursor");
-    // All four reports named it, twice each.
+    // Four reports named it on one day, twice each.
     expect(body.unsupported).toEqual([
-      { week: isoWeek(today), name: "graphql:Repository.projectsV2", reports: 4, total: 8 },
+      { week: isoWeek(today), name: "graphql:Repository.projectsV2", installs: 4, total: 8 },
     ]);
   });
 });
