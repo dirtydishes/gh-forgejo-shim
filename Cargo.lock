@@ -628,6 +628,7 @@ dependencies = [
  "async-graphql",
  "axum",
  "axum-server",
+ "base64",
  "fga-core",
  "futures-util",
  "rustls",

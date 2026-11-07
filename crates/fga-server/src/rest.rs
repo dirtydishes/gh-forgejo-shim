@@ -134,21 +134,60 @@ pub async fn pulls(
         Ok(pulls) => pulls,
         Err(error) => return rest_error(error),
     };
-    let start = (page - 1).saturating_mul(per_page);
-    let body: Vec<_> = pulls
+    let items = pulls
         .iter()
-        .skip(start)
-        .take(per_page)
         .map(|pr| map::pull_request(pr, &host.wip_prefixes))
         .collect();
-    let last = pulls.len().div_ceil(per_page).max(1);
+    let head: Vec<(&str, &str)> = query.head.iter().map(|h| ("head", h.as_str())).collect();
+    paged(
+        &host,
+        &["repos", &owner, &name, "pulls"],
+        &[("state", filter)],
+        &head,
+        per_page,
+        page,
+        items,
+    )
+}
+
+/// GitHub's paging parameters: `per_page` items (30 unless asked, at most 100) from `page`,
+/// counted from 1.
+#[derive(Default, Deserialize)]
+pub struct Paging {
+    per_page: Option<usize>,
+    page: Option<usize>,
+}
+impl Paging {
+    /// `(per_page, page)`, or `None` for page 0.
+    pub fn resolve(&self) -> Option<(usize, usize)> {
+        let page = self.page.unwrap_or(1);
+        (page > 0).then(|| (self.per_page.unwrap_or(30).clamp(1, 100), page))
+    }
+}
+
+/// One page of `items` under `/api/v3/{segments}`, with GitHub's `Link` header when there is more
+/// than one page. Each link keeps the `before` and `after` query parameters around `per_page` and
+/// `page`.
+pub(crate) fn paged(
+    host: &Host,
+    segments: &[&str],
+    before: &[(&str, &str)],
+    after: &[(&str, &str)],
+    per_page: usize,
+    page: usize,
+    items: Vec<serde_json::Value>,
+) -> Response {
+    let last = items.len().div_ceil(per_page).max(1);
+    let start = (page - 1).saturating_mul(per_page);
+    let body: Vec<_> = items.into_iter().skip(start).take(per_page).collect();
     let mut headers = HeaderMap::new();
     if last > 1 {
         let mut url = host.public_url.clone();
         url.path_segments_mut()
             .expect("validated base URL")
             .pop_if_empty()
-            .extend(["api", "v3", "repos", &owner, &name, "pulls"]);
+            .extend(["api", "v3"])
+            .extend(segments);
         let mut links = Vec::new();
         for (rel, number) in [
             ("next", page.checked_add(1).filter(|_| page < last)),
@@ -158,13 +197,13 @@ pub async fn pulls(
         ] {
             if let Some(number) = number {
                 url.set_query(None);
-                url.query_pairs_mut()
-                    .append_pair("state", filter)
+                let mut pairs = url.query_pairs_mut();
+                pairs.extend_pairs(before);
+                pairs
                     .append_pair("per_page", &per_page.to_string())
                     .append_pair("page", &number.to_string());
-                if let Some(head) = &query.head {
-                    url.query_pairs_mut().append_pair("head", head);
-                }
+                pairs.extend_pairs(after);
+                drop(pairs);
                 links.push(format!("<{url}>; rel=\"{rel}\""));
             }
         }
@@ -176,7 +215,7 @@ pub async fn pulls(
     (headers, Json(body)).into_response()
 }
 
-fn invalid_query() -> Response {
+pub(crate) fn invalid_query() -> Response {
     (
         axum::http::StatusCode::UNPROCESSABLE_ENTITY,
         Json(json!({"message": "Validation Failed"})),

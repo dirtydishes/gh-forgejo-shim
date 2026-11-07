@@ -2,6 +2,8 @@
 //! A panic still reaches stderr through the panic hook, which the embedding process owns.
 #![deny(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
 pub mod config;
+mod git;
+mod pull_parts;
 mod rest;
 mod runs;
 
@@ -165,6 +167,38 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/v3/repos/{owner}/{repo}/pulls/{number}",
             get(rest::pull),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/pulls/{number}/comments",
+            get(pull_parts::review_comments),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/pulls/{number}/reviews",
+            get(pull_parts::reviews),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/pulls/{number}/files",
+            get(pull_parts::files),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/pulls/{number}/commits",
+            get(pull_parts::commits),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/issues/{number}/comments",
+            get(pull_parts::issue_comments),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/compare/{basehead}",
+            get(git::compare),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/contents",
+            get(git::contents_root),
+        )
+        .route(
+            "/api/v3/repos/{owner}/{repo}/contents/{*path}",
+            get(git::contents),
         )
         .route("/api/v3/repos/{owner}/{repo}/readme", get(rest::readme))
         .route(
