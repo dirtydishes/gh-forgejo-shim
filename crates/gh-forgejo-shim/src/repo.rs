@@ -639,10 +639,11 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
 pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
     let mut ssh = SshHosts::default();
-    let mut host_of = |url: &str| {
-        let url = GitUrl::parse(url)?;
+    let mut host_of = |raw: &str| {
+        let url = GitUrl::parse(raw)?;
+        // SSH resolves the push's own `user@host`, which a `Match user` rule can send elsewhere.
         let host = if url.scheme == "ssh" {
-            ssh.resolve(&url.host)
+            ssh.resolve(&ssh_user_host(raw).unwrap_or(url.host))
         } else {
             url.host
         };
@@ -716,6 +717,18 @@ pub(crate) fn push_leaves(forge: &str, cwd: Option<&Path>) -> Option<String> {
         }
     }
     None
+}
+
+/// An SSH URL's `user@host`, for `ssh -G`: the authority of `ssh://user@host[:port]/path`, or
+/// what precedes the `:` of scp-style `user@host:path`. `None` without a user.
+fn ssh_user_host(raw: &str) -> Option<String> {
+    let authority = match raw.split_once("://") {
+        Some((_, rest)) => rest.split('/').next()?,
+        None => raw.split_once(':')?.0,
+    };
+    let (user, host) = authority.rsplit_once('@')?;
+    let host = host.rsplit_once(':').map_or(host, |(host, _)| host);
+    Some(format!("{user}@{host}"))
 }
 
 /// Where SSH would take a remote gh adds on `forge` with its SSH protocol, when that isn't the
