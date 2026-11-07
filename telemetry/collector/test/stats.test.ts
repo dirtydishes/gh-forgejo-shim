@@ -83,15 +83,23 @@ describe("stats", () => {
   });
 
   it("follows each first week's installs into later weeks", () => {
-    const cohorts = [
-      { day: "2026-11-02", first_week: "2026-W45", count: 4 },
-      { day: "2026-11-03", first_week: "2026-W45", count: 6 },
-      { day: "2026-11-10", first_week: "2026-W45", count: 3 },
-      { day: "2026-11-11", first_week: "2026-W46", count: 2 },
+    const days: Array<[string, string, number]> = [
+      ["2026-11-02", "2026-W45", 4],
+      ["2026-11-03", "2026-W45", 6],
+      ["2026-11-10", "2026-W45", 3],
+      ["2026-11-10", "2026-W46", 3],
+      ["2026-11-17", "2026-W45", 3],
+      ["2026-11-17", "2026-W46", 2],
     ];
-    expect(stats([], cohorts, [], "2026-11-12").retention).toEqual([
+    const rows = [...new Set(days.map(([day]) => day))].map((day) =>
+      row(day, days.filter(([d]) => d === day).reduce((sum, [, , n]) => sum + n, 0)),
+    );
+    const cohorts = days.map(([day, first_week, count]) => ({ day, first_week, count }));
+    expect(stats(rows, cohorts, [], "2026-11-18").retention).toEqual([
       { first_week: "2026-W45", week: "2026-W45", installs: 6 },
       { first_week: "2026-W45", week: "2026-W46", installs: 3 },
+      { first_week: "2026-W46", week: "2026-W46", installs: 3 },
+      // 2026-W47: the week's 5 less W45's 3 would show W46's 2, so neither shows.
     ]);
   });
 
@@ -180,5 +188,23 @@ describe("isoWeek", () => {
     expect(isoWeek("2027-01-01")).toBe("2026-W53");
     expect(isoWeek("2024-12-30")).toBe("2025-W01");
     expect(isoWeek("2021-01-03")).toBe("2020-W53");
+  });
+});
+
+describe("retention", () => {
+  it("never lets a week's total minus its first weeks give away a small cohort", () => {
+    // Four reports on 2026-01-05: three from installs that began that week, one from the next
+    // week's only other possible first week. The week's 4 less W01's 3 would show W02's 1.
+    const rows = [
+      { day: "2026-01-05", mode: "client", client: "codex", forge: "forgejo", forge_major: 15, os: "macos",
+        arch: "aarch64", version: "0.3.0", gh: "2.103", count: 4 },
+    ];
+    const cohorts = [
+      { day: "2026-01-05", first_week: "2026-W01", count: 3 },
+      { day: "2026-01-05", first_week: "2026-W02", count: 1 },
+    ];
+    const result = stats(rows, cohorts, [], "2026-01-06");
+    expect(result.totals.weeks).toEqual([{ week: "2026-W02", installs: 4, reports: 4 }]);
+    expect(result.retention).toEqual([]);
   });
 });

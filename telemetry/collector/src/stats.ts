@@ -126,6 +126,13 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
       day.installs += row.count;
     }
   }
+  // Retention: each first week's reports are a part of the day's total too. Its daily cells are
+  // never published, but they're counted, so a week's retention can't be subtracted from its total.
+  for (const row of cohortRows) {
+    const day = cell("retention", row.day, { first_week: row.first_week }, true);
+    day.reports += row.count;
+    day.installs += row.count;
+  }
   const days = [...cells.values()];
   const weekOf = new Map<Cell, Cell>();
   for (const day of days) {
@@ -177,21 +184,6 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
     };
   };
 
-  // Retention: for each first week, the installs the counts prove ran in each later week.
-  const cohortDays = new Map<string, number>();
-  for (const row of cohortRows) {
-    const key = JSON.stringify([row.first_week, row.day]);
-    cohortDays.set(key, (cohortDays.get(key) ?? 0) + row.count);
-  }
-  const cohorts = new Map<string, { first_week: string; week: string; installs: number }>();
-  for (const [key, reports] of cohortDays) {
-    const [first_week, day] = JSON.parse(key) as [string, string];
-    const week = isoWeek(day);
-    const found = cohorts.get(`${first_week} ${week}`) ?? { first_week, week, installs: 0 };
-    found.installs = Math.max(found.installs, reports);
-    cohorts.set(`${first_week} ${week}`, found);
-  }
-
   // Unsupported names: a week's installs is its busiest day's reports naming it, since one install
   // names it at most once a day; `total` sums the times they counted it.
   const names = new Map<string, { week: string; name: string; installs: number; total: number }>();
@@ -209,9 +201,12 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
     totals: publish("totals"),
     by_field: Object.fromEntries(FIELDS.map((field) => [field, publish(field)])),
     combinations: publish("combinations"),
-    retention: [...cohorts.values()]
-      .filter((found) => found.week >= firstWeek && found.installs >= MINIMUM)
-      .sort(order),
+    // For each first week, the installs the counts prove ran in each later week.
+    retention: publish("retention").weeks.map((found) => ({
+      first_week: (found as Labels).first_week,
+      week: found.week,
+      installs: found.installs,
+    })),
     unsupported: [...names.values()]
       .filter((found) => found.week >= firstWeek && found.installs >= MINIMUM)
       .sort(order),
