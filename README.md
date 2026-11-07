@@ -59,6 +59,7 @@ client-only mode, Claude's agent can still run `gh` itself, once you
 - [Install](#install) and [Quickstart](#quickstart)
 - [Server mode](#server-mode) and [pull request links](#pull-request-links)
 - [Known gaps](#known-gaps)
+- [Usage reports](#usage-reports)
 - When something breaks: [Doctor](#doctor), [Codex probe diagnostics](#codex-probe-diagnostics),
   [Rollback](#rollback)
 - [Reference](#reference): commands and JSON output, configuration and auth, setup details
@@ -225,6 +226,15 @@ lists every check.
 Set `FJ_SHIM_TRACE` to a file path, and `FJ_SHIM_TRACE_BODY=1` for redacted excerpts, to record each
 `gh` command the shim handles or delegates. Read a trace before you share it. [docs/tracing.md](docs/tracing.md) has
 the commands, what redaction hides, and the smoke probes.
+
+## Usage reports
+
+gh-forgejo-shim and fga-server send one anonymous report a day: the version, OS, mode, which agent
+ran gh, the forge's software, and the week of the first report. No hosts, repositories, commands or
+IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
+`gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1` (`FGA_TELEMETRY=0` for fga-server), and
+see the exact report with `gfj telemetry show`. [docs/telemetry.md](docs/telemetry.md) lists every
+field, what the collector keeps, and where the totals are published.
 
 ## Rollback
 
