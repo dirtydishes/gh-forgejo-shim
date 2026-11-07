@@ -1410,6 +1410,12 @@ fn a_fork_remote_s_ssh_destination_counts_unless_gh_uses_https() {
             true,
         ),
         (FORGE_LOGIN.to_string(), Some("git_protocol: ssh\n"), true),
+        // gh reads an alias as its own name, so this is `ssh` to gh.
+        (
+            FORGE_LOGIN.to_string(),
+            Some("saved: &ssh https\ngit_protocol: *ssh\n"),
+            true,
+        ),
     ] {
         push.gh_files(&hosts, config);
         let output = push.pr_create(&push.ssh_path, &[]);
