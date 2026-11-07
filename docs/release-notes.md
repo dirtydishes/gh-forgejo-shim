@@ -15,6 +15,13 @@
   lists, links and code blocks show formatted in ChatGPT desktop's PR view, with no extra Forgejo
   requests (#166). Images show only when the forge itself hosts them, at its full address.
 
+- **The gh commands coding agents run on a pull request work through the gateway.** `gh pr view
+  --json files` (and `mergeCommit`, `potentialMergeCommit`, `closingIssuesReferences`), review
+  comments' `path` and `line` in GraphQL, and `gh api` for a PR's review comments, reviews, files,
+  commits and conversation no longer fail. ChatGPT desktop's PR-code tab can read a comparison, its
+  diff, file contents at a commit and `.gitattributes` blobs. `gh pr diff --patch` prints a patch,
+  not JSON. MAPPING.md §11 lists what Forgejo can't supply. `gh run view --log` still fails (#161).
+
 The v0.2.2 notes follow.
 
 # gh-forgejo-shim v0.2.2
