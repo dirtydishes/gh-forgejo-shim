@@ -379,20 +379,20 @@ async fn server_report(
     struct Version {
         version: String,
     }
-    let version = |path: &'static str| {
-        let url = forgejo_url.join(path);
+    let version = |segments: &'static [&'static str]| {
+        let url = below(forgejo_url, segments);
         async move {
-            let response = client.get(url.ok()?).send().await.ok()?;
+            let response = client.get(url?).send().await.ok()?;
             if !response.status().is_success() {
                 return None;
             }
             Some(response.json::<Version>().await.ok()?.version)
         }
     };
-    let forgejo_route = version("api/forgejo/v1/version").await;
+    let forgejo_route = version(&["api", "forgejo", "v1", "version"]).await;
     let api = match forgejo_route {
         Some(_) => None,
-        None => version("api/v1/version").await,
+        None => version(&["api", "v1", "version"]).await,
     };
     let (forge, forge_major) = forge(forgejo_route.as_deref(), api.as_deref());
     Report {
@@ -408,6 +408,17 @@ async fn server_report(
         first_week: first_week(state),
         unsupported: take_unsupported(),
     }
+}
+
+/// `segments` below `base`, keeping a base path such as a forge served under `/forgejo/`, as the
+/// gateway's own requests do.
+fn below(base: &url::Url, segments: &[&str]) -> Option<url::Url> {
+    let mut url = base.clone();
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .extend(segments);
+    Some(url)
 }
 
 /// Where fga-server keeps its report state: `FGA_STATE_DIR` (the image sets
@@ -507,6 +518,27 @@ mod tests {
         assert_eq!(report_version("0.3.0-rc.1+acme"), "0.3.0-rc.1");
         assert_eq!(report_version("acme-build"), "0.0.0");
         assert_eq!(report_version("1.2"), "0.0.0");
+    }
+
+    #[test]
+    fn a_version_route_keeps_the_forge_s_base_path() {
+        let url = |base: &str| {
+            below(&base.parse().unwrap(), &["api", "v1", "version"])
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            url("http://forgejo:3000"),
+            "http://forgejo:3000/api/v1/version"
+        );
+        assert_eq!(
+            url("http://forgejo:3000/forgejo/"),
+            "http://forgejo:3000/forgejo/api/v1/version"
+        );
+        assert_eq!(
+            url("http://forgejo:3000/forgejo"),
+            "http://forgejo:3000/forgejo/api/v1/version"
+        );
     }
 
     #[test]
