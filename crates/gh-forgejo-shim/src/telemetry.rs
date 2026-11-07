@@ -25,7 +25,7 @@ pub const URL_ENV: &str = "GFJ_TELEMETRY_URL";
 pub const NOTICE: &str =
     "gh-forgejo-shim sends one anonymous usage report a day: its version, OS, \
 which agent ran gh, and the forge's software. No hosts, repositories, commands or IDs. Turn it off \
-with `gfj telemetry off` or GFJ_TELEMETRY=0, and see the exact report with `gfj telemetry show`. \
+with `gfj telemetry off` or GFJ_TELEMETRY=0, and see the report with `gfj telemetry show`. \
 Details: https://github.com/dirtydishes/gh-forgejo-shim/blob/main/docs/telemetry.md";
 
 /// A variable's value, from whichever environment the caller holds.
@@ -292,7 +292,8 @@ fn gh_version(config: &config::Config, env: &EnvMap) -> Option<String> {
     }
 }
 
-/// `gfj telemetry show`: today's report, byte for byte as [`send`] would post it.
+/// `gfj telemetry show`: today's report as [`send`] would post it, except that `client` names what
+/// ran `show`, where the day's report names what ran gh.
 pub fn show(env: &EnvMap) -> String {
     let get = |name: &str| env.get(name).cloned();
     let dir = state_dir(&get);

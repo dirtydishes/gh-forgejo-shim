@@ -233,7 +233,7 @@ gh-forgejo-shim and fga-server send one anonymous report a day: the version, OS,
 ran gh, the forge's software, and the week of the first report. No hosts, repositories, commands or
 IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
 `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1` (`FGA_TELEMETRY=0` for fga-server), and
-see the exact report with `gfj telemetry show`. [docs/telemetry.md](docs/telemetry.md) lists every
+see the report with `gfj telemetry show`. [docs/telemetry.md](docs/telemetry.md) lists every
 field, what the collector keeps, and where the totals are published.
 
 ## Rollback

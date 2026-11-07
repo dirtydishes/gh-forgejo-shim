@@ -18,7 +18,8 @@ Turn them off with `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`. S
 - **A debug build** (`cargo build` without `--release`) sends nothing unless `GFJ_TELEMETRY_URL` or
   `FGA_TELEMETRY_URL` names an address. Tests and development runs never reach the collector.
 
-`gfj telemetry show` prints the exact report the wrapper would send today, byte for byte.
+`gfj telemetry show` prints the report the wrapper would send today, as it would send it, with one
+difference: its `client` names whatever ran `show`, where the day's report names whatever ran `gh`.
 
 ## What a report holds
 
@@ -100,8 +101,9 @@ prints one, because agents read its output.
 
 Reports go to `https://telemetry.dirtydishes.dev/v1/report`, a Cloudflare Worker whose code is in
 [`telemetry/collector`](../telemetry/collector). For each report, it adds one to a counter for that
-UTC day and that combination of values, and one to a counter for each `unsupported` name. That's
-all it stores. It keeps no IP address, header, user agent or report body, and its request logs are
+UTC day and that combination of values, one to a counter for that day and the report's first week,
+and one to a counter for each `unsupported` name. That's all it stores. The first week is counted
+apart from the other values, so no stored counter ties a combination to the week an install began. It keeps no IP address, header, user agent or report body, and its request logs are
 off. It deletes counters older than 400 days.
 
 ## Published totals
