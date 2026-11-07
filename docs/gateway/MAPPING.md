@@ -1,6 +1,6 @@
 # Field mapping: Forgejo → GitHub (A3)
 
-Status: v1.1, 2026-11-01 (Opus). v1 folds in the G2a evidence (`docs/G2A-FINDINGS.md`); v1.1 adds §8, web URLs. The gateway (`fga-core::map`) and gh-forgejo-shim share this spec.
+Status: v1.1, 2026-11-01 (Opus). v1 folds in the G2a evidence (`docs/G2A-FINDINGS.md`); v1.1 adds §8, web URLs. §11 (files, review comments, comparisons, contents) was added 2026-11-07. The gateway (`fga-core::map`) and gh-forgejo-shim share this spec.
 
 **Sources:**
 - GitHub's public GraphQL schema (`schema.docs.graphql`, fetched 2026-10-30).
@@ -361,6 +361,46 @@ against GitHub, on either fetch path, so the gateway doesn't change it.
   repository also has a local branch with that literal name (`refs/heads/refs/topic`), git checks
   out the branch instead. Against GitHub, a PR whose fork is deleted has no head repository either,
   and gh takes the same path with the same name.
+
+## 11. Files, review comments, comparisons and contents
+
+These are what coding agents ask for when they read a pull request with gh, and what ChatGPT
+desktop's PR-code tab reads to show the code. Where Forgejo has no data for a field, the gateway
+returns GitHub's empty or null value, never an error.
+
+**GraphQL.**
+
+| GitHub | Forgejo |
+|---|---|
+| `PullRequest.files` | `GET pulls/{n}/files`, every page: `path`, `additions`, `deletions`; `changeType` from `status` (`changed`, Forgejo's word for a modification, is `MODIFIED`). `viewerViewedState` is always `UNVIEWED`: Forgejo keeps viewed files but doesn't serve them |
+| `mergeCommit` | `merge_commit_sha` once merged, else null |
+| `potentialMergeCommit` | always null: Forgejo makes a test merge but doesn't expose it |
+| `closingIssuesReferences` | the issues the body's closing keywords name (`close`, `fix` and `resolve` in their forms, then `#N` or `owner/repo#N`), the references Forgejo closes on merge; at most 50. Pull requests and issues the viewer can't read are left out. `userLinkedOnly: true` lists none: Forgejo has no manual links. `orderBy` is ignored |
+| `PullRequestReviewComment.path`, `diffHunk` | the comment's own |
+| `line`, `originalLine` | the commented line as the reviewer saw it, from the comment's hunk (see the rule in `map/reviews.rs`); `line` is null once the comment is outdated |
+| `outdated`, thread `isOutdated` | true once the PR's head is no longer the commit the review was made on. Forgejo's API doesn't say whether a push touched the line, so any later push makes it outdated |
+| `commit`, `originalCommit` | the review's commit |
+| `startLine`, `originalStartLine`, thread `startDiffSide` | null: a Forgejo comment covers one line |
+| `subjectType` | `LINE` |
+| thread `isCollapsed`, `resolvedBy` | resolved, and who resolved it |
+| `Repository.object(expression:)` | `REV:PATH` is a `Blob` from `GET contents/{path}?ref=REV`; a bare `REV` is a `Commit`; `HEAD` or an empty revision is the default branch. A missing path or revision is null, as on GitHub. A directory or a submodule is null too: the gateway serves no `Tree`. Look-ups by `oid` are null |
+| `Blob.text` | the file's text, at most 1 MiB, with `isTruncated` past that. Null for a binary blob (one with a NUL byte or that isn't UTF-8) and when Forgejo sent no content |
+
+**REST.** Each route reads everything from Forgejo, then pages it as GitHub does: `per_page` (30
+unless asked, at most 100), `page`, and a `Link` header when there is more than one page, which
+`gh api --paginate` follows.
+
+| Route | From Forgejo | Differences |
+|---|---|---|
+| `pulls/{n}/comments` | every listed review (not review requests, not others' pending reviews) and each one's comments, oldest first | `line`, `original_line` and `side` as above. `position` and `original_position`, GitHub's offsets into the diff, are null. `commit_id` and `original_commit_id` are the review's commit. `in_reply_to_id` points a later comment at the first comment of its conversation (one review's comments on the same path and line); the first has none |
+| `pulls/{n}/reviews` | the same listed reviews, oldest first | `submitted_at` is null for a pending review |
+| `pulls/{n}/files` | `pulls/{n}/files` and the PR's diff | `patch` is the file's hunks from `pulls/{n}.diff`; a binary file or a pure rename has none. `sha` is null: Forgejo gives no blob SHA per file. `status` uses GitHub's words (`removed`, `modified`) |
+| `pulls/{n}/commits` | `pulls/{n}/commits` | oldest first, as on GitHub; Forgejo lists newest first |
+| `issues/{n}/comments` | `issues/{n}/comments` | none |
+| `pulls/{n}` with `Accept: …diff` or `…patch` | `pulls/{n}.diff`, `pulls/{n}.patch` | none (`gh pr diff`, `gh pr diff --patch`) |
+| `compare/{base}...{head}` | `compare/{base}...{head}`, the reverse comparison for `behind_by`, and `git/commits` for the base, head and merge base | Forgejo names no merge base. The gateway takes it from the compared commits' parents: the one outside the comparison that every other such parent is an ancestor of, checked with further comparisons when merges leave several. If Forgejo cut the commit list short, or the two share no history, the comparison is a 404. Files, their line counts and patches come from the pull request with the same head and merge base when there is one, as for ChatGPT's PR tab. Without one, files carry only their status, with zero counts and no patch. Two-dot comparisons aren't served |
+| `compare/…` with `Accept: …diff` or `…patch` | the matching pull request's diff or patch | Forgejo's API serves no other comparison's diff, so one that is no pull request's is a 422 |
+| `contents/{path}?ref=` | `contents/{path}` | a file's base64 `content` up to 1 MiB; past that, `content` is empty and `encoding` is `none`, as on GitHub. With `Accept: application/vnd.github.object+json` a directory is one object with `entries`; with `…raw` a file is its bytes (`raw/{path}`). `url` points at the gateway; `git_url` is null, as the gateway serves no `git/blobs` |
 
 ## Open items to verify against the live twin (G2/G3)
 
