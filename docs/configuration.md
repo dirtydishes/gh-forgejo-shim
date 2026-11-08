@@ -15,18 +15,21 @@ Example:
 ```toml
 hosts = ["git.example.com"]
 
-[paths]
-gh = "/opt/homebrew/bin/gh"
-fj = "/opt/homebrew/bin/fj"
-
 [host."git.example.com"]
 api_url = "https://git.example.com"
 token_env = "EXAMPLE_FORGEJO_TOKEN"
+ca_file = "/path/to/ca.pem"
+wip_prefixes = ["WIP:", "[WIP]"]
+
+[paths]
+gh = "/opt/homebrew/bin/gh"
+fj = "/opt/homebrew/bin/fj"
 ```
 
 A `[host."NAME"]` table sets `api_url`, `token_env`, `ca_file` and `wip_prefixes`
-for one host; the README's [Configuration](../README.md#configuration) section
-describes each key.
+for one host.
+
+The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store. `wip_prefixes` lists the title prefixes the forge marks drafts with, and should match the forge's own WIP setting: commands that launch real gh strip them from a draft's title, and the first one marks a new draft. It defaults to `["WIP:", "[WIP]"]`; the list can't be empty, and a prefix can't contain a comma.
 
 ## Host Allowlist
 
@@ -57,6 +60,27 @@ behavior for GitHub repositories and keeps a stale or accidental `github.com`
 entry from being treated as Forgejo.
 
 ## Environment Overrides
+
+The shim reads these variables:
+
+```text
+FJ_SHIM_HOSTS
+FJ_SHIM_REAL_GH
+FJ_SHIM_ALLOW_UNKNOWN_GH
+FJ_SHIM_REAL_FJ
+FJ_SHIM_CA_FILE
+FJ_SHIM_TRACE
+FJ_SHIM_TRACE_BODY
+FJ_SHIM_REAL_GIT
+FJ_SHIM_TOKEN
+FORGEJO_TOKEN
+GITEA_TOKEN
+FJ_TOKEN
+GH_REPO
+GH_HOST
+```
+
+`FJ_SHIM_TRACE` and `FJ_SHIM_TRACE_BODY` turn on [tracing](tracing.md).
 
 `FJ_SHIM_HOSTS` replaces the configured host list for the current process:
 
@@ -113,7 +137,7 @@ Some GUI apps, including Codex.app when launched from Finder, Dock, or Spotlight
 /usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 ```
 
-That PATH may miss both the generated shim at `~/.local/bin/gh` and the real Homebrew GitHub CLI at `/opt/homebrew/bin/gh`.
+That PATH may miss both the generated shim at `~/.local/bin/gh` and the real Homebrew GitHub CLI at `/opt/homebrew/bin/gh`. The usual sign is Codex.app or another GUI-launched tool saying `GitHub CLI (gh) is not installed` even though `gh --version` works in your shell.
 
 `gfj bootstrap` repairs this by default on macOS. To run only the GUI PATH
 repair, use:
@@ -138,6 +162,12 @@ To provide an exact value instead of the default:
 gh-forgejo-shim install-gui-path --path "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 ```
 
+To only write the LaunchAgent and wait until the next login:
+
+```sh
+gh-forgejo-shim install-gui-path --no-apply
+```
+
 `gh-forgejo-shim doctor` reports separate checks for current process `PATH` and
 macOS GUI PATH so shell and GUI launcher problems are easier to tell apart.
 
@@ -154,7 +184,7 @@ gh-forgejo-shim auth logout [host]
 
 `auth login` prompts for a Forgejo host when one is not supplied, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, and saves it in shim-owned auth storage. It also adds the host to the allowlist, so routed `gh pr ...`, `gh issue ...`, and `gh repo view` commands can use the saved token immediately.
 
-`auth import --from fj` reads forgejo-cli's `keys.json`; `--from tea` reads tea's YAML config. It copies the host's token into shim-owned storage and adds the host to the allowlist, without contacting the server. This is useful when Terminal already has auth through another Forgejo CLI, but GUI-launched apps such as Codex.app don't inherit that shell's environment.
+`auth import --from fj` reads forgejo-cli's `keys.json`; `--from tea` reads tea's YAML config. It copies the host's token into shim-owned storage and adds the host to the allowlist, without contacting the server. This is useful when Terminal already has auth through another Forgejo CLI, but GUI-launched apps such as Codex.app don't inherit that shell's environment. Omit `--hostname` only when the file has one entry. Missing or ambiguous entries cause an error without a write. The command prints the host and source path, never the token. Imports do not refresh OAuth tokens or read another tool's Keychain entries.
 
 `auth status` reports whether auth is available for the host without printing the token. `auth logout` removes only the shim-owned stored auth for that host.
 
@@ -185,14 +215,20 @@ GITEA_TOKEN
 FJ_TOKEN
 ```
 
-With more than one host, generic variables never supply a token. Normal commands
-never read other tools' credential files; run `auth import` once to copy a token.
+Empty variables count as unset. With more than one host, generic variables never
+supply a token. Normal commands never read other tools' credential files; run
+`auth import` once to copy a token.
 
 On macOS, the current `fj` CLI stores auth in:
 
 ```text
 ~/Library/Application Support/forgejo-cli.forgejo-cli/keys.json
 ```
+
+Import also accepts fj's older `Cyborus.forgejo-cli/keys.json` location. On Linux, fj uses `${XDG_DATA_HOME:-~/.local/share}/forgejo-cli/keys.json`. Tea uses `${XDG_CONFIG_HOME}/tea/config.yml`, defaulting to `~/Library/Application Support/tea/config.yml` on macOS or `~/.config/tea/config.yml` on Linux, with `~/.tea/tea.yml` as its legacy fallback.
+
+The token needs the four scopes in the README's
+[Token scopes](../README.md#token-scopes) table.
 
 After import, GUI apps such as Codex.app find Forgejo auth without inheriting
 shell-only environment variables.
