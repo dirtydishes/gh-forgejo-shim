@@ -144,8 +144,9 @@ fn ok(reply: Reply) -> Result<Reply, Error> {
 /// holds `/` or `\`, as written or after up to three rounds of percent-decoding (each proxy in a
 /// chain may decode once). Such a segment would take the token to another service behind the same
 /// proxy, so it is never sent. A tab, CR or LF counts too: the URL parser drops them, so `.\t.`
-/// would go out as `..`. Names never need one; multi-part paths are split into segments.
-fn climbs(segment: &str) -> bool {
+/// would go out as `..`. Names never need one; multi-part paths are split into segments. The
+/// shim's built-in client refuses the same segments.
+pub fn climbs(segment: &str) -> bool {
     let mut text = segment.to_owned();
     for _ in 0..=3 {
         if matches!(text.as_str(), "." | "..") || text.contains(['/', '\\', '\t', '\r', '\n']) {
