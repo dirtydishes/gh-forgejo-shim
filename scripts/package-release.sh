@@ -66,6 +66,7 @@ install -m 0755 "$release_dir/gh-forgejo-shim${bin_suffix}" "$stage_dir/gh-forge
 install -m 0755 "$release_dir/gfj${bin_suffix}" "$stage_dir/gfj${bin_suffix}"
 install -m 0644 README.md "$stage_dir/README.md"
 install -m 0644 LICENSE "$stage_dir/LICENSE"
+install -m 0644 CONTRIBUTING.md "$stage_dir/CONTRIBUTING.md"
 install -m 0644 docs/installation.md "$stage_dir/docs/installation.md"
 install -m 0644 docs/pipx-to-rust-migration.md "$stage_dir/docs/pipx-to-rust-migration.md"
 install -m 0644 docs/rollback.md "$stage_dir/docs/rollback.md"

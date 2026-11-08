@@ -887,6 +887,7 @@ fn audit_diag_release_documented_extract() -> TestResult {
     for file in [
         "README.md",
         "LICENSE",
+        "CONTRIBUTING.md",
         "docs/installation.md",
         "docs/pipx-to-rust-migration.md",
         "docs/rollback.md",
