@@ -1,0 +1,30 @@
+fragment pr on PullRequest{additions,assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},baseRefName,baseRefOid,body,changedFiles,closed,closedAt,closingIssuesReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},commits(first: 100) {nodes {commit {authors(first:100) {nodes {name,email,user{id,login}}},messageHeadline,messageBody,oid,committedDate,authoredDate}}},createdAt,deletions,files(first: 100) {nodes {additions,deletions,path,changeType}},fullDatabaseId,headRefName,headRefOid,headRepository{id,name,nameWithOwner},headRepositoryOwner{id,login,...on User{name}},id,isCrossRepository,isDraft,labels(first:100){nodes{id,name,description,color},totalCount},latestReviews(first: 100) {nodes {author{login},authorAssociation,submittedAt,body,state}},maintainerCanModify,mergeCommit{oid},mergeStateStatus,mergeable,mergedAt,mergedBy{login,...on User{id,name}},milestone{number,title,description,dueOn},number,potentialMergeCommit{oid},projectCards(first:100){nodes{project{name}column{name}},totalCount},projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount},reactionGroups{content,users{totalCount}},reviewDecision,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login,name},...on Bot{login},...on Team{organization{login}name,slug}}}},reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},state,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},title,updatedAt,url}
+    query PullRequestList(
+      $owner: String!,
+      $repo: String!,
+      $limit: Int!,
+      $endCursor: String,
+      $baseBranch: String,
+      $headBranch: String,
+      $state: [PullRequestState!] = OPEN
+    ) {
+      repository(owner: $owner, name: $repo) {
+        pullRequests(
+          states: $state,
+          baseRefName: $baseBranch,
+          headRefName: $headBranch,
+          first: $limit,
+          after: $endCursor,
+          orderBy: {field: CREATED_AT, direction: DESC}
+        ) {
+          totalCount
+          nodes {
+            ...pr
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
