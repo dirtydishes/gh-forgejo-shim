@@ -18,6 +18,8 @@ categories = ["command-line-utilities", "development-tools"]
 # version and edition.
 [workspace.dependencies]
 async-graphql = "7.2"
+# Pinned with async-graphql: fga-core walks the parsed document's values.
+async-graphql-value = "=7.2.1"
 axum = "0.8"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

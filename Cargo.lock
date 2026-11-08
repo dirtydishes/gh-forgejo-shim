@@ -626,6 +626,7 @@ version = "0.1.0"
 dependencies = [
  "ammonia",
  "async-graphql",
+ "async-graphql-value",
  "axum",
  "base64",
  "comrak",

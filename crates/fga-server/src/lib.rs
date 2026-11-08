@@ -420,8 +420,8 @@ fn names(authority: &[u8], name: &url::Host, port: u16, default: u16) -> bool {
 
 /// The largest GraphQL request body. A 65,536-character PR body or comment (GitHub's limit) sent
 /// as a variable fits even at six bytes a character, as Go's JSON encoder writes `<`; real
-/// documents are a few KB. Validation errors arise before any field resolves, so the output
-/// budget never sees them: this bounds how many one document can raise.
+/// documents are a few KB. It bounds parsing; the schema's document cost check bounds the work
+/// and errors of validation, which the output budget never sees.
 const MAX_GRAPHQL_REQUEST_BYTES: usize = 512 * 1024;
 
 /// The most errors one response lists; one more says how many were left out.

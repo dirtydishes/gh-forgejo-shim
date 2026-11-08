@@ -146,6 +146,12 @@ async fn every_captured_document_is_within_the_limits() {
     assert!(documents.len() > 140, "found {} documents", documents.len());
     let mut invalid = Vec::new();
     for (source, query) in documents {
+        let document = async_graphql::parser::parse_query(&query).expect("parses");
+        let steps = cost::check(&document).expect("within cost");
+        assert!(
+            steps * 4 <= cost::MAX_COST,
+            "{source}: costs {steps}: raise MAX_COST"
+        );
         match validate(builder(), &query).await {
             // Room to spare, so a client's next version or a new field doesn't hit the limits.
             Ok(result) => assert!(
@@ -335,4 +341,76 @@ async fn the_budget_error_survives_a_list_that_cannot_be_null() {
     let error = serde_json::to_value(&errors[0]).expect("error");
     assert_eq!(error["extensions"]["type"], "RESOURCE_LIMITS_EXCEEDED");
     assert!(size < 1024, "{size} bytes");
+}
+
+/// The one error a refused document gets, after asserting there is only one.
+async fn refused(query: &str) -> String {
+    let response = builder().finish().execute(query).await;
+    assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+    response.errors[0].message.clone()
+}
+
+/// async-graphql's overlapping-fields rule reports one error per argument for each repeat of an
+/// output name, before the complexity limit applies: here 40 repeats of 200 arguments would be
+/// about 8,000 errors, and the same shape at 512 KiB billions. The first conflict refuses it.
+#[tokio::test]
+async fn a_repeated_field_with_differing_arguments_is_refused_once() {
+    let arguments = vec!["b:1"; 200].join(" ");
+    let query = format!("{{viewer({arguments}){{login}} {}}}", "viewer ".repeat(40));
+    assert!(
+        refused(&query)
+            .await
+            .contains("conflict because they have differing arguments")
+    );
+
+    let small = refused("{viewer(b:1){login} viewer{login}}").await;
+    assert!(small.contains("differing arguments"), "{small}");
+}
+
+/// The same rule walks every fragment a selection set reaches, once per selection set: 200
+/// selections of a fragment that spreads 200 conflicting ones would be 40,000 errors.
+#[tokio::test]
+async fn conflicts_reached_through_fragments_are_refused_once() {
+    let selections: Vec<String> = (0..200).map(|i| format!("v{i}:viewer{{...G}}")).collect();
+    let spreads: Vec<String> = (0..200).map(|i| format!("...f{i}")).collect();
+    let fragments: Vec<String> = (0..200)
+        .map(|i| format!("fragment f{i} on User{{a:login a:name}}"))
+        .collect();
+    let query = format!(
+        "{{{}}} fragment G on User{{{}}} {}",
+        selections.join(" "),
+        spreads.join(" "),
+        fragments.join(" ")
+    );
+
+    assert!(refused(&query).await.contains("are different fields"));
+}
+
+/// async-graphql's recursion-depth check walks a spread again each time it appears, so a
+/// fragment spread twice at each of 30 levels would take a billion steps.
+#[tokio::test]
+async fn fragments_spread_twice_at_each_level_are_refused() {
+    let mut query = String::from("{...F0}");
+    for level in 0..30 {
+        let next = level + 1;
+        query.push_str(&format!(
+            " fragment F{level} on Query{{...F{next} ...F{next}}}"
+        ));
+    }
+    query.push_str(" fragment F30 on Query{__typename}");
+
+    assert_eq!(refused(&query).await, "Query is too complex.");
+}
+
+#[tokio::test]
+async fn a_fragment_spread_within_itself_is_refused() {
+    let message = refused("{...F} fragment F on Query{...F ...F}").await;
+    assert_eq!(message, "Cannot spread fragment \"F\" within itself");
+}
+
+#[tokio::test]
+async fn a_document_past_its_cost_is_refused() {
+    let arguments = vec!["b:1"; cost::MAX_COST].join(" ");
+    let query = format!("{{viewer({arguments}){{login}}}}");
+    assert_eq!(refused(&query).await, "Query is too complex.");
 }

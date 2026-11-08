@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 async-graphql.workspace = true
+async-graphql-value.workspace = true
 base64.workspace = true
 reqwest.workspace = true
 serde.workspace = true
