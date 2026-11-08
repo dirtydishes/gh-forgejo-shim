@@ -67,6 +67,7 @@ gfj
 VERSION
 LICENSE
 README.md
+CONTRIBUTING.md
 docs/
 ```
 
