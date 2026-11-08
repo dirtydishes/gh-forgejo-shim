@@ -1,5 +1,15 @@
 # gh-forgejo-shim
 
+> **Early beta.** Version 0.2 rebuilt the shim around a new gateway. Everyday pull request, issue
+> and check commands work, but gaps remain: some `gh` commands and fields still fail, and a few app
+> features work only with GitHub itself. We're closing these gaps release by release.
+> [Known gaps](#known-gaps) lists what doesn't work yet. If something breaks, please
+> [open an issue](https://github.com/dirtydishes/gh-forgejo-shim/issues/new). Say which app you
+> were using and which action you were attempting, and paste the output of `gfj doctor`. To show us
+> the exact commands, turn on [tracing](#codex-probe-diagnostics) and attach the trace, but read it
+> first: redaction hides most credentials, not every form. [Rollback](#rollback) removes only the
+> shim's own files.
+
 `gh-forgejo-shim` is a native Rust CLI that helps Codex.app and other GitHub-oriented tools work inside Forgejo repositories without putting Python in the installed `gh`, `gfj`, or `gh-forgejo-shim` runtime path.
 
 It installs a durable management command named `gh-forgejo-shim` plus a shorter daily-use alias named `gfj`. When you opt in, it can also place a user-local `gh` wrapper in front of the real GitHub CLI. Real GitHub repositories still delegate to the real `gh`. In allowlisted Forgejo repositories, the pull request, issue, run and API commands that coding tools use run the real `gh` too, against a gateway the wrapper starts for the call; the shim's own code answers the rest of a narrow set of repository, pull request, issue and check commands. The wrapper needs `gh` 2.103.3 or newer ([Requirements](#requirements)).
@@ -31,6 +41,21 @@ You can use both. [Server Mode](#server-mode), further down, has the setup.
 - GitHub-shaped `gh repo view`, `gh pr ...`, and `gh issue ...` output for the fields tools usually probe.
 - Pull request checks mapped from Forgejo commit statuses into GitHub-style `statusCheckRollup` and `gh pr checks` output.
 - Safe rollback commands that remove only shim-managed files.
+
+## Known gaps
+
+- `gh run view --log` and `--log-failed` fail with a 404: the gateway doesn't serve job logs yet
+  ([#161](https://github.com/dirtydishes/gh-forgejo-shim/issues/161)).
+- Some `gh pr view --json` and `gh repo view --json` fields, and some `gh api` routes, aren't served
+  by the gateway yet
+  ([#146](https://github.com/dirtydishes/gh-forgejo-shim/issues/146),
+  [#189](https://github.com/dirtydishes/gh-forgejo-shim/issues/189)).
+- ChatGPT desktop's pull request overview pane needs a GitHub account connected to ChatGPT and
+  can't open a Forgejo pull request. That's how ChatGPT is built, not a shim bug. The sidebar
+  status, the pull request menu, review comments and the agent's `gh` commands work.
+- In a Forgejo checkout, `gh pr create` checks where git will push before it runs. The check is best
+  effort: a few unusual git or SSH setups can still send the push to another host
+  ([#255](https://github.com/dirtydishes/gh-forgejo-shim/issues/255)).
 
 ## Install
 
