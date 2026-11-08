@@ -34,6 +34,9 @@ const PER_ITEM: usize = 24;
 /// An error besides its message and path: its other keys and punctuation.
 const PER_ERROR: usize = 128;
 
+/// The `type` of the budget's own error, GitHub's for a query past its resource limits.
+const BUDGET_ERROR: &str = "RESOURCE_LIMITS_EXCEEDED";
+
 /// A response budget: each request may build this many bytes of response.
 pub(super) struct OutputBudget(pub(super) usize);
 
@@ -89,8 +92,13 @@ impl Extension for Spending {
             return result;
         }
         if self.spent.swap(true, Ordering::Relaxed) {
-            // An error passes up, so the budget's own error reaches the response.
-            return result.and(Ok(Some(Value::Null)));
+            // Only the budget's own error passes up, so it reaches the response. Any other error
+            // that lands after the budget ran out, such as a field's that was waiting on Forgejo,
+            // is dropped like its value: each carries its path, and many may land at once.
+            return match result {
+                Err(error) if is_budget_error(&error) => Err(error),
+                _ => Ok(Some(Value::Null)),
+            };
         }
         let mut error = ServerError::new(
             format!(
@@ -100,10 +108,18 @@ impl Extension for Spending {
             None,
         );
         let mut extensions = ErrorExtensionValues::default();
-        extensions.set("type", "RESOURCE_LIMITS_EXCEEDED");
+        extensions.set("type", BUDGET_ERROR);
         error.extensions = Some(extensions);
         Err(error)
     }
+}
+
+fn is_budget_error(error: &ServerError) -> bool {
+    error
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.get("type"))
+        .is_some_and(|kind| *kind == Value::String(BUDGET_ERROR.to_owned()))
 }
 
 /// What a field's value adds to the response beyond what its own fields and items were charged.
