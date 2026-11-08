@@ -59,9 +59,9 @@ GitHub-only metadata flags such as reviewers, labels, assignees, projects, miles
 
 By default, `gh pr create` prints the created pull request's URL.
 
-Pull request URLs use GitHub's `/pull/<number>` layout; the README's
-[Pull request links](../README.md#pull-request-links) section explains why and has the redirect for
-the forge's reverse proxy.
+Pull request URLs use GitHub's `/pull/<number>` layout;
+[Pull request links](pull-request-links.md) explains why and has the redirect for the forge's
+reverse proxy.
 
 `gh pr list` runs the real `gh`, and the gateway applies its filters, including state, limit, head, base, author, assignee and label. `--search` takes GitHub's query syntax, and qualifiers that Forgejo has no equivalent for aren't applied.
 

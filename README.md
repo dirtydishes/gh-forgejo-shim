@@ -9,15 +9,15 @@
 > first: redaction hides most credentials, not every form. [Rollback](#rollback) removes only the
 > shim's own files.
 
-Open a Forgejo repository in ChatGPT desktop or Codex, and its pull requests work as they do on
-GitHub. The shim answers the GitHub CLI (`gh`) calls these apps make with data from your Forgejo
+Open a Forgejo repository in Codex, in the ChatGPT desktop app, and its pull requests work as they
+do on GitHub. The shim answers the GitHub CLI (`gh`) calls these apps make with data from your Forgejo
 server, and leaves your GitHub repositories to the real `gh`.
 
 ![Codex in ChatGPT desktop, open on a Forgejo repository named gfj-demo. Asked "Is PR #1 ready to merge?", the agent answers that Forgejo reports the PR can merge into main without conflicts, that lint, tests and build passed, and that it has one review comment and no approvals. The sidebar shows a pull request status icon beside each chat.](docs/images/pr-ready.png)
 
 ## What works
 
-In a Forgejo repository, ChatGPT desktop and Codex give you:
+In a Forgejo repository, Codex in ChatGPT desktop gives you:
 
 - A pull request status icon beside each chat in the sidebar.
 - The pull request menu: view the PR, its code changes and status, repair, and merge.
@@ -28,10 +28,6 @@ In a Forgejo repository, ChatGPT desktop and Codex give you:
 <img src="docs/images/pr-menu.png" width="480" alt="The pull request menu in Codex for a Forgejo pull request: View PR, Code changes (+225 −3), Status (Open), Repair, Merge, and Add to chat. Beside it, the repository panel lists the pull request with a green status dot.">
 
 ![A Forgejo review comment on src/cli/commands.ts, line 45, attached to the Codex message box as "1 comment". Below it, the user has typed "Fix this, push, and reply to the reviewer."](docs/images/review-comment.png)
-
-ChatGPT's pull request overview pane can't open a Forgejo pull request; [Known gaps](#known-gaps)
-says why and lists what else is missing. Claude Code and Claude desktop need
-[server mode](#server-mode).
 
 ## Works with
 
@@ -44,7 +40,8 @@ says why and lists what else is missing. Claude Code and Claude desktop need
 
 "Yes" means it has been run in the app. "API tested" means CI sends the app's own requests to the
 gateway, but no run in the app is on record. "Either" means client-only or server mode. In
-client-only mode, Claude's agent can still run `gh` itself.
+client-only mode, Claude's agent can still run `gh` itself. [Known gaps](#known-gaps) lists what
+doesn't work yet.
 
 ## Contents
 
@@ -67,8 +64,7 @@ client-only mode, Claude's agent can still run `gh` itself.
   hostname, so the forge itself answers GitHub's API. Any `gh` logged in to the forge works with no
   wrapper, and so do tools that call the API without `gh`. **Use it if you use Claude Code or Claude
   desktop:** they look up a branch's pull request themselves, outside `gh`, and only a gateway on the
-  forge can answer. You need control of the forge's reverse proxy, so a hosted forge such as Codeberg
-  can't use it.
+  forge can answer. It needs control of the forge's reverse proxy.
 
 You can use both. [Server mode](#server-mode), further down, has the setup.
 
@@ -90,13 +86,9 @@ brew install dirtydishes/tap/gh-forgejo-shim
 gfj --version
 ```
 
-Existing pipx users should follow
-[Migrate From pipx To The Rust Binary](docs/pipx-to-rust-migration.md) when
-installing a native Rust release. PyPI is not a supported product runtime.
-
-GitHub release tarballs are also available for macOS and Linux. See
-[docs/installation.md](docs/installation.md) for manual tarball installs,
-checksum verification, rollback, and maintainer release details.
+Release tarballs for macOS and Linux, checksums and upgrades: [docs/installation.md](docs/installation.md).
+Coming from the old pipx install: [docs/pipx-to-rust-migration.md](docs/pipx-to-rust-migration.md).
+PyPI is not a supported product runtime.
 
 ## Quickstart
 
@@ -134,13 +126,10 @@ Create the Forgejo token under **Settings → Applications** with these four sco
 | `write:issue` | Issues can't be read, and a pull request's comments and scheduled auto-merge read as none. With `read:issue` only, issues and comments can't be created or edited. |
 | `read:organization` | A repository an organization owns reads as owned by a user. |
 
-`gfj doctor` asks each configured host's Forgejo which of these its token has, and names any that's missing. Where a missing scope hides data rather than failing a call, as in the last two rows, the gateway answers without that data and logs one warning per scope: in fga-server's log, or, for the wrapper, as a `warning` record in the trace when `FJ_SHIM_TRACE` is set.
+`gfj doctor` names any scope a host's token lacks. [docs/configuration.md](docs/configuration.md#auth)
+says what the gateway logs when a missing scope hides data.
 
 ## Server mode
-
-Server mode runs the gateway, `fga-server`, next to Forgejo on the forge's own hostname, so the forge
-answers GitHub's API. Any `gh` logged in to the forge then works with no wrapper, and so do Claude
-Code and Claude desktop, which look up a branch's pull request themselves, outside `gh`.
 
 **You need:**
 
@@ -176,49 +165,15 @@ Code and Claude desktop, which look up a branch's pull request themselves, outsi
    `gh auth login --hostname forge.example.com`, and paste it. Claude and ChatGPT desktop take their
    token from `gh`.
 
-### Upgrade and roll back
-
-The gateway keeps no state. To upgrade, change the image tag in `compose.yaml` to the new release and
-run `docker compose up -d` in the folder that holds your compose file. To roll back, change the tag
-back and run it again.
-
-To build the image yourself instead, run
-`docker build -f packaging/gateway/Dockerfile -t fga-server:<version> .` in a checkout of that release,
-and set `image: fga-server:<version>`.
+The gateway keeps no state. To upgrade or roll back, change the image tag in `compose.yaml` and run
+`docker compose up -d` again. [server-mode.md](docs/gateway/server-mode.md#1-run-the-gateway) also
+shows how to build the image yourself.
 
 ## Pull request links
 
-Every pull request URL the wrapper and the gateway print uses GitHub's layout,
-`https://<forge>/<owner>/<repo>/pull/7`, not Forgejo's `/pulls/7`. ChatGPT and Codex.app find a PR
-only by that `/pull/<number>` shape. Forgejo itself has no `/pull/` page:
-
-- **Server mode** redirects `/pull/7` to Forgejo's `/pulls/7`, so every link opens.
-- **Client-only installs:** the wrapper's own `--web` commands (`gh pr view --web`, `gh pr diff --web`,
-  `gh pr comment --web`, and `gh issue view --web` for a PR) give Forgejo's `/pulls/7` page. A `/pull/7` link opened anywhere else, such as
-  ChatGPT's "Open pull request in browser", gets a 404 unless the forge redirects it.
-
-If you run the forge, add the redirect to its reverse proxy. For nginx, in the forge's `server` block:
-
-```nginx
-location ~ "^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(/(?:files|commits|checks))?/?$" {
-    return 301 /$1/$2/pulls/$3$4$is_args$args;
-}
-```
-
-For Nginx Proxy Manager, paste the same block into the forge's proxy host, under **Advanced**, below
-anything already there.
-
-For Caddy, in the forge's site block:
-
-```caddyfile
-@pull_link path_regexp pull ^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(/(?:files|commits|checks))?/?$
-redir @pull_link /{re.pull.1}/{re.pull.2}/pulls/{re.pull.3}{re.pull.4}{?query} 301
-```
-
-Both match only plain owner and repository names, so a crafted path can't redirect to another site.
-They assume the forge is served at the root of its hostname; under a subpath, add the prefix to both
-the pattern and the target.
-Server mode's gateway does the same, and also redirects deeper paths under a PR.
+The wrapper and the gateway print pull request links in GitHub's `/pull/7` layout, which Forgejo
+doesn't serve. Server mode redirects them; for client-only installs, add the redirect in
+[docs/pull-request-links.md](docs/pull-request-links.md) to the forge's reverse proxy.
 
 ## Known gaps
 
@@ -239,67 +194,21 @@ Server mode's gateway does the same, and also redirects deeper paths under a PR.
 
 ## Doctor
 
-Run:
-
-```sh
-gfj doctor
-```
-
-It checks that `gh` resolves to the managed wrapper and that the real `gh` is 2.103.3 or newer, that
-a Forgejo host is allowlisted, that a token can be found and has the [scopes it needs](#token-scopes),
-and, on macOS, the PATH new GUI apps get. [docs/installation.md](docs/installation.md#doctor) lists
-every check.
+Run `gfj doctor`. It checks `gh` and its version, the wrapper, the allowlisted hosts, the token and
+its [scopes](#token-scopes), and on macOS the GUI PATH. [docs/installation.md](docs/installation.md#doctor)
+lists every check.
 
 ## Codex probe diagnostics
 
-When Codex.app reports `GitHub CLI unavailable`, `Pull request status unavailable`, or stale branch
-data, turn on tracing before guessing at the fix. The shim then records the exact `gh` commands it
-handles or delegates:
-
-```sh
-export FJ_SHIM_TRACE="$PWD/codex-probe-trace.jsonl"
-export FJ_SHIM_TRACE_BODY=1
-```
-
-Redaction hides credentials in common forms but not every form, so read a trace before you share
-it. Summarize one with:
-
-```sh
-gfj trace summarize codex-probe-trace.jsonl
-```
-
-[docs/tracing.md](docs/tracing.md) covers what a trace records, how redaction works, the smoke probes
-(`gfj trace smoke`) and recording Codex's raw `git` calls.
+Set `FJ_SHIM_TRACE` to a file path, and `FJ_SHIM_TRACE_BODY=1` for redacted excerpts, to record each
+`gh` command the shim handles or delegates. Read a trace before you share it. [docs/tracing.md](docs/tracing.md) has
+the commands, what redaction hides, and the smoke probes.
 
 ## Rollback
 
-Remove the generated wrapper:
-
-```sh
-gfj uninstall-shim
-```
-
-Remove the macOS GUI PATH LaunchAgent:
-
-```sh
-gfj uninstall-gui-path
-```
-
-Remove shim-owned auth for a host:
-
-```sh
-gfj auth logout git.example.com
-```
-
-Temporarily bypass Forgejo routing for a process:
-
-```sh
-FJ_SHIM_HOSTS= gh pr view
-```
-
-See [docs/rollback.md](docs/rollback.md) for PATH troubleshooting and recovery steps.
-For old pipx installs moving to Rust, see
-[docs/pipx-to-rust-migration.md](docs/pipx-to-rust-migration.md).
+`gfj uninstall-shim` removes the wrapper and `gfj uninstall-gui-path` the macOS LaunchAgent;
+`gfj auth logout HOST` removes stored auth. Each touches only the shim's own files.
+[docs/rollback.md](docs/rollback.md) has every step.
 
 ## Reference
 
@@ -316,21 +225,4 @@ For old pipx installs moving to Rust, see
 
 ## Development
 
-Run tests with:
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-```
-
-Run the native binaries directly from the checkout:
-
-```sh
-cargo run -p gh-forgejo-shim --bin gh-forgejo-shim -- --help
-cargo run -p gh-forgejo-shim --bin gfj -- --version
-```
-
-For installed-runtime validation, build the release archive with
-`scripts/package-release.sh`, unpack it into a temporary directory, and run the
-`gh-forgejo-shim`, `gfj`, and managed `gh` wrapper smoke checks from there.
+Build, test and release steps are in [CONTRIBUTING.md](CONTRIBUTING.md).

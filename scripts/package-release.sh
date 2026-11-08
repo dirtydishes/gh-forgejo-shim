@@ -72,6 +72,7 @@ install -m 0644 docs/rollback.md "$stage_dir/docs/rollback.md"
 install -m 0644 docs/commands.md "$stage_dir/docs/commands.md"
 install -m 0644 docs/configuration.md "$stage_dir/docs/configuration.md"
 install -m 0644 docs/tracing.md "$stage_dir/docs/tracing.md"
+install -m 0644 docs/pull-request-links.md "$stage_dir/docs/pull-request-links.md"
 install -m 0644 docs/images/*.png "$stage_dir/docs/images/"
 printf '%s\n' "$version" > "$stage_dir/VERSION"
 
