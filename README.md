@@ -33,8 +33,22 @@ ChatGPT's pull request overview pane can't open a Forgejo pull request; [Known g
 says why and lists what else is missing. Claude Code and Claude desktop need
 [server mode](#server-mode).
 
+## Works with
+
+| App | PR status | CI checks | Merge | Issues | Mode |
+|---|---|---|---|---|---|
+| ChatGPT desktop (Codex in the app) | yes, except the overview pane | yes | yes | untested | either |
+| Codex CLI | untested | untested | untested | untested | either |
+| Claude Code | API tested | untested | untested | untested | server mode |
+| Claude desktop | API tested | API tested | untested | untested | server mode |
+
+"Yes" means it has been run in the app. "API tested" means CI sends the app's own requests to the
+gateway, but no run in the app is on record. "Either" means client-only or server mode. In
+client-only mode, Claude's agent can still run `gh` itself.
+
 ## Contents
 
+- [Works with](#works-with)
 - [Two ways to run it](#two-ways-to-run-it)
 - [Install](#install) and [Quickstart](#quickstart)
 - [Server mode](#server-mode) and [pull request links](#pull-request-links)
