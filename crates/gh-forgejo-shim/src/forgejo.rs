@@ -67,7 +67,6 @@ impl RepoRef {
     pub fn web_base_url(&self) -> String {
         format!("https://{}/{}/{}", self.host, self.owner, self.repo)
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1052,6 +1051,11 @@ mod tests {
             .list_check_statuses(&RepoRef::new("git.example.com", "o", "r"), "..")
             .err()
             .ok_or("a `..` commit was sent")?;
+        assert!(error.message().contains("\"..\" can't be part"), "{error}");
+        let error = client
+            .list_commit_statuses(&RepoRef::new("git.example.com", "o", "r"), "..")
+            .err()
+            .ok_or("a `..` commit was sent to the statuses route")?;
         assert!(error.message().contains("\"..\" can't be part"), "{error}");
 
         match listener.accept() {
