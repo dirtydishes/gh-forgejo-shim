@@ -35,8 +35,9 @@ pub const MAX_COMPLEXITY: usize = 500;
 /// 13.
 pub const MAX_DEPTH: usize = 20;
 
-/// The most one response's JSON may come to, counting each object entry and list item at more
-/// than its JSON takes (the `budget` module says how). One upstream response may be as large
+/// The most one response's data and field errors may come to as JSON, counting each object entry
+/// and list item at more than its JSON takes (the `budget` module says how). fga-server bounds
+/// validation errors, which come first. One upstream response may be as large
 /// (`forgejo::MAX_RESPONSE_BYTES`); real documents build far less. The response's values, held
 /// once and then written out, take a few times this in memory at most.
 pub const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;

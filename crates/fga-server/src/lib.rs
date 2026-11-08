@@ -10,7 +10,7 @@ mod runs;
 use async_graphql::Request;
 use axum::{
     Extension, Json, Router,
-    extract::{Request as HttpRequest, State},
+    extract::{DefaultBodyLimit, Request as HttpRequest, State},
     http::{
         StatusCode,
         header::{AUTHORIZATION, HOST},
@@ -242,7 +242,10 @@ pub fn app(state: AppState) -> Router {
             "/api/v3/repos/{owner}/{repo}/actions/workflows/{id}/runs",
             get(runs::workflow_runs),
         )
-        .route("/api/graphql", post(graphql_request))
+        .route(
+            "/api/graphql",
+            post(graphql_request).layer(DefaultBodyLimit::max(MAX_GRAPHQL_REQUEST_BYTES)),
+        )
         .fallback(|| async { rest_error(Error::NotFound) })
         .layer(middleware::from_fn(authenticate));
     Router::new()
@@ -415,6 +418,15 @@ fn names(authority: &[u8], name: &url::Host, port: u16, default: u16) -> bool {
         })
 }
 
+/// The largest GraphQL request body. A 65,536-character PR body or comment (GitHub's limit) sent
+/// as a variable fits even at six bytes a character, as Go's JSON encoder writes `<`; real
+/// documents are a few KB. Validation errors arise before any field resolves, so the output
+/// budget never sees them: this bounds how many one document can raise.
+const MAX_GRAPHQL_REQUEST_BYTES: usize = 512 * 1024;
+
+/// The most errors one response lists; one more says how many were left out.
+const MAX_GRAPHQL_ERRORS: usize = 100;
+
 async fn graphql_request(
     State(state): State<AppState>,
     Extension(session): Extension<Session>,
@@ -432,9 +444,11 @@ async fn graphql_request(
         .await;
     // Only the errors are rewritten: `data`, which the output budget bounds, is written out as it
     // is rather than copied into a second tree first.
-    let errors = response
+    let total = response.errors.len();
+    let mut errors: Vec<Value> = response
         .errors
         .into_iter()
+        .take(MAX_GRAPHQL_ERRORS)
         .map(|error| {
             let mut error = serde_json::to_value(error).expect("GraphQL error is serializable");
             let kind = error
@@ -449,6 +463,13 @@ async fn graphql_request(
             error
         })
         .collect();
+    if total > MAX_GRAPHQL_ERRORS {
+        errors.push(json!({
+            "message": format!("{} more errors left out", total - MAX_GRAPHQL_ERRORS),
+            "type": "RESOURCE_LIMITS_EXCEEDED",
+            "path": [],
+        }));
+    }
     Json(GithubResponse {
         data: response.data,
         extensions: response.extensions,
