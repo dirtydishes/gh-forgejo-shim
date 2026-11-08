@@ -249,8 +249,9 @@ impl ForgejoClient {
         let base_url = settings
             .and_then(|settings| settings.api_url.clone())
             .unwrap_or_else(|| format!("https://{}", host_for_url(&host)));
-        let policy = match Url::parse(&base_url) {
-            Ok(base) if redirects => renamed_repository_redirects(&base),
+        // `repo_api_base_url` builds repository calls the same way.
+        let policy = match Url::parse(&format!("{base_url}/api/v1/repos")) {
+            Ok(repos) if redirects => renamed_repository_redirects(&repos),
             _ => Policy::none(),
         };
         let mut client = Self::with_ca_files(token, &paths, policy)?;
@@ -738,20 +739,19 @@ fn host_for_url(host: &str) -> String {
     trimmed.to_string()
 }
 
-/// The redirects a client for the forge at `base` follows. Forgejo answers an API call for a
-/// renamed or moved repository with a redirect to the same path and query under the new owner
-/// and name: 301 for a renamed repository, 307 for a renamed owner. The client follows that, up to
-/// 10 times. It returns any other redirect as the answer, so the token never goes to another
-/// path or service on the same origin.
-fn renamed_repository_redirects(base: &Url) -> Policy {
-    let mut repos: Vec<String> = base
+/// The redirects a client follows, given `repos`, the URL its repository calls start with:
+/// `<base>/api/v1/repos`, parsed as its requests are, so a base path keeps every segment, empty
+/// ones included. Forgejo answers an API call for a renamed or moved repository with a redirect
+/// to the same path and query under the new owner and name: 301 for a renamed repository, 307
+/// for a renamed owner. The client follows that, up to 10 times. It returns any other redirect as
+/// the answer, so the token never goes to another path or service on the same origin.
+fn renamed_repository_redirects(repos: &Url) -> Policy {
+    let repos: Vec<String> = repos
         .path_segments()
         .into_iter()
         .flatten()
-        .filter(|segment| !segment.is_empty())
         .map(str::to_owned)
         .collect();
-    repos.extend(["api", "v1", "repos"].map(str::to_owned));
     Policy::custom(move |attempt| {
         // `previous` starts with the first request, so this allows 10 redirects.
         let follow = attempt.previous().len() <= 10
@@ -767,8 +767,8 @@ fn renamed_repository_redirects(base: &Url) -> Policy {
     })
 }
 
-/// Whether `to` is `from`, an API call below `repos` (the base's path, then `api/v1/repos`), on
-/// the same origin with only the owner and repository after `repos` changed, to plain names.
+/// Whether `to` is `from`, an API call below `repos` (the path segments of `<base>/api/v1/repos`),
+/// on the same origin with only the owner and repository after `repos` changed, to plain names.
 fn renames_repository(repos: &[String], from: &Url, to: &Url) -> bool {
     fn segments(url: &Url) -> Option<Vec<&str>> {
         url.path_segments().map(Iterator::collect)
@@ -1471,6 +1471,35 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(paths(&seen).len(), 11);
+        Ok(())
+    }
+
+    /// A base path keeps its empty segments: requests go to `<base>/api/v1/...` as written.
+    #[test]
+    fn a_rename_is_followed_below_a_base_path_with_an_empty_segment() -> TestResult {
+        let (host, seen) = start_recording_server(|path| match path {
+            "/forgejo//nested/api/v1/repos/o/old" => (
+                "301 Moved Permanently",
+                Some("/forgejo//nested/api/v1/repos/o/new".to_string()),
+            ),
+            _ => ("200 OK", None),
+        })?;
+        let client = ForgejoClient::for_host(
+            "git.example.com",
+            Some("secret-token".to_string()),
+            &configured_host(Some(format!("http://{host}/forgejo//nested")), None),
+            &crate::config::EnvMap::new(),
+        )?;
+
+        client.get_repo(&RepoRef::new("git.example.com", "o", "old"))?;
+
+        assert_eq!(
+            paths(&seen),
+            [
+                "/forgejo//nested/api/v1/repos/o/old",
+                "/forgejo//nested/api/v1/repos/o/new"
+            ]
+        );
         Ok(())
     }
 
