@@ -28,9 +28,9 @@ fn head() -> &'static str {
     FIXTURE["head"].as_str().unwrap()
 }
 
-/// Forgejo, answering each captured path with its captured reply and anything else with 404.
-async fn upstream(uri: Uri) -> axum::response::Response {
-    match FIXTURE["routes"].get(uri.path()) {
+/// Forgejo, answering each path in `routes` with its reply and anything else with 404.
+fn answer(routes: &Value, uri: &Uri) -> axum::response::Response {
+    match routes.get(uri.path()) {
         Some(Value::String(text)) => text.clone().into_response(),
         Some(value) => axum::Json(value.clone()).into_response(),
         None => (
@@ -42,13 +42,18 @@ async fn upstream(uri: Uri) -> axum::response::Response {
 }
 
 async fn gateway() -> SocketAddr {
+    gateway_with(FIXTURE["routes"].clone()).await
+}
+
+async fn gateway_with(routes: Value) -> SocketAddr {
+    let routes = std::sync::Arc::new(routes);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
-        axum::serve(listener, Router::new().fallback(upstream))
-            .await
-            .unwrap()
+    let upstream = Router::new().fallback(move |uri: Uri| {
+        let routes = routes.clone();
+        async move { answer(&routes, &uri) }
     });
+    tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
     let host = Host::new(
         "https://forge.test".parse().unwrap(),
         Forgejo::new(upstream_url.parse().unwrap()).unwrap(),
@@ -476,4 +481,86 @@ async fn a_pull_request_reads_as_a_patch() {
         reply.body,
         FIXTURE["routes"]["/api/v1/repos/e2e/demo/pulls/1.patch"]
     );
+}
+
+fn sha(c: char) -> String {
+    c.to_string().repeat(40)
+}
+fn git_commit(sha: &str, parents: &[&str]) -> Value {
+    let who =
+        json!({"name": "e2e", "email": "e2e@example.invalid", "date": "2026-11-07T00:00:00Z"});
+    json!({"sha": sha, "commit": {"message": format!("commit {}\n\nbody", &sha[..7]), "author": who, "committer": who},
+        "author": null, "committer": null, "html_url": "",
+        "parents": parents.iter().map(|p| json!({"sha": p})).collect::<Vec<_>>()})
+}
+fn comparison(total: i64, commits: Vec<Value>) -> Value {
+    json!({"total_commits": total, "commits": commits, "files": []})
+}
+
+/// A comparison whose boundary parents aren't ordered, as after a criss-cross merge, has no single
+/// merge base, so there is no pull request's diff to give for it: a PR branched from one of those
+/// parents would show other changes.
+#[tokio::test]
+async fn a_comparison_without_one_merge_base_is_no_pull_requests() {
+    let (x, h, a, b, c) = (sha('1'), sha('2'), sha('a'), sha('b'), sha('c'));
+    let r = "/api/v1/repos/o/r";
+    let mut routes = json!({
+        "/api/v1/user": {"id": 1, "login": "e2e", "full_name": "", "avatar_url": ""},
+        format!("{r}/pulls"): [{"number": 7, "title": "t", "state": "open", "merged": false,
+            "draft": false, "html_url": "https://forge.test/o/r/pulls/7", "merged_at": null,
+            "user": {"id": 1, "login": "e2e", "full_name": "", "avatar_url": ""},
+            "head": {"label": "topic", "ref": "topic", "sha": h, "repo": null},
+            "base": {"label": "stable", "ref": "stable", "sha": b, "repo": null},
+            "merge_base": b}],
+        format!("{r}/pulls/7/files"): [],
+        format!("{r}/pulls/7.diff"): "",
+        // `head` holds three commits off `a`, `b` and `c`. `a` is an ancestor of `b`, but `b` and
+        // `c` each have commits the other lacks.
+        format!("{r}/compare/{x}...{h}"): comparison(3, vec![git_commit(&h, &[&a]), git_commit(&sha('3'), &[&b]), git_commit(&sha('4'), &[&c])]),
+        format!("{r}/compare/{h}...{x}"): comparison(0, vec![]),
+        format!("{r}/compare/{b}...{a}"): comparison(0, vec![]),
+        format!("{r}/compare/{c}...{b}"): comparison(2, vec![]),
+        format!("{r}/compare/{b}...{c}"): comparison(2, vec![]),
+    });
+    for s in [&x, &h, &a, &b, &c] {
+        routes[format!("{r}/git/commits/{s}")] = git_commit(s, &[]);
+    }
+    let addr = gateway_with(routes).await;
+    let reply = get(addr, &format!("/api/v3/repos/o/r/compare/{x}...{h}")).await;
+    assert_eq!(reply.status, 404, "{}", reply.body);
+}
+
+/// Past 20 candidate merge bases, the gateway gives none rather than guess.
+#[tokio::test]
+async fn too_many_candidate_merge_bases_give_none() {
+    let (x, h) = (sha('1'), sha('2'));
+    let parents: Vec<String> = (0..21).map(|i| format!("{i:040x}")).collect();
+    let refs: Vec<&str> = parents.iter().map(String::as_str).collect();
+    let r = "/api/v1/repos/o/r";
+    let mut routes = json!({
+        "/api/v1/user": {"id": 1, "login": "e2e", "full_name": "", "avatar_url": ""},
+        format!("{r}/compare/{x}...{h}"): comparison(1, vec![git_commit(&h, &refs)]),
+    });
+    for s in [&x, &h, &parents[20]] {
+        routes[format!("{r}/git/commits/{s}")] = git_commit(s, &[]);
+    }
+    // A pull request branched from the parent a capped search would settle on.
+    routes[format!("{r}/compare/{h}...{x}")] = comparison(0, vec![]);
+    routes[format!("{r}/pulls")] = json!([{"number": 7, "title": "t", "state": "open",
+        "merged": false, "draft": false, "html_url": "https://forge.test/o/r/pulls/7",
+        "merged_at": null, "user": {"id": 1, "login": "e2e", "full_name": "", "avatar_url": ""},
+        "head": {"label": "topic", "ref": "topic", "sha": h, "repo": null},
+        "base": {"label": "stable", "ref": "stable", "sha": parents[20], "repo": null},
+        "merge_base": parents[20]}]);
+    routes[format!("{r}/pulls/7/files")] = json!([]);
+    routes[format!("{r}/pulls/7.diff")] = json!("");
+    // Any pairwise comparison would say "ordered", so only the cap stops a guess.
+    for a in &parents {
+        for b in &parents {
+            routes[format!("{r}/compare/{a}...{b}")] = comparison(0, vec![]);
+        }
+    }
+    let addr = gateway_with(routes).await;
+    let reply = get(addr, &format!("/api/v3/repos/o/r/compare/{x}...{h}")).await;
+    assert_eq!(reply.status, 404, "{}", reply.body);
 }

@@ -22,7 +22,7 @@ use std::{
 /// `content` and `encoding: none`, to be read raw.
 const MAX_INLINE_CONTENT: u64 = 1024 * 1024;
 
-/// At most this many candidate merge bases are compared with each other.
+/// A comparison whose commits leave more candidate merge bases than this gets no merge base.
 const MAX_MERGE_BASE_CANDIDATES: usize = 20;
 
 fn accepts(headers: &HeaderMap, media: &[&str]) -> bool {
@@ -58,11 +58,14 @@ async fn merge_base(
             candidates.push(&parent.sha);
         }
     }
+    if candidates.len() > MAX_MERGE_BASE_CANDIDATES {
+        return Ok(None);
+    }
     let Some((&first, rest)) = candidates.split_first() else {
         return Ok(None);
     };
     let mut best = first;
-    for &candidate in rest.iter().take(MAX_MERGE_BASE_CANDIDATES) {
+    for &candidate in rest {
         // Nothing in `best` that `candidate` lacks: `best` is its ancestor, so it is newer.
         if session
             .compare(owner, repo, candidate, best)
@@ -71,6 +74,19 @@ async fn merge_base(
             == 0
         {
             best = candidate;
+        }
+    }
+    // Prove it: every other candidate must be an ancestor of `best`. Two that aren't ordered
+    // (a criss-cross merge) leave no single merge base.
+    for &candidate in &candidates {
+        if candidate != best
+            && session
+                .compare(owner, repo, best, candidate)
+                .await?
+                .total_commits
+                != 0
+        {
+            return Ok(None);
         }
     }
     Ok(Some(best.to_owned()))
