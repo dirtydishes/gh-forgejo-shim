@@ -696,13 +696,22 @@ impl ForgejoClient {
             .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
         let status = response.status();
         if status.is_redirection() {
-            let location = response
+            // Where it pointed, without userinfo, query or fragment: any of them may hold a secret.
+            let target = response
                 .headers()
                 .get(LOCATION)
                 .and_then(|value| value.to_str().ok())
+                .and_then(|location| response.url().join(location).ok())
+                .map(|mut target| {
+                    let _ = target.set_username("");
+                    let _ = target.set_password(None);
+                    target.set_query(None);
+                    target.set_fragment(None);
+                    format!(" to {target}")
+                })
                 .unwrap_or_default();
             return Err(ForgejoError::new(format!(
-                "Forgejo API answered HTTP {} with a redirect to {location:?}, which the shim doesn't follow: it follows only a renamed repository's redirect within the API",
+                "Forgejo API answered HTTP {} with a redirect{target}, which the shim doesn't follow: it follows only a renamed repository's redirect within the API",
                 status.as_u16()
             )));
         }
@@ -1500,6 +1509,39 @@ mod tests {
                 "/forgejo//nested/api/v1/repos/o/new"
             ]
         );
+        Ok(())
+    }
+
+    /// The error names where a refused redirect pointed, but not its userinfo or query.
+    #[test]
+    fn a_refused_redirect_names_no_credentials_or_query() -> TestResult {
+        let (host, _seen) = start_recording_server(|path| {
+            if path == "/forgejo/api/v1/repos/o/r" {
+                (
+                    "302 Found",
+                    Some(
+                        "http://alice:PRIVATE-PASSWORD@127.0.0.1:9/login?access_token=SYNTHETIC#frag"
+                            .to_string(),
+                    ),
+                )
+            } else {
+                ("200 OK", None)
+            }
+        })?;
+
+        let error = subpath_client(&host)?
+            .get_repo(&RepoRef::new("git.example.com", "o", "r"))
+            .err()
+            .ok_or("the redirect was followed")?;
+
+        let message = error.message();
+        assert!(
+            message.contains("with a redirect to http://127.0.0.1:9/login, which"),
+            "{message}"
+        );
+        for secret in ["alice", "PRIVATE-PASSWORD", "SYNTHETIC", "frag"] {
+            assert!(!message.contains(secret), "{message}");
+        }
         Ok(())
     }
 
