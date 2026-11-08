@@ -61,7 +61,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-install -d "$stage_dir/docs" "$dist_dir"
+install -d "$stage_dir/docs/images" "$dist_dir"
 install -m 0755 "$release_dir/gh-forgejo-shim${bin_suffix}" "$stage_dir/gh-forgejo-shim${bin_suffix}"
 install -m 0755 "$release_dir/gfj${bin_suffix}" "$stage_dir/gfj${bin_suffix}"
 install -m 0644 README.md "$stage_dir/README.md"
@@ -69,6 +69,10 @@ install -m 0644 LICENSE "$stage_dir/LICENSE"
 install -m 0644 docs/installation.md "$stage_dir/docs/installation.md"
 install -m 0644 docs/pipx-to-rust-migration.md "$stage_dir/docs/pipx-to-rust-migration.md"
 install -m 0644 docs/rollback.md "$stage_dir/docs/rollback.md"
+install -m 0644 docs/commands.md "$stage_dir/docs/commands.md"
+install -m 0644 docs/configuration.md "$stage_dir/docs/configuration.md"
+install -m 0644 docs/tracing.md "$stage_dir/docs/tracing.md"
+install -m 0644 docs/images/*.png "$stage_dir/docs/images/"
 printf '%s\n' "$version" > "$stage_dir/VERSION"
 
 COPYFILE_DISABLE=1 tar -czf "$archive_path" -C "$stage_dir" .
