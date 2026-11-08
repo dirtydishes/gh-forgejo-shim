@@ -60,6 +60,27 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      # Fails on any vulnerability advisory against a crate in Cargo.lock, built or not.
+      # Unmaintained and unsound notices print as warnings without failing the job.
+      - name: Check Cargo.lock against the RustSec advisory database
+        run: cargo audit
+
   gateway-e2e:
     name: gateway e2e
     runs-on: ubuntu-latest
