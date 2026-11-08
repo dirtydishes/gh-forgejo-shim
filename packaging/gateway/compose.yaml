@@ -8,7 +8,7 @@ services:
   fga-server:
     # A release from https://github.com/dirtydishes/gh-forgejo-shim/releases. Pin a version, so an
     # upgrade happens only when you change it.
-    image: ghcr.io/dirtydishes/fga-server:0.2.2
+    image: ghcr.io/dirtydishes/fga-server:0.3.0
     container_name: fga-server
     restart: unless-stopped
     environment:
