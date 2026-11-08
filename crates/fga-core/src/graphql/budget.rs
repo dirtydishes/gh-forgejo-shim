@@ -7,7 +7,9 @@
 //! at its escaped name plus [`PER_ENTRY`]; each list item at [`PER_ITEM`]; and each error at its
 //! message and path plus [`PER_ERROR`]. A field's object or list is charged when the field
 //! resolves, after its contents. Its names are the document's own, shared until the response is
-//! written, so charging them then still comes before they cost anything.
+//! written, so charging them then still comes before they cost anything. The one thing left
+//! uncharged is a `__typename` in the root object, which reaches no hook and has no field above
+//! it; that output is never larger than the document, which the request size limit bounds.
 //!
 //! The field that would pass the budget fails with `RESOURCE_LIMITS_EXCEEDED`, and every field
 //! that starts after it is `null` without resolving, so it starts no Forgejo request. Fields
