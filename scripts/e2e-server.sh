@@ -65,7 +65,8 @@ docker run -d --name "$run-caddy" --network "$run" --network-alias caddy \
     -e FORGE_SITE=http://forge.test -e FGA_UPSTREAM=gateway:8080 -e FORGEJO_UPSTREAM=forgejo:3000 \
     -v "$PWD/packaging/gateway/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 >/dev/null
 docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" \
-    -v "$PWD/scripts/e2e/server-client.sh:/test/server-client.sh:ro" fga-g2a-e2e:local bash /test/server-client.sh
+    -v "$PWD/scripts/e2e/server-client.sh:/test/server-client.sh:ro" \
+    -v "$PWD/scripts/e2e/agent-commands.sh:/test/agent-commands.sh:ro" fga-g2a-e2e:local bash /test/server-client.sh
 docker run --name "$run-launcher" --network "$run" -v "$run-tls:/tls:ro" \
     -v "$PWD/scripts/e2e/launcher-client.sh:/test/launcher-client.sh:ro" fga-g2a-e2e:local bash /test/launcher-client.sh
 printf 'PASS server-mode e2e: the shipped image and nginx snippet serve gh and Claude for Forgejo 15\n'
