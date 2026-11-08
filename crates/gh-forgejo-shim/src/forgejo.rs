@@ -68,18 +68,6 @@ impl RepoRef {
         format!("https://{}/{}/{}", self.host, self.owner, self.repo)
     }
 
-    pub fn api_base_url(&self) -> String {
-        self.api_base_url_with_scheme("https")
-    }
-
-    fn api_base_url_with_scheme(&self, scheme: &str) -> String {
-        format!(
-            "{scheme}://{}/api/v1/repos/{}/{}",
-            host_for_url(&self.host),
-            quote_path_segment(&self.owner),
-            quote_path_segment(&self.repo)
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1010,14 +998,10 @@ mod tests {
     }
 
     #[test]
-    fn repo_ref_builds_python_compatible_urls() {
+    fn repo_ref_builds_python_compatible_web_urls() {
         let repo = RepoRef::new("git.example.com", "own er", "r/e");
 
         assert_eq!(repo.web_base_url(), "https://git.example.com/own er/r/e");
-        assert_eq!(
-            repo.api_base_url(),
-            "https://git.example.com/api/v1/repos/own%20er/r%2Fe"
-        );
     }
 
     /// A segment a URL parser or proxy could resolve out of the repository's path is refused
