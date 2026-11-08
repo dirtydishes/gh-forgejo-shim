@@ -32,6 +32,11 @@ use async_graphql_value::{ConstValue, Name, Value};
 /// stays under a quarter of this. Validation's errors grow at most a few per step.
 pub const MAX_COST: usize = 5_000;
 
+/// The deepest the document's text may nest brackets, braces and parentheses, in all. gh's
+/// documents reach 13. Parsing and checking an object value takes about 7 KB of stack a level,
+/// and a worker thread has 2 MiB.
+pub const MAX_NESTING: usize = 64;
+
 pub(super) struct DocumentCost;
 
 impl ExtensionFactory for DocumentCost {
@@ -49,6 +54,11 @@ impl Extension for DocumentCost {
         variables: &Variables,
         next: NextParseQuery<'_>,
     ) -> ServerResult<async_graphql::parser::types::ExecutableDocument> {
+        // The parser recurses once per level of a value, list type or selection, with no limit
+        // of its own on values: a few KB of `[` would overflow a worker thread's stack.
+        if nesting(query) > MAX_NESTING {
+            return Err(ServerError::new("Query is nested too deep.", None));
+        }
         // A document that doesn't parse gets async-graphql's own error.
         if let Ok(document) = parse_query(query)
             && let Err(refusal) = check(&document, variables)
@@ -374,4 +384,46 @@ fn const_value_nodes(value: &ConstValue) -> usize {
         }
     }
     count
+}
+
+/// How deep `query` nests `[`, `{` and `(`, outside strings, block strings and comments, read
+/// once without parsing. Unbalanced text only needs to read no shallower than the parser would.
+pub(super) fn nesting(query: &str) -> usize {
+    let bytes = query.as_bytes();
+    let (mut depth, mut deepest, mut i) = (0usize, 0usize, 0usize);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'#' => {
+                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+            b'"' if bytes[i..].starts_with(b"\"\"\"") => {
+                i += 3;
+                while i < bytes.len() && !bytes[i..].starts_with(b"\"\"\"") {
+                    // `\"""` is an escaped delimiter inside a block string.
+                    i += if bytes[i..].starts_with(b"\\\"\"\"") {
+                        4
+                    } else {
+                        1
+                    };
+                }
+                i += 2;
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && !matches!(bytes[i], b'"' | b'\n' | b'\r') {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'[' | b'{' | b'(' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            b']' | b'}' | b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        i += 1;
+    }
+    deepest
 }

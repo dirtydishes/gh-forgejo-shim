@@ -149,6 +149,11 @@ async fn every_captured_document_is_within_the_limits() {
         let document = async_graphql::parser::parse_query(&query).expect("parses");
         let steps =
             cost::check(&document, &async_graphql::Variables::default()).expect("within cost");
+        let depth = cost::nesting(&query);
+        assert!(
+            depth * 4 <= cost::MAX_NESTING,
+            "{source}: nests {depth}: raise MAX_NESTING"
+        );
         assert!(
             steps * 4 <= cost::MAX_COST,
             "{source}: costs {steps}: raise MAX_COST"
@@ -468,4 +473,35 @@ async fn a_differing_argument_is_named_as_the_rule_names_it() {
         message.starts_with("Fields \"login\" conflict because they have differing arguments"),
         "{message}"
     );
+}
+
+#[test]
+fn nesting_skips_strings_and_comments() {
+    assert_eq!(cost::nesting("{a(b:[1,{c:2}])}"), 4);
+    assert_eq!(cost::nesting(r#"{a(b:"[[[[\"[[")}"#), 2);
+    assert_eq!(cost::nesting("{a(b:\"\"\"[[[\\\"\"\"[[[\"\"\")}"), 2);
+    assert_eq!(cost::nesting("{a # [[[[\n}"), 1);
+    assert_eq!(cost::nesting("{a(b:\"x\ny\")}"), 2);
+}
+
+/// The parser recurses once per level of a value with no limit of its own, so deep nesting is
+/// refused before it parses. Each of these stays shallow enough to parse safely on a test
+/// thread even without the refusal.
+#[tokio::test]
+async fn deep_nesting_is_refused_before_parsing() {
+    for (open, close) in [("[", "]"), ("{c:", "}")] {
+        let levels = cost::MAX_NESTING;
+        let query = format!(
+            "{{viewer(a:{}1{}){{login}}}}",
+            open.repeat(levels),
+            close.repeat(levels)
+        );
+        assert_eq!(refused(&query).await, "Query is nested too deep.");
+    }
+    let types = format!(
+        "query($v:{}Int{}){{viewer{{login}}}}",
+        "[".repeat(cost::MAX_NESTING + 1),
+        "]".repeat(cost::MAX_NESTING + 1)
+    );
+    assert_eq!(refused(&types).await, "Query is nested too deep.");
 }
