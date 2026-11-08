@@ -711,7 +711,7 @@ impl ForgejoClient {
                 })
                 .unwrap_or_default();
             return Err(ForgejoError::new(format!(
-                "Forgejo API answered HTTP {} with a redirect{target}, which the shim doesn't follow: it follows only a renamed repository's redirect within the API",
+                "Forgejo API answered HTTP {} with a redirect{target} that the shim didn't follow: it follows only a renamed repository's redirect within the API, up to 10 in a row",
                 status.as_u16()
             )));
         }
@@ -1452,7 +1452,7 @@ mod tests {
                     .ok_or_else(|| format!("{status} to {location} was followed"))?;
 
                 assert!(
-                    error.message().contains("which the shim doesn't follow"),
+                    error.message().contains("that the shim didn't follow"),
                     "{status} to {location}: {error}"
                 );
                 assert_eq!(
@@ -1536,7 +1536,7 @@ mod tests {
 
         let message = error.message();
         assert!(
-            message.contains("with a redirect to http://127.0.0.1:9/login, which"),
+            message.contains("with a redirect to http://127.0.0.1:9/login that"),
             "{message}"
         );
         for secret in ["alice", "PRIVATE-PASSWORD", "SYNTHETIC", "frag"] {
@@ -1568,7 +1568,7 @@ mod tests {
             .ok_or_else(|| format!("{status} was followed"))?;
 
             assert!(
-                error.to_string().contains("which the shim doesn't follow"),
+                error.to_string().contains("that the shim didn't follow"),
                 "{status}: {error}"
             );
             assert_eq!(paths(&seen), ["/forgejo/api/v1/user"], "{status}");
