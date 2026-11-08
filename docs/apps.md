@@ -10,7 +10,7 @@ needs. Tried an app? Tell us how it went in
 
 ## Agents that can run `gh`
 
-- **GitHub Copilot CLI.** On GitHub Enterprise Server, GitHub's docs say it does issue and pull
+- **GitHub Copilot CLI.** On GitHub Enterprise Server, GitHub's docs say it can do issue and pull
   request work through `gh`, signed in to that server
   ([set up Copilot CLI](https://docs.github.com/en/enterprise-server@3.22/copilot/copilot-on-ghes/set-up-copilot-cli)).
   Untested with the shim.
@@ -42,8 +42,9 @@ These tools speak Forgejo or Gitea themselves:
   extension browses pull requests, issues and Actions on Forgejo, Gitea and Codeberg.
 - **JetBrains IDEs:** the [Gitea & Forgejo Pull Requests](https://plugins.jetbrains.com/plugin/34605-gitea--forgejo-pull-requests)
   plugin, from a third party, can review, comment on, approve and merge pull requests.
-- **Zed** links commits, issues and pull requests to a self-hosted Forgejo or Gitea once you add it
-  under `git_hosting_providers` ([Git integrations](https://zed.dev/docs/git)), and opens Forgejo's
+- **Zed** links commits, issues and pull requests to a self-hosted Forgejo or Gitea, which it detects
+  from the remote URL or which you add under `git_hosting_providers`
+  ([Git integrations](https://zed.dev/docs/git)), and opens Forgejo's
   new pull request page for a branch ([source](https://github.com/zed-industries/zed/blob/d2a4fb6ded7c470be25d1541281da3882495b65b/crates/git_hosting_providers/src/providers/forgejo.rs#L231-L244)).
 - **lazygit** opens Gitea's new pull request page once you set the `gitea` provider
   ([custom pull request URLs](https://github.com/jesseduffield/lazygit/blob/bd4062a1e745b47d87ee8d0b24649529ed28b499/docs/Config.md#custom-pull-request-urls)).
