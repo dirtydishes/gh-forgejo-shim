@@ -482,6 +482,10 @@ fn nesting_skips_strings_and_comments() {
     assert_eq!(cost::nesting("{a(b:\"\"\"[[[\\\"\"\"[[[\"\"\")}"), 2);
     assert_eq!(cost::nesting("{a # [[[[\n}"), 1);
     assert_eq!(cost::nesting("{a(b:\"x\ny\")}"), 2);
+    // An unclosed block string reads as `""` and then an ordinary string, as the parser reads it.
+    assert_eq!(cost::nesting(r#"{a(b:["""x"[[[[1]]]]])}"#), 7);
+    assert_eq!(cost::nesting(r#"{a(b:["""x"{c:{c:1}}])}"#), 5);
+    assert_eq!(cost::nesting("{a(b:\"\"\"x\"\"\"[[1]])}"), 4);
 }
 
 /// The parser recurses once per level of a value with no limit of its own, so deep nesting is
