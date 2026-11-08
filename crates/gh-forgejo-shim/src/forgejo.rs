@@ -1528,6 +1528,33 @@ mod tests {
         Ok(())
     }
 
+    /// `doctor`'s probes follow no redirect at all, a rename's included: the answer is the 301.
+    #[test]
+    fn the_doctor_probe_client_follows_no_redirect() -> TestResult {
+        let (host, seen) = start_recording_server(|path| {
+            if path == "/forgejo/api/v1/repos/o/old" {
+                (
+                    "301 Moved Permanently",
+                    Some("/forgejo/api/v1/repos/o/new".to_string()),
+                )
+            } else {
+                ("200 OK", None)
+            }
+        })?;
+        let client = ForgejoClient::for_host_without_redirects(
+            "git.example.com",
+            Some("secret-token".to_string()),
+            &configured_host(Some(format!("http://{host}/forgejo")), None),
+            &crate::config::EnvMap::new(),
+        )?;
+
+        let (status, _) = client.probe("git.example.com", Method::GET, "/api/v1/repos/o/old")?;
+
+        assert_eq!(status, 301);
+        assert_eq!(paths(&seen), ["/forgejo/api/v1/repos/o/old"]);
+        Ok(())
+    }
+
     /// A base path keeps its empty segments: requests go to `<base>/api/v1/...` as written.
     #[test]
     fn a_rename_is_followed_below_a_base_path_with_an_empty_segment() -> TestResult {
