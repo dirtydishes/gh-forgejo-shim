@@ -1,0 +1,16 @@
+fragment issue on Issue {assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},blockedBy(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},blocking(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},body,closed,closedAt,closedByPullRequestsReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,isPinned,issueType{id,name,description,color},labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,parent{id,number,title,url,state,repository{nameWithOwner}},projectCards(first:100){nodes{project{name}column{name}},totalCount},projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount},reactionGroups{content,users{totalCount}},state,stateReason,subIssues(first:100){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},subIssuesSummary{total,completed,percentCompleted},title,updatedAt,url}
+  query IssueList($owner: String!, $repo: String!, $limit: Int, $endCursor: String, $states: [IssueState!] = OPEN, $assignee: String, $author: String, $mention: String) {
+    repository(owner: $owner, name: $repo) {
+      hasIssuesEnabled
+      issues(first: $limit, after: $endCursor, orderBy: {field: CREATED_AT, direction: DESC}, states: $states, filterBy: {assignee: $assignee, createdBy: $author, mentioned: $mention}) {
+        totalCount
+        nodes {
+          ...issue
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
