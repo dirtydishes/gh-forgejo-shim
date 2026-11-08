@@ -13,5 +13,6 @@ The GraphQL documents gh 2.103.3 sends when asked for every `--json` field it of
 | `pr-view-comments.graphql` | `gh pr view 1 --comments` |
 | `pr-checks.graphql` | `gh pr checks 1` |
 
-They are the largest documents gh builds for these commands. The gateway's query limits must accept
-every one: see `crates/fga-core/src/graphql/tests.rs`.
+They are the largest documents gh builds for these commands. No query limit may refuse any of them:
+see `crates/fga-core/src/graphql/tests.rs`. `repo-view-all.graphql` fails validation anyway, as it
+asks for a field the gateway doesn't serve (`archivedAt`).
