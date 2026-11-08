@@ -34,6 +34,8 @@ check '[ "$view" = "{\"headRefName\":\"s/pass\",\"number\":1,\"state\":\"OPEN\"}
 # Captured, not piped into grep -q: under pipefail an early grep exit would fail the writer.
 checks=$(gh pr checks 1 -R forge.test/e2e/oracle)
 check '[ "$(printf "%s" "$checks" | cut -f1,2)" = "ci	pass" ]' 'gh pr checks through the proxy'
+# The commands coding agents and ChatGPT's PR-code tab run on a PR.
+token="$token" bash /test/agent-commands.sh
 # Claude Code and Claude desktop look up the repository and the branch's PR over REST.
 check '[ "$(api https://forge.test/api/v3/repos/e2e/oracle | jq -r .full_name)" = e2e/oracle ]' 'Claude repository lookup'
 check '[ "$(api "https://forge.test/api/v3/repos/e2e/oracle/pulls?head=e2e:s/pass&state=open" | jq -r ".[0].number")" = 1 ]' 'Claude head=e2e:s/pass lookup'
