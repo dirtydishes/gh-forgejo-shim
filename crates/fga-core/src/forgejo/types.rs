@@ -461,6 +461,18 @@ pub struct GitCommit {
     #[serde(default)]
     pub html_url: String,
 }
+impl From<GitCommit> for PullCommit {
+    fn from(c: GitCommit) -> Self {
+        Self {
+            sha: c.sha,
+            commit: c.commit,
+            author: c.author,
+            committer: c.committer,
+            parents: c.parents,
+            html_url: c.html_url,
+        }
+    }
+}
 #[derive(Clone, Debug, Deserialize)]
 pub struct CommitParent {
     pub sha: String,
