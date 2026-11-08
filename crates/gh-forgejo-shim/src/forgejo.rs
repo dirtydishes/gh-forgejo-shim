@@ -3,10 +3,12 @@ use std::time::Duration;
 
 use fga_core::forgejo::{CommitStatus, Protection};
 use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LOCATION, USER_AGENT};
+use reqwest::redirect::Policy;
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+use url::Url;
 
 use crate::ShimError;
 
@@ -192,12 +194,16 @@ impl ForgejoClient {
             timeout: Duration::from_secs(30),
             scheme: "https".to_string(),
             base_url: None,
-            http: Client::new(),
+            http: Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .expect("HTTP client with default settings"),
         }
     }
 
     /// Build a client for one configured host. Both CA sources add roots to
     /// the normal trust store; neither disables certificate verification.
+    /// It follows only a renamed repository's redirect within the API.
     pub fn for_host(
         host: &str,
         token: Option<String>,
@@ -240,28 +246,29 @@ impl ForgejoClient {
             }
             paths.push(path);
         }
-        let mut client = Self::with_ca_files(token, &paths, redirects)?;
-        client.base_url = Some(
-            settings
-                .and_then(|settings| settings.api_url.clone())
-                .unwrap_or_else(|| format!("https://{}", host_for_url(&host))),
-        );
+        let base_url = settings
+            .and_then(|settings| settings.api_url.clone())
+            .unwrap_or_else(|| format!("https://{}", host_for_url(&host)));
+        let policy = match Url::parse(&base_url) {
+            Ok(base) if redirects => renamed_repository_redirects(&base),
+            _ => Policy::none(),
+        };
+        let mut client = Self::with_ca_files(token, &paths, policy)?;
+        client.base_url = Some(base_url);
         Ok(client)
     }
 
+    /// A client trusting `path`'s roots too, following no redirect.
     pub fn with_ca_file(token: Option<String>, path: &std::path::Path) -> ForgejoResult<Self> {
-        Self::with_ca_files(token, &[path], true)
+        Self::with_ca_files(token, &[path], Policy::none())
     }
 
     fn with_ca_files(
         token: Option<String>,
         paths: &[&std::path::Path],
-        redirects: bool,
+        redirects: Policy,
     ) -> ForgejoResult<Self> {
-        let mut builder = Client::builder();
-        if !redirects {
-            builder = builder.redirect(reqwest::redirect::Policy::none());
-        }
+        let mut builder = Client::builder().redirect(redirects);
         for path in paths {
             let pem = std::fs::read(path).map_err(|error| {
                 ForgejoError::new(format!(
@@ -687,6 +694,17 @@ impl ForgejoClient {
             .send()
             .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
         let status = response.status();
+        if status.is_redirection() {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            return Err(ForgejoError::new(format!(
+                "Forgejo API answered HTTP {} with a redirect to {location:?}, which the shim doesn't follow: it follows only a renamed repository's redirect within the API",
+                status.as_u16()
+            )));
+        }
         let response_data = response
             .bytes()
             .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
@@ -718,6 +736,67 @@ fn host_for_url(host: &str) -> String {
         return rest[..end].to_string();
     }
     trimmed.to_string()
+}
+
+/// The redirects a client for the forge at `base` follows. Forgejo answers an API call for a
+/// renamed or moved repository with a redirect to the same path and query under the new owner
+/// and name: 301 for a renamed repository, 307 for a renamed owner. The client follows that, up to
+/// 10 times. It returns any other redirect as the answer, so the token never goes to another
+/// path or service on the same origin.
+fn renamed_repository_redirects(base: &Url) -> Policy {
+    let mut repos: Vec<String> = base
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    repos.extend(["api", "v1", "repos"].map(str::to_owned));
+    Policy::custom(move |attempt| {
+        // `previous` starts with the first request, so this allows 10 redirects.
+        let follow = attempt.previous().len() <= 10
+            && attempt
+                .previous()
+                .last()
+                .is_some_and(|from| renames_repository(&repos, from, attempt.url()));
+        if follow {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
+/// Whether `to` is `from`, an API call below `repos` (the base's path, then `api/v1/repos`), on
+/// the same origin with only the owner and repository after `repos` changed, to plain names.
+fn renames_repository(repos: &[String], from: &Url, to: &Url) -> bool {
+    fn segments(url: &Url) -> Option<Vec<&str>> {
+        url.path_segments().map(Iterator::collect)
+    }
+    let (Some(old), Some(new)) = (segments(from), segments(to)) else {
+        return false;
+    };
+    let names = repos.len()..repos.len() + 2;
+    let below_repos =
+        |path: &[&str]| path.len() >= names.end && path[..repos.len()].iter().eq(repos.iter());
+    from.origin() == to.origin()
+        && to.username().is_empty()
+        && to.password().is_none()
+        && from.query() == to.query()
+        && old.len() == new.len()
+        && below_repos(&old)
+        && below_repos(&new)
+        && old[names.end..] == new[names.end..]
+        && new[names].iter().all(|name| is_forgejo_name(name))
+}
+
+/// A name Forgejo allows for an owner or repository: ASCII letters, digits, `-`, `_` and `.`,
+/// and never `.` or `..`. Anything else in a redirect, an escape included, isn't Forgejo's rename.
+fn is_forgejo_name(name: &str) -> bool {
+    !matches!(name, "" | "." | "..")
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
 }
 
 fn head_matches(item: &Value, head: &str) -> bool {
@@ -775,6 +854,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io::{self, Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread::{self, JoinHandle};
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -1287,6 +1367,201 @@ mod tests {
 
         assert_eq!(error.to_string(), "Forgejo API returned invalid JSON");
         Ok(())
+    }
+
+    /// Forgejo 15's answers to API calls for a renamed repository (301) and a renamed owner
+    /// (307), behind a proxy that serves the forge under `/forgejo`.
+    #[test]
+    fn a_renamed_repository_or_owner_redirect_is_followed_within_the_api() -> TestResult {
+        let (host, seen) = start_recording_server(|path| match path {
+            "/forgejo/api/v1/repos/old-owner/old.repo/issues/1" => (
+                "307 Temporary Redirect",
+                Some("/forgejo/api/v1/repos/new-owner/old.repo/issues/1".to_string()),
+            ),
+            "/forgejo/api/v1/repos/new-owner/old.repo/issues/1" => (
+                "301 Moved Permanently",
+                Some("/forgejo/api/v1/repos/new-owner/new_repo/issues/1".to_string()),
+            ),
+            "/forgejo/api/v1/repos/o/old/pulls?state=open" => (
+                "301 Moved Permanently",
+                Some("/forgejo/api/v1/repos/o/new/pulls?state=open".to_string()),
+            ),
+            _ => ("200 OK", None),
+        })?;
+        let client = subpath_client(&host)?;
+
+        client.get_issue(&RepoRef::new("git.example.com", "old-owner", "old.repo"), 1)?;
+        client.list_pulls(&RepoRef::new("git.example.com", "o", "old"), "open", None)?;
+
+        assert_eq!(
+            paths(&seen),
+            [
+                "/forgejo/api/v1/repos/old-owner/old.repo/issues/1",
+                "/forgejo/api/v1/repos/new-owner/old.repo/issues/1",
+                "/forgejo/api/v1/repos/new-owner/new_repo/issues/1",
+                "/forgejo/api/v1/repos/o/old/pulls?state=open",
+                "/forgejo/api/v1/repos/o/new/pulls?state=open",
+            ]
+        );
+        Ok(())
+    }
+
+    /// Any other redirect is the answer, so the token makes no second request: not to another
+    /// service or API route on the origin, nor out of the base path or to another origin.
+    #[test]
+    fn no_other_redirect_is_followed() -> TestResult {
+        let (other, other_seen) = start_recording_server(|_| ("200 OK", None))?;
+        let locations = [
+            "/other-service/capture".to_string(),
+            "/forgejo/api/v1/user".to_string(),
+            "/api/v1/repos/o/new".to_string(),
+            "/forgejo/api/v1/repos/o/new/../../../../other".to_string(),
+            "/forgejo/api/v1/repos/o/%2e%2e".to_string(),
+            "/forgejo/api/v1/repos/o/new%2F..%2F..%2Fother".to_string(),
+            "/forgejo/api/v1/repos/o/new/extra".to_string(),
+            "/forgejo/api/v1/repos/o/new?state=all".to_string(),
+            format!("http://{other}/forgejo/api/v1/repos/o/new"),
+        ];
+        for status in [
+            "301 Moved Permanently",
+            "302 Found",
+            "307 Temporary Redirect",
+            "308 Permanent Redirect",
+        ] {
+            for location in &locations {
+                let target = location.clone();
+                let (host, seen) = start_recording_server(move |path| {
+                    if path == "/forgejo/api/v1/repos/o/r" {
+                        (status, Some(target.clone()))
+                    } else {
+                        ("200 OK", None)
+                    }
+                })?;
+                let error = subpath_client(&host)?
+                    .get_repo(&RepoRef::new("git.example.com", "o", "r"))
+                    .err()
+                    .ok_or_else(|| format!("{status} to {location} was followed"))?;
+
+                assert!(
+                    error.message().contains("which the shim doesn't follow"),
+                    "{status} to {location}: {error}"
+                );
+                assert_eq!(
+                    paths(&seen),
+                    ["/forgejo/api/v1/repos/o/r"],
+                    "{status} to {location}"
+                );
+            }
+        }
+        assert_eq!(paths(&other_seen), Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn rename_redirects_stop_after_ten() -> TestResult {
+        let (host, seen) = start_recording_server(|path| {
+            let next = path
+                .strip_prefix("/forgejo/api/v1/repos/o/r")
+                .and_then(|n| n.parse::<u32>().ok())
+                .map(|n| format!("/forgejo/api/v1/repos/o/r{}", n + 1));
+            ("301 Moved Permanently", next)
+        })?;
+
+        let result = subpath_client(&host)?.get_repo(&RepoRef::new("git.example.com", "o", "r0"));
+
+        assert!(result.is_err());
+        assert_eq!(paths(&seen).len(), 11);
+        Ok(())
+    }
+
+    /// `auth login` checks the token with `/user` through the same client.
+    #[test]
+    fn the_login_token_check_follows_no_redirect_off_the_api() -> TestResult {
+        for status in ["302 Found", "307 Temporary Redirect"] {
+            let (host, seen) = start_recording_server(move |path| {
+                if path == "/forgejo/api/v1/user" {
+                    (status, Some("/other-service/capture".to_string()))
+                } else {
+                    ("200 OK", None)
+                }
+            })?;
+            let config = configured_host(Some(format!("http://{host}/forgejo")), None);
+
+            let error = crate::auth::validate_token_with(
+                "git.example.com",
+                "secret-token",
+                &config,
+                &crate::config::EnvMap::new(),
+            )
+            .err()
+            .ok_or_else(|| format!("{status} was followed"))?;
+
+            assert!(
+                error.to_string().contains("which the shim doesn't follow"),
+                "{status}: {error}"
+            );
+            assert_eq!(paths(&seen), ["/forgejo/api/v1/user"], "{status}");
+        }
+        Ok(())
+    }
+
+    /// A client for `git.example.com`, a forge served under `/forgejo` at `host`.
+    fn subpath_client(host: &str) -> ForgejoResult<ForgejoClient> {
+        ForgejoClient::for_host(
+            "git.example.com",
+            Some("secret-token".to_string()),
+            &configured_host(Some(format!("http://{host}/forgejo")), None),
+            &crate::config::EnvMap::new(),
+        )
+    }
+
+    /// The path and query of each request `seen` holds, in order.
+    fn paths(seen: &Mutex<Vec<CapturedRequest>>) -> Vec<String> {
+        seen.lock()
+            .expect("request log")
+            .iter()
+            .map(|request| {
+                let path = request.request_line.split(' ').nth(1).unwrap_or_default();
+                assert_eq!(
+                    request.headers.get("authorization").map(String::as_str),
+                    Some("token secret-token"),
+                    "{path}"
+                );
+                path.to_string()
+            })
+            .collect()
+    }
+
+    /// A server answering each request with `respond(path)`, a status line and the `Location` to
+    /// send if any, and a JSON body, for as long as the test runs. It keeps every request it reads
+    /// before it answers, so a client call that returns has been recorded.
+    fn start_recording_server(
+        respond: impl Fn(&str) -> (&'static str, Option<String>) + Send + 'static,
+    ) -> io::Result<(String, Arc<Mutex<Vec<CapturedRequest>>>)> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let host = listener.local_addr()?.to_string();
+        let seen = Arc::<Mutex<Vec<CapturedRequest>>>::default();
+        let log = Arc::clone(&seen);
+        thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let Ok(request) = read_request(&mut stream) else {
+                    continue;
+                };
+                let path = request.request_line.split(' ').nth(1).unwrap_or_default();
+                let (status, location) = respond(path);
+                log.lock().expect("request log").push(request);
+                let location = location
+                    .map(|location| format!("location: {location}\r\n"))
+                    .unwrap_or_default();
+                let body = r#"{"login":"alice","name":"r","full_name":"o/r"}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\n{location}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        Ok((host, seen))
     }
 
     fn start_fake_server(

@@ -203,8 +203,18 @@ pub fn auth_file_path(home: Option<&Path>) -> PathBuf {
 pub fn validate_token(host: &str, token: &str) -> Result<Option<String>> {
     let env = config::current_env();
     let config = config::load_config_with_env(None, &env)?;
+    validate_token_with(host, token, &config, &env)
+}
+
+/// [`validate_token`] with the given config and environment.
+pub(crate) fn validate_token_with(
+    host: &str,
+    token: &str,
+    config: &Config,
+    env: &EnvMap,
+) -> Result<Option<String>> {
     let client =
-        crate::forgejo::ForgejoClient::for_host(host, Some(token.to_string()), &config, &env)?
+        crate::forgejo::ForgejoClient::for_host(host, Some(token.to_string()), config, env)?
             .with_timeout(Duration::from_secs(10));
     let value = client.get_current_user(&normalize_host(host))?;
     let object = value
