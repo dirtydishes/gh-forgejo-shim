@@ -471,21 +471,68 @@ async fn graphql_request(
         }));
     }
     Json(GithubResponse {
-        data: response.data,
-        extensions: response.extensions,
+        data: Sorted(response.data),
         errors,
+        extensions: response
+            .extensions
+            .into_iter()
+            .map(|(key, value)| (key, Sorted(value)))
+            .collect(),
     })
 }
 
 /// async-graphql's response as GitHub writes it: each error's `type` at its top and a `path`
-/// always, with no `extensions`.
+/// always, with no `extensions`. Every object's keys are written sorted, as the gateway always
+/// has: clients and the contract compare its output byte for byte.
 #[derive(serde::Serialize)]
 struct GithubResponse {
-    data: async_graphql::Value,
-    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    extensions: std::collections::BTreeMap<String, async_graphql::Value>,
+    data: Sorted,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     errors: Vec<Value>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    extensions: std::collections::BTreeMap<String, Sorted>,
+}
+
+/// A value written with each object's keys in order, sorting a list of borrowed keys rather than
+/// copying the value. Its depth is the document's, which the schema limits.
+struct Sorted(async_graphql::Value);
+
+impl serde::Serialize for Sorted {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        sorted(&self.0, serializer)
+    }
+}
+
+fn sorted<S: serde::Serializer>(
+    value: &async_graphql::Value,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::{SerializeMap, SerializeSeq};
+    struct Borrowed<'a>(&'a async_graphql::Value);
+    impl serde::Serialize for Borrowed<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            sorted(self.0, serializer)
+        }
+    }
+    match value {
+        async_graphql::Value::Object(entries) => {
+            let mut keys: Vec<_> = entries.iter().collect();
+            keys.sort_unstable_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+            let mut map = serializer.serialize_map(Some(keys.len()))?;
+            for (key, value) in keys {
+                map.serialize_entry(key.as_str(), &Borrowed(value))?;
+            }
+            map.end()
+        }
+        async_graphql::Value::List(items) => {
+            let mut list = serializer.serialize_seq(Some(items.len()))?;
+            for item in items {
+                list.serialize_element(&Borrowed(item))?;
+            }
+            list.end()
+        }
+        other => serde::Serialize::serialize(other, serializer),
+    }
 }
 
 fn rest_error(error: Error) -> Response {
