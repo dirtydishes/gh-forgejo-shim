@@ -46,10 +46,12 @@ You can use both. [Server Mode](#server-mode), further down, has the setup.
 
 - `gh run view --log` and `--log-failed` fail with a 404: the gateway doesn't serve job logs yet
   ([#161](https://github.com/dirtydishes/gh-forgejo-shim/issues/161)).
-- Some `gh pr view --json` and `gh repo view --json` fields, and some `gh api` routes, aren't served
-  by the gateway yet
-  ([#146](https://github.com/dirtydishes/gh-forgejo-shim/issues/146),
-  [#189](https://github.com/dirtydishes/gh-forgejo-shim/issues/189)).
+- Some `gh repo view --json` fields and some `gh api` routes aren't served by the gateway yet
+  ([#189](https://github.com/dirtydishes/gh-forgejo-shim/issues/189)).
+- In server mode without the wrapper, a `gh api` call with no `--hostname` goes to github.com when
+  gh is also logged in there; that's how gh picks a host. Agents run such calls, so install the
+  wrapper too, or tell the agent to pass `--hostname`
+  ([#265](https://github.com/dirtydishes/gh-forgejo-shim/issues/265)).
 - ChatGPT desktop's pull request overview pane needs a GitHub account connected to ChatGPT and
   can't open a Forgejo pull request. That's how ChatGPT is built, not a shim bug. The sidebar
   status, the pull request menu, review comments and the agent's `gh` commands work.

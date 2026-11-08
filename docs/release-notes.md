@@ -1,4 +1,4 @@
-# Unreleased
+# gh-forgejo-shim v0.3.0
 
 - **Server mode no longer sends host-less commands to github.com.** In a checkout of a forge's
   repository, with gh logged in to both the forge and github.com, commands such as
@@ -31,6 +31,11 @@
   missing scope hides data, such as a pull request's comments, the gateway logs one warning per
   scope, in fga-server's log or the wrapper's trace. The README lists the scopes in one place
   (#250, #217).
+
+- **Known gap: host-less `gh api` in server mode.** Without the wrapper, a `gh api` call with no
+  `--hostname` goes to github.com when gh is also logged in there, because that's how gh picks a
+  host. Agents run such calls, so install the wrapper as well, or have the agent pass `--hostname`
+  (#265).
 
 The v0.2.2 notes follow.
 
