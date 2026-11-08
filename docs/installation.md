@@ -109,7 +109,31 @@ shape problems it cannot fix automatically. By default it targets the first safe
 writable directory that is already visible in the current process `PATH`; if no
 safe visible directory exists, it falls back to `~/.local/bin`.
 
-Useful setup variants:
+In full, `bootstrap`:
+
+- Detects the current Forgejo repository from Git remotes.
+- Adds the repository host to the shim allowlist.
+- Installs the managed `gh` wrapper into the first safe writable directory already visible to the current process, falling back to `~/.local/bin` when needed.
+- Checks the current process `PATH`, the real GitHub CLI path, and whether managed `gh` is first.
+- On macOS, updates the launchd GUI PATH for newly opened GUI apps unless `--no-gui-path` is passed.
+- Checks the real GitHub CLI's version (2.103.3 or newer) before it writes anything.
+- Checks whether Forgejo auth can be found from shim storage or token variables.
+- Checks `origin`, `origin/HEAD`, and current-branch upstream tracking.
+- Prints repair commands for anything it cannot fix automatically.
+
+The long command name works the same way:
+
+```sh
+gh-forgejo-shim bootstrap
+```
+
+If the wrapper path already contains an unrelated `gh`, bootstrap refuses to overwrite it unless you opt in:
+
+```sh
+gfj bootstrap --force
+```
+
+To force the older user-local target, preview actions, or skip macOS GUI PATH repair:
 
 ```sh
 gfj bootstrap --target user-local
@@ -121,6 +145,103 @@ gfj doctor
 On macOS, restart already-running GUI apps after `bootstrap` reports that it
 changed the GUI PATH. Existing processes cannot inherit a new launchd
 environment in place.
+
+## Manual Setup
+
+If you prefer not to use `bootstrap`, allowlist at least one Forgejo host:
+
+```sh
+gh-forgejo-shim config add-host git.example.com
+```
+
+Known GitHub hosts are ignored even if they appear in the allowlist; see
+[Host Allowlist](configuration.md#host-allowlist).
+
+Install the opt-in wrapper:
+
+```sh
+gh-forgejo-shim install-shim
+```
+
+The wrapper is written to:
+
+```text
+~/.local/bin/gh
+```
+
+Make sure `~/.local/bin` appears before the real `gh` location in `PATH`. You can confirm with:
+
+```sh
+command -v gh
+which -a gh
+```
+
+If you need a different install location:
+
+```sh
+gh-forgejo-shim install-shim --bin-dir ~/.local/bin
+```
+
+On macOS, GUI apps may not see that `PATH`; see
+[macOS GUI PATH](configuration.md#macos-gui-path).
+
+## Doctor
+
+`gfj doctor` checks:
+
+- Whether the current process `PATH` can resolve bare `gh`.
+- Whether the real GitHub CLI can be found from config, env, current `PATH`, or common install dirs, and whether it is 2.103.3 or newer.
+- Whether managed `gh` is installed first and can delegate to real `gh`.
+- Whether duplicate managed wrappers are present.
+- Whether `bd` can be found for repo workflows. This is diagnostic only; `bd` is not part of the GitHub CLI shim.
+- Whether `fj` can be found for legacy auth-import diagnostics. Missing `fj` is not a GitHub CLI readiness failure.
+- Whether at least one Forgejo host is allowlisted.
+- Whether an auth token can be discovered.
+- Whether each host's token has the [scopes it needs](../README.md#token-scopes). doctor asks that host's Forgejo, naming an owner that can't exist, so the check reads and changes nothing. It never prints the token.
+- On macOS, whether the user launchd PATH can expose the shim to new GUI apps.
+
+## Repository Remote Shape
+
+GitHub-style tools usually inspect the local Git checkout before they invoke `gh`. The shim can answer Forgejo-backed `gh` commands, but tools may still show incomplete repository state, disabled commit or push controls, or unavailable pull request status if the checkout does not look like a conventional GitHub clone.
+
+For best compatibility, each Forgejo checkout should have:
+
+```text
+origin.url      https://git.example.com/owner/repo.git
+origin.pushurl  git@ssh.example.com:owner/repo.git
+origin/HEAD     refs/remotes/origin/main
+branch upstream origin/current-branch
+```
+
+If your checkout already has a Forgejo remote under another name, keep it and add `origin` as a compatibility alias:
+
+```sh
+git remote add origin https://git.example.com/owner/repo.git
+git remote set-url --push origin git@ssh.example.com:owner/repo.git
+git fetch origin
+git remote set-head origin -a
+git branch --set-upstream-to=origin/your-branch your-branch
+```
+
+If the server does not report the default branch clearly, set it explicitly:
+
+```sh
+git remote set-head origin main
+```
+
+Useful checks:
+
+```sh
+git config --get remote.origin.url
+git symbolic-ref --quiet refs/remotes/origin/HEAD
+git rev-parse --abbrev-ref --symbolic-full-name @{u}
+git status --short --branch
+gh repo view --json nameWithOwner,url,defaultBranchRef,sshUrl
+gh pr status --json number,title,url,headRefName,state
+gh issue list --json number,title,state,url
+```
+
+If your tool connects to a remote SSH workspace, apply the same remote setup inside that remote checkout too. Fixing the local Mac clone does not change a separate remote clone.
 
 ## Upgrading
 
