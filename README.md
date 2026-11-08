@@ -33,8 +33,8 @@ In a Forgejo repository, Codex in ChatGPT desktop gives you:
 
 | App | PR status | CI checks | Merge | Issues | Mode |
 |---|---|---|---|---|---|
-| ChatGPT desktop (Codex in the app) | yes, except the overview pane | yes | yes | untested | either |
-| Codex CLI | API tested | untested | untested | untested | either |
+| ChatGPT desktop (Codex in the app) | yes, except the overview pane | yes | untested | untested | either |
+| Codex CLI | yes | yes | untested | untested | either |
 | Claude Code | API tested | untested | untested | untested | server mode |
 | Claude desktop | yes | yes | untested | untested | server mode |
 
