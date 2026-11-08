@@ -1,0 +1,312 @@
+//! A bound on the work one document makes async-graphql do before any limit of its own applies.
+//! Its parser checks recursion depth by walking every fragment spread again, with no memory of
+//! what it walked, so a fragment spread twice at each of 32 levels takes 2^32 steps. Its
+//! validation keeps every error it finds, and its overlapping-fields rule compares each repeated
+//! output name with the first, once per argument, across every fragment a selection reaches: a
+//! document under 100 KB raised 8 million errors and held 4 GB. The complexity and depth limits
+//! come after both.
+//!
+//! So each document is parsed and measured first, in steps that stop as soon as the count
+//! passes [`MAX_COST`]: every node as written (field, argument, value, directive, fragment,
+//! variable); every node again for each operation that reaches it through its fragments; and
+//! each step of the overlapping-fields rule, which this check runs itself and stops at its first
+//! conflict. A document that costs more, spreads a fragment within itself, or has a conflict is
+//! refused with one error before async-graphql parses it. None of these refusals can turn away
+//! a document async-graphql would accept: every conflict or cycle found is one it refuses too.
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use async_graphql::extensions::{Extension, ExtensionContext, ExtensionFactory, NextParseQuery};
+use async_graphql::parser::types::{Directive, ExecutableDocument, Field, Selection, SelectionSet};
+use async_graphql::parser::{Positioned, parse_query};
+use async_graphql::{ServerError, ServerResult, Variables};
+use async_graphql_value::{ConstValue, Name, Value};
+
+/// The most steps one document may cost. The costliest document the repo holds from a real
+/// client, gh's `pr list` with every `--json` field, costs 885; `graphql::tests` checks every one
+/// stays under a quarter of this. Validation's errors grow at most a few per step.
+pub const MAX_COST: usize = 5_000;
+
+pub(super) struct DocumentCost;
+
+impl ExtensionFactory for DocumentCost {
+    fn create(&self) -> Arc<dyn Extension> {
+        Arc::new(DocumentCost)
+    }
+}
+
+#[async_graphql::async_trait::async_trait]
+impl Extension for DocumentCost {
+    async fn parse_query(
+        &self,
+        ctx: &ExtensionContext<'_>,
+        query: &str,
+        variables: &Variables,
+        next: NextParseQuery<'_>,
+    ) -> ServerResult<async_graphql::parser::types::ExecutableDocument> {
+        // A document that doesn't parse gets async-graphql's own error.
+        if let Ok(document) = parse_query(query)
+            && let Err(refusal) = check(&document)
+        {
+            return Err(ServerError::new(refusal.message(), None));
+        }
+        next.run(ctx, query, variables).await
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum Refusal {
+    TooCostly,
+    Cycle(String),
+    Conflict(String),
+}
+
+impl Refusal {
+    fn message(&self) -> String {
+        match self {
+            Self::TooCostly => "Query is too complex.".to_owned(),
+            Self::Cycle(name) => format!("Cannot spread fragment \"{name}\" within itself"),
+            Self::Conflict(message) => message.clone(),
+        }
+    }
+}
+
+/// Counts steps, failing once they pass [`MAX_COST`].
+struct Meter {
+    spent: usize,
+}
+
+impl Meter {
+    fn charge(&mut self, steps: usize) -> Result<(), Refusal> {
+        self.spent = self.spent.saturating_add(steps);
+        if self.spent > MAX_COST {
+            Err(Refusal::TooCostly)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// What `document` costs, or why it is refused.
+pub(super) fn check(document: &ExecutableDocument) -> Result<usize, Refusal> {
+    let mut meter = Meter { spent: 0 };
+    let operations: Vec<_> = document.operations.iter().map(|(_, op)| op).collect();
+    // As written: every node once, and the overlapping-fields rule for every selection set.
+    for operation in &operations {
+        for variable in &operation.node.variable_definitions {
+            meter.charge(1)?;
+            directives(&mut meter, &variable.node.directives)?;
+            if let Some(default) = &variable.node.default_value {
+                meter.charge(const_value_nodes(&default.node))?;
+            }
+        }
+        directives(&mut meter, &operation.node.directives)?;
+        written(&mut meter, document, &operation.node.selection_set)?;
+    }
+    for fragment in document.fragments.values() {
+        meter.charge(1)?;
+        directives(&mut meter, &fragment.node.directives)?;
+        written(&mut meter, document, &fragment.node.selection_set)?;
+    }
+    // Each operation with its fragments expanded, as the recursion-depth check, the per-operation
+    // variable rules and the complexity and depth limits walk it.
+    for operation in &operations {
+        expanded(&mut meter, document, &operation.node.selection_set)?;
+    }
+    Ok(meter.spent)
+}
+
+/// Every selection set below `root` as written, each node charged once, with the
+/// overlapping-fields rule run on each set.
+fn written(
+    meter: &mut Meter,
+    document: &ExecutableDocument,
+    root: &Positioned<SelectionSet>,
+) -> Result<(), Refusal> {
+    let mut sets = vec![root];
+    while let Some(set) = sets.pop() {
+        overlapping_fields(meter, document, set)?;
+        for selection in &set.node.items {
+            meter.charge(1)?;
+            match &selection.node {
+                Selection::Field(field) => {
+                    arguments(meter, &field.node.arguments)?;
+                    directives(meter, &field.node.directives)?;
+                    sets.push(&field.node.selection_set);
+                }
+                Selection::FragmentSpread(spread) => directives(meter, &spread.node.directives)?,
+                Selection::InlineFragment(inline) => {
+                    directives(meter, &inline.node.directives)?;
+                    sets.push(&inline.node.selection_set);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every node below `root` with fragment spreads expanded where they appear. A spread of a
+/// fragment already on the path is a cycle, which async-graphql refuses too.
+fn expanded(
+    meter: &mut Meter,
+    document: &ExecutableDocument,
+    root: &Positioned<SelectionSet>,
+) -> Result<(), Refusal> {
+    // Each entry is a set to walk and the fragments on the path to it.
+    let mut sets: Vec<(&Positioned<SelectionSet>, Arc<Vec<&str>>)> =
+        vec![(root, Arc::new(Vec::new()))];
+    while let Some((set, path)) = sets.pop() {
+        for selection in &set.node.items {
+            meter.charge(1)?;
+            match &selection.node {
+                Selection::Field(field) => {
+                    arguments(meter, &field.node.arguments)?;
+                    directives(meter, &field.node.directives)?;
+                    sets.push((&field.node.selection_set, Arc::clone(&path)));
+                }
+                Selection::InlineFragment(inline) => {
+                    directives(meter, &inline.node.directives)?;
+                    sets.push((&inline.node.selection_set, Arc::clone(&path)));
+                }
+                Selection::FragmentSpread(spread) => {
+                    directives(meter, &spread.node.directives)?;
+                    let name = spread.node.fragment_name.node.as_str();
+                    let Some(fragment) = document.fragments.get(name) else {
+                        continue;
+                    };
+                    if path.contains(&name) {
+                        return Err(Refusal::Cycle(name.to_owned()));
+                    }
+                    meter.charge(path.len())?;
+                    let mut inner = Vec::clone(&path);
+                    inner.push(name);
+                    sets.push((&fragment.node.selection_set, Arc::new(inner)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// async-graphql's `OverlappingFieldsCanBeMerged` on one selection set, in the same order, each
+/// step charged, failing at the first conflict it would report.
+fn overlapping_fields(
+    meter: &mut Meter,
+    document: &ExecutableDocument,
+    root: &Positioned<SelectionSet>,
+) -> Result<(), Refusal> {
+    let mut outputs: HashMap<(Option<&str>, &str), &Positioned<Field>> = HashMap::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut stack = vec![(None, root.node.items.iter())];
+    while let Some((on_type, items)) = stack.last_mut() {
+        let on_type = *on_type;
+        let Some(selection) = items.next() else {
+            stack.pop();
+            continue;
+        };
+        meter.charge(1)?;
+        match &selection.node {
+            Selection::Field(field) => {
+                let name = field.node.response_key().node.as_str();
+                let Some(previous) = outputs.get(&(on_type, name)) else {
+                    outputs.insert((on_type, name), field);
+                    continue;
+                };
+                // Each argument is looked up by a scan of the other field's.
+                meter.charge(
+                    previous.node.arguments.len().max(1) * field.node.arguments.len().max(1),
+                )?;
+                if let Some(message) = conflict(name, previous, field) {
+                    return Err(Refusal::Conflict(message));
+                }
+            }
+            Selection::InlineFragment(inline) => {
+                let on_type = inline
+                    .node
+                    .type_condition
+                    .as_ref()
+                    .map(|condition| condition.node.on.node.as_str());
+                stack.push((on_type, inline.node.selection_set.node.items.iter()));
+            }
+            Selection::FragmentSpread(spread) => {
+                let name = spread.node.fragment_name.node.as_str();
+                if let Some(fragment) = document.fragments.get(name)
+                    && visited.insert(name)
+                {
+                    let on_type = Some(fragment.node.type_condition.node.on.node.as_str());
+                    stack.push((on_type, fragment.node.selection_set.node.items.iter()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The first error async-graphql's rule reports for `field` under `name`, after `previous`.
+fn conflict(name: &str, previous: &Positioned<Field>, field: &Positioned<Field>) -> Option<String> {
+    if previous.node.name.node != field.node.name.node {
+        return Some(format!(
+            "Fields \"{name}\" conflict because \"{}\" and \"{}\" are different fields. Use different aliases on the fields to fetch both if this was intentional.",
+            previous.node.name.node, field.node.name.node
+        ));
+    }
+    let differing = previous.node.arguments.len() != field.node.arguments.len()
+        || previous
+            .node
+            .arguments
+            .iter()
+            .any(|(argument, value)| field.node.get_argument(&argument.node) != Some(value));
+    differing.then(|| {
+        format!(
+            "Fields \"{name}\" conflict because they have differing arguments. Use different aliases on the fields to fetch both if this was intentional."
+        )
+    })
+}
+
+fn arguments(
+    meter: &mut Meter,
+    arguments: &[(Positioned<Name>, Positioned<Value>)],
+) -> Result<(), Refusal> {
+    for (_, value) in arguments {
+        meter.charge(1 + value_nodes(&value.node))?;
+    }
+    Ok(())
+}
+
+fn directives(meter: &mut Meter, directives: &[Positioned<Directive>]) -> Result<(), Refusal> {
+    for directive in directives {
+        meter.charge(1)?;
+        arguments(meter, &directive.node.arguments)?;
+    }
+    Ok(())
+}
+
+/// How many values `value` holds, itself included, walked without recursion.
+fn value_nodes(value: &Value) -> usize {
+    let mut count = 0;
+    let mut values = vec![value];
+    while let Some(value) = values.pop() {
+        count += 1;
+        match value {
+            Value::List(items) => values.extend(items),
+            Value::Object(entries) => values.extend(entries.values()),
+            _ => {}
+        }
+    }
+    count
+}
+
+/// [`value_nodes`] for a variable's default.
+fn const_value_nodes(value: &ConstValue) -> usize {
+    let mut count = 0;
+    let mut values = vec![value];
+    while let Some(value) = values.pop() {
+        count += 1;
+        match value {
+            ConstValue::List(items) => values.extend(items),
+            ConstValue::Object(entries) => values.extend(entries.values()),
+            _ => {}
+        }
+    }
+    count
+}

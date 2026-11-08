@@ -3,6 +3,7 @@ use async_graphql::{EmptySubscription, ErrorExtensions, Schema};
 mod budget;
 mod checks;
 mod connections;
+mod cost;
 mod git;
 mod issues;
 mod mutation_inputs;
@@ -53,6 +54,7 @@ fn builder() -> async_graphql::SchemaBuilder<Query, Mutation, EmptySubscription>
         .data(crate::map::WipPrefixes::default())
         .limit_complexity(MAX_COMPLEXITY)
         .limit_depth(MAX_DEPTH)
+        .extension(cost::DocumentCost)
 }
 
 #[cfg(test)]
