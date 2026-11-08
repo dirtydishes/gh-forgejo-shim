@@ -23,6 +23,9 @@ jobs:
   version:
     name: check version
     runs-on: ubuntu-24.04
+    # Reads only: cargo-audit's build scripts run here, so they get no token that can write.
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
 
