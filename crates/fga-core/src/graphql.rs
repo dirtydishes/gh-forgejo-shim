@@ -1,5 +1,6 @@
 use crate::forgejo;
 use async_graphql::{EmptySubscription, ErrorExtensions, Schema};
+mod budget;
 mod checks;
 mod connections;
 mod git;
@@ -34,8 +35,15 @@ pub const MAX_COMPLEXITY: usize = 500;
 /// 13.
 pub const MAX_DEPTH: usize = 20;
 
+/// About the most one response may hold, its values' text and a little for each name (the
+/// `budget` module). One upstream response may be as large (`forgejo::MAX_RESPONSE_BYTES`); real
+/// documents build far less.
+pub const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
 pub fn schema() -> GithubSchema {
-    builder().finish()
+    builder()
+        .extension(budget::OutputBudget(MAX_OUTPUT_BYTES))
+        .finish()
 }
 
 fn builder() -> async_graphql::SchemaBuilder<Query, Mutation, EmptySubscription> {

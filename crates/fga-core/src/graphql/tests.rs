@@ -201,3 +201,31 @@ async fn a_document_nested_past_the_limit_is_refused() {
         .expect_err("one past the limit");
     assert_eq!(errors[0].message, "Query is nested too deep.");
 }
+
+/// Introspection resolves without Forgejo, so it shows the budget at work: past it, the response
+/// has one error and stops growing; under it, the response is the same as without one.
+#[tokio::test]
+async fn a_response_stops_growing_at_its_output_budget() {
+    let query = "{__schema{types{name description fields{name description}}}}";
+    let full = builder().finish().execute(query).await;
+    assert!(full.errors.is_empty(), "{:?}", full.errors);
+    let size = serde_json::to_vec(&full).expect("response").len();
+
+    let limited = builder()
+        .extension(budget::OutputBudget(size / 4))
+        .finish()
+        .execute(query)
+        .await;
+    assert_eq!(limited.errors.len(), 1, "{:?}", limited.errors);
+    let error = serde_json::to_value(&limited.errors[0]).expect("error");
+    assert_eq!(error["extensions"]["type"], "RESOURCE_LIMITS_EXCEEDED");
+    assert!(serde_json::to_vec(&limited).expect("response").len() < size / 2);
+
+    let roomy = builder()
+        .extension(budget::OutputBudget(size * 2))
+        .finish()
+        .execute(query)
+        .await;
+    assert!(roomy.errors.is_empty(), "{:?}", roomy.errors);
+    assert_eq!(roomy.data, full.data);
+}
