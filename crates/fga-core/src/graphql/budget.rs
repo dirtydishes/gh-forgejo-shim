@@ -1,19 +1,38 @@
 //! A cap on how much one GraphQL request may build, counted while its fields resolve. The
 //! complexity limit bounds how many fields a document selects, but one field can be an issue body
-//! or a file, and a list can repeat a selection a hundred times: the cap bounds what all of that
-//! adds up to before the response is assembled.
+//! or a file, an alias can be long, and a list repeats its selection for every item: the cap
+//! bounds what all of that adds up to before the response is written out.
+//!
+//! What it counts is the response's JSON: each string at its escaped length; each object entry
+//! at its escaped name plus [`PER_ENTRY`]; each list item at [`PER_ITEM`]; and each error at its
+//! message and path plus [`PER_ERROR`]. A field's object or list is charged when the field
+//! resolves, after its contents. Its names are the document's own, shared until the response is
+//! written, so charging them then still comes before they cost anything.
+//!
+//! The field that would pass the budget fails with `RESOURCE_LIMITS_EXCEEDED`, and every field
+//! after it is `null` without resolving, so no further Forgejo request runs. That `null` fills
+//! non-null fields too, so a stopped response breaks its schema; its one error tells the client
+//! the data is incomplete.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextResolve, ResolveInfo,
 };
-use async_graphql::{ErrorExtensionValues, ServerError, ServerResult, Value};
+use async_graphql::{ErrorExtensionValues, PathSegment, ServerError, ServerResult, Value};
 
-/// What each value costs besides its text: its name and punctuation in the response.
-const PER_VALUE: usize = 16;
+/// An object entry besides its name: its punctuation and a value the entry's own field doesn't
+/// charge (a number, boolean, null, or a `__typename`, which reaches no extension). Every type
+/// name is shorter: `graphql::tests` checks.
+pub(super) const PER_ENTRY: usize = 64;
 
-/// One request may build `0` bytes of values.
+/// A list item besides its own value: its punctuation, and a number or boolean.
+const PER_ITEM: usize = 24;
+
+/// An error besides its message and path: its other keys and punctuation.
+const PER_ERROR: usize = 128;
+
+/// One request may build `0` bytes of response.
 pub(super) struct OutputBudget(pub(super) usize);
 
 impl ExtensionFactory for OutputBudget {
@@ -26,11 +45,7 @@ impl ExtensionFactory for OutputBudget {
     }
 }
 
-/// One request's budget. Each field's value is charged as it resolves: a string its length, any
-/// other value [`PER_VALUE`]. A list's items and an object's fields resolve, and are charged, on
-/// their own. The field that would pass the budget fails with `RESOURCE_LIMITS_EXCEEDED`; every
-/// field after it is `null` without resolving, so the response carries that one error and no
-/// further Forgejo request runs.
+/// One request's budget: see the module documentation.
 struct Spending {
     budget: usize,
     left: AtomicUsize,
@@ -49,12 +64,19 @@ impl Extension for Spending {
         if self.spent.load(Ordering::Relaxed) {
             return Ok(Some(Value::Null));
         }
-        let value = next.run(ctx, info).await?;
-        let cost = match &value {
-            Some(Value::String(text)) => text.len() + PER_VALUE,
-            Some(Value::Binary(bytes)) => bytes.len() + PER_VALUE,
-            _ => PER_VALUE,
+        // No field holds the root object, so its entries are charged by the fields in it.
+        let root_entry = if info.path_node.parent.is_none() {
+            json_len(info.alias.unwrap_or(info.name)) + PER_ENTRY
+        } else {
+            0
         };
+        let result = next.run(ctx, info).await;
+        let cost = root_entry
+            + match &result {
+                Ok(Some(value)) => value_cost(value),
+                Ok(None) => 0,
+                Err(error) => error_cost(error),
+            };
         if self
             .left
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
@@ -62,10 +84,11 @@ impl Extension for Spending {
             })
             .is_ok()
         {
-            return Ok(value);
+            return result;
         }
         if self.spent.swap(true, Ordering::Relaxed) {
-            return Ok(Some(Value::Null));
+            // An error passes up, so the budget's own error reaches the response.
+            return result.and(Ok(Some(Value::Null)));
         }
         let mut error = ServerError::new(
             format!(
@@ -79,4 +102,41 @@ impl Extension for Spending {
         error.extensions = Some(extensions);
         Err(error)
     }
+}
+
+/// What a field's value adds to the response beyond what its own fields and items were charged.
+fn value_cost(value: &Value) -> usize {
+    match value {
+        Value::String(text) => json_len(text),
+        Value::Enum(name) => name.len(),
+        // Each byte as a number of up to three digits and a comma.
+        Value::Binary(bytes) => bytes.len() * 4,
+        Value::List(items) => items.len() * PER_ITEM,
+        Value::Object(entries) => entries.keys().map(|name| json_len(name) + PER_ENTRY).sum(),
+        Value::Null | Value::Number(_) | Value::Boolean(_) => 0,
+    }
+}
+
+fn error_cost(error: &ServerError) -> usize {
+    let path: usize = error
+        .path
+        .iter()
+        .map(|segment| match segment {
+            PathSegment::Field(name) => json_len(name) + 3,
+            PathSegment::Index(_) => 21,
+        })
+        .sum();
+    json_len(&error.message) + path + PER_ERROR
+}
+
+/// `text`'s length as a JSON string body: serde_json writes `"` and `\` as two bytes, the named
+/// control characters as two, and the rest below 0x20 as six (`\u00XX`).
+pub(super) fn json_len(text: &str) -> usize {
+    text.bytes()
+        .map(|byte| match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
+            0..=0x1f => 6,
+            _ => 1,
+        })
+        .sum()
 }

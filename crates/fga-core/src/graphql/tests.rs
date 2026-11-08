@@ -221,11 +221,79 @@ async fn a_response_stops_growing_at_its_output_budget() {
     assert_eq!(error["extensions"]["type"], "RESOURCE_LIMITS_EXCEEDED");
     assert!(serde_json::to_vec(&limited).expect("response").len() < size / 2);
 
+    // An entry costs more than its JSON (`PER_ENTRY`), so leave room.
     let roomy = builder()
-        .extension(budget::OutputBudget(size * 2))
+        .extension(budget::OutputBudget(size * 8))
         .finish()
         .execute(query)
         .await;
     assert!(roomy.errors.is_empty(), "{:?}", roomy.errors);
     assert_eq!(roomy.data, full.data);
+}
+
+/// What `query` builds under an output budget of `budget` bytes: its errors and its size as JSON.
+async fn under_budget(budget: usize, query: &str) -> (Vec<ServerError>, usize) {
+    let response = builder()
+        .extension(budget::OutputBudget(budget))
+        .finish()
+        .execute(query)
+        .await;
+    let size = serde_json::to_vec(&response).expect("response").len();
+    (response.errors, size)
+}
+
+/// `count` fields of `field` under long aliases, in every type the schema has.
+fn long_aliases(field: &str, count: usize) -> String {
+    let prefix = "a".repeat(3000);
+    let fields: Vec<String> = (0..count).map(|i| format!("{prefix}{i}:{field}")).collect();
+    format!("{{__schema{{types{{{}}}}}}}", fields.join(" "))
+}
+
+/// The response names each alias once per type, so long aliases weigh far more than the
+/// document; the budget counts them.
+#[tokio::test]
+async fn long_aliases_count_against_the_output_budget() {
+    let budget = 1024 * 1024;
+    let (errors, size) = under_budget(budget, &long_aliases("name", 497)).await;
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(size <= budget + 4096, "{size} bytes");
+}
+
+/// `__typename` resolves without reaching the extension; its entry is charged where its object
+/// is.
+#[tokio::test]
+async fn typename_entries_count_against_the_output_budget() {
+    let budget = 64 * 1024;
+    let fields: Vec<String> = (0..497).map(|i| format!("t{i}:__typename")).collect();
+    let query = format!("{{__schema{{types{{{}}}}}}}", fields.join(" "));
+
+    let (errors, size) = under_budget(budget, &query).await;
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(size <= budget + 4096, "{size} bytes");
+}
+
+/// An entry's charge covers a `__typename` value, so every type name must fit in it.
+#[tokio::test]
+async fn every_type_name_fits_in_an_entry() {
+    let response = builder().finish().execute("{__schema{types{name}}}").await;
+    let data = response.data.into_json().expect("data");
+    let names = data["__schema"]["types"].as_array().expect("types");
+    assert!(names.len() > 50);
+    for name in names {
+        let name = name["name"].as_str().expect("name");
+        assert!(name.len() + 16 <= budget::PER_ENTRY, "{name}");
+    }
+}
+
+#[test]
+fn json_len_counts_escapes() {
+    assert_eq!(budget::json_len("plain é"), "plain é".len());
+    assert_eq!(budget::json_len("\"\\\n"), 6);
+    assert_eq!(budget::json_len("\u{1}"), 6);
+    assert_eq!(
+        budget::json_len("\u{1}\"\n"),
+        serde_json::to_string("\u{1}\"\n").expect("JSON").len() - 2
+    );
 }
