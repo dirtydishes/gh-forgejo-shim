@@ -420,7 +420,7 @@ async fn graphql_request(
     Extension(session): Extension<Session>,
     Extension(host): Extension<Arc<Host>>,
     Json(request): Json<Request>,
-) -> Json<Value> {
+) -> Json<GithubResponse> {
     let response = state
         .schema
         .execute(
@@ -430,9 +430,13 @@ async fn graphql_request(
                 .data(host.wip_prefixes.clone()),
         )
         .await;
-    let mut value = serde_json::to_value(response).expect("GraphQL response is serializable");
-    if let Some(errors) = value.get_mut("errors").and_then(Value::as_array_mut) {
-        for error in errors {
+    // Only the errors are rewritten: `data`, which the output budget bounds, is written out as it
+    // is rather than copied into a second tree first.
+    let errors = response
+        .errors
+        .into_iter()
+        .map(|error| {
+            let mut error = serde_json::to_value(error).expect("GraphQL error is serializable");
             let kind = error
                 .pointer("/extensions/type")
                 .cloned()
@@ -442,9 +446,25 @@ async fn graphql_request(
                 error["path"] = json!([]);
             }
             error.as_object_mut().unwrap().remove("extensions");
-        }
-    }
-    Json(value)
+            error
+        })
+        .collect();
+    Json(GithubResponse {
+        data: response.data,
+        extensions: response.extensions,
+        errors,
+    })
+}
+
+/// async-graphql's response as GitHub writes it: each error's `type` at its top and a `path`
+/// always, with no `extensions`.
+#[derive(serde::Serialize)]
+struct GithubResponse {
+    data: async_graphql::Value,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    extensions: std::collections::BTreeMap<String, async_graphql::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<Value>,
 }
 
 fn rest_error(error: Error) -> Response {
