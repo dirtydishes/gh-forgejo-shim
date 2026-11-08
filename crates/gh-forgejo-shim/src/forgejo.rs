@@ -1483,6 +1483,51 @@ mod tests {
         Ok(())
     }
 
+    /// Absolute Locations naming the forge's own host: a rename there is followed, but not one
+    /// that changes the scheme or carries userinfo.
+    #[test]
+    fn absolute_locations_are_judged_by_origin_and_userinfo() -> TestResult {
+        for (followed, location) in [
+            (true, "http://{own}/forgejo/api/v1/repos/o/new"),
+            (false, "https://{own}/forgejo/api/v1/repos/o/new"),
+            (false, "http://alice:pw@{own}/forgejo/api/v1/repos/o/new"),
+            (false, "http://alice@{own}/forgejo/api/v1/repos/o/new"),
+        ] {
+            let own = Arc::new(std::sync::OnceLock::<String>::new());
+            let address = Arc::clone(&own);
+            let (host, seen) = start_recording_server(move |path| {
+                if path == "/forgejo/api/v1/repos/o/r" {
+                    let target = location.replace("{own}", address.get().expect("address"));
+                    ("301 Moved Permanently", Some(target))
+                } else {
+                    ("200 OK", None)
+                }
+            })?;
+            own.set(host.clone()).map_err(|_| "address set twice")?;
+
+            let result =
+                subpath_client(&host)?.get_repo(&RepoRef::new("git.example.com", "o", "r"));
+
+            if followed {
+                result?;
+                assert_eq!(
+                    paths(&seen),
+                    ["/forgejo/api/v1/repos/o/r", "/forgejo/api/v1/repos/o/new"]
+                );
+            } else {
+                let error = result
+                    .err()
+                    .ok_or_else(|| format!("{location} was followed"))?;
+                assert!(
+                    error.message().contains("that the shim didn't follow"),
+                    "{location}: {error}"
+                );
+                assert_eq!(paths(&seen), ["/forgejo/api/v1/repos/o/r"], "{location}");
+            }
+        }
+        Ok(())
+    }
+
     /// A base path keeps its empty segments: requests go to `<base>/api/v1/...` as written.
     #[test]
     fn a_rename_is_followed_below_a_base_path_with_an_empty_segment() -> TestResult {
