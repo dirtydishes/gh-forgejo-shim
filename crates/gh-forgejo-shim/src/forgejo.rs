@@ -696,19 +696,13 @@ impl ForgejoClient {
             .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
         let status = response.status();
         if status.is_redirection() {
-            // Where it pointed, without userinfo, query or fragment: any of them may hold a secret.
+            // Only the origin it pointed to: its path, query and userinfo may each hold a secret.
             let target = response
                 .headers()
                 .get(LOCATION)
                 .and_then(|value| value.to_str().ok())
                 .and_then(|location| response.url().join(location).ok())
-                .map(|mut target| {
-                    let _ = target.set_username("");
-                    let _ = target.set_password(None);
-                    target.set_query(None);
-                    target.set_fragment(None);
-                    format!(" to {target}")
-                })
+                .map(|target| format!(" to {}", target.origin().ascii_serialization()))
                 .unwrap_or_default();
             return Err(ForgejoError::new(format!(
                 "Forgejo API answered HTTP {} with a redirect{target} that the shim didn't follow: it follows only a renamed repository's redirect within the API, up to 10 in a row",
@@ -1584,15 +1578,16 @@ mod tests {
         Ok(())
     }
 
-    /// The error names where a refused redirect pointed, but not its userinfo or query.
+    /// The error names only the origin a refused redirect pointed to: its userinfo, path, query
+    /// and fragment may each carry a secret.
     #[test]
-    fn a_refused_redirect_names_no_credentials_or_query() -> TestResult {
+    fn a_refused_redirect_names_only_its_origin() -> TestResult {
         let (host, _seen) = start_recording_server(|path| {
             if path == "/forgejo/api/v1/repos/o/r" {
                 (
                     "302 Found",
                     Some(
-                        "http://alice:PRIVATE-PASSWORD@127.0.0.1:9/login?access_token=SYNTHETIC#frag"
+                        "http://alice:PRIVATE-PASSWORD@127.0.0.1:9/sso/continue/PATH-SECRET?access_token=SYNTHETIC#frag"
                             .to_string(),
                     ),
                 )
@@ -1608,10 +1603,17 @@ mod tests {
 
         let message = error.message();
         assert!(
-            message.contains("with a redirect to http://127.0.0.1:9/login that"),
+            message.contains("with a redirect to http://127.0.0.1:9 that"),
             "{message}"
         );
-        for secret in ["alice", "PRIVATE-PASSWORD", "SYNTHETIC", "frag"] {
+        for secret in [
+            "alice",
+            "PRIVATE-PASSWORD",
+            "sso",
+            "PATH-SECRET",
+            "SYNTHETIC",
+            "frag",
+        ] {
             assert!(!message.contains(secret), "{message}");
         }
         Ok(())
