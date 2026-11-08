@@ -11,7 +11,9 @@
 //! variable); every node again for each operation that reaches it through its fragments; each
 //! step of the overlapping-fields rule, which this check runs itself and stops at its first
 //! conflict; and, for each reference to a request variable after its first, the variable's size,
-//! as validation copies and checks the whole value at every reference. A document that costs
+//! as validation copies and checks the whole value at every reference. Execution copies a
+//! variable again wherever a field naming it resolves; that grows with list sizes and how many
+//! fields resolve at once, which this check doesn't bound (#282). A document that costs
 //! more, spreads a fragment within itself, or has a conflict is refused with one error before
 //! async-graphql parses it. None of these refusals can turn away a document async-graphql would
 //! accept: every conflict or cycle found is one it refuses too, though its own error list may
