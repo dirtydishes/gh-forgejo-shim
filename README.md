@@ -1,9 +1,8 @@
 # gh-forgejo-shim
 
-> **Early beta.** Version 0.2 rebuilt the shim around a new gateway. Everyday pull request, issue
-> and check commands work, but gaps remain: some `gh` commands and fields still fail, and a few app
-> features work only with GitHub itself. We're closing these gaps release by release.
-> [Known gaps](#known-gaps) lists what doesn't work yet. If something breaks, please
+> **Beta.** The shim covers the `gh` calls ChatGPT desktop, Codex and Claude make for day-to-day
+> pull request work. A few less common commands aren't covered yet; [Known gaps](#known-gaps) lists
+> them. If something breaks, please
 > [open an issue](https://github.com/dirtydishes/gh-forgejo-shim/issues/new). Say which app you
 > were using and which action you were attempting, and paste the output of `gfj doctor`. To show us
 > the exact commands, turn on [tracing](#codex-probe-diagnostics) and attach the trace, but read it
