@@ -399,16 +399,22 @@ pub(super) fn nesting(query: &str) -> usize {
                 }
             }
             b'"' if bytes[i..].starts_with(b"\"\"\"") => {
-                i += 3;
-                while i < bytes.len() && !bytes[i..].starts_with(b"\"\"\"") {
+                let mut end = i + 3;
+                while end < bytes.len() && !bytes[end..].starts_with(b"\"\"\"") {
                     // `\"""` is an escaped delimiter inside a block string.
-                    i += if bytes[i..].starts_with(b"\\\"\"\"") {
+                    end += if bytes[end..].starts_with(b"\\\"\"\"") {
                         4
                     } else {
                         1
                     };
                 }
-                i += 2;
+                if end < bytes.len() {
+                    i = end + 2;
+                } else {
+                    // Unclosed, the parser reads the first two quotes as an empty string and
+                    // the third as the start of an ordinary one, so read on from there.
+                    i += 1;
+                }
             }
             b'"' => {
                 i += 1;
