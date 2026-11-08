@@ -36,12 +36,12 @@ In a Forgejo repository, Codex in ChatGPT desktop gives you:
 | ChatGPT desktop (Codex in the app) | yes, except the overview pane | yes | yes | untested | either |
 | Codex CLI | API tested | untested | untested | untested | either |
 | Claude Code | API tested | untested | untested | untested | server mode |
-| Claude desktop | API tested | API tested | untested | untested | server mode |
+| Claude desktop | yes | yes | untested | untested | server mode |
 
 "Yes" means it has been run in the app. "API tested" means CI sends the app's own requests to the
 gateway, but no run in the app is on record. "Either" means client-only or server mode. In
-client-only mode, Claude's agent can still run `gh` itself. [Known gaps](#known-gaps) lists what
-doesn't work yet.
+client-only mode, Claude's agent can still run `gh` itself, once you
+[tell it to](#tell-claudes-agent-to-use-gh). [Known gaps](#known-gaps) lists what doesn't work yet.
 
 ## Contents
 
@@ -131,6 +131,8 @@ says what the gateway logs when a missing scope hides data.
 
 ## Server mode
 
+![Claude desktop's Code tab on a Forgejo repository named gfj-demo, branch feat/full-text-search. Asked "Is PR #1 ready to merge?", the agent answers that it can merge: no conflicts, and lint, test and build passed on commit 12bed17. Still open is a review comment on src/cli/commands.ts line 45 asking the search help to mention the 50-match cap, which the code sets at src/db/bookmarks.ts line 58. The right panel lists PR #1, "feat(search): full-text search for …", +225 −3, with one comment and a green CI dot.](docs/images/claude-pr-ready.png)
+
 **You need:**
 
 - your own Forgejo;
@@ -165,6 +167,16 @@ says what the gateway logs when a missing scope hides data.
    `gh auth login --hostname forge.example.com`, and paste it. Claude and ChatGPT desktop take their
    token from `gh`.
 
+### Tell Claude's agent to use `gh`
+
+In testing, Claude desktop's agent saw the Forgejo remote, assumed `gh` only works with GitHub, and
+used `curl` instead. Codex used `gh` without help. Two lines in your repository's `CLAUDE.md` fixed it:
+
+```text
+`gh` works in this repository through gh-forgejo-shim. Use it for pull requests, checks, reviews and comments.
+Pass `--hostname <your forge host>` to every `gh api` call; without it, `gh api` can go to github.com.
+```
+
 The gateway keeps no state. To upgrade or roll back, change the image tag in `compose.yaml` and run
 `docker compose up -d` again. [server-mode.md](docs/gateway/server-mode.md#1-run-the-gateway) also
 shows how to build the image yourself.
@@ -184,7 +196,8 @@ doesn't serve. Server mode redirects them; for client-only installs, add the red
 - In server mode without the wrapper, a `gh api` call with no `--hostname` goes to github.com when
   gh is also logged in there; that's how gh picks a host. Agents run such calls, so install the
   wrapper too, or tell the agent to pass `--hostname`
-  ([#265](https://github.com/dirtydishes/gh-forgejo-shim/issues/265)).
+  ([#265](https://github.com/dirtydishes/gh-forgejo-shim/issues/265)). The second line of the
+  [`CLAUDE.md` tip](#tell-claudes-agent-to-use-gh) does that for Claude.
 - ChatGPT desktop's pull request overview pane needs a GitHub account connected to ChatGPT and
   can't open a Forgejo pull request. That's how ChatGPT is built, not a shim bug. The sidebar
   status, the pull request menu, review comments and the agent's `gh` commands work.
