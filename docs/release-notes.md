@@ -7,8 +7,12 @@
   names the host gh used. `gh gist` and other GitHub-only commands fail there; run them outside the
   checkout to reach github.com. `gh pr create` stops with an error when git would push the forge's
   commits to another host, through a remote's push URL, a `pushInsteadOf` rule or an SSH host alias.
-  In a forge checkout, `gh repo create` with `--push`, or when it prompts, stops too: create the
-  repository without `--push`, then push with git (#231).
+  That check reads gh's `git_protocol` from gh's own files, so setups where gh uses https for the
+  forge aren't refused over an SSH alias. Without `ssh` on `PATH`, it refuses an SSH push when git
+  connects through its own SSH command (`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`), which it
+  can't check. The check is best effort (#255). In a forge checkout, `gh repo create` with
+  `--push`, or when it prompts, stops too: create the repository without `--push`, then push with
+  git (#231, #256).
 
 - **PR descriptions and comments render as Markdown.** The gateway's `bodyHTML` is now
   GitHub-flavoured Markdown rendered and sanitized in the gateway, so headings, lists, tables, task
