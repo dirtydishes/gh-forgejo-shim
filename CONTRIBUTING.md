@@ -16,11 +16,13 @@ Run the native commands from the checkout while iterating:
 
 ```sh
 cargo run -p gh-forgejo-shim --bin gh-forgejo-shim -- --help
+cargo run -p gh-forgejo-shim --bin gfj -- --version
 cargo run -p gh-forgejo-shim --bin gfj -- doctor
 ```
 
 Installed runtime changes should be verified from a release-style archive built
-with `scripts/package-release.sh`. The product runtime is Rust-only; do not add
+with `scripts/package-release.sh`: unpack it into a temporary directory, and run
+the `gh-forgejo-shim`, `gfj`, and managed `gh` wrapper smoke checks from there. The product runtime is Rust-only; do not add
 Python source, setuptools metadata, PyPI packaging, or pipx install paths unless
 a separate decision bead records a temporary migration exception.
 
