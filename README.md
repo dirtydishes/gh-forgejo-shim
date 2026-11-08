@@ -38,6 +38,9 @@ In a Forgejo repository, Codex in ChatGPT desktop gives you:
 | Claude Code | API tested | untested | untested | untested | server mode |
 | Claude desktop | yes | yes | untested | untested | server mode |
 
+Using an app that isn't listed, or marked untested? Tell us how it went in
+[#271](https://github.com/dirtydishes/gh-forgejo-shim/issues/271).
+
 "Yes" means it has been run in the app. "API tested" means CI sends the app's own requests to the
 gateway, but no run in the app is on record. "Either" means client-only or server mode. In
 client-only mode, Claude's agent can still run `gh` itself, once you
