@@ -85,3 +85,60 @@ async fn the_reports_aliased_document_is_refused() {
     assert_eq!(body["errors"][0]["message"], "Query is too complex.");
     assert_eq!(body["errors"][0]["type"], "GRAPHQL_VALIDATION_FAILED");
 }
+
+/// Validation errors arise before any field resolves, so the output budget never sees them. A
+/// document that defines many variables of an unknown type raises three errors for each: the
+/// response lists 100 and says how many more there were.
+#[tokio::test]
+async fn validation_errors_are_capped() {
+    let addr = gateway().await;
+    let variables: Vec<String> = (0..20_000).map(|i| format!("$a{i}: Nope")).collect();
+    let query = format!("query ({}) {{ viewer {{ login }} }}", variables.join(", "));
+    assert!(query.len() < 512 * 1024);
+
+    let (status, body) = graphql(addr, &query).await;
+
+    assert_eq!(status, 200);
+    let errors = body["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 101);
+    assert_eq!(errors[100]["type"], "RESOURCE_LIMITS_EXCEEDED");
+    assert!(
+        errors[100]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("more errors left out"),
+        "{}",
+        errors[100]
+    );
+    assert!(body.to_string().len() < 64 * 1024);
+}
+
+/// A document past 512 KiB is refused before it is parsed.
+#[tokio::test]
+async fn an_oversized_document_is_refused() {
+    let addr = gateway().await;
+    let body = json!({ "query": format!("{{ viewer {{ login }} }} #{}", "x".repeat(600 * 1024)) })
+        .to_string();
+    let head = format!(
+        "POST /api/graphql HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token disposable\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let status = tokio::task::spawn_blocking(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(head.as_bytes()).unwrap();
+        // The gateway may answer before it has read the whole body; a failed write is fine.
+        let mut writer = stream.try_clone().unwrap();
+        let sender = std::thread::spawn(move || {
+            let _ = writer.write_all(body.as_bytes());
+        });
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response);
+        let _ = sender.join();
+        String::from_utf8_lossy(&response).into_owned()
+    })
+    .await
+    .unwrap();
+
+    assert!(status.starts_with("HTTP/1.1 413"), "{status:.200}");
+}
