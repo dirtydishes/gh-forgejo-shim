@@ -48,6 +48,14 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
+      # Every build waits for this job, so an advisory published since the last CI run stops the
+      # release before anything is packaged.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Check Cargo.lock against the RustSec advisory database
+        run: cargo audit
+
   build-artifacts:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
