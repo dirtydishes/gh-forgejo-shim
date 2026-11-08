@@ -298,7 +298,9 @@ pub fn commit(c: CommitParts<'_>, owner: &str, repo: &str, public: &Url) -> Valu
 pub fn diff_patches(diff: &str) -> HashMap<String, String> {
     let mut patches = HashMap::new();
     let mut blocks: Vec<Vec<&str>> = Vec::new();
-    for line in diff.lines() {
+    // Split on LF alone: a CRLF file's hunk lines keep their CR, as `git apply` needs.
+    let diff = diff.strip_suffix('\n').unwrap_or(diff);
+    for line in diff.split('\n') {
         if line.starts_with("diff --git ") || blocks.is_empty() {
             blocks.push(Vec::new());
         }
@@ -359,5 +361,11 @@ mod tests {
         assert_eq!(patches["gone.txt"], "@@ -1 +0,0 @@\n-x");
         assert!(!patches.contains_key("img.png"));
         assert_eq!(patches.len(), 2);
+    }
+
+    #[test]
+    fn a_crlf_files_patch_keeps_its_carriage_returns() {
+        let diff = "diff --git a/w.txt b/w.txt\r\nindex 1..2 100644\n--- a/w.txt\n+++ b/w.txt\n@@ -1 +1 @@\n-old\r\n+new\r\n";
+        assert_eq!(diff_patches(diff)["w.txt"], "@@ -1 +1 @@\n-old\r\n+new\r");
     }
 }
