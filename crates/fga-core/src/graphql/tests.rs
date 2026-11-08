@@ -445,3 +445,27 @@ async fn a_large_variable_referenced_twice_is_refused() {
     assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
     assert_eq!(response.errors[0].message, "Query is too complex.");
 }
+
+/// Validation never enters a selection under `__typename`, so a conflict there refuses nothing.
+#[tokio::test]
+async fn a_selection_under_typename_is_not_checked_for_conflicts() {
+    let response = builder()
+        .finish()
+        .execute("{__typename{a:login a:name}}")
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().expect("data"),
+        serde_json::json!({ "__typename": "Query" })
+    );
+}
+
+/// The refusal names a differing argument as async-graphql's rule does.
+#[tokio::test]
+async fn a_differing_argument_is_named_as_the_rule_names_it() {
+    let message = refused(r#"{viewer(login:"a"){id} viewer(login:"b"){id}}"#).await;
+    assert!(
+        message.starts_with("Fields \"login\" conflict because they have differing arguments"),
+        "{message}"
+    );
+}
