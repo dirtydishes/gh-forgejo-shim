@@ -147,7 +147,8 @@ async fn every_captured_document_is_within_the_limits() {
     let mut invalid = Vec::new();
     for (source, query) in documents {
         let document = async_graphql::parser::parse_query(&query).expect("parses");
-        let steps = cost::check(&document).expect("within cost");
+        let steps =
+            cost::check(&document, &async_graphql::Variables::default()).expect("within cost");
         assert!(
             steps * 4 <= cost::MAX_COST,
             "{source}: costs {steps}: raise MAX_COST"
@@ -413,4 +414,34 @@ async fn a_document_past_its_cost_is_refused() {
     let arguments = vec!["b:1"; cost::MAX_COST].join(" ");
     let query = format!("{{viewer({arguments}){{login}}}}");
     assert_eq!(refused(&query).await, "Query is too complex.");
+}
+
+/// Validation copies and checks a request variable's whole value at each reference, so a second
+/// reference to a large one costs its size. One reference, as clients send, costs no more.
+#[tokio::test]
+async fn a_large_variable_referenced_twice_is_refused() {
+    let variables =
+        async_graphql::Variables::from_json(serde_json::json!({ "v": vec![0; 20_000] }));
+    let once = r#"query($v:String!){repository(owner:$v,name:"x"){id}}"#;
+    let twice = r#"query($v:String!){a:repository(owner:$v,name:"x"){id} b:repository(owner:$v,name:"y"){id}}"#;
+
+    let response = builder()
+        .finish()
+        .execute(async_graphql::Request::new(once).variables(variables.clone()))
+        .await;
+    assert!(
+        response
+            .errors
+            .iter()
+            .all(|error| error.message != "Query is too complex."),
+        "{:?}",
+        response.errors
+    );
+
+    let response = builder()
+        .finish()
+        .execute(async_graphql::Request::new(twice).variables(variables))
+        .await;
+    assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+    assert_eq!(response.errors[0].message, "Query is too complex.");
 }
