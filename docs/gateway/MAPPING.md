@@ -388,7 +388,7 @@ returns GitHub's empty or null value, never an error.
 
 **REST.** Each route reads everything from Forgejo, then pages it as GitHub does: `per_page` (30
 unless asked, at most 100), `page`, and a `Link` header when there is more than one page, which
-`gh api --paginate` follows.
+`gh api --paginate` follows. A comparison isn't paged yet: it comes whole on the first page (#262).
 
 | Route | From Forgejo | Differences |
 |---|---|---|
@@ -398,7 +398,7 @@ unless asked, at most 100), `page`, and a `Link` header when there is more than 
 | `pulls/{n}/commits` | `pulls/{n}/commits` | oldest first, as on GitHub; Forgejo lists newest first |
 | `issues/{n}/comments` | `issues/{n}/comments` | none |
 | `pulls/{n}` with `Accept: …diff` or `…patch` | `pulls/{n}.diff`, `pulls/{n}.patch` | none (`gh pr diff`, `gh pr diff --patch`) |
-| `compare/{base}...{head}` | `compare/{base}...{head}`, the reverse comparison for `behind_by`, and `git/commits` for the base, head and merge base | Forgejo names no merge base. The gateway takes it from the compared commits' parents: the one outside the comparison that every other such parent is an ancestor of, proven with further comparisons when merges leave several. If no single parent is (a criss-cross merge), more than 20 parents are candidates, Forgejo cut the commit list short, or the two share no history, the comparison is a 404 rather than a guess. Files, their line counts and patches come from the pull request with the same head and merge base when there is one, as for ChatGPT's PR tab. Without one, files carry only their status, with zero counts and no patch. Two-dot comparisons aren't served |
+| `compare/{base}...{head}` | `compare/{base}...{head}`, the reverse comparison for `behind_by`, and `git/commits` for the base, head and merge base | Forgejo names no merge base. The gateway takes it from the compared commits' parents: the one outside the comparison that every other such parent is an ancestor of, proven with further comparisons when merges leave several. If no single parent is (a criss-cross merge), more than 20 parents are candidates, Forgejo cut the commit list short, or the two share no history, the comparison is a 404 rather than a guess. Files, their line counts and patches come from the pull request with the same head and merge base when there is one, as for ChatGPT's PR tab. Without one, files carry only their status, with zero counts and no patch. Two-dot comparisons aren't served, nor ends named by a branch with a slash (#263) |
 | `compare/…` with `Accept: …diff` or `…patch` | the matching pull request's diff or patch | Forgejo's API serves no other comparison's diff, so one that is no pull request's is a 422 |
 | `contents/{path}?ref=` | `contents/{path}` | a file's base64 `content` up to 1 MiB; past that, `content` is empty and `encoding` is `none`, as on GitHub. With `Accept: application/vnd.github.object+json` a directory is one object with `entries`; with `…raw` a file is its bytes (`raw/{path}`). `url` points at the gateway; `git_url` is null, as the gateway serves no `git/blobs` |
 
