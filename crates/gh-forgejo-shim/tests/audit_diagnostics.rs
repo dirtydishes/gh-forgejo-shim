@@ -883,13 +883,17 @@ fn audit_diag_release_documented_extract() -> TestResult {
     for binary in ["gh-forgejo-shim", "gfj"] {
         fs::write(release.join(binary), "#!/bin/sh\nexit 0\n")?;
     }
-    fs::create_dir(f.root.join("docs"))?;
+    fs::create_dir_all(f.root.join("docs/images"))?;
     for file in [
         "README.md",
         "LICENSE",
         "docs/installation.md",
         "docs/pipx-to-rust-migration.md",
         "docs/rollback.md",
+        "docs/commands.md",
+        "docs/configuration.md",
+        "docs/tracing.md",
+        "docs/images/pr-ready.png",
     ] {
         fs::write(f.root.join(file), "audit fixture\n")?;
     }
