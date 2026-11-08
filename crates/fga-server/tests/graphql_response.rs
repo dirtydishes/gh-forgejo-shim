@@ -33,6 +33,12 @@ async fn gateway() -> SocketAddr {
 
 /// POST `query` to the gateway's GraphQL endpoint, returning the status and the JSON body.
 async fn graphql(addr: SocketAddr, query: &str) -> (u16, Value) {
+    let (status, body) = graphql_text(addr, query).await;
+    (status, serde_json::from_str(&body).unwrap())
+}
+
+/// [`graphql`], with the body as the gateway wrote it.
+async fn graphql_text(addr: SocketAddr, query: &str) -> (u16, String) {
     let body = json!({ "query": query }).to_string();
     let request = format!(
         "POST /api/graphql HTTP/1.1\r\nHost: forge.test\r\nAuthorization: token disposable\r\n\
@@ -50,7 +56,7 @@ async fn graphql(addr: SocketAddr, query: &str) -> (u16, Value) {
     .unwrap();
     let (head, body) = response.split_once("\r\n\r\n").unwrap();
     let status = head.split(' ').nth(1).unwrap().parse().unwrap();
-    (status, serde_json::from_str(body).unwrap())
+    (status, body.to_owned())
 }
 
 #[tokio::test]
@@ -67,6 +73,26 @@ async fn data_and_errors_keep_githubs_shape() {
     assert_eq!(error["type"], "GRAPHQL_VALIDATION_FAILED");
     assert_eq!(error["path"], json!([]));
     assert!(error.get("extensions").is_none(), "{error}");
+}
+
+/// Every object's keys come sorted, whatever order the document asks for them in: the bytes are
+/// those of the response re-encoded through serde_json's sorted map.
+#[tokio::test]
+async fn object_keys_are_written_sorted() {
+    let addr = gateway().await;
+
+    let (status, body) =
+        graphql_text(addr, "{viewer{name login id} __typename unknownField}").await;
+
+    assert_eq!(status, 200);
+    let sorted = serde_json::to_string(&serde_json::from_str::<Value>(&body).unwrap()).unwrap();
+    assert_eq!(body, sorted);
+    let (_, body) = graphql_text(addr, "{viewer{name login id} __typename}").await;
+    assert!(body.contains(r#""viewer":{"id":"#), "{body}");
+    assert_eq!(
+        body,
+        serde_json::to_string(&serde_json::from_str::<Value>(&body).unwrap()).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -87,12 +113,12 @@ async fn the_reports_aliased_document_is_refused() {
 }
 
 /// Validation errors arise before any field resolves, so the output budget never sees them. A
-/// document that defines many variables of an unknown type raises three errors for each: the
-/// response lists 100 and says how many more there were.
+/// document that defines many variables of an unknown type, within its cost, raises more than one
+/// error for each: the response lists 100 and says how many more there were.
 #[tokio::test]
 async fn validation_errors_are_capped() {
     let addr = gateway().await;
-    let variables: Vec<String> = (0..20_000).map(|i| format!("$a{i}: Nope")).collect();
+    let variables: Vec<String> = (0..1_500).map(|i| format!("$a{i}: Nope")).collect();
     let query = format!("query ({}) {{ viewer {{ login }} }}", variables.join(", "));
     assert!(query.len() < 512 * 1024);
 
