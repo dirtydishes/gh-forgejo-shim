@@ -15,4 +15,4 @@ The GraphQL documents gh 2.103.3 sends when asked for every `--json` field it of
 
 They are the largest documents gh builds for these commands. No query limit may refuse any of them:
 see `crates/fga-core/src/graphql/tests.rs`. `repo-view-all.graphql` fails validation anyway, as it
-asks for a field the gateway doesn't serve (`archivedAt`).
+asks for 47 `Repository` fields the gateway doesn't serve, from `archivedAt` on.

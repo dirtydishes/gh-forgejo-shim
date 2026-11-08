@@ -160,9 +160,10 @@ async fn every_captured_document_is_within_the_limits() {
             }
         }
     }
-    // Documents that name a field the gateway doesn't serve fail validation before any limit:
-    // gh's `repo view` with every field (`archivedAt`), and `pr create`/`pr edit`'s read-back
-    // (`assignedActors`). Any other document that stops validating fails here.
+    // Documents that name fields the gateway doesn't serve fail validation before any limit:
+    // gh's `repo view` with every field (47 `Repository` fields, from `archivedAt` on), and
+    // `pr create`/`pr edit`'s read-back (`PullRequest.assignedActors` and `Bot.id`). Any other
+    // document that stops validating fails here.
     assert_eq!(
         invalid,
         [
