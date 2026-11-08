@@ -74,7 +74,8 @@ fn root() -> PathBuf {
 }
 
 /// Every GraphQL document the repo holds from a real client, with where it came from: gh's
-/// captured documents, the oracle's recorded gh requests, a contract case's, and ChatGPT's.
+/// captured documents, the oracle's recorded gh requests (reads and writes), a contract case's, and
+/// ChatGPT's.
 fn documents() -> Vec<(String, String)> {
     let mut documents = Vec::new();
     let read = |path: &Path| std::fs::read_to_string(path).expect("fixture");
@@ -100,6 +101,7 @@ fn documents() -> Vec<(String, String)> {
     }
     for (dir, pattern) in [
         ("fixtures/oracle", ".requests.json"),
+        ("fixtures/oracle/writes", ".requests.json"),
         ("contract/cases", ".json"),
     ] {
         let mut paths: Vec<PathBuf> = std::fs::read_dir(root().join(dir))
@@ -141,7 +143,7 @@ fn name(path: &Path) -> String {
 #[tokio::test]
 async fn every_captured_document_is_within_the_limits() {
     let documents = documents();
-    assert!(documents.len() > 50, "found {} documents", documents.len());
+    assert!(documents.len() > 140, "found {} documents", documents.len());
     for (source, query) in documents {
         match validate(builder(), &query).await {
             // Room to spare, so a client's next version or a new field doesn't hit the limits.
