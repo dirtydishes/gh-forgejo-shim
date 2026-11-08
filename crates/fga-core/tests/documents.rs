@@ -899,4 +899,39 @@ async fn a_scope_that_hides_data_warns_once_per_process() {
         ],
         "one warning per scope"
     );
+
+    // A PR that closes an issue the token can't read lists none, and says why once.
+    let mut closing = pull("other", "open");
+    closing["body"] = json!("Closes #5");
+    let issues = serve(without_issue_scope(
+        forge_with(true, closing, false),
+        StatusCode::FORBIDDEN,
+    ))
+    .await;
+    let session = Forgejo::new(issues.parse().unwrap())
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    let response = fga_core::graphql::schema()
+        .execute(
+            async_graphql::Request::new(
+                r#"{repository(owner:"e2e",name:"oracle"){pullRequest(number:1){
+                    closingIssuesReferences(first:5){nodes{number}}}}}"#,
+            )
+            .data(session)
+            .data("https://forge.test".parse::<url::Url>().unwrap()),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["repository"]["pullRequest"]["closingIssuesReferences"],
+        json!({"nodes": []})
+    );
+    let warned = seen(&issues);
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    assert!(
+        warned[0].contains("the token lacks read:issue"),
+        "{warned:?}"
+    );
 }

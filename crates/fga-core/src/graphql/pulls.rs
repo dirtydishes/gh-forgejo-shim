@@ -690,11 +690,8 @@ impl PullRequest {
                 repository.unwrap_or_else(|| (self.owner.clone(), self.repo.clone()));
             match session.issue(&owner, &repo, number).await {
                 Ok(issue) => nodes.push(Issue::new(issue, &owner, &repo)),
-                Err(
-                    forgejo::Error::NotFound
-                    | forgejo::Error::Forbidden
-                    | forgejo::Error::MissingScope(_),
-                ) => {}
+                Err(forgejo::Error::NotFound | forgejo::Error::Forbidden) => {}
+                Err(forgejo::Error::MissingScope(scope)) => session.hidden(&scope),
                 Err(e) => return Err(error(e)),
             }
         }
