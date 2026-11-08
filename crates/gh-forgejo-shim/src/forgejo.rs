@@ -359,7 +359,7 @@ impl ForgejoClient {
     pub fn create_pull(&self, repo: &RepoRef, request: &CreatePullRequest) -> ForgejoResult<Value> {
         self.request_json(
             Method::POST,
-            format!("{}/pulls", self.repo_api_base_url(repo)),
+            format!("{}/pulls", self.repo_api_base_url(repo)?),
             Some(json!({
                 "title": request.title,
                 "body": request.body,
@@ -373,7 +373,7 @@ impl ForgejoClient {
     pub fn get_pull(&self, repo: &RepoRef, number: u64) -> ForgejoResult<Value> {
         self.request_json(
             Method::GET,
-            format!("{}/pulls/{number}", self.repo_api_base_url(repo)),
+            format!("{}/pulls/{number}", self.repo_api_base_url(repo)?),
             None,
         )
     }
@@ -384,7 +384,7 @@ impl ForgejoClient {
             Method::GET,
             format!(
                 "{}/pulls/{number}.{diff_type}",
-                self.repo_api_base_url(repo)
+                self.repo_api_base_url(repo)?
             ),
             None,
             "text/plain",
@@ -394,7 +394,7 @@ impl ForgejoClient {
     pub fn list_pull_files(&self, repo: &RepoRef, number: u64) -> ForgejoResult<Vec<Value>> {
         let files = self.request_json(
             Method::GET,
-            format!("{}/pulls/{number}/files", self.repo_api_base_url(repo)),
+            format!("{}/pulls/{number}/files", self.repo_api_base_url(repo)?),
             None,
         )?;
         Ok(list_of_objects(files))
@@ -405,8 +405,8 @@ impl ForgejoClient {
             Method::GET,
             format!(
                 "{}/statuses/{}",
-                self.repo_api_base_url(repo),
-                quote_path_segment(sha)
+                self.repo_api_base_url(repo)?,
+                path_segment(sha)?
             ),
             None,
         )?;
@@ -428,8 +428,8 @@ impl ForgejoClient {
     ) -> ForgejoResult<Vec<CommitStatus>> {
         self.get_pages(format!(
             "{}/commits/{}/statuses",
-            self.repo_api_base_url(repo),
-            quote_path_segment(sha)
+            self.repo_api_base_url(repo)?,
+            path_segment(sha)?
         ))
     }
 
@@ -442,7 +442,7 @@ impl ForgejoClient {
         // returns every rule on each request, so it is read once, not paginated.
         let value = self.request_json(
             Method::GET,
-            format!("{}/branch_protections", self.repo_api_base_url(repo)),
+            format!("{}/branch_protections", self.repo_api_base_url(repo)?),
             None,
         )?;
         let rules: Vec<Protection> = serde_json::from_value(value)
@@ -485,7 +485,7 @@ impl ForgejoClient {
     }
 
     pub fn get_repo(&self, repo: &RepoRef) -> ForgejoResult<Value> {
-        self.request_json(Method::GET, self.repo_api_base_url(repo), None)
+        self.request_json(Method::GET, self.repo_api_base_url(repo)?, None)
     }
 
     pub fn list_issues(
@@ -529,7 +529,7 @@ impl ForgejoClient {
             Method::GET,
             format!(
                 "{}/issues?{}",
-                self.repo_api_base_url(repo),
+                self.repo_api_base_url(repo)?,
                 form_urlencode(&params)
             ),
             None,
@@ -540,7 +540,7 @@ impl ForgejoClient {
     pub fn get_issue(&self, repo: &RepoRef, number: u64) -> ForgejoResult<Value> {
         self.request_json(
             Method::GET,
-            format!("{}/issues/{number}", self.repo_api_base_url(repo)),
+            format!("{}/issues/{number}", self.repo_api_base_url(repo)?),
             None,
         )
     }
@@ -548,7 +548,7 @@ impl ForgejoClient {
     pub fn list_labels(&self, repo: &RepoRef) -> ForgejoResult<Vec<Value>> {
         let labels = self.request_json(
             Method::GET,
-            format!("{}/labels", self.repo_api_base_url(repo)),
+            format!("{}/labels", self.repo_api_base_url(repo)?),
             None,
         )?;
         Ok(list_of_objects(labels))
@@ -574,7 +574,7 @@ impl ForgejoClient {
 
         self.request_json(
             Method::POST,
-            format!("{}/issues", self.repo_api_base_url(repo)),
+            format!("{}/issues", self.repo_api_base_url(repo)?),
             Some(Value::Object(payload)),
         )
     }
@@ -587,7 +587,7 @@ impl ForgejoClient {
     ) -> ForgejoResult<Value> {
         self.request_json(
             Method::POST,
-            format!("{}/issues/{number}/comments", self.repo_api_base_url(repo)),
+            format!("{}/issues/{number}/comments", self.repo_api_base_url(repo)?),
             Some(json!({ "body": body })),
         )
     }
@@ -603,7 +603,7 @@ impl ForgejoClient {
             Method::GET,
             format!(
                 "{}/pulls?{}",
-                self.repo_api_base_url(repo),
+                self.repo_api_base_url(repo)?,
                 form_urlencode(&params)
             ),
             None,
@@ -618,13 +618,13 @@ impl ForgejoClient {
             .collect())
     }
 
-    fn repo_api_base_url(&self, repo: &RepoRef) -> String {
-        format!(
+    fn repo_api_base_url(&self, repo: &RepoRef) -> ForgejoResult<String> {
+        Ok(format!(
             "{}/api/v1/repos/{}/{}",
             self.host_base_url(&repo.host),
-            quote_path_segment(&repo.owner),
-            quote_path_segment(&repo.repo)
-        )
+            path_segment(&repo.owner)?,
+            path_segment(&repo.repo)?
+        ))
     }
 
     fn host_base_url(&self, host: &str) -> String {
@@ -733,6 +733,18 @@ fn head_matches(item: &Value, head: &str) -> bool {
 
 fn quote_path_segment(value: &str) -> String {
     percent_encode(value.as_bytes(), PercentEncodeMode::Path)
+}
+
+/// `value` escaped as one segment of an API path, refused before any request when a URL parser
+/// or proxy could resolve it out of the path: [`fga_core::forgejo::climbs`], the rule the gateway
+/// applies. Escaping alone isn't enough, since `.` stays as written and a proxy may decode `%2F`.
+fn path_segment(value: &str) -> ForgejoResult<String> {
+    if fga_core::forgejo::climbs(value) {
+        return Err(ForgejoError::new(format!(
+            "{value:?} can't be part of a Forgejo API path: it could resolve outside the repository"
+        )));
+    }
+    Ok(quote_path_segment(value))
 }
 
 fn form_urlencode(params: &[(String, String)]) -> String {
@@ -885,7 +897,7 @@ mod tests {
         )?;
         assert_eq!(client.get_current_user("git.example.com")?["login"], "test");
         assert_eq!(
-            client.get_repo(&RepoRef::new("git.example.com", "own er", "r/e"))?["name"],
+            client.get_repo(&RepoRef::new("git.example.com", "own er", "r+e"))?["name"],
             "repo"
         );
         let requests = finish_fake_server(handle)?;
@@ -895,7 +907,7 @@ mod tests {
         );
         assert_eq!(
             requests[1].request_line,
-            "GET /forgejo/api/v1/repos/own%20er/r%2Fe HTTP/1.1"
+            "GET /forgejo/api/v1/repos/own%20er/r%2Be HTTP/1.1"
         );
         for request in requests {
             assert_eq!(
@@ -1006,6 +1018,78 @@ mod tests {
             repo.api_base_url(),
             "https://git.example.com/api/v1/repos/own%20er/r%2Fe"
         );
+    }
+
+    /// A segment a URL parser or proxy could resolve out of the repository's path is refused
+    /// before any request, by the gateway's rule: dot segments, separators, and either escaped
+    /// up to three times. The forge's listener must have no connection waiting afterwards.
+    #[test]
+    fn climbing_segments_are_refused_before_any_request() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let config = configured_host(
+            Some(format!("http://{}/forgejo", listener.local_addr()?)),
+            None,
+        );
+        let client = ForgejoClient::for_host(
+            "git.example.com",
+            Some("host-token".to_string()),
+            &config,
+            &crate::config::EnvMap::new(),
+        )?;
+        for (owner, repo) in [
+            ("..", ".."),
+            (".", "r"),
+            ("o", "."),
+            ("o", ".."),
+            ("%2e%2e", "r"),
+            ("o", "%2E%2e"),
+            ("%252e%252e", "r"),
+            ("o", "%25252e%25252e"),
+            ("o/..", "r"),
+            ("o", "r%2F..%2F.."),
+            ("o", "r%252Fx"),
+            ("o", "..\\x"),
+            ("o", "%5C"),
+            ("o", ".\t."),
+        ] {
+            let error = client
+                .get_repo(&RepoRef::new("git.example.com", owner, repo))
+                .err()
+                .ok_or_else(|| format!("{owner}/{repo} was sent"))?;
+            assert!(
+                error
+                    .message()
+                    .contains("can't be part of a Forgejo API path"),
+                "{owner}/{repo}: {error}"
+            );
+        }
+        let error = client
+            .list_check_statuses(&RepoRef::new("git.example.com", "o", "r"), "..")
+            .err()
+            .ok_or("a `..` commit was sent")?;
+        assert!(error.message().contains("\"..\" can't be part"), "{error}");
+
+        match listener.accept() {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            other => Err(format!("a request reached the forge: {other:?}").into()),
+        }
+    }
+
+    /// Dots inside a name are ordinary: Forgejo has `.profile` repositories.
+    #[test]
+    fn dotted_names_are_sent_as_written() -> TestResult {
+        let (host, handle) = start_fake_server(vec![FakeResponse::json(r#"{"name":".profile"}"#)])?;
+        let client = ForgejoClient::new(None).with_scheme("http");
+
+        client.get_repo(&RepoRef::new(host, "o.rg-1_", ".profile"))?;
+        let requests = finish_fake_server(handle)?;
+
+        assert_eq!(
+            requests[0].request_line,
+            "GET /api/v1/repos/o.rg-1_/.profile HTTP/1.1"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1142,7 +1226,7 @@ mod tests {
         ])?;
         let client = ForgejoClient::new(None).with_scheme("http");
         let repo = RepoRef::new(host, "owner", "repo");
-        let statuses = client.list_check_statuses(&repo, "abc/123")?;
+        let statuses = client.list_check_statuses(&repo, "abc 123")?;
         let requests = finish_fake_server(handle)?;
         assert_eq!(statuses.iter().map(|s| s.id).collect::<Vec<_>>(), [2, 1]);
         assert!(matches!(
@@ -1150,7 +1234,7 @@ mod tests {
             fga_core::forgejo::CommitStatusState::Pending
         ));
         for (index, request) in requests.iter().enumerate() {
-            assert_eq!(request.request_line, format!("GET /api/v1/repos/owner/repo/commits/abc%2F123/statuses?page={}&limit=50 HTTP/1.1", index + 1));
+            assert_eq!(request.request_line, format!("GET /api/v1/repos/owner/repo/commits/abc%20123/statuses?page={}&limit=50 HTTP/1.1", index + 1));
         }
         Ok(())
     }
@@ -1203,7 +1287,7 @@ mod tests {
         ])?;
         let client = ForgejoClient::new(None).with_scheme("http");
         let repo = RepoRef::new(host, "owner", "repo");
-        let url = format!("{}/commits/abc/statuses", client.repo_api_base_url(&repo));
+        let url = format!("{}/commits/abc/statuses", client.repo_api_base_url(&repo)?);
         let error = client
             .get_pages_up_to::<CommitStatus>(url, 3)
             .expect_err("page cap");
@@ -1221,13 +1305,13 @@ mod tests {
         let client = ForgejoClient::new(None).with_scheme("http");
         let repo = RepoRef::new(host, "owner", "repo");
 
-        let statuses = client.list_commit_statuses(&repo, "abc/123")?;
+        let statuses = client.list_commit_statuses(&repo, "abc 123")?;
         let requests = finish_fake_server(handle)?;
 
         assert_eq!(statuses, vec![json!({"context": "ci"})]);
         assert_eq!(
             requests[0].request_line,
-            "GET /api/v1/repos/owner/repo/statuses/abc%2F123 HTTP/1.1"
+            "GET /api/v1/repos/owner/repo/statuses/abc%20123 HTTP/1.1"
         );
         Ok(())
     }
