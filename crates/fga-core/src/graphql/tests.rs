@@ -314,3 +314,24 @@ fn json_len_counts_escapes() {
         serde_json::to_string("\u{1}\"\n").expect("JSON").len() - 2
     );
 }
+
+/// The budget's own error must pass up through a list that can't be null, even when too little
+/// budget is left to charge it there. Introspection's `types` is `[__Type!]!`: each type below
+/// costs exactly `per_type`, the budget holds five and 40 bytes more, so the sixth runs it out,
+/// and its error, worth more than 40 bytes, lands on fields with nothing left to charge.
+#[tokio::test]
+async fn the_budget_error_survives_a_list_that_cannot_be_null() {
+    let alias = "a".repeat(100);
+    let fields: Vec<String> = (0..10)
+        .map(|i| format!("{alias}{i:02}:__typename"))
+        .collect();
+    let per_type = 10 * (alias.len() + 2 + budget::PER_ENTRY);
+    let query = format!("{{__schema{{types{{{}}}}}}}", fields.join(" "));
+
+    let (errors, size) = under_budget(5 * per_type + 40, &query).await;
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let error = serde_json::to_value(&errors[0]).expect("error");
+    assert_eq!(error["extensions"]["type"], "RESOURCE_LIMITS_EXCEEDED");
+    assert!(size < 1024, "{size} bytes");
+}
