@@ -564,3 +564,18 @@ async fn too_many_candidate_merge_bases_give_none() {
     let reply = get(addr, &format!("/api/v3/repos/o/r/compare/{x}...{h}")).await;
     assert_eq!(reply.status, 404, "{}", reply.body);
 }
+
+/// `object(expression: "SHA")` is the commit with its message and dates.
+#[tokio::test]
+async fn an_object_expression_naming_a_commit_has_its_metadata() {
+    let addr = gateway().await;
+    let query = format!(
+        r#"query{{repository(owner:"e2e",name:"demo"){{object(expression:"{}"){{... on Commit{{oid messageHeadline messageBody authoredDate}}}}}}}}"#,
+        head()
+    );
+    let commit = &graphql(addr, json!({"query": query})).await["data"]["repository"]["object"];
+    assert_eq!(commit["oid"], head());
+    assert_eq!(commit["messageHeadline"], "docs: drop the old guide");
+    assert_eq!(commit["messageBody"], "The README covers it now.");
+    assert!(!commit["authoredDate"].as_str().unwrap().is_empty());
+}

@@ -132,11 +132,12 @@ pub(super) async fn object(
     };
     let Some(path) = path else {
         return match session.git_commit(owner, repo, rev).await {
-            Ok(commit) => Ok(Some(GitObject::Commit(Box::new(Commit::head(
-                owner,
-                repo,
-                &commit.sha,
-            ))))),
+            Ok(commit) => Ok(Some(GitObject::Commit(Box::new(Commit {
+                owner: owner.into(),
+                repo: repo.into(),
+                sha: commit.sha.clone(),
+                source: Some(commit.into()),
+            })))),
             Err(forgejo::Error::NotFound) => Ok(None),
             Err(e) => Err(error(e)),
         };
