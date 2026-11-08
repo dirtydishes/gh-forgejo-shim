@@ -37,6 +37,12 @@ In a Forgejo repository, Codex in ChatGPT desktop gives you:
 | Codex CLI | yes | yes | untested | untested | either |
 | Claude Code | API tested | untested | untested | untested | server mode |
 | Claude desktop | yes | yes | untested | untested | server mode |
+| GitHub Copilot CLI | untested | untested | untested | untested | either |
+| Cursor's agent ([#242](https://github.com/dirtydishes/gh-forgejo-shim/issues/242)) | untested | untested | untested | untested | either |
+| [Other agents that can run `gh`](docs/apps.md#agents-that-can-run-gh) | untested | untested | untested | untested | either |
+
+[docs/apps.md](docs/apps.md) covers more apps: editors, tools that speak Forgejo themselves and may
+not need the shim, and cloud features it can't reach.
 
 Using an app that isn't listed, or marked untested? Tell us how it went in
 [#271](https://github.com/dirtydishes/gh-forgejo-shim/issues/271).
