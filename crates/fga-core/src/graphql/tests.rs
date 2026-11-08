@@ -144,6 +144,7 @@ fn name(path: &Path) -> String {
 async fn every_captured_document_is_within_the_limits() {
     let documents = documents();
     assert!(documents.len() > 140, "found {} documents", documents.len());
+    let mut invalid = Vec::new();
     for (source, query) in documents {
         match validate(builder(), &query).await {
             // Room to spare, so a client's next version or a new field doesn't hit the limits.
@@ -153,10 +154,24 @@ async fn every_captured_document_is_within_the_limits() {
                 result.complexity,
                 result.depth
             ),
-            // gh's `repo view` with every field asks for one the gateway doesn't serve.
-            Err(errors) => assert!(!refused_by_a_limit(&errors), "{source}: {errors:?}"),
+            Err(errors) => {
+                assert!(!refused_by_a_limit(&errors), "{source}: {errors:?}");
+                invalid.push(source);
+            }
         }
     }
+    // Documents that name a field the gateway doesn't serve fail validation before any limit:
+    // gh's `repo view` with every field (`archivedAt`), and `pr create`/`pr edit`'s read-back
+    // (`assignedActors`). Any other document that stops validating fails here.
+    assert_eq!(
+        invalid,
+        [
+            "fixtures/gh-every-field/repo-view-all.graphql",
+            "fixtures/oracle/writes/base.requests.json#0",
+            "fixtures/oracle/writes/edit-draft.requests.json#0",
+            "fixtures/oracle/writes/edit.requests.json#0",
+        ]
+    );
 }
 
 /// The report's document: one issue body under 1,000 aliases. Each field costs one, so
