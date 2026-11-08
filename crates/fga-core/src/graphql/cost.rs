@@ -14,7 +14,8 @@
 //! as validation copies and checks the whole value at every reference. A document that costs
 //! more, spreads a fragment within itself, or has a conflict is refused with one error before
 //! async-graphql parses it. None of these refusals can turn away a document async-graphql would
-//! accept: every conflict or cycle found is one it refuses too.
+//! accept: every conflict or cycle found is one it refuses too, though its own error list may
+//! name another first.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -148,29 +149,33 @@ enum Walk {
 }
 
 /// Every selection set below `root` as written, each node charged once, with the
-/// overlapping-fields rule run on each set.
+/// overlapping-fields rule run on each set validation enters. It never enters one below
+/// `__typename`, which it reads as a leaf whatever follows.
 fn written<'a>(
     meter: &mut Meter<'a>,
     document: &'a ExecutableDocument,
     root: &'a Positioned<SelectionSet>,
 ) -> Result<(), Refusal> {
-    let mut sets = vec![root];
-    while let Some(set) = sets.pop() {
-        overlapping_fields(meter, document, set)?;
+    let mut sets = vec![(root, true)];
+    while let Some((set, entered)) = sets.pop() {
+        if entered {
+            overlapping_fields(meter, document, set)?;
+        }
         for selection in &set.node.items {
             meter.charge(1)?;
             match &selection.node {
                 Selection::Field(field) => {
                     arguments(meter, &field.node.arguments, Walk::Written)?;
                     directives(meter, &field.node.directives, Walk::Written)?;
-                    sets.push(&field.node.selection_set);
+                    let leaf = field.node.name.node == "__typename";
+                    sets.push((&field.node.selection_set, entered && !leaf));
                 }
                 Selection::FragmentSpread(spread) => {
                     directives(meter, &spread.node.directives, Walk::Written)?
                 }
                 Selection::InlineFragment(inline) => {
                     directives(meter, &inline.node.directives, Walk::Written)?;
-                    sets.push(&inline.node.selection_set);
+                    sets.push((&inline.node.selection_set, entered));
                 }
             }
         }
@@ -275,25 +280,29 @@ fn overlapping_fields(
     Ok(())
 }
 
-/// The first error async-graphql's rule reports for `field` under `name`, after `previous`.
+/// The first error async-graphql's rule reports for `field` under `name`, after `previous`. For
+/// one differing argument it names the argument, not the field, as the rule does.
 fn conflict(name: &str, previous: &Positioned<Field>, field: &Positioned<Field>) -> Option<String> {
+    let differing = |name: &str| {
+        format!(
+            "Fields \"{name}\" conflict because they have differing arguments. Use different aliases on the fields to fetch both if this was intentional."
+        )
+    };
     if previous.node.name.node != field.node.name.node {
         return Some(format!(
             "Fields \"{name}\" conflict because \"{}\" and \"{}\" are different fields. Use different aliases on the fields to fetch both if this was intentional.",
             previous.node.name.node, field.node.name.node
         ));
     }
-    let differing = previous.node.arguments.len() != field.node.arguments.len()
-        || previous
-            .node
-            .arguments
-            .iter()
-            .any(|(argument, value)| field.node.get_argument(&argument.node) != Some(value));
-    differing.then(|| {
-        format!(
-            "Fields \"{name}\" conflict because they have differing arguments. Use different aliases on the fields to fetch both if this was intentional."
-        )
-    })
+    if previous.node.arguments.len() != field.node.arguments.len() {
+        return Some(differing(name));
+    }
+    previous
+        .node
+        .arguments
+        .iter()
+        .find(|(argument, value)| field.node.get_argument(&argument.node) != Some(value))
+        .map(|(argument, _)| differing(&argument.node))
 }
 
 fn arguments<'a>(
