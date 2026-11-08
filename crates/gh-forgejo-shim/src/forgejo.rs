@@ -197,7 +197,7 @@ impl ForgejoClient {
             http: Client::builder()
                 .redirect(Policy::none())
                 .build()
-                .expect("HTTP client with default settings"),
+                .expect("HTTP client that follows no redirect"),
         }
     }
 
