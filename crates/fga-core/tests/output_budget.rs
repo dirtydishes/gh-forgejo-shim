@@ -46,6 +46,14 @@ async fn run(body: String, query: String) -> (async_graphql::Response, usize) {
         .route(
             "/api/v1/repos/o/r/issues",
             get(move || async move { Json(all) }),
+        )
+        // Slow, so every field that reads comments is waiting on Forgejo when the budget runs out.
+        .route(
+            "/api/v1/repos/o/r/issues/{number}/comments",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Json(json!([]))
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap())
@@ -120,6 +128,32 @@ async fn errors_stop_at_the_output_budget() {
     let prefix = "e".repeat(3000);
     let fields: Vec<String> = (0..160)
         .map(|i| format!("{prefix}{i}:labels(first:-1){{totalCount}}"))
+        .collect();
+    let query = format!(
+        "{{repository(owner:\"o\",name:\"r\"){{issues(first:100){{nodes{{{}}}}}}}}}",
+        fields.join(" ")
+    );
+
+    let (response, size) = run(String::new(), query).await;
+
+    assert!(size <= MAX_OUTPUT_BYTES + SLACK, "{size} bytes");
+    assert!(
+        response.errors.iter().any(|error| error
+            .message
+            .starts_with("This query's response would pass")),
+        "{} errors",
+        response.errors.len()
+    );
+}
+
+/// Errors that land after the budget ran out are dropped too. Each field here reads an issue's
+/// comments from a slow forge and then fails on `first:-1`, so all 7,840 are in flight when the
+/// budget runs out. Unbounded, they build 95 MB.
+#[tokio::test]
+async fn errors_landing_after_the_budget_are_dropped() {
+    let prefix = "e".repeat(12_000);
+    let fields: Vec<String> = (0..160)
+        .map(|i| format!("{prefix}{i}:comments(first:-1){{totalCount}}"))
         .collect();
     let query = format!(
         "{{repository(owner:\"o\",name:\"r\"){{issues(first:100){{nodes{{{}}}}}}}}}",
