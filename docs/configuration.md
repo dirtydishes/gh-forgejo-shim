@@ -230,6 +230,8 @@ Import also accepts fj's older `Cyborus.forgejo-cli/keys.json` location. On Linu
 The token needs the four scopes in the README's
 [Token scopes](../README.md#token-scopes) table.
 
+`gfj doctor` asks each configured host's Forgejo which of these its token has, and names any that's missing. Where a missing scope hides data rather than failing a call, as with `write:issue` or `read:organization`, the gateway answers without that data and logs one warning per scope: in fga-server's log, or, for the wrapper, as a `warning` record in the trace when `FJ_SHIM_TRACE` is set.
+
 After import, GUI apps such as Codex.app find Forgejo auth without inheriting
 shell-only environment variables.
 

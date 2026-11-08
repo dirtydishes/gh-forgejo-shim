@@ -893,6 +893,7 @@ fn audit_diag_release_documented_extract() -> TestResult {
         "docs/commands.md",
         "docs/configuration.md",
         "docs/tracing.md",
+        "docs/pull-request-links.md",
         "docs/images/pr-ready.png",
     ] {
         fs::write(f.root.join(file), "audit fixture\n")?;
