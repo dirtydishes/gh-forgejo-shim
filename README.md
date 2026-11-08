@@ -4,8 +4,11 @@
 > and check commands work, but gaps remain: some `gh` commands and fields still fail, and a few app
 > features work only with GitHub itself. We're closing these gaps release by release.
 > [Known gaps](#known-gaps) lists what doesn't work yet. If something breaks, please
-> [open an issue](https://github.com/dirtydishes/gh-forgejo-shim/issues/new) with the command you
-> ran. [Rollback](#rollback) removes only the shim's own files.
+> [open an issue](https://github.com/dirtydishes/gh-forgejo-shim/issues/new). Say which app you
+> were using and which action you were attempting, and paste the output of `gfj doctor`. To show us
+> the exact commands, turn on [tracing](#codex-probe-diagnostics) and attach the trace, but read it
+> first: redaction hides most credentials, not every form. [Rollback](#rollback) removes only the
+> shim's own files.
 
 `gh-forgejo-shim` is a native Rust CLI that helps Codex.app and other GitHub-oriented tools work inside Forgejo repositories without putting Python in the installed `gh`, `gfj`, or `gh-forgejo-shim` runtime path.
 
