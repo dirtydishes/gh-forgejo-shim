@@ -10,9 +10,11 @@
 //! written, so charging them then still comes before they cost anything.
 //!
 //! The field that would pass the budget fails with `RESOURCE_LIMITS_EXCEEDED`, and every field
-//! after it is `null` without resolving, so no further Forgejo request runs. That `null` fills
-//! non-null fields too, so a stopped response breaks its schema; its one error tells the client
-//! the data is incomplete.
+//! that starts after it is `null` without resolving, so it starts no Forgejo request. Fields
+//! already resolving alongside it finish, since async-graphql resolves siblings together: the
+//! budget bounds the response's size, not the upstream work. That `null` fills non-null fields
+//! too, so a stopped response breaks its schema; its one error tells the client the data is
+//! incomplete.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -32,7 +34,7 @@ const PER_ITEM: usize = 24;
 /// An error besides its message and path: its other keys and punctuation.
 const PER_ERROR: usize = 128;
 
-/// One request may build `0` bytes of response.
+/// A response budget: each request may build this many bytes of response.
 pub(super) struct OutputBudget(pub(super) usize);
 
 impl ExtensionFactory for OutputBudget {
