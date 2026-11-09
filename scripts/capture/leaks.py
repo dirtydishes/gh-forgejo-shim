@@ -15,7 +15,8 @@ import re
 import sys
 from pathlib import Path
 
-from redact import ARMOR, EMAIL, EPOCH_SECONDS, GIT_IDENT, IPV4, IPV6, MONTHS, TIME_KEY, TOKEN, embedded, is_email, is_ip
+from redact import (ARMOR, EMAIL, EPOCH_SECONDS, GIT_IDENT, IPV4, IPV6, KEPT_DATES, MONTHS, TIME_KEY, TOKEN,
+                    embedded, is_email, is_ip)
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
@@ -44,8 +45,8 @@ BARE_HOST = re.compile(r"(?<![\w./-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z
 # a host flag or variable in text such as a log. Records' argv and env are read in value_findings.
 NAMED_HOST = re.compile(r"Logged in to (\S+) account|(?<![\w/])[\w.-]+@([A-Za-z0-9][\w.-]*):(?!//)|"
                         r"(?:--hostname|--host|GH_HOST)[= ]\s*([^\s\"',]+)")
-# Dates other than the placeholders' 2000-01-01; gh's own release date in `gh --version` stays.
-GH_VERSION = re.compile(r"gh version \S+ \(\d{4}-\d\d-\d\d\)")
+# Dates other than the placeholders' 2000-01-01, and those redact.py keeps as versions.
+KEPT = re.compile(KEPT_DATES)
 DATE = re.compile(r"(?<!\d)\d{4}([-/])\d\d\1\d\d(?!\d)|\b\d\d[/ ](?:" + MONTHS + r")[/ ]\d{4}\b|"
                   r"\b(?:" + MONTHS + r") +\d{1,2} \d\d:\d\d:\d\d(?: [A-Z]+)? \d{4}\b")
 PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|01[/ ]Jan[/ ]2000|Jan +1 00:00:\d\d(?: [A-Z]+)? 2000")
@@ -78,7 +79,7 @@ def text_findings(text):
     for match in EMAIL.finditer(text):
         if is_email(match.group(0)) and not allowed_host(match.group(0).rsplit("@", 1)[1]):
             kinds.add("email")
-    if any(not PLACEHOLDER_DATES.fullmatch(match.group(0)) for match in DATE.finditer(GH_VERSION.sub("", text))):
+    if any(not PLACEHOLDER_DATES.fullmatch(match.group(0)) for match in DATE.finditer(KEPT.sub("", text))):
         kinds.add("date")
     if HOME.search(text):
         kinds.add("home directory")
