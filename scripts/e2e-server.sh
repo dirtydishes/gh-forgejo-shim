@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 run="fga-server-e2e-$$"
+# The pinned upstream versions. The weekly upstream workflow sets these to the latest releases.
+gh_version="${E2E_GH_VERSION:-2.103.3}"
+forgejo_image="${E2E_FORGEJO_IMAGE:-codeberg.org/forgejo/forgejo:15}"
 cleanup() {
     result=$?
     trap - EXIT
@@ -29,7 +32,7 @@ hosts=$(docker run --rm -e FGA_UPSTREAM=https://gateway.test:8443 \
 [ "$hosts" = 3 ] || { echo "FAIL the Caddyfile sets Host on $hosts of 3 gateway routes" >&2; exit 1; }
 printf 'PASS the Caddyfile sends the client'"'"'s Host on all 3 gateway routes\n'
 docker build -q -f packaging/gateway/Dockerfile -t fga-server:e2e . >/dev/null
-docker build -q -f scripts/e2e/Dockerfile -t fga-g2a-e2e:local . >/dev/null
+docker build -q -f scripts/e2e/Dockerfile --build-arg GH_VERSION="$gh_version" -t fga-g2a-e2e:local . >/dev/null
 docker network create "$run" >/dev/null
 docker volume create "$run-tls" >/dev/null
 # A CA and a forge.test leaf it signs: rustls, which the shim's gateway client uses, refuses a
@@ -47,7 +50,7 @@ docker run -d --name "$run-forgejo" --network "$run" --network-alias forgejo \
     -e FORGEJO__security__INSTALL_LOCK=true -e FORGEJO__database__DB_TYPE=sqlite3 \
     -e FORGEJO__server__ROOT_URL=https://forge.test/ -e FORGEJO__server__DOMAIN=forge.test \
     -e FORGEJO__service__DISABLE_REGISTRATION=true -e FORGEJO__mailer__ENABLED=false \
-    -e FORGEJO__repository__DEFAULT_BRANCH=main codeberg.org/forgejo/forgejo:15 >/dev/null
+    -e FORGEJO__repository__DEFAULT_BRANCH=main "$forgejo_image" >/dev/null
 for attempt in $(seq 1 90); do
     docker exec "$run-forgejo" wget -q -O /dev/null http://localhost:3000/api/v1/version 2>/dev/null && break
     [ "$attempt" -eq 90 ] && { echo 'Forgejo did not become ready' >&2; exit 1; }
@@ -70,5 +73,6 @@ docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" \
     -v "$PWD/scripts/e2e/agent-commands.sh:/test/agent-commands.sh:ro" fga-g2a-e2e:local bash /test/server-client.sh
 docker run --name "$run-launcher" --network "$run" -v "$run-tls:/tls:ro" \
     -v "$PWD/scripts/e2e/launcher-client.sh:/test/launcher-client.sh:ro" fga-g2a-e2e:local bash /test/launcher-client.sh
-printf 'PASS server-mode e2e: the shipped image and nginx snippet serve gh and Claude for Forgejo 15\n'
+printf 'PASS server-mode e2e: the shipped image and nginx snippet serve gh %s and Claude for %s\n' \
+    "$gh_version" "$forgejo_image"
 printf 'PASS client-mode e2e: the shim launches real gh for gh pr checkout against the same forge\n'
