@@ -1,7 +1,7 @@
 # Client captures
 
-The `gh` calls agent apps made, recorded by a transparent `gh` wrapper while each app ran against a
-real checkout, then redacted with `scripts/capture/redact.py`. They show what each app sends and
+The `gh` calls agent apps made, recorded by a transparent `gh` wrapper (`scripts/capture/gh-capture`)
+while each app ran against a real checkout, then redacted with `scripts/capture/redact.py`. They show what each app sends and
 what GitHub answered, so tests can hold the shim to the same calls.
 
 | File | Client | What it shows |
@@ -74,6 +74,12 @@ A user's numeric ID and follower counts are `0`. Screenshots taken during the ca
 a script can't redact an image.
 
 ## Adding a capture
+
+Record with `scripts/capture/gh-capture`, linked in as `gh` ahead of the real one on the client's
+`PATH` (its docstring says how). `gfj trace` doesn't serve here: it records the shim's own routing,
+without the caller's process chain or gh's answers, and only where the shim is installed. To mark
+the steps of a capture, append `MARK <label> <HH:MM:SS>` lines, in local time, to a `.marks` file
+named like the log. Then redact and check:
 
 ```sh
 python3 scripts/capture/redact.py --out fixtures/clients \
