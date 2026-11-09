@@ -1,12 +1,27 @@
-# Unreleased
+# gh-forgejo-shim v0.4.0
 
-- **Anonymous daily usage reports.** The gh wrapper and fga-server each send one report a day,
-  with a fixed set of fields: version, OS, arch, mode, which agent ran gh, the forge's software and
-  major version, gh's version, the week of the first report, and GitHub names the gateway lacked.
-  No hosts, repositories, commands or IDs. The wrapper sends it in the background and never slows
-  or changes a `gh` call. `gfj telemetry off`, `GFJ_TELEMETRY=0`, `DO_NOT_TRACK=1` or `CI` turns it
-  off (`FGA_TELEMETRY=0` for fga-server), and `gfj telemetry show` prints the report. The
-  rounded weekly totals are public; see [docs/telemetry.md](telemetry.md).
+- **gh-forgejo-shim now sends one anonymous usage report a day, and you can turn it off.** It's on
+  by default. `gfj telemetry off` stops it for good (or set `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`;
+  `FGA_TELEMETRY=0` for fga-server), and `gfj telemetry show` prints exactly what would be sent.
+  Machines with `CI` set never report. A report holds only these fields:
+
+  ```json
+  {"schema":1,"version":"0.4.0","os":"macos","arch":"aarch64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"gh":"2.103","first_week":"2026-W45","unsupported":{}}
+  ```
+
+  That's the version, OS and chip, client-only or server mode, which agent ran `gh` (from a fixed
+  list of six names), the forge's software and major version, `gh`'s version, the week of the first
+  report, and how often the gateway lacked a GitHub feature, by GitHub's own names. It never holds
+  a host, repository, command, token, address, user name or install ID. The wrapper sends it in
+  the background, so a `gh` call is never slowed or changed. The counts stay private to the
+  maintainer; [telemetry.dirtydishes.dev/v1/stats](https://telemetry.dirtydishes.dev/v1/stats)
+  publishes only finished weeks' figures, one field at a time, rounded to the nearest 10. The reports show
+  which agents and forges to support next. [docs/telemetry.md](telemetry.md) has the details.
+
+- **Branch names with a slash work in server mode.** Comparing `main...feature/topic`, and GraphQL
+  `object(expression: "feature/topic")`, returned a 404 or null; most branches are named that way.
+  The gateway now resolves each branch to a commit before comparing. Names that git itself refuses,
+  such as ones with `..`, are still refused before any request reaches Forgejo (#263).
 
 The v0.3.1 notes follow.
 
