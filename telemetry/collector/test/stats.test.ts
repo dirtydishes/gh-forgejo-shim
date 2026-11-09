@@ -62,7 +62,7 @@ describe("rounded", () => {
 });
 
 describe("weekFigures", () => {
-  it("publishes installs as the busiest day, reports as the week's sum, and one breakdown per field", () => {
+  it("publishes installs as the busiest day, and one breakdown per field", () => {
     const rows = [
       row(DAYS[0], 30),
       row(DAYS[1], 50),
@@ -72,7 +72,6 @@ describe("weekFigures", () => {
     expect(week(rows)).toEqual({
       week: WEEK,
       installs: 60,
-      reports: 130,
       client: {
         codex: 50, chatgpt: UNDER, "claude-code": UNDER, "claude-desktop": UNDER, cursor: 10, other: UNDER,
         none: UNDER,
@@ -105,7 +104,7 @@ describe("weekFigures", () => {
   });
 
   it("publishes nothing per day, per combination, per first week or per unsupported name", () => {
-    expect(Object.keys(week([row(DAYS[0], 30)]))).toEqual(["week", "installs", "reports", ...FIELDS]);
+    expect(Object.keys(week([row(DAYS[0], 30)]))).toEqual(["week", "installs", ...FIELDS]);
   });
 
   it("no longer lets three fields on one day solve for a hidden count (#287)", () => {
@@ -151,6 +150,15 @@ describe("weekFigures", () => {
     ];
     expect(week(shape(1))).toEqual(week(shape(0)));
     expect(week(shape(1))).toEqual(week(shape(2)));
+  });
+
+  it("gives a reader no sum of days to multiply a busiest day out against (parallax r7#1)", () => {
+    // 14 client and s server reports every day. A week's reports of 7 × (14 + s) beside a client
+    // figure of at most 14 would leave s = 9 as the only fit. Without a sum, 1, 5 and 9 read the same.
+    const shape = (server: number) =>
+      DAYS.flatMap((day) => [row(day, 14), row(day, server, { mode: "server", client: "", gh: "" })]);
+    expect(week(shape(9))).toEqual(week(shape(1)));
+    expect(week(shape(9))).toEqual(week(shape(5)));
   });
 
   it("doesn't show a sender one real install where others report too (parallax r7#2)", () => {
@@ -203,7 +211,7 @@ describe("weekFigures", () => {
       }
       const result = week(rows);
       const tables = FIELDS.map((field) => Object.values(result[field] as Record<string, Rounded>));
-      for (const figure of [result.installs, result.reports, ...tables.flat()]) {
+      for (const figure of [result.installs, ...tables.flat()]) {
         expect(figure === UNDER || (figure >= 10 && figure % 10 === 0), String(figure)).toBe(true);
       }
 

@@ -189,7 +189,6 @@ describe("GET /v1/stats", () => {
     expect(body.weeks.at(-1)).toMatchObject({
       week: isoWeek(lastWeek),
       installs: 10,
-      reports: 10,
       client: { codex: 10, cursor: "under 10", chatgpt: "under 10" },
       version: { "0.3.0": 10, other: "under 10" },
     });
@@ -202,7 +201,7 @@ describe("GET /v1/stats", () => {
     await env.DB.batch([counted(lastWeek, 13), counted(daysBefore(lastWeek, -1), 25)]);
     await freeze(env, today);
     const before = await stats();
-    expect(before.weeks.at(-1)).toMatchObject({ week: isoWeek(lastWeek), installs: 30, reports: 40 });
+    expect(before.weeks.at(-1)).toMatchObject({ week: isoWeek(lastWeek), installs: 30 });
     await env.DB.batch([counted(lastWeek, 40, "cursor"), counted(daysBefore(lastWeek, -2), 90)]);
     await freeze(env, today);
     expect(await stats()).toEqual(before);

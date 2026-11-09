@@ -87,7 +87,6 @@ export function weekFigures(week: string, sums: Sum[]) {
     week,
     // The day's total has field "" and value "", read as none.
     installs: rounded(busiest(of("").get("none"))),
-    reports: rounded([...(of("").get("none")?.values() ?? [])].reduce((sum, n) => sum + n, 0)),
     ...fixed,
     version: {
       ...Object.fromEntries(named.map((found) => [found, rounded(busiest(versions.get(found)))])),
