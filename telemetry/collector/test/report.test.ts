@@ -225,4 +225,37 @@ describe("GET /v1/stats", () => {
     ]);
     expect((await rows("published")).length).toBe(26);
   });
+
+  it("works out 26 weeks within the Free plan's 50 database calls (parallax r7#4)", async () => {
+    await env.DB.batch(
+      [...Array(26).keys()].map((back) => counted(daysBefore(monday(today), (back + 1) * 7), 20)),
+    );
+    const db = metered(env.DB);
+    await freeze(db.env, today);
+    await expire(db.env, today);
+    expect(db.calls()).toBeLessThanOrEqual(4);
+    const weeks = (await stats()).weeks as Array<Record<string, any>>;
+    expect(weeks.map((found) => found.installs)).toEqual(Array(26).fill(20));
+  });
 });
+
+/** `db`, counting each call that reaches the database; a batch counts once, as D1 counts it. */
+function metered(db: D1Database) {
+  let calls = 0;
+  const real = new WeakMap<object, D1PreparedStatement>();
+  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
+    const counting = {
+      bind: (...values: unknown[]) => wrap(statement.bind(...values)),
+      all: () => (calls++, statement.all()),
+      run: () => (calls++, statement.run()),
+      first: () => (calls++, statement.first()),
+    } as unknown as D1PreparedStatement;
+    real.set(counting, statement);
+    return counting;
+  };
+  const DB = {
+    prepare: (query: string) => wrap(db.prepare(query)),
+    batch: (statements: D1PreparedStatement[]) => (calls++, db.batch(statements.map((found) => real.get(found)!))),
+  } as unknown as D1Database;
+  return { env: { DB }, calls: () => calls };
+}

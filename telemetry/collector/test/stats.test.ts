@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { FIELDS, UNDER, rounded, weekFigures, type Rounded, type Row } from "../src/stats";
+import { FIELDS, UNDER, rounded, weekFigures, type Rounded, type Sum } from "../src/stats";
 import { isoWeek } from "../src/week";
+
+/** One `reports` counter: a day, a combination of values, and how many reports had them. */
+interface Row {
+  day: string;
+  mode: string;
+  client: string;
+  forge: string;
+  forge_major: number;
+  os: string;
+  arch: string;
+  version: string;
+  gh: string;
+  count: number;
+}
 
 const row = (day: string, count: number, values: Partial<Row> = {}): Row => ({
   day,
@@ -19,7 +33,13 @@ const row = (day: string, count: number, values: Partial<Row> = {}): Row => ({
 // 2026-11-02 is a Monday, in 2026-W45.
 const WEEK = "2026-W45";
 const DAYS = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"];
-const week = (rows: Row[]) => weekFigures(WEEK, rows);
+/** What the cron's query sums from these counters: each day's total, and each field's values. */
+const sums = (rows: Row[]): Sum[] =>
+  rows.flatMap((r) => [
+    { field: "", value: "", day: r.day, n: r.count },
+    ...FIELDS.map((field) => ({ field, value: String(r[field]), day: r.day, n: r.count })),
+  ]);
+const week = (rows: Row[]) => weekFigures(WEEK, sums(rows));
 
 describe("rounded", () => {
   it("rounds to the nearest 10 and never shows a count below 10", () => {
@@ -130,6 +150,20 @@ describe("weekFigures", () => {
       row(DAYS[1], real, rare),
     ];
     expect(week(shape(1))).toEqual(week(shape(0)));
+    expect(week(shape(1))).toEqual(week(shape(2)));
+  });
+
+  it("doesn't show a sender one real install where others report too (parallax r7#2)", () => {
+    // A sender floods one day: 94 common reports and 9 with a rare set, so the day's total sits at
+    // the top of its range and each rare value one short of 10. With 39 other installs reporting
+    // that day, one or two real installs with the rare set read the same.
+    const rare = { client: "cursor", os: "linux", forge: "gitea", forge_major: 1, version: "0.4.0" };
+    const shape = (real: number) => [
+      row(DAYS[1], 94), // the sender's own
+      row(DAYS[1], 9, rare), // the sender's own
+      row(DAYS[1], 39),
+      row(DAYS[1], real, rare),
+    ];
     expect(week(shape(1))).toEqual(week(shape(2)));
   });
 
