@@ -28,3 +28,5 @@ COPY scripts/oracle /test/oracle-scripts
 COPY fixtures/oracle /test/oracle
 
 COPY scripts/e2e/write-seed.py /test/write-seed.py
+COPY scripts/e2e/replay.py /test/replay.py
+COPY fixtures/clients /test/clients

@@ -15,6 +15,10 @@ what GitHub answered, so tests can hold the shim to the same calls.
 | `claude-desktop-4.4212.jsonl` | Claude desktop 4.4212, running Claude Code 2.1.309 | The same flow from the desktop app: no token for the Forgejo host, then the fake one |
 | `claude-desktop-4.4212-forgejo-requests.log` | the same | The Forgejo host's access log for it |
 
+`scripts/e2e/replay.py` replays every distinct call in CI's gateway e2e job, against a Forgejo
+seeded like the GitHub twin: through the gh wrapper the shim installs, and through plain gh and the
+server-mode gateway. Each answer must have the shape of GitHub's.
+
 ## Records
 
 Each `.jsonl` line is one `gh` call:
