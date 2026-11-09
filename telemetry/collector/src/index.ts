@@ -3,12 +3,12 @@
  *
  * `POST /v1/report` checks a report against the contract and adds one to that day's counter for
  * its values. The counters are private: only the maintainer reads them, from the database. Once a
- * week ends, the daily cron works out its rounded one-field totals and stores them; `GET /v1/stats`
+ * week ends, the daily cron works out its one-field totals, with noise and rounded, and stores them; `GET /v1/stats`
  * publishes what's stored. The Worker reads nothing from a request but its method, path and body,
  * keeps no address, header, user agent or body, and logs nothing.
  */
 import { validate } from "./report";
-import { FIELDS, ROUNDING, weekFigures, type Sum, type Week } from "./stats";
+import { FIELDS, ROUNDING, noise, weekFigures, type Sum, type Week } from "./stats";
 import { daysBefore, isoWeek, monday, utcDay } from "./week";
 
 export interface Env {
@@ -111,10 +111,10 @@ const SUMS = [
  * Works out and stores the figures for each of the last [`WEEKS`] finished weeks that has none
  * stored. A report counts on the day it arrives, so a finished week's counters never change; its
  * figures are worked out from them once and never again, so two responses never differ in a figure
- * and can't be subtracted from each other. It makes at most three database calls, however many
+ * and can't be subtracted from each other, nor its noise averaged away. `draw` is for tests. It makes at most three database calls, however many
  * weeks are missing, to stay within the Workers Free plan's limits.
  */
-export async function freeze(env: Env, today: string): Promise<void> {
+export async function freeze(env: Env, today: string, draw: () => number = noise): Promise<void> {
   const thisWeek = monday(today);
   const stored = await env.DB.prepare("SELECT week FROM published WHERE week >= ?")
     .bind(isoWeek(daysBefore(thisWeek, WEEKS * 7)))
@@ -137,7 +137,7 @@ export async function freeze(env: Env, today: string): Promise<void> {
     missing.map((first) =>
       env.DB.prepare("INSERT INTO published (week, figures) VALUES (?, ?) ON CONFLICT (week) DO NOTHING").bind(
         isoWeek(first),
-        JSON.stringify(weekFigures(isoWeek(first), byWeek.get(isoWeek(first)) ?? [])),
+        JSON.stringify(weekFigures(isoWeek(first), byWeek.get(isoWeek(first)) ?? [], draw)),
       ),
     ),
   );

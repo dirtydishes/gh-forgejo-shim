@@ -155,6 +155,9 @@ const counted = (day: string, count: number, client = "codex") =>
     "INSERT INTO reports VALUES (?, 'client', ?, 'forgejo', 15, 'macos', 'aarch64', '0.3.0', '2.103', ?)",
   ).bind(day, client, count);
 
+/** No noise, for tests that check exact figures. */
+const exact = () => 0;
+
 const stats = async () =>
   (await (await exports.default.fetch("https://telemetry.example/v1/stats")).json()) as Record<string, any>;
 
@@ -178,7 +181,7 @@ describe("GET /v1/stats", () => {
       env.DB.prepare("INSERT INTO cohorts VALUES (?, ?, 14)").bind(lastWeek, isoWeek(lastWeek)),
       env.DB.prepare("INSERT INTO unsupported VALUES (?, 'graphql:Repository.projectsV2', 14, 28)").bind(lastWeek),
     ]);
-    await freeze(env, today);
+    await freeze(env, today, exact);
     const response = await exports.default.fetch("https://telemetry.example/v1/stats");
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
@@ -199,7 +202,7 @@ describe("GET /v1/stats", () => {
 
   it("never changes a week's figures once they're published", async () => {
     await env.DB.batch([counted(lastWeek, 13), counted(daysBefore(lastWeek, -1), 25)]);
-    await freeze(env, today);
+    await freeze(env, today, exact);
     const before = await stats();
     expect(before.weeks.at(-1)).toMatchObject({ week: isoWeek(lastWeek), installs: 30 });
     await env.DB.batch([counted(lastWeek, 40, "cursor"), counted(daysBefore(lastWeek, -2), 90)]);
@@ -214,7 +217,7 @@ describe("GET /v1/stats", () => {
       counted(fifteenWeeks, 40),
       counted(lastWeek, 30),
     ]);
-    await freeze(env, today);
+    await freeze(env, today, exact);
     const weeks = (await stats()).weeks as Array<Record<string, any>>;
     expect(weeks.length).toBe(26);
     expect(weeks[0].week).toBe(isoWeek(daysBefore(monday(today), 26 * 7)));
@@ -230,7 +233,7 @@ describe("GET /v1/stats", () => {
       [...Array(26).keys()].map((back) => counted(daysBefore(monday(today), (back + 1) * 7), 20)),
     );
     const db = metered(env.DB);
-    await freeze(db.env, today);
+    await freeze(db.env, today, exact);
     await expire(db.env, today);
     expect(db.calls()).toBeLessThanOrEqual(4);
     const weeks = (await stats()).weeks as Array<Record<string, any>>;
