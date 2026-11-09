@@ -331,6 +331,15 @@ class SignalTest(unittest.TestCase):
             self.assertEqual(process.returncode, -number, number)
         self.assertEqual([r["signal"] for r in wrapper.records()], ["SIGSEGV", "SIGABRT"])
 
+    @unittest.skipUnless(hasattr(signal, "SIGRTMIN"), "real-time signals (Linux)")
+    def test_a_signal_without_a_name(self):
+        wrapper = Wrapper(self)
+        number = signal.SIGRTMIN + 3
+        process = self.started(wrapper, "kill", FAKE_SIGNAL=str(int(number)))
+        process.communicate(timeout=30)
+        self.assertEqual(process.returncode, -number)
+        self.assertEqual(wrapper.records()[0]["signal"], f"signal {int(number)}")
+
     def test_the_callers_signal_reaches_gh(self):
         wrapper = Wrapper(self)
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
