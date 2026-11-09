@@ -345,6 +345,29 @@ class LogFailureTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"out pr list\n", b"err\n"))
         self.assertFalse(wrapper.log.exists())
 
+    def test_a_broken_or_older_redact_py_only_stops_the_record(self):
+        wrapper = Wrapper(self)
+        for source in ("def broken(:\n", "TOKEN = None\n"):
+            alone = wrapper.root / "copy" / "gh-capture"
+            alone.parent.mkdir(exist_ok=True)
+            alone.write_text(WRAPPER.read_text())
+            (alone.parent / "redact.py").write_text(source)
+            result = subprocess.run([sys.executable, str(alone), "pr", "list"], env=wrapper.env, cwd=wrapper.root,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"out pr list\n", b"err\n"), source)
+            self.assertFalse(wrapper.log.exists())
+
+    def test_a_deleted_cwd_and_closed_streams(self):
+        wrapper = Wrapper(self)
+        shells = {"deleted cwd": 'mkdir gone && cd gone && rmdir ../gone && exec "$0" "$@"',
+                  "closed stdin": 'exec "$0" "$@" <&-', "closed stdout": 'exec "$0" "$@" >&-'}
+        for name, shell in shells.items():
+            result = subprocess.run(["/bin/sh", "-c", shell, sys.executable, str(WRAPPER), "pr", "list", "--json", "number"],
+                                    env=wrapper.env, cwd=wrapper.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=30)
+            self.assertEqual((result.returncode, result.stderr), (0, b"err\n"), name)
+        self.assertEqual(len(wrapper.records()), 3)
+
     def test_a_log_that_cant_be_written(self):
         wrapper = Wrapper(self)
         blocker = wrapper.root / "file"
