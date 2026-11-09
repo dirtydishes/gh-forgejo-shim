@@ -82,11 +82,18 @@ async function report(request: Request, env: Env): Promise<Response> {
       `INSERT INTO cohorts (day, first_week, count) VALUES (?, ?, 1)
        ON CONFLICT (day, first_week) DO UPDATE SET count = count + 1`,
     ).bind(day, checked.first_week),
-    ...Object.entries(checked.unsupported).map(([name, count]) =>
-      env.DB.prepare(
-        `INSERT INTO unsupported (day, name, reports, total) VALUES (?, ?, 1, ?)
-         ON CONFLICT (day, name) DO UPDATE SET reports = reports + 1, total = total + excluded.total`,
-      ).bind(day, name, count),
+    // Schema 1's counts name no agent, so they stay apart from schema 2's.
+    ...checked.counts.map((found) =>
+      checked.schema === 1
+        ? env.DB.prepare(
+            `INSERT INTO unsupported (day, name, reports, total) VALUES (?, ?, 1, ?)
+             ON CONFLICT (day, name) DO UPDATE SET reports = reports + 1, total = total + excluded.total`,
+          ).bind(day, found.name, found.count)
+        : env.DB.prepare(
+            `INSERT INTO calls (day, client, kind, name, reports, total) VALUES (?, ?, ?, ?, 1, ?)
+             ON CONFLICT (day, client, kind, name)
+             DO UPDATE SET reports = reports + 1, total = total + excluded.total`,
+          ).bind(day, found.client, found.kind, found.name, found.count),
     ),
   ];
   await env.DB.batch(statements);
@@ -172,6 +179,7 @@ export async function expire(env: Env, today: string): Promise<void> {
     env.DB.prepare("DELETE FROM reports WHERE day < ?").bind(cutoff),
     env.DB.prepare("DELETE FROM cohorts WHERE day < ?").bind(cutoff),
     env.DB.prepare("DELETE FROM unsupported WHERE day < ?").bind(cutoff),
+    env.DB.prepare("DELETE FROM calls WHERE day < ?").bind(cutoff),
     env.DB.prepare("DELETE FROM published WHERE week < ?").bind(isoWeek(cutoff)),
   ]);
 }

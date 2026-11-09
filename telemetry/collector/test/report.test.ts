@@ -5,8 +5,8 @@ import { daysBefore, isoWeek, monday, utcDay } from "../src/week";
 
 const today = utcDay(new Date());
 
-/** The report doc/telemetry.md shows, dated this week. */
-const example = () => ({
+/** A schema 1 report, as 0.4.0 sends it, dated this week. */
+const example = (): Record<string, unknown> => ({
   schema: 1,
   version: "0.3.0",
   os: "macos",
@@ -19,6 +19,25 @@ const example = () => ({
   first_week: isoWeek(today),
   unsupported: { "graphql:Repository.projectsV2": 2 },
 });
+
+/** The schema 2 report docs/telemetry.md shows, dated this week. */
+const example2 = (): Record<string, unknown> => ({
+  ...example(),
+  schema: 2,
+  unsupported: { codex: { "graphql:Repository.projectsV2": 2 }, chatgpt: { "rest:repos.releases": 1 } },
+  failed: { chatgpt: { "rest:repos.pulls": 1 } },
+});
+
+/** fga-server's schema 2 report: no client or gh, and counts by name alone. */
+const server2 = (): Record<string, unknown> => {
+  const report = example2();
+  delete report.client;
+  delete report.gh;
+  report.mode = "server";
+  report.unsupported = {};
+  report.failed = { "rest:repos.pulls": 3 };
+  return report;
+};
 
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   exports.default.fetch(
@@ -35,7 +54,7 @@ const rows = async (table: string) =>
 // Each test starts from empty counters and nothing published.
 beforeEach(async () => {
   await env.DB.batch(
-    ["reports", "cohorts", "unsupported", "published"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
+    ["reports", "cohorts", "unsupported", "calls", "published"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
   );
 });
 
@@ -66,9 +85,41 @@ describe("POST /v1/report", () => {
     expect(await rows("unsupported")).toEqual([
       { day: today, name: "graphql:Repository.projectsV2", reports: 2, total: 4 },
     ]);
+    // Schema 1 doesn't say which agent a count came from.
+    expect(await rows("calls")).toEqual([]);
     const stored = JSON.stringify([await rows("reports"), await rows("unsupported")]);
     expect(stored).not.toContain("203.0.113.9");
     expect(stored).not.toContain("reqwest");
+  });
+
+  it("counts a schema 2 report's unsupported and failed counts by client", async () => {
+    expect((await post(example2())).status).toBe(204);
+    expect((await post(example2())).status).toBe(204);
+    const byClient = (await rows("calls")).sort((a, b) =>
+      `${a.kind}${a.client}${a.name}`.localeCompare(`${b.kind}${b.client}${b.name}`),
+    );
+    expect(byClient).toEqual([
+      { day: today, client: "chatgpt", kind: "failed", name: "rest:repos.pulls", reports: 2, total: 2 },
+      { day: today, client: "chatgpt", kind: "unsupported", name: "rest:repos.releases", reports: 2, total: 2 },
+      { day: today, client: "codex", kind: "unsupported", name: "graphql:Repository.projectsV2", reports: 2, total: 4 },
+    ]);
+    expect(await rows("unsupported")).toEqual([]);
+  });
+
+  it("counts the same installs from either schema", async () => {
+    await post(example());
+    const first = [await rows("reports"), await rows("cohorts")];
+    await env.DB.batch(["reports", "cohorts"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)));
+    await post(example2());
+    expect([await rows("reports"), await rows("cohorts")]).toEqual(first);
+  });
+
+  it("counts fga-server's schema 2 report by name alone", async () => {
+    expect((await post(server2())).status).toBe(204);
+    expect(await rows("reports")).toMatchObject([{ mode: "server", client: "", gh: "" }]);
+    expect(await rows("calls")).toEqual([
+      { day: today, client: "", kind: "failed", name: "rest:repos.pulls", reports: 1, total: 3 },
+    ]);
   });
 
   it("counts a server report, which has no client or gh", async () => {
@@ -85,7 +136,8 @@ describe("POST /v1/report", () => {
     const cases: Array<[string, (report: Record<string, unknown>) => void]> = [
       ["an unknown field", (r) => (r.install_id = "abc")],
       ["a host", (r) => (r.host = "forge.example.com")],
-      ["another schema", (r) => (r.schema = 2)],
+      ["another schema", (r) => (r.schema = 3)],
+      ["schema 1 with failed counts", (r) => (r.failed = {})],
       ["an unknown client", (r) => (r.client = "vim")],
       ["a raw client name", (r) => (r.client = "/Applications/Codex.app")],
       ["an unknown forge", (r) => (r.forge = "gitlab")],
@@ -117,6 +169,48 @@ describe("POST /v1/report", () => {
     expect(await rows("unsupported")).toEqual([]);
   });
 
+  it("refuses a schema 2 report with anything outside its schema, whole", async () => {
+    const cases: Array<[string, (report: Record<string, unknown>) => void]> = [
+      ["no failed counts", (r) => delete r.failed],
+      ["no unsupported counts", (r) => delete r.unsupported],
+      ["schema 1's counts by name alone", (r) => (r.unsupported = { "rest:repos.releases": 1 })],
+      ["an unknown client", (r) => (r.failed = { vim: { "rest:repos.pulls": 1 } })],
+      ["a raw client name", (r) => (r.failed = { "/Applications/Codex.app": { "rest:repos.pulls": 1 } })],
+      ["a client fga-server's reports leave out", (r) => (r.failed = { "": { "rest:repos.pulls": 1 } })],
+      ["a name outside the vocabulary", (r) => (r.failed = { codex: { "rest:repos.acme": 1 } })],
+      ["a path", (r) => (r.failed = { codex: { "/repos/acme/secret/pulls/1": 1 } })],
+      ["an error message", (r) => (r.failed = { codex: { "Forgejo returned an invalid response": 1 } })],
+      ["a host", (r) => (r.unsupported = { codex: { "forge.example.com": 1 } })],
+      ["a count as text", (r) => (r.failed = { codex: { "rest:repos.pulls": "1" } })],
+      ["a zero count", (r) => (r.failed = { codex: { "rest:repos.pulls": 0 } })],
+      ["a huge count", (r) => (r.failed = { codex: { "rest:repos.pulls": 1_000_001 } })],
+      ["a fractional count", (r) => (r.failed = { codex: { "rest:repos.pulls": 1.5 } })],
+      ["a list of names", (r) => (r.failed = { codex: ["rest:repos.pulls"] })],
+      ["counts as a list", (r) => (r.failed = [{ "rest:repos.pulls": 1 }])],
+      ["counts as text", (r) => (r.failed = "rest:repos.pulls")],
+      ["a nested level too many", (r) => (r.failed = { codex: { "rest:repos.pulls": { count: 1 } } })],
+      ["an unknown field", (r) => (r.errors = { codex: { "rest:repos.pulls": 1 } })],
+    ];
+    for (const [name, change] of cases) {
+      const report = example2();
+      change(report);
+      expect((await post(report)).status, name).toBe(400);
+    }
+    const server: Array<[string, (report: Record<string, unknown>) => void]> = [
+      ["counts by client", (r) => (r.failed = { codex: { "rest:repos.pulls": 1 } })],
+      ["a name outside the vocabulary", (r) => (r.failed = { "rest:repos.acme": 1 })],
+      ["no failed counts", (r) => delete r.failed],
+      ["a client", (r) => (r.client = "codex")],
+    ];
+    for (const [name, change] of server) {
+      const report = server2();
+      change(report);
+      expect((await post(report)).status, `server: ${name}`).toBe(400);
+    }
+    expect(await rows("reports")).toEqual([]);
+    expect(await rows("calls")).toEqual([]);
+  });
+
   it("answers only POST", async () => {
     const response = await exports.default.fetch("https://telemetry.example/v1/report");
     expect(response.status).toBe(405);
@@ -135,12 +229,15 @@ describe("retention", () => {
       ),
       env.DB.prepare("INSERT INTO cohorts VALUES ('2025-01-01', '2026-W45', 5)"),
       env.DB.prepare("INSERT INTO unsupported VALUES ('2025-01-01', 'rest:other', 3, 3)"),
+      env.DB.prepare("INSERT INTO calls VALUES ('2025-01-01', 'codex', 'failed', 'rest:repos.pulls', 1, 1)"),
+      env.DB.prepare("INSERT INTO calls VALUES ('2026-11-01', 'codex', 'failed', 'rest:repos.pulls', 1, 1)"),
       env.DB.prepare("INSERT INTO published VALUES ('2025-W01', '{}')"),
       env.DB.prepare("INSERT INTO published VALUES ('2026-W44', '{}')"),
     ]);
     await expire(env, "2026-11-07");
     expect((await rows("reports")).map((row) => row.day)).toEqual(["2026-11-01"]);
     expect(await rows("unsupported")).toEqual([]);
+    expect((await rows("calls")).map((row) => row.day)).toEqual(["2026-11-01"]);
     expect(await rows("cohorts")).toEqual([]);
     expect((await rows("published")).map((row) => row.week)).toEqual(["2026-W44"]);
   });
@@ -199,6 +296,33 @@ describe("GET /v1/stats", () => {
     // First weeks and unsupported names stay in the database.
     expect(JSON.stringify(body)).not.toContain("projectsV2");
     expect(JSON.stringify(body)).not.toContain("first_week");
+  });
+
+  it("publishes the same figures, in the same shape, whatever counts the reports carried", async () => {
+    const installs = () => [counted(lastWeek, 13), counted(lastWeek, 1, "cursor"), counted(daysBefore(lastWeek, -1), 25)];
+    await env.DB.batch(installs());
+    await freeze(env, today, exact);
+    const without = await stats();
+    await env.DB.batch(["reports", "published"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)));
+    await env.DB.batch([
+      ...installs(),
+      env.DB.prepare("INSERT INTO unsupported VALUES (?, 'graphql:Repository.projectsV2', 14, 28)").bind(lastWeek),
+      env.DB.prepare("INSERT INTO calls VALUES (?, 'codex', 'failed', 'rest:repos.pulls', 13, 90)").bind(lastWeek),
+      env.DB.prepare("INSERT INTO calls VALUES (?, 'cursor', 'unsupported', 'rest:repos.releases', 1, 1)").bind(lastWeek),
+      env.DB.prepare("INSERT INTO calls VALUES (?, '', 'failed', 'graphql:Repository.pullRequest', 40, 400)").bind(lastWeek),
+    ]);
+    await freeze(env, today, exact);
+    const counts = await stats();
+    expect(counts).toEqual(without);
+    expect(Object.keys(counts)).toEqual(["generated", "rounded_to", "weeks"]);
+    for (const week of counts.weeks) {
+      expect(Object.keys(week)).toEqual(["week", "installs", "client", "forge", "mode", "os", "version"]);
+    }
+    expect(counts.weeks.at(-1)).toMatchObject({ week: isoWeek(lastWeek), installs: 30 });
+    const text = JSON.stringify(counts);
+    for (const hidden of ["failed", "unsupported", "rest:", "graphql:", "pulls"]) {
+      expect(text).not.toContain(hidden);
+    }
   });
 
   it("never changes a week's figures once they're published", async () => {

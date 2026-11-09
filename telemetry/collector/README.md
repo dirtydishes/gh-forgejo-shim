@@ -52,8 +52,18 @@ SELECT first_week, week_of, MAX(n) AS installs FROM (
 ) GROUP BY first_week, week_of ORDER BY first_week, week_of;
 ```
 
-Unsupported names: per week, the installs that named each one (its busiest day's reports) and how
-many times they counted it:
+What broke, and in which agent: per week, for each agent, kind and name, the installs that counted
+it (its busiest day's reports) and how many times. `kind` is `unsupported` (the gateway lacks the
+feature) or `failed` (it has the feature and failed on its side). An empty `client` is fga-server.
+These come from schema 2 reports:
+
+```sql
+SELECT date(day, 'weekday 0', '-6 days') AS week_of, client, kind, name,
+  MAX(reports) AS installs, SUM(total) AS times
+FROM calls GROUP BY week_of, client, kind, name ORDER BY week_of, kind, installs DESC;
+```
+
+Schema 1 reports count unsupported names without saying which agent asked, in `unsupported`:
 
 ```sql
 SELECT date(day, 'weekday 0', '-6 days') AS week_of, name,
