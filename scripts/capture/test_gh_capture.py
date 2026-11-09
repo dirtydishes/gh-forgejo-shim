@@ -276,6 +276,8 @@ class TokenOutputTest(unittest.TestCase):
     def test_aliases_extensions_and_more_token_paths(self):
         self.hidden("tok")
         self.hidden("my-extension", "--flag")
+        self.hidden("co", "1")
+        self.hidden("extension", "exec", "my-extension")
         self.hidden("api", "-X", "POST", "orgs/o/actions/runners/generate-jitconfig", output='{"encoded_jit_config":"e30="}')
         self.hidden("api", "repos/o/r/actions/runners/registration-token?per_page=1", output='{"token":"AABB"}')
         self.hidden("api", "user/applications/oauth2", "--jq", ".client_secret", output="gto_" + "q" * 30 + "\n")
@@ -304,6 +306,12 @@ class TokenOutputTest(unittest.TestCase):
         self.assertIn('"temp_clone_token":""', stored)
         self.assertIn('"token":"<redacted>"', stored)
         self.assertIn(patch, stored)
+
+    def test_commands_and_their_aliases_keep_their_output(self):
+        wrapper = Wrapper(self)
+        for argv in (["discussion", "list"], ["skill", "list"], ["cs", "list"], ["environment", "list"]):
+            wrapper.run(*argv, FAKE_GH="print", FAKE_OUT="[]\n")
+        self.assertEqual([record["stdout"] for record in wrapper.records()], ["[]\n"] * 4)
 
     def test_command_words_not_any_word(self):
         wrapper = Wrapper(self)
