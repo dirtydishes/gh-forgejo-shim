@@ -52,8 +52,8 @@ jobs:
           {
             echo '### Upstream versions under test'
             echo
-            echo "- gh $gh_version (pinned in CI: 2.103.3)"
-            echo "- Forgejo $forgejo_version, \`$forgejo_digest\` (pinned in CI: 15)"
+            echo "- gh $gh_version"
+            echo "- Forgejo $forgejo_version, \`$forgejo_digest\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run gh against the gateway and a real Forgejo
