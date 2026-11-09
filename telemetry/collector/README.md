@@ -11,6 +11,13 @@ report holds, what the collector keeps and what it publishes.
 
 `npm test` runs the tests in the Workers runtime against a local D1. `npm run check` typechecks.
 
+## Changing the report or the database
+
+Deploy in this order. Apply a new migration to the database first, then deploy the Worker that uses
+it: a Worker whose table doesn't exist yet fails every report that writes to it, and loses that
+report's other counts with it. Then release the shim that sends the new schema: until the new
+Worker is live, the old one refuses every report in it.
+
 ## Reading the detailed counts
 
 The counters in D1 are private: only the maintainer reads them, straight from the database. Run a
