@@ -247,6 +247,22 @@ class RedactTest(unittest.TestCase):
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
         self.assertEqual(redactor.text(text), "npx ripgrep@14.1.0 && echo ::add-mask::$X from <ip>")
 
+    def test_a_person_without_a_login_and_json_that_doesnt_parse(self):
+        redactor = redact.Redactor([("octo-person", "<user>")])
+        answer = {"data": {"viewer": {"name": "Real Name", "bio": "my own bio", "location": "Somewhere Town",
+                                      "socialAccounts": {"nodes": [{"provider": "X", "url": "https://x.example/octo_tw"}]}},
+                           "repository": {"name": "secret-repo"}}}
+        self.assertEqual(redactor.value(answer)["data"], {
+            "viewer": {"name": "<redacted>", "bio": "<redacted>", "location": "<redacted>",
+                       "socialAccounts": {"nodes": [{"provider": "<redacted>", "url": "<redacted>"}]}},
+            "repository": {"name": "secret-repo"}})
+        cut = '{"login":"octo-person","name":"Real Name","bio": "my own bio"}\nwarning: rate limited\n'
+        self.assertEqual(redactor.structured(cut), '{"login":"<user>","name":"<redacted>","bio": "<redacted>"}\nwarning: rate limited\n')
+        self.assertEqual(redactor.structured('\ufeff{"login":"octo-person","bio":"b"}'), '\ufeff{"login":"<user>","bio":"<redacted>"}')
+        learner = redact.Redactor([])
+        learner.learn(['{"login":"someone-else","bio":"b"', '{"login":"octo-person"}'])
+        self.assertIn("someone-else", learner.names)
+
     def test_the_viewer_from_a_bare_login(self):
         redactor = redact.Redactor([])
         redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "stdout": "octo-person\n"},

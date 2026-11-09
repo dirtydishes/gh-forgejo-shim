@@ -96,6 +96,15 @@ USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view
              "url", "html_url", "resourcePath", "avatar_url", "avatarUrl", "created_at", "updated_at",
              "createdAt", "updatedAt", "followers_url", "following_url", "gists_url", "starred_url",
              "subscriptions_url", "organizations_url", "repos_url", "events_url", "received_events_url"}
+# Keys whose object is a person even without a `login` (GraphQL's `viewer{name bio}`), as is any
+# object inside a user's.
+USER_HOLDERS = {"viewer", "user", "author", "committer", "owner", "creator", "actor", "sender", "assignee",
+                "mergedBy", "merged_by", "closed_by", "enabledBy", "requestedReviewer", "reviewer", "editor"}
+# Profile fields in JSON that doesn't parse (cut short, or followed by other output), and the
+# logins in it.
+PROFILE_TEXT = re.compile(r'("(?:name|full_name|login_name|bio|bioHTML|location|blog|company|email|website|websiteUrl|'
+                          r'description|twitter_username|twitterUsername|pronouns|gravatar_id)"\s*:\s*)"(?:[^"\\]|\\.)*"')
+LOGIN_TEXT = re.compile(r'"(?:login|username)"\s*:\s*"([^"\\]+)"')
 # Who wrote a commit, as git records it: a name beside an email, a date or a user.
 IDENTITY_KEYS = {"name", "email"}
 NODE_KEYS = {"node_id", "nodeId", "id"}
@@ -180,8 +189,12 @@ class Redactor:
                 found["instants"].add(parse_ctime(match))
             for match in HTTP_DATE.finditer(value):
                 found["instants"].add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
-            for parsed in embedded(value):
-                self._collect(parsed, found)
+            parsed = embedded(value)
+            for item in parsed:
+                self._collect(item, found)
+            if not parsed:
+                for login in LOGIN_TEXT.findall(value):
+                    add(found["logins"], login)
 
     def text(self, value):
         value = USERINFO.sub(r"\1<redacted>@", value)
@@ -228,11 +241,14 @@ class Redactor:
             return match.group(1) + run
         return match.group(1) + run + match.group(3) + self.jobs.setdefault(match.group(4), str(len(self.jobs) + 1))
 
-    def value(self, value):
-        """A JSON value: strings by the text rules, and a person's details hidden by key."""
+    def value(self, value, person=False):
+        """A JSON value: strings by the text rules, and a person's details hidden by key. `person`
+        marks a value held under a person's key."""
         if isinstance(value, dict):
+            # A user keeps its allowlisted keys; any other object held by a person keeps only its type.
             user = "login" in value
-            identity = not user and ("email" in value or "name" in value and bool({"user", "date"} & set(value)))
+            keep = USER_KEYS if user else {"__typename"} if person else None
+            identity = keep is None and ("email" in value or "name" in value and bool({"user", "date"} & set(value)))
             result = {}
             for key, item in value.items():
                 if SENSITIVE_KEY.search(key) and isinstance(item, str) and item:
@@ -241,13 +257,15 @@ class Redactor:
                     result[key] = EPOCH_SECONDS * (1000 if item > 10 ** 12 else 1)
                 elif key in NODE_KEYS and isinstance(item, str) and item:
                     result[key] = self._node(item)
-                elif user and key not in USER_KEYS or identity and key in IDENTITY_KEYS:
+                elif keep is not None and key not in keep:
+                    result[key] = self.value(item, person=True) if isinstance(item, (dict, list)) else hidden(item)
+                elif identity and key in IDENTITY_KEYS:
                     result[key] = hidden(item)
                 else:
-                    result[key] = self.value(item)
+                    result[key] = self.value(item, person=key in USER_HOLDERS and isinstance(item, dict))
             return result
         if isinstance(value, list):
-            return [self.value(item) for item in value]
+            return [self.value(item, person) for item in value]
         if isinstance(value, str):
             return self.structured(value)
         return value
@@ -268,7 +286,7 @@ class Redactor:
             return "\n".join(lines) + blank + self.structured(body)
         spans = json_spans(text)
         if spans is None:
-            return self.text(text)
+            return PROFILE_TEXT.sub(r'\1"<redacted>"', self.text(text))
         out = []
         last = 0
         for start, end, item in spans:
@@ -365,7 +383,7 @@ def json_spans(text):
     spans = []
     index = 0
     while True:
-        while index < len(text) and text[index].isspace():
+        while index < len(text) and (text[index].isspace() or text[index] == "\ufeff"):
             index += 1
         if index == len(text):
             break
