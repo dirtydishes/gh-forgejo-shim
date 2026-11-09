@@ -20,9 +20,10 @@ pub const PRODUCT_VERSION: &str = env!("FGA_PRODUCT_VERSION");
 pub const TIMEOUT: Duration = Duration::from_secs(2);
 /// The largest count a report carries for one name; the collector refuses more.
 pub const MAX_COUNT: u64 = 1_000_000;
-/// The most names a report carries, over both tallies and every agent. At the vocabulary's longest
-/// names and largest counts, that keeps a report well under the collector's 16 KiB limit, past
-/// which it refuses the whole report.
+/// The largest report sent: the collector refuses one past 16 KiB whole.
+pub const MAX_BYTES: usize = 15 * 1024;
+/// The names a report too large to send keeps, over both tallies and every agent. At the
+/// vocabulary's longest names and largest counts, that many fit well under [`MAX_BYTES`].
 pub const MAX_NAMES: usize = 120;
 
 /// One day's report. Nothing else is ever sent: no host, repository, path, argument, address or
@@ -94,29 +95,32 @@ impl Tally {
 }
 
 impl Report {
-    /// The report with at most [`MAX_NAMES`] names over both tallies: the largest counts stay,
-    /// ties going to the earlier name. A report past the collector's limit would be refused whole.
+    /// The report, cut to fit [`MAX_BYTES`] if it doesn't: then it keeps [`MAX_NAMES`] names, taken
+    /// in turn from each agent's failures and missing features, largest count first, so one agent's
+    /// many counts never crowd out another's only failure.
     pub fn bounded(mut self) -> Self {
-        let mut counts: Vec<_> = [&self.unsupported, &self.failed]
-            .into_iter()
-            .enumerate()
-            .flat_map(|(tally, counts)| {
-                counts
-                    .counts()
-                    .into_iter()
-                    .map(move |(count, client, name)| {
-                        (std::cmp::Reverse(count), name, client, tally)
-                    })
-            })
-            .collect();
-        if counts.len() <= MAX_NAMES {
+        if serde_json::to_string(&self).map_or(0, |json| json.len()) <= MAX_BYTES {
             return self;
+        }
+        let mut counts = Vec::new();
+        // Failures first: a newly broken feature matters more than one never built.
+        for (tally, counts_of) in [(0, &self.failed), (1, &self.unsupported)] {
+            let mut groups: BTreeMap<Option<&'static str>, Vec<(u64, String)>> = BTreeMap::new();
+            for (count, client, name) in counts_of.counts() {
+                groups.entry(client).or_default().push((count, name));
+            }
+            for (client, mut names) in groups {
+                names.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                for (rank, (count, name)) in names.into_iter().enumerate() {
+                    counts.push((rank, tally, std::cmp::Reverse(count), client, name));
+                }
+            }
         }
         counts.sort();
         let kept: HashSet<_> = counts
             .into_iter()
             .take(MAX_NAMES)
-            .map(|(_, name, client, tally)| (tally, client, name))
+            .map(|(_, tally, _, client, name)| (tally, client, name))
             .collect();
         let keep = |tally: usize| {
             let kept = &kept;
@@ -124,8 +128,8 @@ impl Report {
                 kept.contains(&(tally, client, name.to_string()))
             }
         };
-        self.unsupported.retain(keep(0));
-        self.failed.retain(keep(1));
+        self.failed.retain(keep(0));
+        self.unsupported.retain(keep(1));
         self
     }
 }
@@ -835,22 +839,43 @@ mod tests {
             let kept = bounded.unsupported.counts().len() + bounded.failed.counts().len();
             assert_eq!(kept, MAX_NAMES);
             let size = serde_json::to_string(&bounded).unwrap().len();
-            assert!(size < 16 * 1024, "{size} bytes");
+            assert!(size <= MAX_BYTES, "{size} bytes");
         }
-        // The largest counts stay.
-        let mut names = BTreeMap::from([("rest:repos.pulls".to_string(), 2)]);
-        names.extend(longest.iter().take(MAX_NAMES).map(|name| (name.clone(), 1)));
-        let bounded = report(
+        // A report that fits keeps every count.
+        let names: BTreeMap<String, u64> = longest
+            .iter()
+            .take(MAX_NAMES + 1)
+            .map(|name| (name.clone(), 1))
+            .collect();
+        let fits = report(
             "server",
             None,
-            Tally::ByName(names),
+            Tally::ByName(names.clone()),
             Tally::ByName(BTreeMap::new()),
         );
-        let Tally::ByName(kept) = &bounded.unsupported else {
+        assert_eq!(fits.unsupported, Tally::ByName(names));
+        // Cut down, one agent's many counts leave another's only failure, and each agent's
+        // largest count stays.
+        let codex: BTreeMap<String, u64> = longest.iter().map(|name| (name.clone(), 2)).collect();
+        let chatgpt = BTreeMap::from([("rest:repos.pulls".to_string(), 1)]);
+        let cut = report(
+            "client",
+            Some("codex"),
+            Tally::ByClient(BTreeMap::from([
+                ("codex", codex),
+                ("chatgpt", chatgpt.clone()),
+            ])),
+            Tally::ByClient(BTreeMap::from([("chatgpt", chatgpt.clone())])),
+        );
+        let Tally::ByClient(failed) = &cut.failed else {
             unreachable!()
         };
-        assert_eq!(kept.len(), MAX_NAMES);
-        assert_eq!(kept.get("rest:repos.pulls"), Some(&2));
+        assert_eq!(failed.get("chatgpt"), Some(&chatgpt));
+        let Tally::ByClient(unsupported) = &cut.unsupported else {
+            unreachable!()
+        };
+        assert_eq!(unsupported.get("chatgpt"), Some(&chatgpt));
+        assert_eq!(unsupported["codex"].len(), MAX_NAMES - 2);
     }
 
     #[test]
