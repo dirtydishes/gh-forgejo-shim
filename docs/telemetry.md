@@ -64,6 +64,10 @@ From fga-server, which can't tell agents apart, so its counts are by name alone:
 | `unsupported` | `{"codex": {"rest:repos.releases": 1}}` | How often the gateway lacked a GitHub REST resource or GraphQL field since the last report, under the agent (as `client` names it) whose `gh` call asked for it. From fga-server, by name alone. |
 | `failed` | `{"chatgpt": {"rest:repos.pulls": 1}}` | How often a request for a feature the gateway has [failed](#what-counts-as-a-failure) since the last report, by agent and name the same way. |
 
+A report stays under 15 KiB, within the collector's 16 KiB limit. On a day with more counts than
+that holds, it keeps 120 names, taken in turn from each agent's failures and then its missing
+features, largest count first, and drops the rest.
+
 A report never holds a host, repository, owner, path, command, argument, token, address, user name,
 error message or any kind of install ID. The `unsupported` and `failed` names come only from the
 fixed list in `contract/telemetry.json` (its `names`): GitHub's own names for its REST resources
