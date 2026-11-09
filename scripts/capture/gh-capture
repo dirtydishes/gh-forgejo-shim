@@ -26,6 +26,7 @@ go on to gh, and when a signal kills gh the wrapper dies of the same one. Python
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -158,8 +159,8 @@ class Pump(threading.Thread):
         self.total = 0
 
     def run(self):
-        writing = True
-        while True:
+        writing = reading = True
+        while reading:
             chunk = os.read(self.source.fileno(), 65536)
             if not chunk:
                 break
@@ -169,12 +170,17 @@ class Pump(threading.Thread):
             while writing and chunk:
                 try:
                     chunk = chunk[os.write(self.target, chunk):]
+                except BlockingIOError:
+                    # The caller's non-blocking pipe is full: wait for room, as gh itself would.
+                    select.select([], [self.target], [])
                 except BrokenPipeError:
                     # The caller stopped reading: so does the wrapper, and gh's next write fails
                     # as it would have without the wrapper.
+                    writing = reading = False
+                except OSError:
+                    # Anything else (a full disk, a closed descriptor) loses the caller's copy, but
+                    # gh's pipe keeps draining, so gh never blocks on it.
                     writing = False
-            if not writing:
-                break
         self.source.close()
 
 
