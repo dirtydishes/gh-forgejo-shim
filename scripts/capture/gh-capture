@@ -1,18 +1,27 @@
 #!/usr/bin/python3
 """Transparent `gh` wrapper that records how clients call gh.
 
-Install it as `gh` in a directory that comes before the real gh on the client's PATH. It runs the real
-gh (GH_CAPTURE_REAL, default /opt/homebrew/bin/gh) and appends one JSON line per call to
-GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl).
+Link it in as `gh` in a directory that comes before the real gh on the client's PATH:
+
+    ln -s <checkout>/scripts/capture/gh-capture ~/.local/bin/gh
+
+It runs the real gh (GH_CAPTURE_REAL, default /opt/homebrew/bin/gh) and appends one JSON line per
+call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, created owner-only). Nothing about the
+log can break a call: one that can't be written is skipped, saying so only on a terminal.
 
 A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env, exit
-code, duration, and stdout and stderr. Output that can carry a token (`auth token`, `--show-token`)
-is never stored, only its length.
+code (and the signal, if one killed gh), duration, and stdout and stderr. No credential is stored:
+argv loses tokens, sensitive flag values and `gh secret` bodies; output that can carry a token
+(`auth token`, `--show-token`, `auth git-credential`, `config get`, `api` on token paths) is stored
+only as its length; other output loses its tokens and credentials. The rules come from redact.py
+beside the script, which is why it's linked rather than copied; without them nothing is recorded.
+The rest of a person's details stay until redact.py runs on the log, before anything is committed.
 
 When stdout is a terminal, it records the argv and execs gh, so interactive output doesn't change.
 Otherwise gh writes to pipes, which keeps its non-TTY behaviour, and each chunk reaches the caller as
-gh writes it (`gh pr checks --watch`), with a copy kept for the record. Python 3.9 compatible (macOS
-/usr/bin/python3).
+gh writes it (`gh pr checks --watch`), with a copy kept for the record. SIGINT, SIGTERM and SIGHUP
+go on to gh, and when a signal kills gh the wrapper dies of the same one. Python 3.9 compatible
+(macOS /usr/bin/python3).
 """
 import json
 import os
