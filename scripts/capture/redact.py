@@ -50,9 +50,14 @@ SECRET_ASSIGNMENT = re.compile(r"(?i)\b([\w.-]*(?:token|secret|passw(?:or)?d|cre
 # A home directory, URL-encoded too; its last part is the local user's name.
 HOME = re.compile(r"(?:/|%2[Ff])(?:Users|home)(?:/|%2[Ff])([^/%\s\"'<>]+)|[A-Za-z]:\\+Users\\+([^\\\s\"'<>]+)")
 SHARED_HOMES = {"shared", "guest"}
-# Logins of bots and apps, which GraphQL gives without `[bot]`: kept, as they name no one.
+# Logins kept as they are: bots and apps, which GraphQL gives without `[bot]`, and words gh and
+# GitHub use in paths and commands, which GitHub and Forgejo reserve, so they name an organization
+# or the system (`actions/checkout`), never a person. Replacing them would break every path.
 BOTS = {"github-actions", "dependabot", "copilot", "renovate", "ghost", "web-flow", "forgejo-actions",
         "gitea-actions"}
+PATH_WORDS = {"actions", "admin", "api", "apps", "checks", "cli", "commits", "compare", "explore", "git",
+              "github", "graphql", "issues", "login", "notifications", "orgs", "pr", "pulls", "releases",
+              "repos", "runs", "search", "settings", "status", "user", "users"}
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
 AVATAR = re.compile(r"https?://(?:avatars\.githubusercontent\.com|(?:secure|www)\.gravatar\.com|"
@@ -135,6 +140,7 @@ class Redactor:
         self.runs = {}
         self.jobs = {}
         self.times = {}
+        self.kept = []
 
     def learn(self, values):
         """Pass one: logins, local user names and timestamps from every file, so placeholders are
@@ -147,7 +153,10 @@ class Redactor:
         users = sum(1 for placeholder in self.names.values() if re.fullmatch(r"<user(?:-\d+)?>", placeholder))
         for viewer, logins in ((True, found["viewers"]), (False, found["logins"])):
             for login in logins:
-                if login.lower() in known or login.lower() in BOTS or login.endswith("[bot]") or login.startswith("<"):
+                if login.lower() in PATH_WORDS and login.lower() not in known:
+                    add(self.kept, login)
+                if (login.lower() in known or login.lower() in BOTS | PATH_WORDS or login.endswith("[bot]")
+                        or login.startswith("<")):
                     continue
                 # `<user>` is only ever the viewer: anyone else is `<user-2>` on.
                 users = users + 1 if viewer else max(users, 1) + 1
@@ -534,6 +543,9 @@ def main(argv=None):
     redactor.learn([learnable(path) for path in files])
     if USER not in redactor.names.values():
         parser.error(f"found no capturing account in the captures: pass --name <your login>='{USER}'")
+    if redactor.kept:
+        print("kept these logins, which are also words in gh's paths; check they aren't people: "
+              + ", ".join(redactor.kept), file=sys.stderr)
     args.out.mkdir(parents=True, exist_ok=True)
     for path in files:
         (args.out / redactor.text(path.name)).write_text(redact(path, redactor))
