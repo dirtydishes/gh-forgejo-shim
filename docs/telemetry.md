@@ -175,7 +175,8 @@ its rounding changes, and so tell whether one more real report came. Noise moves
 than one report, so one real report more or less changes a figure's odds by about 1.2 times at
 most, and never decides it. A report moves at most seven noisy counts: `installs`, one value of
 each of `client`, `forge`, `mode` and `os`, its version's, and `other` when that version isn't
-named. Read together, they change the odds by about 3.2 times at most.
+named. Read together, they change the odds by about 3.2 times at most. The one exception is a
+version that only one install ran, below.
 
 What's left: each week's noise is new, so someone who repeats this every week for a long time can
 slowly learn which values a quiet install tends to carry. A version that only one install ran shows

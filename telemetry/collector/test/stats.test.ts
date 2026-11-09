@@ -219,7 +219,7 @@ describe("weekFigures", () => {
   });
 
   it("adds noise when no draw is passed", () => {
-    // Every figure would read the same each time without noise; 22 noisy figures rarely all do.
+    // Every figure would read the same each time without noise; 19 noisy figures rarely all do.
     const rows = [row(DAYS[0], 14), row(DAYS[0], 25, { client: "cursor", os: "linux" })];
     const seen = new Set(Array.from({ length: 50 }, () => JSON.stringify(weekFigures(WEEK, sums(rows)))));
     expect(seen.size).toBeGreaterThan(1);

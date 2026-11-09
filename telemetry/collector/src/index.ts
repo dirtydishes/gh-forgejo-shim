@@ -4,8 +4,8 @@
  * `POST /v1/report` checks a report against the contract and adds one to that day's counter for
  * its values. The counters are private: only the maintainer reads them, from the database. Once a
  * week ends, the daily cron works out its one-field totals, with noise and rounded, and stores
- * them; `GET /v1/stats` publishes what's stored. The Worker reads nothing from a request but its method, path and body,
- * keeps no address, header, user agent or body, and logs nothing.
+ * them; `GET /v1/stats` publishes what's stored. The Worker reads nothing from a request but its
+ * method, path and body, keeps no address, header, user agent or body, and logs nothing.
  */
 import { validate } from "./report";
 import { FIELDS, ROUNDING, noise, weekFigures, type Sum, type Week } from "./stats";
