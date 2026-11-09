@@ -168,16 +168,19 @@ async fn requests_are_counted_by_github_s_names_only() {
     let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
     tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
     for (token, status) in [("broken", 502), ("wrong", 401)] {
-        let rest = client
-            .get(format!(
-                "{broken_gateway}/api/v3/repos/acme/secret-repo/pulls/5"
-            ))
-            .header("host", "forge.test")
-            .header("authorization", format!("token {token}"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(rest.status().as_u16(), status, "{token}");
+        // A route the gateway has, and one it doesn't: still unsupported, not failed.
+        for path in ["pulls/5", "releases/5"] {
+            let rest = client
+                .get(format!(
+                    "{broken_gateway}/api/v3/repos/acme/secret-repo/{path}"
+                ))
+                .header("host", "forge.test")
+                .header("authorization", format!("token {token}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(rest.status().as_u16(), status, "{token} {path}");
+        }
         let graphql = client
             .post(format!("{broken_gateway}/api/graphql"))
             .header("host", "forge.test")
@@ -207,7 +210,7 @@ async fn requests_are_counted_by_github_s_names_only() {
             ("graphql:Repository.projectsV2".to_string(), 1),
             ("rest:other".to_string(), 1),
             ("rest:repos".to_string(), 1),
-            ("rest:repos.releases".to_string(), 1),
+            ("rest:repos.releases".to_string(), 2),
         ]),
     );
     let text = format!("{counts:?}");
