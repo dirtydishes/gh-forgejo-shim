@@ -181,6 +181,17 @@ class RedactTest(unittest.TestCase):
                                "X-Ratelimit-Reset: <redacted>")
         self.assertEqual((blank, json.loads(body)["location"]), ("\r\n\r\n", "<redacted>"))
 
+    def test_the_capturing_account_is_user_and_bots_keep_their_names(self):
+        redactor = redact.Redactor([])
+        answer = {"author": {"login": "someone-else"}, "mergedBy": {"login": "github-actions"}, "by": {"login": "Copilot"}}
+        redactor.learn([[{"argv": ["pr", "view", "--json", "author"], "stdout": json.dumps(answer)},
+                         {"argv": ["api", "user"], "stdout": json.dumps({"login": "octo-person"})}]])
+        self.assertEqual(redactor.names, {"octo-person": "<user>", "someone-else": "<user-2>"})
+        self.assertEqual(redactor.text("github-actions Copilot"), "github-actions Copilot")
+        redactor = redact.Redactor([])
+        redactor.learn(['{"data":{"x":{"login":"someone-else"},"viewer":{"login":"octo-person"}}}'])
+        self.assertEqual(redactor.names["octo-person"], "<user>")
+
     def test_node_ids_are_numbered(self):
         self.capture.redact()
         row = self.capture.records()[12]
