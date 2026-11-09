@@ -106,13 +106,15 @@ Reports go to `https://telemetry.dirtydishes.dev/v1/report`, a Cloudflare Worker
 UTC day and that combination of values, one to a counter for that day and the report's first week,
 and one to a counter for each `unsupported` name. That's all it stores. The first week is counted
 apart from the other values, so no stored counter ties a combination to the week an install began. It keeps no IP address, header, user agent or report body, and its request logs are
-off. It deletes counters older than 400 days.
+off. After each week ends, it also stores that week's published totals. It deletes counters and
+published totals older than 400 days.
 
 ## Published totals
 
 `https://telemetry.dirtydishes.dev/v1/stats` publishes the totals as JSON, for anyone to read:
 
-- `totals`: installs and reports per day (the last 90 days) and per week (the last 26 weeks).
+- `totals`: installs and reports per day (the last 90 days) and per week (the last 26 weeks), for
+  finished ISO weeks only.
 - `by_field`: the same, for each value of `client`, `forge`, `mode`, `os` and `version` on its own.
 - `combinations`: the same, for each combination of `mode`, `client`, `forge`, `forge_major`, `os`,
   `arch`, `version` and `gh`.
@@ -125,3 +127,7 @@ day. A week's `installs` is its busiest day's count, the most the counts can pro
 
 Any count below 3 is left out, with its labels. So are enough other counts that a left-out count
 can't be worked out by subtracting what's shown from a total.
+
+A week's totals, and its days', appear once the week ends, Monday to Sunday in UTC. The collector
+works them out once, early on the Monday after, and never changes them. Totals that changed while
+a week went on could be compared from one response to the next to find a left-out count.
