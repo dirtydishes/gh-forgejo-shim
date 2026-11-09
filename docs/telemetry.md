@@ -136,7 +136,7 @@ for each of the last 26 finished ISO weeks, the week's installs, and its install
       "forge": {"forgejo": 110, "gitea": 10, "other": "under 10", "none": "under 10"},
       "mode": {"client": 110, "server": 10},
       "os": {"macos": 80, "linux": 40, "other": "under 10"},
-      "version": {"0.3.1": 30, "0.4.0": 90, "other": "under 10"}
+      "version": {"0.4.0": 90, "other": 30}
     }
   ]
 }
@@ -150,9 +150,9 @@ for each of the last 26 finished ISO weeks, the week's installs, and its install
   In a breakdown, each value's figure is its own busiest day's, so a field's figures needn't add
   up to `installs`.
 - Every value of `client`, `forge`, `mode` and `os` is listed every week, so `"under 10"` may mean
-  none. `none` counts reports without that field: fga-server's have no `client`, and `forge` is
-  absent when the forge didn't answer. Versions whose count with noise is below 10 that week are
-  counted together under `other`.
+  none, and with noise, so may `10`. `none` counts reports without that field: fga-server's have no
+  `client`, and `forge` is absent when the forge didn't answer. A version is named once its count
+  with noise reaches 40 that week; versions below that are counted together under `other`.
 - Nothing else is published: no daily figures or sums of days, no combinations of values, no
   retention, no `unsupported` names, and no `arch`, `forge_major` or `gh`. The maintainer reads those from the
   counters.
@@ -173,12 +173,11 @@ Reports carry no ID, so anyone can send them, and a sender knows how many of a f
 theirs. Without noise, someone could send just enough reports to put a figure one short of where
 its rounding changes, and so tell whether one more real report came. Noise moves that point by more
 than one report, so one real report more or less changes a figure's odds by about 1.2 times at
-most, and never decides it. A report shows in at most six figures, `installs` and one value of each
-field, so even read together they change the odds by under 3 times. The exception is the rare week
-when a report tips its version's count over 10: the version's name then appears, and its count
-leaves `other`.
+most, and never decides it. A report moves at most seven noisy counts: `installs`, one value of
+each of `client`, `forge`, `mode` and `os`, its version's, and `other` when that version isn't
+named. Read together, they change the odds by about 3.2 times at most.
 
 What's left: each week's noise is new, so someone who repeats this every week for a long time can
-slowly learn which values a quiet install tends to carry. A version one install ran can, rarely,
-show by name as `10`. With more
-installs reporting, a single report matters less, and the noise adds little error to the figures.
+slowly learn which values a quiet install tends to carry. A version that only one install ran shows
+by name about one week in 1,200, which tells a reader that some install ran it. With more installs
+reporting, a single report matters less, and the noise adds little error to the figures.
