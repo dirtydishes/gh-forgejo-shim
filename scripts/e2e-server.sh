@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Server mode end to end: the shipped image and nginx snippet in front of Forgejo 15, used by real
-# gh 2.103.3 and Claude's REST lookups. Also validates the shipped Caddyfile.
+# gh 2.103.3 and Claude's REST lookups (E2E_FORGEJO_IMAGE and E2E_GH_VERSION override both). Also
+# validates the shipped Caddyfile.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 run="fga-server-e2e-$$"
