@@ -15,6 +15,7 @@ behavior. Python 3.9 compatible (macOS /usr/bin/python3).
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -90,8 +91,13 @@ def redact_argv(argv):
 
 
 def secret_output(argv):
-    words = [a for a in argv if not a.startswith("-")]
-    return words[:2] == ["auth", "token"] or "--show-token" in argv or "-t" in argv and "auth" in words
+    """Whether gh may print a token: `auth token` wherever its flags sit (`gh --hostname h auth
+    token`), and `auth` with `--show-token` in any form or `-t` alone or among short flags."""
+    if "auth" not in argv:
+        return False
+    shown = any(arg == "--show-token" or arg.startswith("--show-token=") or
+                re.fullmatch(r"-[A-Za-z]*t[A-Za-z]*", arg) for arg in argv)
+    return "token" in argv or shown
 
 
 def fake_token(argv):
