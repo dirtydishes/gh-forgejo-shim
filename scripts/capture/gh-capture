@@ -292,6 +292,14 @@ def begin(argv):
         return None
 
 
+def signal_name(number):
+    """A signal's name, or its number for one without (Linux's real-time signals)."""
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return f"signal {number}"
+
+
 def cwd():
     try:
         return os.getcwd()
@@ -307,7 +315,7 @@ def finish(record, argv, code, started, pumps):
         record["duration_ms"] = round((time.time() - started) * 1000)
         record["exit"] = code
         if code < 0:
-            record["signal"] = signal.Signals(-code).name
+            record["signal"] = signal_name(-code)
         for name, pump in zip(("stdout", "stderr"), pumps):
             record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
     except Exception:
