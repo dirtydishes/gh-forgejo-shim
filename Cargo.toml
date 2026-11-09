@@ -3,7 +3,7 @@ members = ["crates/gh-forgejo-shim", "crates/fga-core", "crates/fga-server"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/dirtydishes/gh-forgejo-shim"
