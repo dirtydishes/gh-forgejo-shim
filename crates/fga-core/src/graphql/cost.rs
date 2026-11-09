@@ -33,8 +33,8 @@ use async_graphql_value::{ConstValue, Name, Value};
 pub const MAX_COST: usize = 5_000;
 
 /// The deepest the document's text may nest brackets, braces and parentheses, in all. gh's
-/// documents reach 13. Parsing and checking an object value takes about 7 KB of stack a level,
-/// and a worker thread has 2 MiB.
+/// documents reach 13. Parsing and checking an object value takes about 7 KB of stack a level
+/// in a debug build and under 2 KB in a release build, and a worker thread has 2 MiB.
 pub const MAX_NESTING: usize = 64;
 
 pub(super) struct DocumentCost;
@@ -56,8 +56,17 @@ impl Extension for DocumentCost {
     ) -> ServerResult<async_graphql::parser::types::ExecutableDocument> {
         // The parser recurses once per level of a value, list type or selection, with no limit
         // of its own on values: a few KB of `[` would overflow a worker thread's stack.
-        if nesting(query) > MAX_NESTING {
-            return Err(ServerError::new("Query is nested too deep.", None));
+        match nesting(query) {
+            None => {
+                return Err(ServerError::new(
+                    "Query has an unclosed block string.",
+                    None,
+                ));
+            }
+            Some(depth) if depth > MAX_NESTING => {
+                return Err(ServerError::new("Query is nested too deep.", None));
+            }
+            Some(_) => {}
         }
         // A document that doesn't parse gets async-graphql's own error.
         if let Ok(document) = parse_query(query)
@@ -388,7 +397,9 @@ fn const_value_nodes(value: &ConstValue) -> usize {
 
 /// How deep `query` nests `[`, `{` and `(`, outside strings, block strings and comments, read
 /// once without parsing. Unbalanced text only needs to read no shallower than the parser would.
-pub(super) fn nesting(query: &str) -> usize {
+/// `None` when a block string is never closed: no client sends one, and reading on past it
+/// the way the parser does makes both the scan and the parse take quadratic time.
+pub(super) fn nesting(query: &str) -> Option<usize> {
     let bytes = query.as_bytes();
     let (mut depth, mut deepest, mut i) = (0usize, 0usize, 0usize);
     while i < bytes.len() {
@@ -408,13 +419,10 @@ pub(super) fn nesting(query: &str) -> usize {
                         1
                     };
                 }
-                if end < bytes.len() {
-                    i = end + 2;
-                } else {
-                    // Unclosed, the parser reads the first two quotes as an empty string and
-                    // the third as the start of an ordinary one, so read on from there.
-                    i += 1;
+                if end >= bytes.len() {
+                    return None;
                 }
+                i = end + 2;
             }
             b'"' => {
                 i += 1;
@@ -431,5 +439,5 @@ pub(super) fn nesting(query: &str) -> usize {
         }
         i += 1;
     }
-    deepest
+    Some(deepest)
 }
