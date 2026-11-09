@@ -142,16 +142,17 @@ for each of the last 26 finished ISO weeks, the week's installs, and its install
 }
 ```
 
-- Every figure is rounded to the nearest 10, and a figure from 0 to 9 reads `"under 10"`, never a
-  number.
+- Every figure gets a small random number added, then is rounded to the nearest 10. A figure that
+  comes to 9 or less reads `"under 10"`, never a number. See
+  [Noise and rounding](#noise-and-rounding).
 - Each install sends at most one report a day, so a day's reports count the installs that ran that
   day. `installs` is the week's busiest day's count, the most the counts can prove ran that week.
   In a breakdown, each value's figure is its own busiest day's, so a field's figures needn't add
   up to `installs`.
 - Every value of `client`, `forge`, `mode` and `os` is listed every week, so `"under 10"` may mean
   none. `none` counts reports without that field: fga-server's have no `client`, and `forge` is
-  absent when the forge didn't answer. Versions with fewer than 10 installs that week are counted
-  together under `other`.
+  absent when the forge didn't answer. Versions whose count with noise is below 10 that week are
+  counted together under `other`.
 - Nothing else is published: no daily figures or sums of days, no combinations of values, no
   retention, no `unsupported` names, and no `arch`, `forge_major` or `gh`. The maintainer reads those from the
   counters.
@@ -160,17 +161,24 @@ A week's totals appear once it ends, Monday to Sunday in UTC. The collector work
 early on the Monday after, and never changes them, so two responses can't be compared to find a
 change.
 
-### What rounding doesn't hide
+### Noise and rounding
 
-Rounding turns each figure into a range, such as 15 to 24 for `20`. Nothing published says which
-day a figure comes from, so no figure is a sum of others. Comparing figures can show that an
-`"under 10"` is at least some count, or exactly 9, but never pins one to a count from 1 to 8.
+Before rounding, each figure gets its own random whole number, drawn so that 0 is likeliest and
+about three draws in four fall between −8 and 8; larger ones are rarer the larger they are
+(`NOISE_SCALE` in [`stats.ts`](../telemetry/collector/src/stats.ts) is 6). The collector draws them
+once, when it works the week out, and stores the result, so asking again returns the same figure
+and the noise can't be averaged away.
 
-Reports carry no ID, so anyone can send them, and a sender knows how many of each figure's
-reports are theirs. By sending many on one day, they can choose where each figure's rounding
-changes, and learn which side of that line everyone else's reports fall on: for example, whether
-any other install used `cursor` that day. In a week when almost no one else reports, that goes
-further. A sender who brings a day's total to the top of its range can learn that exactly one other
-report came that day, and from the breakdowns, which values it carried. The more installs report
-on a day, the less this shows. Only random noise in the figures would stop it
-([#285](https://github.com/dirtydishes/gh-forgejo-shim/issues/285)).
+Reports carry no ID, so anyone can send them, and a sender knows how many of a figure's reports are
+theirs. Without noise, someone could send just enough reports to put a figure one short of where
+its rounding changes, and so tell whether one more real report came. Noise moves that point by more
+than one report, so one real report more or less changes a figure's odds by about 1.2 times at
+most, and never decides it. A report shows in at most six figures, `installs` and one value of each
+field, so even read together they change the odds by under 3 times. The exception is the rare week
+when a report tips its version's count over 10: the version's name then appears, and its count
+leaves `other`.
+
+What's left: each week's noise is new, so someone who repeats this every week for a long time can
+slowly learn which values a quiet install tends to carry. A version one install ran can, rarely,
+show by name as `10`. With more
+installs reporting, a single report matters less, and the noise adds little error to the figures.
