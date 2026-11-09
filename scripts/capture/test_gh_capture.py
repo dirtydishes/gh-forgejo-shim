@@ -58,7 +58,10 @@ if mode == "stream":
 if mode == "kill":
     sys.stdout.write("dying\n")
     sys.stdout.flush()
-    os.kill(os.getpid(), int(os.environ["FAKE_SIGNAL"]))
+    number = int(os.environ["FAKE_SIGNAL"])
+    if number != signal.SIGKILL:
+        signal.signal(number, signal.SIG_DFL)  # die of it, as gh does, not of Python's KeyboardInterrupt
+    os.kill(os.getpid(), number)
 if mode == "wait":
     # Note each signal that arrives, then die of it, as gh does.
     def noted(number, frame):
@@ -403,12 +406,12 @@ class SignalTest(unittest.TestCase):
 
     def test_gh_killed_by_a_signal(self):
         wrapper = Wrapper(self)
-        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGKILL):
             process = self.started(wrapper, "kill", FAKE_SIGNAL=str(int(number)))
-            out, _ = process.communicate(timeout=30)
-            self.assertEqual((process.returncode, out), (-number, b"dying\n"), number)
+            out, errors = process.communicate(timeout=30)
+            self.assertEqual((process.returncode, out, errors), (-number, b"dying\n", b""), number)
         self.assertEqual([(r["exit"], r["signal"]) for r in wrapper.records()],
-                         [(-15, "SIGTERM"), (-2, "SIGINT"), (-1, "SIGHUP")])
+                         [(-15, "SIGTERM"), (-2, "SIGINT"), (-1, "SIGHUP"), (-9, "SIGKILL")])
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "crash-type signals only on Linux")
     def test_gh_crashing(self):
