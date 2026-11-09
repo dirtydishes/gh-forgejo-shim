@@ -15,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-from redact import EMAIL, IPV4, IPV6, TOKEN, embedded, is_email, is_ip
+from redact import EMAIL, IPV4, IPV6, MONTHS, TOKEN, embedded, is_email, is_ip
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
@@ -46,8 +46,9 @@ NAMED_HOST = re.compile(r"Logged in to (\S+) account|(?<![\w/])[\w.-]+@([A-Za-z0
                         r"(?:--hostname|--host|GH_HOST)[= ]\s*([^\s\"',]+)")
 # Dates other than the placeholders' 2000-01-01; gh's own release date in `gh --version` stays.
 GH_VERSION = re.compile(r"gh version \S+ \(\d{4}-\d\d-\d\d\)")
-DATE = re.compile(r"\b(\d{4})([-/])(\d\d)\2(\d\d)\b|\b\d\d/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}\b|"
-                  r"\b\d\d (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\b")
+DATE = re.compile(r"(?<!\d)\d{4}([-/])\d\d\1\d\d(?!\d)|\b\d\d[/ ](?:" + MONTHS + r")[/ ]\d{4}\b|"
+                  r"\b(?:" + MONTHS + r") +\d{1,2} \d\d:\d\d:\d\d(?: [A-Z]+)? \d{4}\b")
+PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|01[/ ]Jan[/ ]2000|Jan +1 00:00:\d\d(?: [A-Z]+)? 2000")
 HOST_FLAGS = {"--hostname", "--host", "-h"}
 REPO_FLAGS = {"--repo", "-R"}
 HOST_VARIABLES = {"GH_HOST", "GH_ENTERPRISE_HOST", "GITHUB_SERVER_URL"}
@@ -73,8 +74,7 @@ def text_findings(text):
     for match in EMAIL.finditer(text):
         if is_email(match.group(0)) and not allowed_host(match.group(0).rsplit("@", 1)[1]):
             kinds.add("email")
-    if any(match.group(0).replace("/", "-") != "2000-01-01" and match.group(0) != "01 Jan 2000"
-           for match in DATE.finditer(GH_VERSION.sub("", text))):
+    if any(not PLACEHOLDER_DATES.fullmatch(match.group(0)) for match in DATE.finditer(GH_VERSION.sub("", text))):
         kinds.add("date")
     if HOME.search(text):
         kinds.add("home directory")
