@@ -200,6 +200,18 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(redactor.text("PRIVATE-TOKEN: abc123\nX-Api-Key: k1"), "PRIVATE-TOKEN: <token>\nX-Api-Key: <token>")
         self.assertEqual(redactor.text("task-runner desk-lamp gho_****"), "task-runner desk-lamp gho_****")
 
+    def test_times_in_go_git_and_date_forms(self):
+        redactor = redact.Redactor([])
+        cases = {
+            "at 2026-10-30T15:16Z": "at 2000-01-01T00:00Z",
+            "at 2026-10-30 15:16:57.123456 -0400 EDT": "at 2000-01-01 00:00:00 +0000 UTC",
+            "Date:   Fri Oct 30 15:16:57 2026 -0400": "Date:   Sat Jan 1 00:00:00 2000 +0000",
+            "Fri Oct  3 15:16:57 EDT 2026": "Sat Jan  1 00:00:00 UTC 2000",
+        }
+        for text, expected in cases.items():
+            self.assertEqual(redactor.text(text), expected)
+            self.assertNotIn("date", leaks.text_findings(expected), expected)
+
     def test_answers_keep_their_json_style(self):
         redactor = redact.Redactor([("octo-person", "<user>")])
         answer = {"login": "octo-person", "bio": "café", "html_url": "https://github.com/octo-person?a=1&b=2"}
@@ -326,6 +338,8 @@ class LeaksTest(unittest.TestCase):
             "git@homebox:o/r.git": "host", "Logged in to homebox account x (keyring)": "host",
             "GH_HOST=homebox": "host", "closed:>2026-09-30": "date", "2026/10/30 15:16:57": "date",
             "Fri, 30 Oct 2026 19:24:15 GMT": "date", "[30/Oct/2026:20:06:03 +0000]": "date",
+            "2026-10-30T15:16:57Z": "date", "created 2026-10-30T15:16:57.123+02:00": "date",
+            "Fri Oct 30 15:16:57 2026 -0400": "date", "Fri Oct  3 15:16:57 EDT 2026": "date",
         }
         for text, kind in cases.items():
             self.assertIn(kind, self.kinds(text), text)

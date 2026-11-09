@@ -62,14 +62,21 @@ HEX_FOLDER = re.compile(r"(?<=/)(?![0-9a-f]{40}/|[0-9a-f]{64}/)(?=\d*[a-f])[0-9a
 PLACEHOLDER_SHA = re.compile(r"0{24}[0-9a-f]{16}")
 ACTIONS = re.compile(r"(/actions/runs/)(\d+)(?:(/jobs?/)(\d+))?")
 # A date and time: ISO 8601 and RFC 3339, git's `2026-10-30 15:16:57 -0400`, Forgejo's log
-# `2026/10/30 15:16:57`, with or without a zone, and HTTP's `Fri, 30 Oct 2026 19:02:30 GMT`.
-TIMESTAMP = re.compile(r"\b(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d):(\d\d)(?:\.(\d+))?"
-                       r"( ?)(Z|[+-]\d\d:?\d\d)?(?![\d:])")
-HTTP_DATE = re.compile(r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d\d (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
-                       r"\d{4} \d\d:\d\d:\d\d GMT")
+# `2026/10/30 15:16:57`, Go's `2026-10-30 15:16:57.123 -0400 EDT`, seconds and zone optional; git's
+# and date(1)'s `Fri Oct 30 15:16:57 2026 -0400` and `Fri Oct 30 15:16:57 EDT 2026`; and HTTP's
+# `Fri, 30 Oct 2026 19:02:30 GMT`. A zone's name becomes UTC.
+ZONE_NAMES = ("UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|AKST|AKDT|HST|BST|CET|CEST|EET|EEST|WET|WEST|IST|"
+              "JST|KST|AEST|AEDT|ACST|AWST|NZST|NZDT|MSK")
+TIMESTAMP = re.compile(r"(?<!\d)(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
+                       r"( ?)(Z|[+-]\d\d:?\d\d)?( (?:" + ZONE_NAMES + r"))?(?![\w:])")
+DAYS = "Mon|Tue|Wed|Thu|Fri|Sat|Sun"
+MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\d\d):(\d\d)( (?:" + ZONE_NAMES
+                   + r"))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
+HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), \d\d (?:" + MONTHS + r") \d{4} \d\d:\d\d:\d\d GMT")
 HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 # A date alone, as in a search (`closed:>2026-09-30`), but not gh's own release date.
-DATE = re.compile(r"(gh version \S+ \(\d{4}-\d\d-\d\d\))|\b\d{4}([-/])\d\d\2\d\d\b")
+DATE = re.compile(r"(gh version \S+ \(\d{4}-\d\d-\d\d\))|(?<!\d)\d{4}([-/])\d\d\2\d\d(?!\d)")
 # An integer time under a key that says so (`reset` in `gh api rate_limit`, `created_at`).
 TIME_KEY = re.compile(r"(?i)reset|(?:^|_)(?:at|time|date)$|[a-z](?:At|Time|Date)$")
 LOG_TIME = re.compile(r"\[(\d\d/[A-Z][a-z]{2}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]")
@@ -160,6 +167,8 @@ class Redactor:
                 add(found["viewers"], login)
             for match in TIMESTAMP.finditer(value):
                 found["instants"].add(parse_time(match))
+            for match in CTIME.finditer(value):
+                found["instants"].add(parse_ctime(match))
             for match in HTTP_DATE.finditer(value):
                 found["instants"].add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
             for parsed in embedded(value):
@@ -188,6 +197,7 @@ class Redactor:
         value = ACTIONS.sub(self._actions, value)
         # A time pass one didn't see (none should be left) still becomes the first placeholder.
         value = TIMESTAMP.sub(lambda m: format_time(self.times.get(parse_time(m), EPOCH), m), value)
+        value = CTIME.sub(lambda m: format_ctime(self.times.get(parse_ctime(m), EPOCH), m), value)
         value = HTTP_DATE.sub(lambda m: self.times.get(datetime.strptime(m.group(0), HTTP_FORMAT).replace(
             tzinfo=timezone.utc), EPOCH).strftime(HTTP_FORMAT), value)
         return DATE.sub(lambda m: m.group(1) or "2000{0}01{0}01".format(m.group(2)), value)
@@ -276,25 +286,43 @@ def hidden(value):
     return value
 
 
-def parse_time(match):
-    """A TIMESTAMP match as a UTC instant; one without a zone counts as UTC."""
-    year, _, month, day, _, hour, minute, second, fraction, _, zone = match.groups()
+def utc(year, month, day, hour, minute, second, micro, zone):
+    """A local time with an optional `Z`, `+HH:MM` or `+HHMM` zone (none: UTC) as a UTC instant."""
     offset = timedelta(0)
     if zone and zone != "Z":
         offset = timedelta(hours=int(zone[1:3]), minutes=int(zone[-2:])) * (1 if zone[0] == "+" else -1)
+    return datetime(year, month, day, hour, minute, second, micro, tzinfo=timezone(offset)).astimezone(timezone.utc)
+
+
+def parse_time(match):
+    """A TIMESTAMP match as a UTC instant."""
+    year, _, month, day, _, hour, minute, second, fraction, _, zone, _ = match.groups()
     micro = int((fraction or "0")[:6].ljust(6, "0"))
-    local = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second), micro,
-                     tzinfo=timezone(offset))
-    return local.astimezone(timezone.utc)
+    return utc(int(year), int(month), int(day), int(hour), int(minute), int(second or 0), micro, zone)
 
 
 def format_time(instant, match):
     """An instant written the way the match wrote its time, in UTC, without a fraction."""
-    _, dash, _, _, separator, _, _, _, _, space, zone = match.groups()
-    text = instant.strftime(f"%Y{dash}%m{dash}%d{separator}%H:%M:%S")
+    _, dash, _, _, separator, _, _, second, _, space, zone, name = match.groups()
+    text = instant.strftime(f"%Y{dash}%m{dash}%d{separator}%H:%M" + (":%S" if second else ""))
     if zone:
         text += space + ("Z" if zone == "Z" else "+00:00" if ":" in zone else "+0000")
-    return text
+    return text + (" UTC" if name else "")
+
+
+def parse_ctime(match):
+    """A CTIME match as a UTC instant."""
+    month, day, hour, minute, second, _, year, zone = match.groups()
+    return utc(int(year), MONTHS.split("|").index(month) + 1, int(day), int(hour), int(minute), int(second), 0, zone)
+
+
+def format_ctime(instant, match):
+    """An instant in the match's own ctime form: the day space-padded if it was (date(1)), not if it
+    wasn't (git), and a zone's name as UTC."""
+    _, day, _, _, _, name, _, zone = match.groups()
+    padded = str(instant.day).rjust(2) if day.startswith(" ") else str(instant.day)
+    text = instant.strftime("%a %b ") + padded + instant.strftime(" %H:%M:%S")
+    return text + (" UTC" if name else "") + instant.strftime(" %Y") + (" +0000" if zone else "")
 
 
 def is_ip(text):
