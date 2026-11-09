@@ -101,8 +101,7 @@ SENSITIVE_KEY = re.compile(r"(?i)token|secret|passw(?:or)?d|passphrase|credentia
 # A user object (any object with a `login`) keeps only these keys; the rest are hidden. GitHub's
 # REST and GraphQL users and Forgejo's each add profile fields of their own (`bio`, `full_name`,
 # `websiteUrl`, `pronouns`, `status`), so a list of what to hide would miss the next one.
-USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view_type", "gravatar_id",
-             "url", "html_url", "resourcePath", "avatar_url", "avatarUrl", "created_at", "updated_at",
+USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view_type", "url", "html_url", "resourcePath", "avatar_url", "avatarUrl", "created_at", "updated_at",
              "createdAt", "updatedAt", "followers_url", "following_url", "gists_url", "starred_url",
              "subscriptions_url", "organizations_url", "repos_url", "events_url", "received_events_url"}
 # Keys whose object is a person even without a `login` (GraphQL's `viewer{name bio}`), as is any
