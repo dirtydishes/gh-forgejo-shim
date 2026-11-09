@@ -96,7 +96,7 @@ brew install dirtydishes/tap/gh-forgejo-shim
 gfj --version
 ```
 
-It sends one anonymous [usage report](#usage-reports) a day, so I can see which agents run into missing features. `gfj telemetry show` prints it, and `gfj telemetry off` stops it.
+It sends one anonymous [usage report](#usage-reports) a day, so I can see which agents run into missing or failing features. `gfj telemetry show` prints it, and `gfj telemetry off` stops it.
 
 Release tarballs for macOS and Linux, checksums and upgrades: [docs/installation.md](docs/installation.md).
 Coming from the old pipx install: [docs/pipx-to-rust-migration.md](docs/pipx-to-rust-migration.md).
@@ -234,7 +234,7 @@ the commands, what redaction hides, and the smoke probes.
 To find what breaks in agents and forges I can't test myself, gh-forgejo-shim and fga-server
 send one anonymous report a day: the version, OS and arch, mode,
 which agent ran gh, the forge's software and major version, gh's version, the week of the first
-report, and the GitHub names the gateway lacked. No hosts, repositories, commands or IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
+report, and the GitHub names the gateway lacked or failed, under the agent that asked. No hosts, repositories, commands or IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
 `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1` (`FGA_TELEMETRY=0` for fga-server), and
 see the report with `gfj telemetry show`. [docs/telemetry.md](docs/telemetry.md) lists every
 field, what the collector keeps, and what it publishes: rounded weekly totals.
