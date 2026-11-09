@@ -85,7 +85,14 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(len(replay.differences({"number": 3, "nodes": [check]}, {"number": 3, "nodes": [failed]}, exact=True)), 1)
         wrong = replay.differences({"number": 3, "nodes": [running]}, {"number": 3, "nodes": [failed]}, exact=True)
         self.assertTrue(wrong and all(".conclusion:" in problem for problem in wrong), wrong)
-        # One to one: a duplicate can't stand in for a missing check.
+        # Only those three fields, and only finishing: a pending status context still counts.
+        pending = {"__typename": "StatusContext", "context": "ci", "state": "PENDING"}
+        self.assertTrue(replay.differences({"number": 3, "nodes": [pending]}, {"number": 3, "nodes": [{**pending, "state": None}]},
+                                           exact=True))
+        # One to one, and checks of one name pair by best match.
+        self.assertEqual(replay.differences({"number": 1, "nodes": [check, failed]}, {"number": 1, "nodes": [failed, check]},
+                                            exact=True), [])
+        # A duplicate can't stand in for a missing check.
         self.assertEqual(replay.differences(want, {"number": 1, "nodes": [check, check]}, exact=True),
                          ["$.nodes: CheckRun 'check', which GitHub's answer lacks", "$.nodes: GitHub's CheckRun 'lint' has no match"])
 

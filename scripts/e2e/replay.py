@@ -52,7 +52,7 @@ def stale(path, expected, actual, context):
     running = expected in (None, "IN_PROGRESS", "QUEUED", "PENDING")
     finished = actual == {"status": "COMPLETED", "conclusion": "SUCCESS"}.get(field) or (
         field == "completedAt" and isinstance(actual, str))
-    return context.get("number") == 3 and running and finished
+    return context.get("number") == 3 and field in ("status", "conclusion", "completedAt") and running and finished
 
 
 # (test, reason): a departure from GitHub's answer that the test accepts.
@@ -197,7 +197,11 @@ def differences(expected, actual, exact, path="$", context=None):
         for index, item in enumerate(actual):
             key = identity(item)
             if key and theirs.get(key):
-                out += differences(theirs[key].pop(0), item, exact, f"{path}[{key[1]}]", context)
+                # Of GitHub's checks with this name, the one it matches best.
+                options = [differences(other, item, exact, f"{path}[{key[1]}]", context) for other in theirs[key]]
+                best = min(range(len(options)), key=lambda option: len(options[option]))
+                theirs[key].pop(best)
+                out += options[best]
             elif key:
                 out.append(f"{path}: {key[0]} {key[1]!r}, which GitHub's answer lacks")
             else:
