@@ -519,10 +519,22 @@ fn classify(command: &str) -> Option<&'static str> {
     let mut words = lower.split_whitespace();
     let base = |word: &str| word.rsplit('/').next().unwrap_or(word).to_string();
     let program = base(words.next()?);
-    // The script a runtime runs: its first argument past options and Bun's or Deno's `run`.
-    let script_path = words
-        .find(|word| !word.starts_with('-') && *word != "run")
-        .unwrap_or_default();
+    // The script a runtime runs: its first argument past options, the value of an option that
+    // takes one (`--require x`), and Bun's or Deno's `run`.
+    let mut script_path = "";
+    while let Some(word) = words.next() {
+        if matches!(
+            word,
+            "-r" | "--require" | "--import" | "--loader" | "--experimental-loader" | "--config"
+        ) {
+            words.next();
+        } else if !word.starts_with('-')
+            && !(word == "run" && matches!(program.as_str(), "bun" | "deno"))
+        {
+            script_path = word;
+            break;
+        }
+    }
     let script = base(script_path);
     let app = bundle(&lower).unwrap_or_default();
     if app.ends_with("/chatgpt.app/") || program == "chatgpt" {
@@ -583,6 +595,9 @@ mod tests {
             ("node --no-warnings /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", Some("claude-code")),
             ("bun run /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", Some("claude-code")),
             ("deno run --allow-all /x/node_modules/@openai/codex/bin/codex.js", Some("codex")),
+            ("node --require /x/preload.js /x/node_modules/@anthropic-ai/claude-code/cli.js", Some("claude-code")),
+            ("node --require /x/@openai/codex/p.js build.js", None),
+            ("node run /work/claude-code/x", None),
             // A path in a later argument isn't the script's.
             ("node build.js /work/@openai/codex/output", None),
             ("node build.js /work/claude-code/output", None),
