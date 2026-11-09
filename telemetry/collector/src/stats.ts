@@ -1,4 +1,4 @@
-import { daysBefore, isoWeek } from "./week";
+import { isoWeek } from "./week";
 
 /** One `reports` row: a day, a combination of values, and how many reports had them. */
 export interface Row {
@@ -31,10 +31,6 @@ export interface UnsupportedRow {
 
 /** No published figure counts fewer installs than this. */
 export const MINIMUM = 3;
-/** Days of daily figures `/v1/stats` publishes. */
-export const DAYS = 90;
-/** Weeks of weekly figures `/v1/stats` publishes. */
-export const WEEKS = 26;
 
 /** The one-field breakdowns. */
 export const FIELDS = ["client", "forge", "mode", "os", "version"] as const;
@@ -88,14 +84,18 @@ export function suppress(cells: Cell[], groups: Group[]): void {
   }
 }
 
+/** What `/v1/stats` publishes for a set of weeks. */
+export type Figures = ReturnType<typeof figures>;
+
 /**
  * Every install sends at most one report a day, so a day's reports count the installs that ran
  * that day. A week's `reports` sums its days; its `installs` is its busiest day's, the most installs
  * the counts can prove ran that week. An absent value reads `none`.
+ *
+ * No sum it guards crosses from one ISO week to another, so the figures for several weeks are each
+ * week's figures side by side.
  */
-export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: UnsupportedRow[], today: string) {
-  const firstDay = daysBefore(today, DAYS - 1);
-  const firstWeek = isoWeek(daysBefore(today, WEEKS * 7 - 1));
+export function figures(rows: Row[], cohortRows: CohortRow[], unsupported: UnsupportedRow[]) {
   const label = (row: Row, field: string): string | number => {
     const value = row[field as keyof Row];
     return value === "" || value === -1 ? "none" : value;
@@ -106,8 +106,7 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
     ["combinations", COMBINATION],
   ];
 
-  // Daily cells, then weekly ones built from them. Figures outside the published days and weeks
-  // count as hidden, since they're never published.
+  // Daily cells, then weekly ones built from them.
   const cells = new Map<string, Cell>();
   const cell = (table: string, period: string, labels: Labels, hidden: boolean): Cell => {
     const key = JSON.stringify([table, period, labels]);
@@ -121,7 +120,7 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
   for (const row of rows) {
     for (const [table, fields] of tables) {
       const labels = Object.fromEntries(fields.map((field) => [field, label(row, field)]));
-      const day = cell(table, row.day, labels, row.day < firstDay);
+      const day = cell(table, row.day, labels, false);
       day.reports += row.count;
       day.installs += row.count;
     }
@@ -137,7 +136,7 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
   const weekOf = new Map<Cell, Cell>();
   for (const day of days) {
     const week = isoWeek(day.period);
-    const total = cell(day.table, week, day.labels, week < firstWeek);
+    const total = cell(day.table, week, day.labels, false);
     total.reports += day.reports;
     total.installs = Math.max(total.installs, day.installs);
     weekOf.set(day, total);
@@ -196,8 +195,6 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
   }
 
   return {
-    generated: today,
-    minimum_count: MINIMUM,
     totals: publish("totals"),
     by_field: Object.fromEntries(FIELDS.map((field) => [field, publish(field)])),
     combinations: publish("combinations"),
@@ -208,13 +205,13 @@ export function stats(rows: Row[], cohortRows: CohortRow[], unsupported: Unsuppo
       installs: found.installs,
     })),
     unsupported: [...names.values()]
-      .filter((found) => found.week >= firstWeek && found.installs >= MINIMUM)
+      .filter((found) => found.installs >= MINIMUM)
       .sort(order),
   };
 }
 
 /** Oldest first, then by the cell's labels, so the output is stable. */
-function order(a: object, b: object): number {
+export function order(a: object, b: object): number {
   const key = (found: object) =>
     JSON.stringify(
       Object.entries(found).filter(([name]) => !["installs", "reports", "total"].includes(name)),
