@@ -221,12 +221,17 @@ class RedactTest(unittest.TestCase):
             "at 2026-10-30 15:16:57.123 +0800 SGT": "at 2000-01-01 00:00:00 +0000 UTC",
             "at 2026-10-30 15:16:57 -0300 -03": "at 2000-01-01 00:00:00 +0000 UTC",
             "at 2026-10-30 15:16:57 PR 1": "at 2000-01-01 00:00:00 PR 1",
+            "at 2026-10-30 15:16:57.123 +0545 +0545": "at 2000-01-01 00:00:00 +0000 UTC",
+            "Fri Oct 30 15:16:57 -03 2026": "Sat Jan 1 00:00:00 UTC 2000",
+            "Fri Oct 30 15:16:57 SGT 2026": "Sat Jan 1 00:00:00 UTC 2000",
         }
         for text, expected in cases.items():
             self.assertEqual(redactor.text(text), expected)
             self.assertEqual(leaks.text_findings(expected), set(), expected)
         self.assertEqual(leaks.text_findings("Sat Jan 1 00:01:11 2000 +0000"), set())
         self.assertEqual(leaks.text_findings("2000-01-01 00:00:00 +0000 SGT"), {"time zone"})
+        self.assertEqual(leaks.text_findings("2000-01-01 00:00:00 +0000 +0545"), {"time zone"})
+        self.assertEqual(leaks.text_findings("Fri Oct 30 15:16:57 -03 2026"), {"date"})
 
     def test_answers_keep_their_json_style(self):
         redactor = redact.Redactor([("octo-person", "<user>")])
@@ -306,6 +311,9 @@ class RedactTest(unittest.TestCase):
         redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "exit": 0, "stdout": "octo-person\n"},
                          {"argv": ["pr", "list", "--author", "octo-person"], "stdout": "[]"}]])
         self.assertEqual(redactor.names, {"octo-person": "<user>"})
+        redactor = redact.Redactor([])
+        redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "exit": 0, "stdout": "octo.per_son\n"}]])
+        self.assertEqual(redactor.names, {"octo.per_son": "<user>"})
         for exit, stdout in ((0, "null\n"), (1, '{"message":"Bad credentials"}\n'), (0, "")):
             redactor = redact.Redactor([])
             redactor.learn([[{"argv": ["api", "user", "-q", ".login"], "exit": exit, "stdout": stdout}]])
