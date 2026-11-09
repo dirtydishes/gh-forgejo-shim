@@ -502,11 +502,9 @@ fn nothing_but_vocabulary_names_reaches_a_report() {
         .join("\n"),
     )
     .expect("counts");
-    fs::write(
-        fixture.state().join("unsupported"),
-        "rest:repos.releases 5\n",
-    )
-    .expect("0.4.0's counts");
+    for name in ["unsupported", "unsupported.sending-1-2"] {
+        fs::write(fixture.state().join(name), "rest:repos.releases 5\n").expect("0.4.0's counts");
+    }
     let expected = (
         serde_json::json!({"codex": {"rest:repos.releases": 2}}),
         serde_json::json!({
@@ -544,7 +542,9 @@ fn nothing_but_vocabulary_names_reaches_a_report() {
     ] {
         assert!(!text.contains(private), "{private}: {text}");
     }
-    assert!(!fixture.state().join("unsupported").exists());
+    for name in ["unsupported", "unsupported.sending-1-2"] {
+        assert!(!fixture.state().join(name).exists(), "{name}");
+    }
 }
 
 /// Turning reports off, by command or by variable, deletes what was kept for them.

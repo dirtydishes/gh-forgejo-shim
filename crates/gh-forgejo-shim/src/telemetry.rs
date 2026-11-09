@@ -268,12 +268,14 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     {
         let _ = client.post(url).json(&report).send();
     }
-    // Keep today's marker only.
+    // Keep today's marker only, and none of the counts a 0.4.0 sender stopped part way through.
     if let Some(dir) = state_dir(&get) {
         let today = format!("sent-{}", usage::utc_day(usage::now()));
         for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("sent-") && name != today {
+            if (name.starts_with("sent-") && name != today)
+                || name.starts_with("unsupported.sending-")
+            {
                 let _ = fs::remove_file(entry.path());
             }
         }
