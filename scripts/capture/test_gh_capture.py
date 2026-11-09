@@ -88,6 +88,31 @@ class ArgvTest(unittest.TestCase):
         self.assertEqual(wrapper.records()[0]["argv"], argv)
 
 
+TOKEN = "gho_" + "Tk9" * 12 + "\n"
+
+
+class TokenOutputTest(unittest.TestCase):
+    """#197 defects 2 and 3: output that can hold a token is never stored, only its length."""
+
+    def hidden(self, *argv, output=TOKEN):
+        wrapper = Wrapper(self)
+        result = wrapper.run(*argv, FAKE_GH="print", FAKE_OUT=output)
+        self.assertEqual(result.stdout, output.encode(), argv)
+        [record] = wrapper.records()
+        self.assertEqual(record["stdout"], {"bytes": len(output), "redacted": True}, argv)
+        self.assertNotIn(output.strip(), wrapper.log.read_text())
+
+    def test_auth_token_wherever_its_flags_sit(self):
+        self.hidden("auth", "token")
+        self.hidden("auth", "token", "--hostname", "forge.test")
+        self.hidden("--hostname", "forge.test", "auth", "token")
+        self.hidden("-h", "forge.test", "auth", "token")
+
+    def test_auth_status_showing_the_token(self):
+        for flag in ("--show-token", "--show-token=true", "-t", "-at"):
+            self.hidden("auth", "status", flag)
+
+
 class LogFailureTest(unittest.TestCase):
     """#197 defect 6: a log that can't be written never breaks the gh call."""
 
