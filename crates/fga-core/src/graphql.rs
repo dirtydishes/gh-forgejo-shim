@@ -4,6 +4,7 @@ mod budget;
 mod checks;
 mod connections;
 mod cost;
+mod failures;
 mod git;
 mod issues;
 mod mutation_inputs;
@@ -15,6 +16,7 @@ mod threads;
 mod types;
 use checks::*;
 use connections::*;
+pub use failures::FAILED_FIELD;
 use git::*;
 use issues::*;
 use mutation_inputs::*;
@@ -46,6 +48,7 @@ pub const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 pub fn schema() -> GithubSchema {
     builder()
         .extension(budget::OutputBudget(MAX_OUTPUT_BYTES))
+        .extension(failures::NameFailures)
         .finish()
 }
 
