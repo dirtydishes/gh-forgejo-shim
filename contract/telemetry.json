@@ -1,5 +1,5 @@
 {
- "schema": 1,
+ "schema": 2,
  "os": [
   "macos",
   "linux",
@@ -42,7 +42,7 @@
   "CheckRun",
   "CheckSuite"
  ],
- "unsupported": [
+ "names": [
   "graphql:CheckRun.annotations",
   "graphql:CheckRun.checkSuite",
   "graphql:CheckRun.completedAt",

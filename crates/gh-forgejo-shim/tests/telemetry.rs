@@ -70,13 +70,16 @@ fn silent_collector(_: &str) -> Option<(u16, String)> {
     None
 }
 
-/// A Forgejo 15 that answers its version routes and the user lookup.
+/// A Forgejo 15 that answers its version routes and the user lookup, and fails one PR.
 fn forge(path: &str) -> Option<(u16, String)> {
     Some(match path {
         "/api/forgejo/v1/version" | "/api/v1/version" => {
             (200, r#"{"version":"15.0.11+gitea-1.22.0"}"#.to_string())
         }
         "/api/v1/user" => (200, r#"{"id":1,"login":"me","avatar_url":""}"#.to_string()),
+        "/api/v1/repos/acme/secret-repo/pulls/1" => {
+            (500, r#"{"message":"acme-secret-failure"}"#.to_string())
+        }
         _ => (404, r#"{"message":"Not Found"}"#.to_string()),
     })
 }
@@ -142,7 +145,11 @@ impl Fixture {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(SHIM);
+        self.shim(Command::new(SHIM), args)
+    }
+
+    /// `command`, which runs the shim with `args`, in this fixture's environment alone.
+    fn shim(&self, mut command: Command, args: &[&str]) -> Command {
         command
             .args(args)
             .current_dir(&self.dir)
@@ -160,6 +167,22 @@ impl Fixture {
 
     fn run(&self, args: &[&str], extra: &[(&str, &str)]) -> Output {
         self.command(args)
+            .envs(extra.iter().copied())
+            .output()
+            .expect("run shim")
+    }
+
+    /// Runs the shim as `app` would: from a shell script under `<app>.app/`, a path the wrapper
+    /// recognises an agent by. The script waits for the shim, so it stays its parent.
+    fn run_as(&self, app: &str, args: &[&str], extra: &[(&str, &str)]) -> Output {
+        let bundle = self.dir.join(format!("{app}.app"));
+        fs::create_dir_all(&bundle).expect("app dir");
+        let script = bundle.join("run");
+        fs::write(&script, "#!/bin/sh\n\"$@\"\nexit $?\n").expect("app script");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let mut command = Command::new(&script);
+        command.arg(SHIM);
+        self.shim(command, args)
             .envs(extra.iter().copied())
             .output()
             .expect("run shim")
@@ -260,7 +283,7 @@ fn one_report_a_day_holds_these_fields_and_the_gh_call_is_untouched() {
         "{report}"
     );
     let mut expected = serde_json::json!({
-        "schema": 1,
+        "schema": 2,
         "version": gh_forgejo_shim::VERSION,
         "os": os,
         "arch": arch,
@@ -271,6 +294,7 @@ fn one_report_a_day_holds_these_fields_and_the_gh_call_is_untouched() {
         "gh": "2.103",
         "first_week": this_week(),
         "unsupported": {},
+        "failed": {},
     });
     assert_eq!(report, &expected);
     // A later call the same day sends nothing more.
@@ -375,25 +399,46 @@ fn the_notice_shows_once_from_setup_commands_and_never_from_gh() {
     assert!(!output.contains("usage report"), "{output}");
 }
 
-/// A launched call's gateway counts what it lacks; the next report carries the counts, by GitHub's
-/// name only, and only once.
+/// A gh call through the gateway, which asks for `paths` over its socket.
+fn requests(paths: &[&str]) -> String {
+    paths
+        .iter()
+        .map(|path| format!(r#"curl -s -o /dev/null --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)" "http://forge.test{path}";"#))
+        .collect()
+}
+
+/// Two agents run gh on one day. A launched call's gateway counts what it lacks and fails, and the
+/// next report carries each count under the agent whose call it came from, by GitHub's name only,
+/// and only once.
 #[test]
-fn unsupported_requests_reach_the_next_report() {
+fn counts_reach_the_next_report_under_the_agent_that_ran_gh() {
     let fixture = Fixture::new(collector);
-    // Today's report goes first, so the call's counts wait for the next one.
+    // Today's report goes first, so the calls' counts wait for the next one.
     fixture.run(&["gh", "--version"], &[]);
     assert_eq!(fixture.reports(1, Duration::from_secs(10)).len(), 1);
-    let body = r#"curl -s -o /dev/null --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)" "http://forge.test/api/v3/repos/acme/secret-repo/releases/1""#;
-    let output = fixture.run(
-        &["gh", "pr", "view", "1", "-R", "forge.test/acme/secret-repo"],
-        &[("GH_BODY", body)],
-    );
+    let view = ["gh", "pr", "view", "1", "-R", "forge.test/acme/secret-repo"];
+    let codex = requests(&["/api/v3/repos/acme/secret-repo/releases/1"]);
+    let output = fixture.run_as("Codex", &view, &[("GH_BODY", &codex)]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
+    // Forgejo fails PR 1, so the gateway answers 502: a failure. PR 2 is only missing.
+    let chatgpt = requests(&[
+        "/api/v3/repos/acme/secret-repo/releases/1",
+        "/api/v3/repos/acme/secret-repo/pulls/1",
+        "/api/v3/repos/acme/secret-repo/pulls/2",
+    ]);
+    let output = fixture.run_as("ChatGPT", &view, &[("GH_BODY", &chatgpt)]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let unsupported = serde_json::json!({
+        "chatgpt": {"rest:repos.releases": 1},
+        "codex": {"rest:repos.releases": 1},
+    });
+    let failed = serde_json::json!({"chatgpt": {"rest:repos.pulls": 1}});
     let shown: Value =
         serde_json::from_str(&stdout(&fixture.run(&["telemetry", "show"], &[]))).expect("JSON");
     assert_eq!(
-        shown["unsupported"],
-        serde_json::json!({"rest:repos.releases": 1})
+        (&shown["unsupported"], &shown["failed"]),
+        (&unsupported, &failed),
+        "{shown}"
     );
     let ticket = fixture.ticket();
     let send = fixture.run(
@@ -403,12 +448,18 @@ fn unsupported_requests_reach_the_next_report() {
     assert_eq!((send.stdout.len(), send.stderr.len()), (0, 0), "{send:?}");
     let reports = fixture.reports(2, Duration::from_secs(5));
     assert_eq!(
-        reports[1]["unsupported"],
-        serde_json::json!({"rest:repos.releases": 1})
+        (&reports[1]["unsupported"], &reports[1]["failed"]),
+        (&unsupported, &failed)
     );
+    let text = reports[1].to_string();
+    assert!(!text.contains("acme") && !text.contains("secret"), "{text}");
     let shown: Value =
         serde_json::from_str(&stdout(&fixture.run(&["telemetry", "show"], &[]))).expect("JSON");
-    assert_eq!(shown["unsupported"], serde_json::json!({}), "sent once");
+    assert_eq!(
+        (&shown["unsupported"], &shown["failed"]),
+        (&serde_json::json!({}), &serde_json::json!({})),
+        "sent once"
+    );
     let state = fs::read_dir(fixture.state())
         .expect("state")
         .map(|entry| fs::read(entry.expect("entry").path()).unwrap_or_default())
@@ -420,6 +471,79 @@ fn unsupported_requests_reach_the_next_report() {
     );
 }
 
+/// Whatever the state directory holds, a report carries only known kinds, agents and vocabulary
+/// names, each count capped. 0.4.0's counts, which don't say which agent asked, are dropped.
+#[test]
+fn nothing_but_vocabulary_names_reaches_a_report() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(
+        fixture.state().join("counts"),
+        [
+            "unsupported codex rest:repos.releases 2",
+            "failed chatgpt /repos/acme/secret-repo/pulls/1 1",
+            "failed acme-agent rest:repos.pulls 1",
+            "failed /Applications/Codex.app rest:repos.pulls 1",
+            "failed codex forge.test 1",
+            "failed codex Forgejo returned an invalid response",
+            "unsupported codex rest:repos.releases 1 acme",
+            "errored codex rest:repos.pulls 1",
+            "failed codex rest:repos.pulls 3",
+            "failed cursor rest:repos.pulls 999999",
+            "failed cursor rest:repos.pulls 999999",
+            "failed cursor rest:repos.issues 18446744073709551616",
+            "",
+        ]
+        .join("\n"),
+    )
+    .expect("counts");
+    fs::write(
+        fixture.state().join("unsupported"),
+        "rest:repos.releases 5\n",
+    )
+    .expect("0.4.0's counts");
+    let expected = (
+        serde_json::json!({"codex": {"rest:repos.releases": 2}}),
+        serde_json::json!({
+            "codex": {"rest:repos.pulls": 3},
+            "cursor": {"rest:repos.pulls": 1_000_000},
+        }),
+    );
+    let shown: Value =
+        serde_json::from_str(&stdout(&fixture.run(&["telemetry", "show"], &[]))).expect("JSON");
+    assert_eq!(
+        (shown["unsupported"].clone(), shown["failed"].clone()),
+        expected
+    );
+    let ticket = fixture.ticket();
+    fixture.run(
+        &["telemetry", "send", "--caller", "1", "--ticket", &ticket],
+        &[],
+    );
+    let reports = fixture.reports(2, Duration::from_secs(5));
+    assert_eq!(
+        (
+            reports[1]["unsupported"].clone(),
+            reports[1]["failed"].clone()
+        ),
+        expected
+    );
+    let text = reports[1].to_string();
+    for private in [
+        "acme",
+        "secret",
+        "forge.test",
+        "Forgejo",
+        "Applications",
+        "errored",
+    ] {
+        assert!(!text.contains(private), "{private}: {text}");
+    }
+    assert!(!fixture.state().join("unsupported").exists());
+}
+
 /// Turning reports off, by command or by variable, deletes what was kept for them.
 #[test]
 fn turning_reports_off_deletes_what_was_kept() {
@@ -428,8 +552,8 @@ fn turning_reports_off_deletes_what_was_kept() {
     fixture.reports(1, Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(500));
     fs::write(
-        fixture.state().join("unsupported"),
-        "rest:repos.releases 1\n",
+        fixture.state().join("counts"),
+        "unsupported codex rest:repos.releases 1\n",
     )
     .expect("counts");
     assert!(fixture.state().join("first-week").exists());
@@ -485,7 +609,7 @@ fn a_pipe_in_the_state_directory_never_holds_up_gh() {
     let fixture = Fixture::new(collector);
     fixture.run(&["gh", "--version"], &[]);
     fixture.reports(1, Duration::from_secs(10));
-    let pipe = fixture.state().join("unsupported");
+    let pipe = fixture.state().join("counts");
     let made = Command::new("mkfifo").arg(&pipe).status().expect("mkfifo");
     assert!(made.success());
     let body = r#"curl -s -o /dev/null --unix-socket "$GH_CONFIG_DIR/s" -H "Authorization: token $(sed -n 's/^ *oauth_token: //p' "$GH_CONFIG_DIR/hosts.yml" | head -n 1)" "http://forge.test/api/v3/repos/acme/secret-repo/releases/1""#;
@@ -537,8 +661,8 @@ fn a_config_opt_out_clears_state_the_same_day() {
     fixture.reports(1, Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(500));
     fs::write(
-        fixture.state().join("unsupported"),
-        "rest:repos.releases 1\n",
+        fixture.state().join("counts"),
+        "unsupported codex rest:repos.releases 1\n",
     )
     .expect("counts");
     let config = fixture.home.join(".config/gh-forgejo-shim/config.toml");
@@ -560,8 +684,8 @@ fn a_stopped_sender_stays_stopped_when_reports_come_back_on() {
     // Counts kept after the opt-out belong to the next report, whatever the stopped sender does.
     fs::create_dir_all(fixture.state()).expect("state");
     fs::write(
-        fixture.state().join("unsupported"),
-        "rest:repos.releases 7\n",
+        fixture.state().join("counts"),
+        "unsupported codex rest:repos.releases 7\n",
     )
     .expect("counts");
     fixture.run(&["gh", "--version"], &[]);
@@ -570,7 +694,7 @@ fn a_stopped_sender_stays_stopped_when_reports_come_back_on() {
     assert_eq!(reports.len(), 1);
     assert_eq!(
         reports[0]["unsupported"],
-        serde_json::json!({"rest:repos.releases": 7})
+        serde_json::json!({"codex": {"rest:repos.releases": 7}})
     );
 }
 

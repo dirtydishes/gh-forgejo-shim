@@ -4,11 +4,11 @@
 Usage: contract.py github-schema.graphql > contract/telemetry.json
 
 The schema is octokit/graphql-schema's schema.graphql at the commit fixtures/github-g1.graphql names.
-The `unsupported` vocabulary is every field GitHub's schema gives the types below, as
-`graphql:<Type>.<field>`, a `graphql:<Type>.other` for each, GitHub's REST resource names as
-`rest:<name>` and `rest:repos.<name>`, and `graphql:other` and `rest:other`. A report may name nothing
-else, so a field or route the gateway lacks is counted by GitHub's name for it, never by text a
-client sent.
+The `names` vocabulary, which a report's `unsupported` and `failed` counts come from, is every
+field GitHub's schema gives the types below, as `graphql:<Type>.<field>`, a `graphql:<Type>.other`
+for each, GitHub's REST resource names as `rest:<name>` and `rest:repos.<name>`, and `graphql:other`
+and `rest:other`. A report may name nothing else, so a field or route the gateway lacks or fails is
+counted by GitHub's name for it, never by text a client sent.
 """
 import json
 import re
@@ -70,14 +70,14 @@ def main() -> None:
     names.update(f"rest:repos.{name}" for name in REPO_RESOURCES)
     names.update(f"rest:{name}" for name in TOP_RESOURCES)
     contract = {
-        "schema": 1,
+        "schema": 2,
         "os": ["macos", "linux", "other"],
         "arch": ["x86_64", "aarch64", "other"],
         "mode": ["client", "server"],
         "client": ["codex", "chatgpt", "claude-code", "claude-desktop", "cursor", "other"],
         "forge": ["forgejo", "gitea", "other"],
         "graphql_types": TYPES,
-        "unsupported": sorted(names),
+        "names": sorted(names),
     }
     json.dump(contract, sys.stdout, indent=1)
     sys.stdout.write("\n")

@@ -106,6 +106,20 @@ describe("POST /v1/report", () => {
     expect(await rows("unsupported")).toEqual([]);
   });
 
+  it("accepts the reports the senders write", async () => {
+    // As fga-server's `usage` tests serialize them.
+    for (const body of [
+      '{"schema":2,"version":"0.4.0","os":"linux","arch":"x86_64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{"chatgpt":{"rest:repos.pulls":1}},"failed":{}}',
+      '{"schema":2,"version":"0.4.0","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{},"failed":{"rest:repos.pulls":1}}',
+    ]) {
+      expect((await post(body)).status, body).toBe(204);
+    }
+    expect((await rows("calls")).map((row) => [row.client, row.kind, row.name])).toEqual([
+      ["chatgpt", "unsupported", "rest:repos.pulls"],
+      ["", "failed", "rest:repos.pulls"],
+    ]);
+  });
+
   it("counts the same installs from either schema", async () => {
     await post(example());
     const first = [await rows("reports"), await rows("cohorts")];

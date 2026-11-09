@@ -1,6 +1,6 @@
 //! Anonymous daily usage counts (docs/telemetry.md): the report the gh wrapper and fga-server each
-//! send at most once a day, the fixed vocabulary its `unsupported` counts come from, and
-//! fga-server's own reporter. `contract/telemetry.json` holds every allowed value, and the collector
+//! send at most once a day, the fixed vocabulary its `unsupported` and `failed` counts come from,
+//! and fga-server's own reporter. `contract/telemetry.json` holds every allowed value, and the collector
 //! rejects anything else.
 
 use serde::Serialize;
@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The report's shape. A change to it is a new schema, which the collector must accept first.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 /// Where reports go: from a release build only ([`endpoint`]), unless an override names another
 /// address.
 pub const ENDPOINT: &str = "https://telemetry.dirtydishes.dev/v1/report";
@@ -42,8 +42,19 @@ pub struct Report {
     pub gh: Option<String>,
     /// The ISO week of the first report, kept locally, so retention can be counted without an ID.
     pub first_week: String,
-    /// Names from the vocabulary, each with how often the gateway lacked it since the last report.
-    pub unsupported: BTreeMap<String, u64>,
+    /// How often the gateway lacked each name since the last report.
+    pub unsupported: Tally,
+    /// How often a request for each name failed on the gateway's side since the last report.
+    pub failed: Tally,
+}
+
+/// A report's counts by vocabulary name: under the agent whose gh call they came from in a client
+/// report, and by name alone from fga-server, which can't tell agents apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Tally {
+    ByClient(BTreeMap<&'static str, BTreeMap<String, u64>>),
+    ByName(BTreeMap<String, u64>),
 }
 
 pub const CLIENTS: [&str; 6] = [
@@ -97,7 +108,7 @@ pub fn arch() -> &'static str {
 #[derive(serde::Deserialize)]
 struct Contract {
     graphql_types: Vec<String>,
-    unsupported: HashSet<String>,
+    names: HashSet<String>,
 }
 
 fn contract() -> &'static Contract {
@@ -276,7 +287,7 @@ pub fn graphql_field(type_name: &str, field: &str) -> String {
 }
 
 fn known(name: String) -> Option<String> {
-    contract().unsupported.contains(&name).then_some(name)
+    contract().names.contains(&name).then_some(name)
 }
 
 /// `name`, if it's in the vocabulary.
@@ -452,6 +463,7 @@ async fn server_report(
         None => version(&["api", "v1", "version"]).await,
     };
     let (forge, forge_major) = forge(forgejo_route.as_deref(), api.as_deref());
+    let counts = take_counts();
     Report {
         schema: SCHEMA,
         version: report_version(PRODUCT_VERSION),
@@ -463,7 +475,8 @@ async fn server_report(
         forge_major,
         gh: None,
         first_week: first_week(state),
-        unsupported: take_counts().unsupported,
+        unsupported: Tally::ByName(counts.unsupported),
+        failed: Tally::ByName(counts.failed),
     }
 }
 
@@ -667,6 +680,45 @@ mod tests {
         ] {
             assert_eq!(set, Some("CI is set".to_string()));
         }
+    }
+
+    #[test]
+    fn a_client_report_counts_by_agent_and_a_server_report_by_name() {
+        let names = || BTreeMap::from([("rest:repos.pulls".to_string(), 1)]);
+        let report = |mode, client, unsupported, failed| Report {
+            schema: SCHEMA,
+            version: "0.4.0".to_string(),
+            os: "linux",
+            arch: "x86_64",
+            mode,
+            client,
+            forge: Some("forgejo"),
+            forge_major: Some(15),
+            gh: None,
+            first_week: "2026-W45".to_string(),
+            unsupported,
+            failed,
+        };
+        let client = report(
+            "client",
+            Some("codex"),
+            Tally::ByClient(BTreeMap::from([("chatgpt", names())])),
+            Tally::ByClient(BTreeMap::new()),
+        );
+        assert_eq!(
+            serde_json::to_string(&client).unwrap(),
+            r#"{"schema":2,"version":"0.4.0","os":"linux","arch":"x86_64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{"chatgpt":{"rest:repos.pulls":1}},"failed":{}}"#
+        );
+        let server = report(
+            "server",
+            None,
+            Tally::ByName(BTreeMap::new()),
+            Tally::ByName(names()),
+        );
+        assert_eq!(
+            serde_json::to_string(&server).unwrap(),
+            r#"{"schema":2,"version":"0.4.0","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{},"failed":{"rest:repos.pulls":1}}"#
+        );
     }
 
     #[test]

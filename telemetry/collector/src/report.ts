@@ -34,7 +34,7 @@ const FIELDS = [
 ];
 /** Each schema's fields: 2 adds `failed`, and splits both counts by client in a client report. */
 const SCHEMA_FIELDS = { 1: new Set(FIELDS), 2: new Set([...FIELDS, "failed"]) };
-const VOCABULARY = new Set<string>(contract.unsupported);
+const VOCABULARY = new Set<string>(contract.names);
 /** The largest count one name may carry, as the client caps it. */
 export const MAX_COUNT = 1_000_000;
 /** The first week a report can name: reports began in 2026. */
