@@ -20,6 +20,10 @@ pub const PRODUCT_VERSION: &str = env!("FGA_PRODUCT_VERSION");
 pub const TIMEOUT: Duration = Duration::from_secs(2);
 /// The largest count a report carries for one name; the collector refuses more.
 pub const MAX_COUNT: u64 = 1_000_000;
+/// The most names a report carries, over both tallies and every agent. At the vocabulary's longest
+/// names and largest counts, that keeps a report well under the collector's 16 KiB limit, past
+/// which it refuses the whole report.
+pub const MAX_NAMES: usize = 120;
 
 /// One day's report. Nothing else is ever sent: no host, repository, path, argument, address or
 /// identifier of any kind.
@@ -55,6 +59,75 @@ pub struct Report {
 pub enum Tally {
     ByClient(BTreeMap<&'static str, BTreeMap<String, u64>>),
     ByName(BTreeMap<String, u64>),
+}
+
+impl Tally {
+    /// Each count with its agent, if any, and name.
+    fn counts(&self) -> Vec<(u64, Option<&'static str>, String)> {
+        match self {
+            Self::ByClient(clients) => clients
+                .iter()
+                .flat_map(|(client, names)| {
+                    names
+                        .iter()
+                        .map(|(name, count)| (*count, Some(*client), name.clone()))
+                })
+                .collect(),
+            Self::ByName(names) => names
+                .iter()
+                .map(|(name, count)| (*count, None, name.clone()))
+                .collect(),
+        }
+    }
+
+    fn retain(&mut self, keep: impl Fn(Option<&'static str>, &str) -> bool) {
+        match self {
+            Self::ByClient(clients) => {
+                for (client, names) in clients.iter_mut() {
+                    names.retain(|name, _| keep(Some(*client), name));
+                }
+                clients.retain(|_, names| !names.is_empty());
+            }
+            Self::ByName(names) => names.retain(|name, _| keep(None, name)),
+        }
+    }
+}
+
+impl Report {
+    /// The report with at most [`MAX_NAMES`] names over both tallies: the largest counts stay,
+    /// ties going to the earlier name. A report past the collector's limit would be refused whole.
+    pub fn bounded(mut self) -> Self {
+        let mut counts: Vec<_> = [&self.unsupported, &self.failed]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(tally, counts)| {
+                counts
+                    .counts()
+                    .into_iter()
+                    .map(move |(count, client, name)| {
+                        (std::cmp::Reverse(count), name, client, tally)
+                    })
+            })
+            .collect();
+        if counts.len() <= MAX_NAMES {
+            return self;
+        }
+        counts.sort();
+        let kept: HashSet<_> = counts
+            .into_iter()
+            .take(MAX_NAMES)
+            .map(|(_, name, client, tally)| (tally, client, name))
+            .collect();
+        let keep = |tally: usize| {
+            let kept = &kept;
+            move |client: Option<&'static str>, name: &str| {
+                kept.contains(&(tally, client, name.to_string()))
+            }
+        };
+        self.unsupported.retain(keep(0));
+        self.failed.retain(keep(1));
+        self
+    }
 }
 
 pub const CLIENTS: [&str; 6] = [
@@ -480,6 +553,7 @@ async fn server_report(
         unsupported: Tally::ByName(counts.unsupported),
         failed: Tally::ByName(counts.failed),
     }
+    .bounded()
 }
 
 /// `segments` below `base`, keeping a base path such as a forge served under `/forgejo/`, as the
@@ -721,6 +795,62 @@ mod tests {
             serde_json::to_string(&server).unwrap(),
             r#"{"schema":2,"version":"0.4.0","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{},"failed":{"rest:repos.pulls":1}}"#
         );
+    }
+
+    /// The collector refuses a report past 16 KiB whole (`MAX_BODY` in `telemetry/collector`), so
+    /// even every agent hitting every name, the longest first, at the largest count fits.
+    #[test]
+    fn the_busiest_report_fits_the_collector_s_limit() {
+        let mut longest: Vec<String> = contract().names.iter().cloned().collect();
+        longest.sort_by_key(|name| (std::cmp::Reverse(name.len()), name.clone()));
+        let full = || {
+            longest
+                .iter()
+                .map(|name| (name.clone(), MAX_COUNT))
+                .collect()
+        };
+        let by_client =
+            || Tally::ByClient(CLIENTS.iter().map(|client| (*client, full())).collect());
+        let report = |mode, client, unsupported, failed| {
+            Report {
+                schema: SCHEMA,
+                version: "10.10.10-alpha.10".to_string(),
+                os: "macos",
+                arch: "aarch64",
+                mode,
+                client,
+                forge: Some("forgejo"),
+                forge_major: Some(15),
+                gh: Some("2.103".to_string()),
+                first_week: "2026-W45".to_string(),
+                unsupported,
+                failed,
+            }
+            .bounded()
+        };
+        for bounded in [
+            report("client", Some("claude-desktop"), by_client(), by_client()),
+            report("server", None, Tally::ByName(full()), Tally::ByName(full())),
+        ] {
+            let kept = bounded.unsupported.counts().len() + bounded.failed.counts().len();
+            assert_eq!(kept, MAX_NAMES);
+            let size = serde_json::to_string(&bounded).unwrap().len();
+            assert!(size < 16 * 1024, "{size} bytes");
+        }
+        // The largest counts stay.
+        let mut names = BTreeMap::from([("rest:repos.pulls".to_string(), 2)]);
+        names.extend(longest.iter().take(MAX_NAMES).map(|name| (name.clone(), 1)));
+        let bounded = report(
+            "server",
+            None,
+            Tally::ByName(names),
+            Tally::ByName(BTreeMap::new()),
+        );
+        let Tally::ByName(kept) = &bounded.unsupported else {
+            unreachable!()
+        };
+        assert_eq!(kept.len(), MAX_NAMES);
+        assert_eq!(kept.get("rest:repos.pulls"), Some(&2));
     }
 
     #[test]

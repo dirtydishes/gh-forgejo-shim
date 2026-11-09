@@ -310,6 +310,7 @@ fn build(env: &EnvMap, client: &'static str, dir: Option<&Path>, counts: Option<
         unsupported: Tally::ByClient(unsupported),
         failed: Tally::ByClient(failed),
     }
+    .bounded()
 }
 
 /// The first allowlisted forge's software, asked without a token: Forgejo answers its own version
