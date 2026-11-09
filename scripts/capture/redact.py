@@ -9,7 +9,7 @@ It takes gh-capture logs (`.jsonl`, with an optional `.marks` beside each), web 
 writes each under --out with its own name. It refuses anything else, screenshots included.
 
 What it replaces, everywhere: the names given with --name; every login seen in a JSON answer or an
-`auth status`; home directories, emails, IP addresses, tokens, Authorization and Cookie values,
+`auth status`; home directories and the local user's name wherever it appears; emails, IP addresses, tokens, Authorization and Cookie values,
 avatar URLs, commit IDs, Actions run and job IDs and timestamps. In JSON, a user object keeps only
 its login, type and URLs, a commit author loses its name and email, and node IDs and any value
 under a sensitive key are hidden. One table serves every file in a run, so a value always maps to the same
@@ -35,7 +35,9 @@ AUTHORIZATION = re.compile(r"(?i)(authorization:\s*(?:(?:token|bearer|basic)\s+)
 USERINFO = re.compile(r"(://)[^/\s\"'<>@]+@")
 COOKIE = re.compile(r"(?i)((?:set-)?cookie:\s*)[^\n\"]+")
 SECRET_ASSIGNMENT = re.compile(r"(?i)\b([\w.-]*(?:token|secret|passw(?:or)?d|credential|api[_-]?key)[\w.-]*=)[^&\s\"']+")
-HOME = re.compile(r"/(?:Users|home)/[^/\s\"'<>]+|[A-Za-z]:\\+Users\\+[^\\\s\"'<>]+")
+# A home directory, URL-encoded too; its last part is the local user's name.
+HOME = re.compile(r"(?:/|%2[Ff])(?:Users|home)(?:/|%2[Ff])([^/%\s\"'<>]+)|[A-Za-z]:\\+Users\\+([^\\\s\"'<>]+)")
+SHARED_HOMES = {"shared", "guest"}
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
 AVATAR = re.compile(r"https?://(?:avatars\.githubusercontent\.com|(?:secure|www)\.gravatar\.com|"
@@ -93,12 +95,13 @@ class Redactor:
         self.times = {}
 
     def learn(self, values):
-        """Pass one: logins and timestamps from every file, so placeholders are fixed before
+        """Pass one: logins, local user names and timestamps from every file, so placeholders are fixed before
         anything is written, and timestamps keep their order."""
         logins = []
         instants = set()
+        locals_ = []
         for value in values:
-            self._collect(value, logins, instants)
+            self._collect(value, logins, instants, locals_)
         known = {name.lower() for name in self.names}
         users = sum(1 for placeholder in self.names.values() if re.fullmatch(r"<user(?:-\d+)?>", placeholder))
         for login in logins:
@@ -107,19 +110,27 @@ class Redactor:
             users += 1
             self.names[login] = USER if users == 1 else f"<user-{users}>"
             known.add(login.lower())
+        for name in locals_:
+            if name.lower() not in known and name.lower() not in SHARED_HOMES:
+                self.names[name] = "<local-user>"
+                known.add(name.lower())
         for index, instant in enumerate(sorted(instants)):
             self.times[instant] = EPOCH + timedelta(seconds=index)
 
-    def _collect(self, value, logins, instants):
+    def _collect(self, value, logins, instants, locals_):
         if isinstance(value, dict):
             for key, item in value.items():
                 if key == "login" and isinstance(item, str) and item not in logins:
                     logins.append(item)
-                self._collect(item, logins, instants)
+                self._collect(item, logins, instants, locals_)
         elif isinstance(value, list):
             for item in value:
-                self._collect(item, logins, instants)
+                self._collect(item, logins, instants, locals_)
         elif isinstance(value, str):
+            for match in HOME.finditer(value):
+                name = match.group(1) or match.group(2)
+                if name not in locals_:
+                    locals_.append(name)
             for login in ACCOUNT.findall(value):
                 if login not in logins:
                     logins.append(login)
@@ -128,7 +139,7 @@ class Redactor:
             for match in HTTP_DATE.finditer(value):
                 instants.add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
             for parsed in embedded(value):
-                self._collect(parsed, logins, instants)
+                self._collect(parsed, logins, instants, locals_)
 
     def text(self, value):
         value = USERINFO.sub(r"\1<redacted>@", value)
