@@ -227,6 +227,9 @@ class RedactTest(unittest.TestCase):
             "Fri Oct 30 15:16:57 ChST 2026": "Sat Jan 1 00:00:00 UTC 2000",
             "at 2026-10-30 15:16:57.123 +1000 ChST": "at 2000-01-01 00:00:00 +0000 UTC",
             "Date: Fri, 30 Oct 2026 15:16:57 -0400": "Date: Sat, 01 Jan 2000 00:00:00 +0000",
+            "Date: Thu, 5 Nov 2026 15:16:57 -0400": "Date: Sat, 1 Jan 2000 00:00:00 +0000",
+            "Date: Thu, 05 Nov 2026 15:16:57 -0400 (EDT)": "Date: Sat, 01 Jan 2000 00:00:00 +0000 (UTC)",
+            "2026-11-05 15:16:57 -0400 Fix login": "2000-01-01 00:00:00 +0000 Fix login",
         }
         for text, expected in cases.items():
             self.assertEqual(redactor.text(text), expected)
@@ -236,6 +239,8 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(leaks.text_findings("2000-01-01 00:00:00 +0000 +0545"), {"time zone"})
         self.assertEqual(leaks.text_findings("2000-01-01 00:00:00 +0000 ChST"), {"time zone"})
         self.assertEqual(leaks.text_findings("Sat Jan 1 00:00:00 ChST 2000"), {"date"})
+        self.assertEqual(leaks.text_findings("Thu, 5 Nov 2026 15:16:57 -0400"), {"date"})
+        self.assertEqual(leaks.text_findings("Sat, 01 Jan 2000 00:00:00 +0000 (EDT)"), {"time zone"})
         self.assertEqual(leaks.text_findings("Fri Oct 30 15:16:57 -03 2026"), {"date"})
 
     def test_answers_keep_their_json_style(self):
