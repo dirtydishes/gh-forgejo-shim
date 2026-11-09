@@ -519,7 +519,8 @@ fn classify(command: &str) -> Option<&'static str> {
     let mut words = lower.split_whitespace();
     let base = |word: &str| word.rsplit('/').next().unwrap_or(word).to_string();
     let program = base(words.next()?);
-    let script = words.next().map(base).unwrap_or_default();
+    let script_path = words.next().unwrap_or_default();
+    let script = base(script_path);
     let app = bundle(&lower).unwrap_or_default();
     if app.ends_with("/chatgpt.app/") || program == "chatgpt" {
         return Some("chatgpt");
@@ -537,10 +538,11 @@ fn classify(command: &str) -> Option<&'static str> {
         return Some("claude-code");
     }
     if matches!(program.as_str(), "node" | "bun" | "deno") {
-        if script == "claude" || lower.contains("/claude-code/") {
+        // Only the script the runtime runs, never a later argument such as an output path.
+        if script == "claude" || script_path.contains("/claude-code/") {
             return Some("claude-code");
         }
-        if script == "codex" || script == "codex.js" || lower.contains("/@openai/codex/") {
+        if script == "codex" || script == "codex.js" || script_path.contains("/@openai/codex/") {
             return Some("codex");
         }
     }
@@ -575,6 +577,9 @@ mod tests {
             ("/usr/bin/git clone https://example.com/Cursor.app/x", None),
             ("/bin/zsh x:/Claude.app/y", None),
             ("node ./Cursor.app/x.js", None),
+            // A path in a later argument isn't the script's.
+            ("node build.js /work/@openai/codex/output", None),
+            ("node build.js /work/claude-code/output", None),
             ("/Applications/T3 Code (Nightly).app/Contents/MacOS/T3 Code --type=/codex.app/", None),
             (
                 "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node /Applications/ChatGPT.app/Contents/Resources/x.mjs",
