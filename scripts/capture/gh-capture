@@ -10,14 +10,16 @@ code, duration, and stdout and stderr. Output that can carry a token (`auth toke
 is never stored, only its length.
 
 When stdout is a terminal, it records the argv and execs gh, so interactive output doesn't change.
-Otherwise it buffers stdout and stderr and replays them after gh exits, which keeps gh's non-TTY
-behavior. Python 3.9 compatible (macOS /usr/bin/python3).
+Otherwise gh writes to pipes, which keeps its non-TTY behaviour, and each chunk reaches the caller as
+gh writes it (`gh pr checks --watch`), with a copy kept for the record. Python 3.9 compatible (macOS
+/usr/bin/python3).
 """
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 # The credential rules come from redact.py beside this script (scripts/capture), so install it as a
@@ -119,14 +121,44 @@ def fake_token(argv):
     return "gfjprobe_" + host.replace(".", "_") if host in hosts else None
 
 
-def text(data):
+class Pump(threading.Thread):
+    """Copies one of gh's output pipes to ours as it arrives, keeping the first MAX_STREAM bytes."""
+
+    def __init__(self, source, target):
+        super().__init__(daemon=True)
+        self.source, self.target = source, target
+        self.kept = bytearray()
+        self.total = 0
+
+    def run(self):
+        writing = True
+        while True:
+            chunk = os.read(self.source.fileno(), 65536)
+            if not chunk:
+                break
+            self.total += len(chunk)
+            if len(self.kept) < MAX_STREAM:
+                self.kept += chunk[:MAX_STREAM - len(self.kept)]
+            while writing and chunk:
+                try:
+                    chunk = chunk[os.write(self.target, chunk):]
+                except BrokenPipeError:
+                    # The caller stopped reading: so does the wrapper, and gh's next write fails
+                    # as it would have without the wrapper.
+                    writing = False
+            if not writing:
+                break
+        self.source.close()
+
+
+def text(pump):
     """Output as stored: its credentials scrubbed, the values under a JSON answer's sensitive keys
     hidden, and cut short past MAX_STREAM. Nothing without redact.py's rules."""
     if redact is None:
         return None
-    if len(data) > MAX_STREAM:
-        return {"truncated": True, "bytes": len(data), "head": scrub(data[:MAX_STREAM].decode("utf-8", "replace"))}
-    value = data.decode("utf-8", "replace")
+    if pump.total > MAX_STREAM:
+        return {"truncated": True, "bytes": pump.total, "head": scrub(bytes(pump.kept).decode("utf-8", "replace"))}
+    value = bytes(pump.kept).decode("utf-8", "replace")
     spans = redact.json_spans(value)
     if spans:
         out, last = [], 0
@@ -188,21 +220,19 @@ def main():
         os.execv(REAL, [REAL] + argv)
 
     start = time.time()
-    proc = subprocess.run([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    pumps = [Pump(proc.stdout, sys.stdout.fileno()), Pump(proc.stderr, sys.stderr.fileno())]
+    for pump in pumps:
+        pump.start()
+    for pump in pumps:
+        pump.join()
+    code = proc.wait()
     record["duration_ms"] = round((time.time() - start) * 1000)
-    record["exit"] = proc.returncode
-    if secret_output(argv):
-        record["stdout"] = {"redacted": True, "bytes": len(proc.stdout)}
-        record["stderr"] = {"redacted": True, "bytes": len(proc.stderr)}
-    else:
-        record["stdout"] = text(proc.stdout)
-        record["stderr"] = text(proc.stderr)
+    record["exit"] = code
+    for name, pump in zip(("stdout", "stderr"), pumps):
+        record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
     write(record)
-    sys.stdout.buffer.write(proc.stdout)
-    sys.stdout.buffer.flush()
-    sys.stderr.buffer.write(proc.stderr)
-    sys.stderr.buffer.flush()
-    sys.exit(proc.returncode)
+    sys.exit(code)
 
 
 if __name__ == "__main__":
