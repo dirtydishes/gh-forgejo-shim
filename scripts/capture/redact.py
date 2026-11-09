@@ -54,6 +54,8 @@ AVATAR = re.compile(r"https?://(?:avatars\.githubusercontent\.com|(?:secure|www)
 IPV4 = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
 IPV6 = re.compile(r"(?<![\w:.-])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:-])")
 SHA = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9a-f]{64}|[0-9a-f]{40})(?![0-9A-Fa-f])")
+# A hex folder name in a path, which may be a build or install ID: `claude-code/2.1.309/<id>/`.
+HEX_FOLDER = re.compile(r"(?<=/)(?![0-9a-f]{40}/|[0-9a-f]{64}/)(?=\d*[a-f])[0-9a-f]{8,64}(?=/)")
 # Placeholders this script writes: leaks.py accepts these and nothing else of their shape.
 PLACEHOLDER_SHA = re.compile(r"0{24}[0-9a-f]{16}")
 ACTIONS = re.compile(r"(/actions/runs/)(\d+)(?:(/jobs?/)(\d+))?")
@@ -177,6 +179,7 @@ class Redactor:
         value = IPV4.sub(lambda m: "<ip>" if is_ip(m.group(0)) else m.group(0), value)
         value = IPV6.sub(lambda m: "<ip>" if is_ip(m.group(0)) else m.group(0), value)
         value = SHA.sub(self._sha, value)
+        value = HEX_FOLDER.sub("<id>", value)
         value = NODE_ID.sub(lambda m: self._node(m.group(0)), value)
         value = ACTIONS.sub(self._actions, value)
         # A time pass one didn't see (none should be left) still becomes the first placeholder.

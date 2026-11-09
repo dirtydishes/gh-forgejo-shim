@@ -212,6 +212,13 @@ class RedactTest(unittest.TestCase):
                 expected = expected.replace("<user>", "\\u003cuser\\u003e").replace("<redacted>", "\\u003credacted\\u003e")
             self.assertEqual(redacted, expected)
 
+    def test_hex_folder_names_are_hidden(self):
+        redactor = redact.Redactor([])
+        self.assertEqual(redactor.text("/Claude/claude-code/2.1.309/5af865b9901c/claude.app /runs/12345678/x"),
+                         "/Claude/claude-code/2.1.309/<id>/claude.app /runs/12345678/x")
+        sha = "0" * 39 + "1"
+        self.assertEqual(redactor.text(f"/commits/{sha}/status"), f"/commits/{sha}/status")
+
     def test_versions_and_workflow_commands_are_left_alone(self):
         redactor = redact.Redactor([])
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
