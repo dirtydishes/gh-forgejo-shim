@@ -30,7 +30,13 @@ from pathlib import Path
 
 USER = "<user>"
 SUFFIXES = {".jsonl", ".log", ".graphql", ".vars", ".json"}
-TOKEN = re.compile(r"(?:github_pat_|gh[pousr]_|glpat-|gitea_)[A-Za-z0-9_]{8,}")
+# Tokens by their prefix (GitHub, GitLab, Forgejo, npm, PyPI, OpenAI and Anthropic, Slack, AWS)
+# and JSON web tokens. gh's masked `gho_****` stays.
+TOKEN = re.compile(r"(?<![A-Za-z0-9_-])(?:(?:github_pat_|gh[pousr]_|glpat-|glrt-|gitea_|npm_|pypi-|sk-|xox[abposr]-)"
+                   r"[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?)")
+# A header that carries a token by itself, as Forgejo's and GitLab's `PRIVATE-TOKEN` does.
+TOKEN_HEADER = re.compile(r"(?i)\b((?:private-token|x-api-key|api-key|x-auth-token|x-access-token|x-gitea-otp):\s*)"
+                          r"[^\s\"',\\]+")
 AUTHORIZATION = re.compile(r"(?i)(authorization:\s*(?:(?:token|bearer|basic)\s+)?)[^\s\"',]+")
 USERINFO = re.compile(r"(://)[^/\s\"'<>@]+@")
 COOKIE = re.compile(r"(?i)((?:set-)?cookie:\s*)[^\n\"]+")
@@ -158,6 +164,7 @@ class Redactor:
         value = EMAIL.sub(lambda m: "<email>" if is_email(m.group(0)) else m.group(0), value)
         value = TOKEN.sub("<token>", value)
         value = AUTHORIZATION.sub(r"\1<token>", value)
+        value = TOKEN_HEADER.sub(r"\1<token>", value)
         value = COOKIE.sub(r"\1<redacted>", value)
         value = SECRET_ASSIGNMENT.sub(r"\1<redacted>", value)
         # Longest first, so a host goes before the login inside it. A name ends at anything but a

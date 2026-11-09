@@ -13,15 +13,15 @@ import re
 import sys
 from pathlib import Path
 
-from redact import EMAIL, IPV4, IPV6, embedded, is_email, is_ip
+from redact import EMAIL, IPV4, IPV6, TOKEN, embedded, is_email, is_ip
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
 PLACEHOLDER_VALUES = {"", "<redacted>", "<token>"}
-TOKEN = re.compile(r"(?:github_pat_|gh[pousr]_|glpat-|gitea_)[A-Za-z0-9_]{8,}")
-JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 HEX = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![0-9A-Fa-f])")
 PLACEHOLDER_SHA = re.compile(r"0{24}[0-9a-f]{16}")
+TOKEN_HEADER = re.compile(r"(?i)\b(?:private-token|x-api-key|api-key|x-auth-token|x-access-token|x-gitea-otp):\s*"
+                          r"([^\s\"',\\]+)")
 AUTHORIZATION = re.compile(r"(?i)authorization:\s*(?:(?:token|bearer|basic)\s+)?([^\s\"',\\]+)")
 COOKIE = re.compile(r"(?i)(?:set-)?cookie:\s*([^\n\"\\]*)")
 SECRET_ASSIGNMENT = re.compile(r"(?i)\b[\w.-]*(?:token|secret|passw(?:or)?d|credential|api[_-]?key)[\w.-]*=([^&\s\"'\\]+)")
@@ -61,11 +61,11 @@ def allowed_host(host):
 def text_findings(text):
     """The kinds of identifying data in one string."""
     kinds = set()
-    if TOKEN.search(text) or JWT.search(text):
+    if TOKEN.search(text):
         kinds.add("token")
     if any(not PLACEHOLDER_SHA.fullmatch(match.group(0)) for match in HEX.finditer(text)):
         kinds.add("token or unredacted commit ID")
-    for pattern in (AUTHORIZATION, COOKIE, SECRET_ASSIGNMENT, USERINFO):
+    for pattern in (AUTHORIZATION, TOKEN_HEADER, COOKIE, SECRET_ASSIGNMENT, USERINFO):
         if any(match.group(1).strip() not in PLACEHOLDER_VALUES for match in pattern.finditer(text)):
             kinds.add("credential")
     for match in EMAIL.finditer(text):
