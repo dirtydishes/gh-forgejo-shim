@@ -453,77 +453,52 @@ pub fn notice(env: &EnvMap, out: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-/// The agent or app that ran gh, from the processes above `pid`: the nearest one this knows.
+/// The agent or app that ran gh, from the processes above `pid`: the nearest one this knows. Only
+/// those processes are read, one at a time, so a call that keeps counts reads a few, not every one.
 fn detect_client(pid: u32) -> Option<&'static str> {
-    let table = processes();
     let mut pid = pid;
     for _ in 0..32 {
-        let (parent, command) = table.get(&pid)?;
-        if let Some(client) = classify(command) {
+        let (parent, command) = process(pid)?;
+        if let Some(client) = classify(&command) {
             return Some(client);
         }
-        if *parent <= 1 || *parent == pid {
+        if parent <= 1 || parent == pid {
             return None;
         }
-        pid = *parent;
+        pid = parent;
     }
     None
 }
 
-/// Every process's parent and command line, read locally and never sent.
-fn processes() -> BTreeMap<u32, (u32, String)> {
-    let mut table = BTreeMap::new();
-    if let Ok(entries) = fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let Some(pid) = entry
-                .file_name()
-                .to_str()
-                .and_then(|n| n.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            let stat = fs::read_to_string(entry.path().join("stat")).unwrap_or_default();
-            // `pid (comm) state ppid …`; the name may hold spaces or parentheses.
-            let parent = stat
-                .rsplit_once(')')
-                .and_then(|(_, rest)| rest.split_whitespace().nth(1))
-                .and_then(|ppid| ppid.parse().ok());
-            let command = fs::read(entry.path().join("cmdline"))
-                .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
-                .unwrap_or_default();
-            if let Some(parent) = parent {
-                table.insert(pid, (parent, command));
-            }
-        }
-        if !table.is_empty() {
-            return table;
-        }
+/// A process's parent and command line, read locally and never sent: from `/proc` where there is
+/// one, else from `ps`.
+fn process(pid: u32) -> Option<(u32, String)> {
+    let dir = Path::new("/proc").join(pid.to_string());
+    if let Ok(stat) = fs::read_to_string(dir.join("stat")) {
+        // `pid (comm) state ppid …`; the name may hold spaces or parentheses.
+        let parent = stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+            .and_then(|ppid| ppid.parse().ok())?;
+        let command = fs::read(dir.join("cmdline"))
+            .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
+            .unwrap_or_default();
+        return Some((parent, command));
     }
-    let Ok(output) = Command::new("ps")
-        .args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "args="])
+    if Path::new("/proc/self/stat").exists() {
+        // Linux, and the process is gone.
+        return None;
+    }
+    let output = Command::new("/bin/ps")
+        .args(["-o", "ppid=", "-o", "args=", "-p", &pid.to_string()])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-    else {
-        return table;
-    };
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let mut fields = line.trim_start().splitn(2, char::is_whitespace);
-        let pid = fields.next().and_then(|pid| pid.parse().ok());
-        let mut rest = fields
-            .next()
-            .unwrap_or_default()
-            .trim_start()
-            .splitn(2, char::is_whitespace);
-        let parent = rest.next().and_then(|ppid| ppid.parse().ok());
-        if let (Some(pid), Some(parent)) = (pid, parent) {
-            table.insert(
-                pid,
-                (parent, rest.next().unwrap_or_default().trim().to_string()),
-            );
-        }
-    }
-    table
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut fields = text.trim_start().splitn(2, char::is_whitespace);
+    let parent = fields.next()?.parse().ok()?;
+    Some((parent, fields.next().unwrap_or_default().trim().to_string()))
 }
 
 /// Which of [`usage::CLIENTS`] a command line is, if any.
@@ -587,11 +562,10 @@ mod tests {
     }
 
     #[test]
-    fn the_process_table_knows_this_process_s_parent() {
-        let table = processes();
-        assert_eq!(
-            table.get(&std::process::id()).map(|(parent, _)| *parent),
-            Some(caller_pid())
-        );
+    fn a_process_s_parent_and_command_line_are_known() {
+        let (parent, command) = process(std::process::id()).expect("this process");
+        assert_eq!(parent, caller_pid());
+        assert!(command.contains("gh_forgejo_shim"), "{command}");
+        assert_eq!(process(u32::MAX), None);
     }
 }

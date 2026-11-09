@@ -234,7 +234,7 @@ the commands, what redaction hides, and the smoke probes.
 To find what breaks in agents and forges I can't test myself, gh-forgejo-shim and fga-server
 send one anonymous report a day: the version, OS and arch, mode,
 which agent ran gh, the forge's software and major version, gh's version, the week of the first
-report, and the GitHub names the gateway lacked or failed, under the agent that asked. No hosts, repositories, commands or IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
+report, and the GitHub names the gateway lacked or failed, under the agent that asked. No hosts, repositories, commands or IDs. The report goes in the background and never slows or changes a `gh` call; a call that hit a missing or failing feature takes a few milliseconds to note which agent ran it. Turn it off with
 `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1` (`FGA_TELEMETRY=0` for fga-server), and
 see the report with `gfj telemetry show`. [docs/telemetry.md](docs/telemetry.md) lists every
 field, what the collector keeps, and what it publishes: rounded weekly totals.
