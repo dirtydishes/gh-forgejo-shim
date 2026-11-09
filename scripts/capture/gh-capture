@@ -17,6 +17,7 @@ gh writes it (`gh pr checks --watch`), with a copy kept for the record. Python 3
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -37,6 +38,9 @@ ENV_KEYS = ("GH_HOST", "GH_REPO", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER",
             "NO_COLOR", "CLICOLOR", "GIT_TERMINAL_PROMPT", "TERM")
 SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 MAX_STREAM = 256 * 1024
+# What a caller sends to stop a call; each goes on to gh. Any other signal reaches gh only as the
+# caller's process group gets it.
+FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 # gh flags with a sensitive word in their name that take no value.
 VALUELESS_FLAGS = {"--with-token", "--show-token"}
 
@@ -192,6 +196,18 @@ def secretless(value):
     return value
 
 
+def die_like(number):
+    """Exit the way gh did when a signal killed it, so the caller sees the same death, not 128+N
+    folded into an exit code (#197 defect 5)."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    signal.signal(number, signal.SIG_DFL)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, [number])
+    os.kill(os.getpid(), number)
+    # Still here: the signal can't kill us. Exit as a shell reports it.
+    sys.exit(128 + number)
+
+
 def write(record):
     """Append one record, owner-only. A log that can't be written never stops the gh call; on a
     terminal it says so."""
@@ -233,19 +249,44 @@ def main():
         write(record)
         os.execv(REAL, [REAL] + argv)
 
+    # A caller's signal goes on to gh, which decides what to do with it; one that arrives before gh
+    # starts waits for it. Signals the caller left ignored stay ignored.
+    child = []
+
+    def forward(number, frame):
+        if child:
+            try:
+                child[0].send_signal(number)
+            except ProcessLookupError:
+                pass
+        else:
+            waiting.append(number)
+
+    waiting = []
+    for number in FORWARDED:
+        if signal.getsignal(number) is not signal.SIG_IGN:
+            signal.signal(number, forward)
     start = time.time()
     proc = subprocess.Popen([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    child.append(proc)
+    for number in waiting:
+        proc.send_signal(number)
     pumps = [Pump(proc.stdout, sys.stdout.fileno()), Pump(proc.stderr, sys.stderr.fileno())]
     for pump in pumps:
         pump.start()
     for pump in pumps:
-        pump.join()
+        while pump.is_alive():
+            pump.join(0.1)
     code = proc.wait()
     record["duration_ms"] = round((time.time() - start) * 1000)
     record["exit"] = code
+    if code < 0:
+        record["signal"] = signal.Signals(-code).name
     for name, pump in zip(("stdout", "stderr"), pumps):
         record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
     write(record)
+    if code < 0:
+        die_like(-code)
     sys.exit(code)
 
 

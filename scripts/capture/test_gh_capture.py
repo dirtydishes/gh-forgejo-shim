@@ -4,7 +4,9 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import resource
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -16,6 +18,8 @@ WRAPPER = Path(__file__).resolve().parent / "gh-capture"
 # The fake gh: what it does is set by FAKE_GH, so each test asks for the behaviour it needs.
 FAKE_GH = r'''#!/usr/bin/env python3
 import os, signal, sys, time
+# Like Go's gh: a write to a closed pipe kills it with SIGPIPE.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 mode = os.environ.get("FAKE_GH", "echo")
 if mode == "echo":
     sys.stdout.write("out " + " ".join(sys.argv[1:]) + "\n")
@@ -35,6 +39,24 @@ if mode == "stream":
             break
         time.sleep(0.05)
     print("second")
+if mode == "kill":
+    sys.stdout.write("dying\n")
+    sys.stdout.flush()
+    os.kill(os.getpid(), int(os.environ["FAKE_SIGNAL"]))
+if mode == "wait":
+    # Note each signal that arrives, then die of it, as gh does.
+    def noted(number, frame):
+        with open(os.environ["FAKE_NOTE"], "a") as note:
+            note.write(f"{number}\n")
+        signal.signal(number, signal.SIG_DFL)
+        os.kill(os.getpid(), number)
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, noted)
+    print("ready", flush=True)
+    time.sleep(60)
+if mode == "flood":
+    while True:
+        print("line", flush=True)
 '''
 
 
@@ -185,6 +207,62 @@ class StreamTest(unittest.TestCase):
         [record] = wrapper.records()
         self.assertEqual((record["stdout"]["truncated"], record["stdout"]["bytes"], len(record["stdout"]["head"])),
                          (True, 300000, 256 * 1024))
+
+
+def no_core():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+class SignalTest(unittest.TestCase):
+    """#197 defect 5: the wrapper dies of the signal that killed gh, and passes the caller's to gh.
+    Crash-type signals are tested on Linux only: macOS shows a crash dialog for each."""
+
+    def started(self, wrapper, mode, **env):
+        process = subprocess.Popen([sys.executable, str(WRAPPER), "pr", "checks", "--watch"],
+                                   env=wrapper.env | {"FAKE_GH": mode} | env, cwd=wrapper.root, preexec_fn=no_core,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        for stream in (process.stdout, process.stderr):
+            self.addCleanup(stream.close)
+        return process
+
+    def test_gh_killed_by_a_signal(self):
+        wrapper = Wrapper(self)
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            process = self.started(wrapper, "kill", FAKE_SIGNAL=str(int(number)))
+            out, _ = process.communicate(timeout=30)
+            self.assertEqual((process.returncode, out), (-number, b"dying\n"), number)
+        self.assertEqual([(r["exit"], r["signal"]) for r in wrapper.records()],
+                         [(-15, "SIGTERM"), (-2, "SIGINT"), (-1, "SIGHUP")])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "crash-type signals only on Linux")
+    def test_gh_crashing(self):
+        wrapper = Wrapper(self)
+        for number in (signal.SIGSEGV, signal.SIGABRT):
+            process = self.started(wrapper, "kill", FAKE_SIGNAL=str(int(number)))
+            process.communicate(timeout=30)
+            self.assertEqual(process.returncode, -number, number)
+        self.assertEqual([r["signal"] for r in wrapper.records()], ["SIGSEGV", "SIGABRT"])
+
+    def test_the_callers_signal_reaches_gh(self):
+        wrapper = Wrapper(self)
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            note = wrapper.root / f"note-{int(number)}"
+            process = self.started(wrapper, "wait", FAKE_NOTE=str(note))
+            ready, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(ready and process.stdout.readline() == b"ready\n", number)
+            process.send_signal(number)
+            process.communicate(timeout=30)
+            self.assertEqual(process.returncode, -number, number)
+            self.assertEqual(note.read_text(), f"{int(number)}\n", number)
+
+    def test_a_caller_that_stops_reading(self):
+        wrapper = Wrapper(self)
+        process = self.started(wrapper, "flood")
+        self.assertEqual(process.stdout.readline(), b"line\n")
+        process.stdout.close()
+        process.wait(timeout=30)
+        self.assertEqual(process.returncode, -signal.SIGPIPE)
 
 
 class LogFailureTest(unittest.TestCase):
