@@ -563,7 +563,11 @@ async fn count_requests(request: HttpRequest, next: Next) -> Response {
     let path = request.uri().path().to_owned();
     let response = next.run(request).await;
     let status = response.status();
-    if status == StatusCode::METHOD_NOT_ALLOWED || (status == StatusCode::NOT_FOUND && !routed) {
+    // A path with no route is unsupported, even when the token check failed before the fallback's
+    // 404.
+    if status == StatusCode::METHOD_NOT_ALLOWED
+        || (!routed && (status == StatusCode::NOT_FOUND || status.is_server_error()))
+    {
         usage::rest_unsupported(&path);
     } else if status.is_server_error() && path != "/api/graphql" {
         usage::rest_failed(&path);
