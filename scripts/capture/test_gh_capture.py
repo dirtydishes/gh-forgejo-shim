@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import pty
 import resource
 import select
 import signal
@@ -115,6 +116,55 @@ class PassThroughTest(unittest.TestCase):
         with mock.patch.object(module.os.path, "exists", return_value=False), \
                 mock.patch.object(module.subprocess, "run", side_effect=FileNotFoundError("/bin/ps")):
             self.assertEqual(module.process_chain(), [])
+
+
+class TerminalTest(unittest.TestCase):
+    def test_a_terminal_gets_gh_itself(self):
+        wrapper = Wrapper(self)
+        controller, terminal = pty.openpty()
+        process = subprocess.Popen([sys.executable, str(WRAPPER), "pr", "view", "1"], env=wrapper.env, cwd=wrapper.root,
+                                   stdin=subprocess.DEVNULL, stdout=terminal, stderr=subprocess.PIPE)
+        os.close(terminal)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        output = b""
+        while True:
+            ready, _, _ = select.select([controller], [], [], 15)
+            self.assertTrue(ready, output)
+            try:
+                chunk = os.read(controller, 1024)
+            except OSError:  # Linux: the terminal's other end has closed
+                break
+            if not chunk:
+                break
+            output += chunk
+        os.close(controller)
+        process.stderr.close()
+        self.assertEqual(process.wait(timeout=30), 0)
+        self.assertIn(b"out pr view 1", output)
+        [record] = wrapper.records()
+        self.assertTrue(record["stdout_tty"])
+        self.assertNotIn("exit", record)
+
+
+class ProbeTest(unittest.TestCase):
+    """The fake-token probe: `auth token` for a listed host answers a fake token."""
+
+    def test_every_hostname_form(self):
+        wrapper = Wrapper(self)
+        (wrapper.root / ".gh-capture").mkdir()
+        (wrapper.root / ".gh-capture" / "fake-token-hosts").write_text("# hosts\nforge.test\n")
+        for argv in (["auth", "token", "--hostname", "forge.test"], ["auth", "token", "-h", "forge.test"],
+                     ["auth", "token", "--hostname=forge.test"]):
+            self.assertEqual(wrapper.run(*argv).stdout, b"gfjprobe_forge_test\n", argv)
+        self.assertEqual(wrapper.run("auth", "token", "--hostname", "github.com").stdout,
+                         b"out auth token --hostname github.com\n")
+        self.assertEqual([record.get("faked") for record in wrapper.records()], [True, True, True, None])
+
+    def test_an_unreadable_host_list_falls_through_to_gh(self):
+        wrapper = Wrapper(self)
+        (wrapper.root / ".gh-capture" / "fake-token-hosts").mkdir(parents=True)
+        result = wrapper.run("auth", "token", "--hostname", "forge.test")
+        self.assertEqual((result.returncode, result.stdout), (0, b"out auth token --hostname forge.test\n"))
 
 
 class InputTest(unittest.TestCase):
