@@ -1,3 +1,36 @@
+# gh-forgejo-shim v0.3.1
+
+A security release. Upgrade the wrapper and, in server mode, the gateway image. Thanks to
+@pikos-apikos, who reported #272–#275.
+
+- **TLS verification no longer trusts distrusted intermediates.** The TLS crates move past three
+  RustSec advisories: `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.11 (RUSTSEC-2026-0382,
+  RUSTSEC-2026-0381, CVE-2026-111943) and `rustls` 0.23.46 (RUSTSEC-2026-0285). CI and the release
+  workflow now check `Cargo.lock` against the advisory database, so the next advisory fails a
+  build before anything is packaged (#272).
+
+- **The gateway can no longer be crashed or flooded by one GraphQL request.** An argument nested a
+  few hundred levels deep overflowed a worker thread's stack and aborted the whole gateway, from
+  one request under 1 KB. Documents nested past 64 levels, with a name or number over 256
+  characters, or with an unclosed `"""` string are now refused before they are parsed. Documents
+  are measured before validation and refused past 5,000 steps, validation lists at most 100
+  errors, request bodies stop at 512 KiB, and a response stops at 16 MB with one
+  `RESOURCE_LIMITS_EXCEEDED` error. Every `gh` and ChatGPT document the project has captured stays
+  well inside these limits (#273).
+
+- **The token follows only a renamed repository's redirect.** The built-in client sent the token
+  after any redirect on the forge's origin, such as one to another service behind the same proxy.
+  It now follows only the redirect Forgejo gives for a renamed or moved repository, so commands on
+  a renamed repository keep working, and returns any other redirect as an error. `auth login`'s
+  token check uses the same rule (#274).
+
+- **`.` and `..` can't move a request out of the repository's path.** The built-in client sent
+  `gh repo view forge.example/../..` to the forge's API root with the token. It now refuses any
+  owner, repository or commit segment that would climb out of the path, as written or
+  percent-encoded, before it makes a request. The gateway already refused these (#275).
+
+The v0.3.0 notes follow.
+
 # gh-forgejo-shim v0.3.0
 
 - **Server mode no longer sends host-less commands to github.com.** In a checkout of a forge's
