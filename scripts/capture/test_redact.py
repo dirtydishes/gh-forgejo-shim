@@ -244,6 +244,9 @@ class RedactTest(unittest.TestCase):
 
     def test_versions_and_workflow_commands_are_left_alone(self):
         redactor = redact.Redactor([])
+        kept = "-H X-GitHub-Api-Version: 2022-11-28 git@github.com:octo/homebox.git mail me@private.dev."
+        self.assertEqual(redactor.text(kept), "-H X-GitHub-Api-Version: 2022-11-28 git@github.com:octo/homebox.git mail <email>.")
+        self.assertNotIn("date", leaks.text_findings("X-GitHub-Api-Version: 2022-11-28"))
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
         self.assertEqual(redactor.text(text), "npx ripgrep@14.1.0 && echo ::add-mask::$X from <ip>")
 

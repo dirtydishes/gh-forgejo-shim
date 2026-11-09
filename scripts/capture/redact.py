@@ -58,8 +58,9 @@ BOTS = {"github-actions", "dependabot", "copilot", "renovate", "ghost", "web-flo
 PATH_WORDS = {"actions", "admin", "api", "apps", "checks", "cli", "commits", "compare", "explore", "git",
               "github", "graphql", "issues", "login", "notifications", "orgs", "pr", "pulls", "releases",
               "repos", "runs", "search", "settings", "status", "user", "users"}
+# An email, but not a git remote in scp form (`git@github.com:o/r.git`).
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
-                   r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+                   r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?![\w-]|\.[\w-]|:[\w~/])")
 AVATAR = re.compile(r"https?://(?:avatars\.githubusercontent\.com|(?:secure|www)\.gravatar\.com|"
                     r"[^/\s\"'<>]+/avatars?)/[^\s\"'<>]*")
 IPV4 = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
@@ -84,8 +85,10 @@ CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\
                    + r"))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
 HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), \d\d (?:" + MONTHS + r") \d{4} \d\d:\d\d:\d\d GMT")
 HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
-# A date alone, as in a search (`closed:>2026-09-30`), but not gh's own release date.
-DATE = re.compile(r"(gh version \S+ \(\d{4}-\d\d-\d\d\))|(?<!\d)\d{4}([-/])\d\d\2\d\d(?!\d)")
+# A date alone, as in a search (`closed:>2026-09-30`). Dates that are versions, not times, stay:
+# gh's release date in `gh --version`, and GitHub's REST API version (`X-GitHub-Api-Version`).
+KEPT_DATES = r"gh version \S+ \(\d{4}-\d\d-\d\d\)|(?i:api-version)[:=] *\d{4}-\d\d-\d\d"
+DATE = re.compile(r"(" + KEPT_DATES + r")|(?<!\d)\d{4}([-/])\d\d\2\d\d(?!\d)")
 # An integer time (epoch seconds or milliseconds) under a key that says so: `reset` in
 # `gh api rate_limit`, `created_at`, `timestamp`, `expires`, a JWT's `exp` and `iat`.
 TIME_KEY = re.compile(r"(?i)time|date|reset|expire|created|updated|modified|since|until|seen|^(?:exp|iat|nbf)$|"
