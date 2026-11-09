@@ -218,10 +218,15 @@ class RedactTest(unittest.TestCase):
             "at 2026-10-30 15:16:57.123456 -0400 EDT": "at 2000-01-01 00:00:00 +0000 UTC",
             "Date:   Fri Oct 30 15:16:57 2026 -0400": "Date:   Sat Jan 1 00:00:00 2000 +0000",
             "Fri Oct  3 15:16:57 EDT 2026": "Sat Jan  1 00:00:00 UTC 2000",
+            "at 2026-10-30 15:16:57.123 +0800 SGT": "at 2000-01-01 00:00:00 +0000 UTC",
+            "at 2026-10-30 15:16:57 -0300 -03": "at 2000-01-01 00:00:00 +0000 UTC",
+            "at 2026-10-30 15:16:57 PR 1": "at 2000-01-01 00:00:00 PR 1",
         }
         for text, expected in cases.items():
             self.assertEqual(redactor.text(text), expected)
-            self.assertNotIn("date", leaks.text_findings(expected), expected)
+            self.assertEqual(leaks.text_findings(expected), set(), expected)
+        self.assertEqual(leaks.text_findings("Sat Jan 1 00:01:11 2000 +0000"), set())
+        self.assertEqual(leaks.text_findings("2000-01-01 00:00:00 +0000 SGT"), {"time zone"})
 
     def test_answers_keep_their_json_style(self):
         redactor = redact.Redactor([("octo-person", "<user>")])
@@ -244,8 +249,9 @@ class RedactTest(unittest.TestCase):
 
     def test_versions_and_workflow_commands_are_left_alone(self):
         redactor = redact.Redactor([])
-        kept = "-H X-GitHub-Api-Version: 2022-11-28 git@github.com:octo/homebox.git mail me@private.dev."
-        self.assertEqual(redactor.text(kept), "-H X-GitHub-Api-Version: 2022-11-28 git@github.com:octo/homebox.git mail <email>.")
+        kept = ("-H X-GitHub-Api-Version: 2022-11-28 X-Github-Api-Version-Selected: 2022-11-28 "
+                "git@github.com:octo/homebox.git mail me@private.dev.")
+        self.assertEqual(redactor.text(kept), kept.replace("me@private.dev", "<email>"))
         self.assertNotIn("date", leaks.text_findings("X-GitHub-Api-Version: 2022-11-28"))
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
         self.assertEqual(redactor.text(text), "npx ripgrep@14.1.0 && echo ::add-mask::$X from <ip>")
@@ -271,20 +277,39 @@ class RedactTest(unittest.TestCase):
         payload = ("tree abc\nauthor Real Name <octo@private.dev> 1793000000 -0500\n"
                    "committer Real Name <octo@private.dev> 1793000000 -0500\n\nmessage\n")
         signature = "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQ\n-----END SSH SIGNATURE-----\n"
-        answer = redactor.value({"commit": {"verification": {"verified": True, "payload": payload, "signature": signature}}})
-        verification = answer["commit"]["verification"]
-        self.assertEqual(verification["payload"], "tree abc\nauthor <redacted> <email> 946684800 +0000\n"
-                                                  "committer <redacted> <email> 946684800 +0000\n\nmessage\n")
-        self.assertEqual(verification["signature"], "-----BEGIN SSH SIGNATURE-----<redacted>-----END SSH SIGNATURE-----\n")
+        self.assertEqual(redactor.text(payload), "tree abc\nauthor <redacted> <email> 946684800 +0000\n"
+                                                 "committer <redacted> <email> 946684800 +0000\n\nmessage\n")
+        self.assertEqual(redactor.text(signature), "-----BEGIN SSH SIGNATURE-----<redacted>-----END SSH SIGNATURE-----\n")
+        answer = redactor.value({"commit": {"verification": {"verified": True, "payload": payload, "signature": signature}},
+                                 "signature": {"keyId": "3AA5C34371567BD2", "isValid": True, "signer": {"login": "octo"}}})
+        self.assertEqual(answer, {"commit": {"verification": {"verified": True, "payload": "<redacted>", "signature": "<redacted>"}},
+                                  "signature": {"keyId": "<redacted>", "isValid": True, "signer": {"login": "<redacted>"}}})
         self.assertEqual(leaks.value_findings(answer), set())
         kinds = leaks.value_findings({"payload": payload, "signature": signature})
         self.assertTrue({"git identity", "signature"} <= kinds, kinds)
 
+    def test_lists_and_dates_under_a_person(self):
+        redactor = redact.Redactor([("octo-person", "<user>")])
+        self.assertEqual(redactor.value({"login": "octo-person", "aliases": ["Real Name", "Somewhere Town", 7]}),
+                         {"login": "<user>", "aliases": ["<redacted>", "<redacted>", 0]})
+        self.assertEqual(redactor.value({"viewer": {"extra": ["Real Name"]}}), {"viewer": {"extra": ["<redacted>"]}})
+        actor = redactor.value({"commit": {"author": {"name": "Real Name", "email": "a@private.dev", "date": "2026-10-30T15:16:57Z"}}})
+        self.assertEqual(actor["commit"]["author"], {"name": "<redacted>", "email": "<redacted>", "date": "2000-01-01T00:00:00Z"})
+
+    def test_placeholders_never_collide(self):
+        redactor = redact.Redactor([("bob", "<user-2>")])
+        redactor.learn([{"data": {"viewer": {"login": "octo-person"}, "x": {"login": "someone-else"}}}])
+        self.assertEqual(redactor.names, {"bob": "<user-2>", "octo-person": "<user>", "someone-else": "<user-3>"})
+
     def test_the_viewer_from_a_bare_login(self):
         redactor = redact.Redactor([])
-        redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "stdout": "octo-person\n"},
+        redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "exit": 0, "stdout": "octo-person\n"},
                          {"argv": ["pr", "list", "--author", "octo-person"], "stdout": "[]"}]])
         self.assertEqual(redactor.names, {"octo-person": "<user>"})
+        for exit, stdout in ((0, "null\n"), (1, '{"message":"Bad credentials"}\n'), (0, "")):
+            redactor = redact.Redactor([])
+            redactor.learn([[{"argv": ["api", "user", "-q", ".login"], "exit": exit, "stdout": stdout}]])
+            self.assertEqual(redactor.names, {}, stdout)
 
     def test_refuses_without_a_capturing_account(self):
         (self.capture.source / "client-1.jsonl").write_text(json.dumps(record(
@@ -302,10 +327,10 @@ class RedactTest(unittest.TestCase):
 
     def test_forgejo_usernames_are_learned(self):
         redactor = redact.Redactor([("octo-person", "<user>")])
-        signer = {"verification": {"signer": {"name": "Real Name", "email": "a@private.dev", "username": "someone-else"}}}
-        redactor.learn([signer])
+        pusher = {"pusher": {"name": "Real Name", "email": "a@private.dev", "username": "someone-else"}}
+        redactor.learn([pusher])
         self.assertEqual(redactor.names["someone-else"], "<user-2>")
-        self.assertEqual(redactor.value(signer)["verification"]["signer"],
+        self.assertEqual(redactor.value(pusher)["pusher"],
                          {"name": "<redacted>", "email": "<redacted>", "username": "<user-2>"})
         self.assertEqual(redactor.text("https://forge.test/someone-else/x"), "https://forge.test/<user-2>/x")
 

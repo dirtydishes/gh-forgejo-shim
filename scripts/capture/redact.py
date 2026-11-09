@@ -51,8 +51,9 @@ SECRET_ASSIGNMENT = re.compile(r"(?i)\b([\w.-]*(?:token|secret|passw(?:or)?d|cre
 HOME = re.compile(r"(?:/|%2[Ff])(?:Users|home)(?:/|%2[Ff])([^/%\s\"'<>]+)|[A-Za-z]:\\+Users\\+([^\\\s\"'<>]+)")
 SHARED_HOMES = {"shared", "guest"}
 # Logins kept as they are: bots and apps, which GraphQL gives without `[bot]`, and words gh and
-# GitHub use in paths and commands, which GitHub and Forgejo reserve, so they name an organization
-# or the system (`actions/checkout`), never a person. Replacing them would break every path.
+# GitHub use in paths and commands, which name an organization or the system (`actions/checkout`)
+# far more often than a person. Replacing them would break every path; redact.py lists any it
+# keeps, for a person to check.
 BOTS = {"github-actions", "dependabot", "copilot", "renovate", "ghost", "web-flow", "forgejo-actions",
         "gitea-actions"}
 PATH_WORDS = {"actions", "admin", "api", "apps", "checks", "cli", "commits", "compare", "explore", "git",
@@ -74,11 +75,12 @@ ACTIONS = re.compile(r"(/actions/runs/)(\d+)(?:(/jobs?/)(\d+))?")
 # A date and time: ISO 8601 and RFC 3339, git's `2026-10-30 15:16:57 -0400`, Forgejo's log
 # `2026/10/30 15:16:57`, Go's `2026-10-30 15:16:57.123 -0400 EDT`, seconds and zone optional; git's
 # and date(1)'s `Fri Oct 30 15:16:57 2026 -0400` and `Fri Oct 30 15:16:57 EDT 2026`; and HTTP's
-# `Fri, 30 Oct 2026 19:02:30 GMT`. A zone's name becomes UTC.
+# `Fri, 30 Oct 2026 19:02:30 GMT`. A zone's name, or Go's `-03` after an offset, becomes UTC.
 ZONE_NAMES = ("UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|AKST|AKDT|HST|BST|CET|CEST|EET|EEST|WET|WEST|IST|"
               "JST|KST|AEST|AEDT|ACST|AWST|NZST|NZDT|MSK")
 TIMESTAMP = re.compile(r"(?<!\d)(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
-                       r"( ?)(Z|[+-]\d\d:?\d\d)?( (?:" + ZONE_NAMES + r"))?(?![\w:])")
+                       r"( ?)(Z|[+-]\d\d:?\d\d)?( (?:" + ZONE_NAMES + r"|(?:(?<=[+-]\d{4} )|(?<=[+-]\d\d:\d\d ))"
+                       r"(?:[A-Z]{2,5}|[+-]\d\d)))?(?![\w:])")
 DAYS = "Mon|Tue|Wed|Thu|Fri|Sat|Sun"
 MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\d\d):(\d\d)( (?:" + ZONE_NAMES
@@ -86,8 +88,9 @@ CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\
 HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), \d\d (?:" + MONTHS + r") \d{4} \d\d:\d\d:\d\d GMT")
 HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 # A date alone, as in a search (`closed:>2026-09-30`). Dates that are versions, not times, stay:
-# gh's release date in `gh --version`, and GitHub's REST API version (`X-GitHub-Api-Version`).
-KEPT_DATES = r"gh version \S+ \(\d{4}-\d\d-\d\d\)|(?i:api-version)[:=] *\d{4}-\d\d-\d\d"
+# gh's release date in `gh --version`, and GitHub's REST API version (`X-GitHub-Api-Version` and
+# the `-Selected` answer).
+KEPT_DATES = r"gh version \S+ \(\d{4}-\d\d-\d\d\)|(?i:api-version(?:-selected)?)[:=] *\d{4}-\d\d-\d\d"
 DATE = re.compile(r"(" + KEPT_DATES + r")|(?<!\d)\d{4}([-/])\d\d\2\d\d(?!\d)")
 # An integer time (epoch seconds or milliseconds) under a key that says so: `reset` in
 # `gh api rate_limit`, `created_at`, `timestamp`, `expires`, a JWT's `exp` and `iat`.
@@ -107,6 +110,9 @@ SENSITIVE_KEY = re.compile(r"(?i)token|secret|passw(?:or)?d|passphrase|credentia
 USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view_type", "url", "html_url", "resourcePath", "avatar_url", "avatarUrl", "created_at", "updated_at",
              "createdAt", "updatedAt", "followers_url", "following_url", "gists_url", "starred_url",
              "subscriptions_url", "organizations_url", "repos_url", "events_url", "received_events_url"}
+# A commit's signature and its check, which name the signer by key ID, fingerprint, subject or
+# account: only their flags and types stay.
+SIGNATURE_KEYS = {"signature", "verification"}
 # Keys whose object is a person even without a `login` (GraphQL's `viewer{name bio}`), as is any
 # object inside a user's.
 USER_HOLDERS = {"viewer", "user", "author", "committer", "owner", "creator", "actor", "sender", "assignee",
@@ -152,7 +158,17 @@ class Redactor:
         for value in values:
             self._collect(value, found)
         known = {name.lower() for name in self.names}
-        users = sum(1 for placeholder in self.names.values() if re.fullmatch(r"<user(?:-\d+)?>", placeholder))
+        taken = set(self.names.values())
+
+        def placeholder(viewer):
+            """`<user>` for the viewer, if no one has it yet; the next free `<user-N>` otherwise."""
+            if viewer and USER not in taken:
+                return USER
+            number = 2
+            while f"<user-{number}>" in taken:
+                number += 1
+            return f"<user-{number}>"
+
         for viewer, logins in ((True, found["viewers"]), (False, found["logins"])):
             for login in logins:
                 if login.lower() in PATH_WORDS and login.lower() not in known:
@@ -161,8 +177,8 @@ class Redactor:
                         or login.startswith("<")):
                     continue
                 # `<user>` is only ever the viewer: anyone else is `<user-2>` on.
-                users = users + 1 if viewer else max(users, 1) + 1
-                self.names[login] = USER if users == 1 else f"<user-{users}>"
+                self.names[login] = placeholder(viewer)
+                taken.add(self.names[login])
                 known.add(login.lower())
         for name in found["locals"]:
             if name.lower() not in known and name.lower() not in SHARED_HOMES:
@@ -181,8 +197,10 @@ class Redactor:
                     for answer in embedded(value["stdout"]):
                         if isinstance(answer, dict) and isinstance(answer.get("login"), str):
                             add(found["viewers"], answer["login"])
-                    if jq_expression(argv) == ".login" and value["stdout"].strip():
-                        add(found["viewers"], value["stdout"].split()[0].strip('"'))
+                    login = value["stdout"].strip().strip('"')
+                    if (jq_expression(argv) == ".login" and value.get("exit") == 0 and login != "null"
+                            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", login)):
+                        add(found["viewers"], login)
             viewer = value.get("viewer")
             if isinstance(viewer, dict) and isinstance(viewer.get("login"), str):
                 add(found["viewers"], viewer["login"])
@@ -263,9 +281,10 @@ class Redactor:
         """A JSON value: strings by the text rules, and a person's details hidden by key. `person`
         marks a value held under a person's key."""
         if isinstance(value, dict):
-            # A user keeps its allowlisted keys; any other object held by a person keeps only its type.
+            # A user keeps its allowlisted keys; any other object held by a person keeps only its type
+            # and a git actor's date.
             user = "login" in value
-            keep = USER_KEYS if user else {"__typename"} if person else None
+            keep = USER_KEYS if user else {"__typename", "date"} if person else None
             identity = keep is None and ("email" in value or "name" in value and bool({"user", "date"} & set(value)))
             result = {}
             for key, item in value.items():
@@ -275,6 +294,8 @@ class Redactor:
                     result[key] = EPOCH_SECONDS * (1000 if item > 10 ** 12 else 1)
                 elif key in NODE_KEYS and isinstance(item, str) and item:
                     result[key] = self._node(item)
+                elif key in SIGNATURE_KEYS and isinstance(item, dict):
+                    result[key] = hidden(item)
                 elif keep is not None and key not in keep:
                     result[key] = self.value(item, person=True) if isinstance(item, (dict, list)) else hidden(item)
                 elif identity and key in IDENTITY_KEYS:
@@ -284,6 +305,8 @@ class Redactor:
             return result
         if isinstance(value, list):
             return [self.value(item, person) for item in value]
+        if person:
+            return hidden(value)
         if isinstance(value, str):
             return self.structured(value)
         return value
