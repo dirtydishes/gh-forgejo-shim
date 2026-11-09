@@ -42,18 +42,32 @@ VALUELESS_FLAGS = {"--with-token", "--show-token"}
 
 
 def process_chain(limit=6):
+    """The parent processes' commands, nearest first. Anything that stops the lookup, such as a
+    system without ps, only cuts the chain short."""
     chain, pid = [], os.getppid()
-    for _ in range(limit):
-        if pid <= 1:
-            break
-        out = subprocess.run(["/bin/ps", "-o", "ppid=,comm=", "-p", str(pid)],
-                             capture_output=True, text=True).stdout.strip()
-        if not out:
-            break
-        ppid, _, comm = out.partition(" ")
-        chain.append(comm.strip())
-        pid = int(ppid)
+    try:
+        for _ in range(limit):
+            if pid <= 1:
+                break
+            pid, command = parent(pid)
+            chain.append(command)
+    except Exception:  # the chain is a nicety; nothing about it may break the call
+        pass
     return chain
+
+
+def parent(pid):
+    """(parent pid, command) of a process: from /proc on Linux, else from ps (macOS)."""
+    if os.path.exists(f"/proc/{pid}/stat"):
+        with open(f"/proc/{pid}/stat") as handle:
+            stat = handle.read()
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            command = handle.read().split(b"\0")[0].decode("utf-8", "replace")
+        # The name sits in brackets and may hold spaces; the parent pid is the second field after.
+        return int(stat[stat.rindex(")") + 2:].split()[1]), command or stat[stat.index("(") + 1:stat.rindex(")")]
+    out = subprocess.run(["/bin/ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    ppid, _, command = out.partition(" ")
+    return int(ppid), command.strip()
 
 
 def scrub(text):

@@ -1,5 +1,7 @@
 """gh-capture against a fake gh: what it passes through, what it records, and what it never does."""
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import select
@@ -8,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 WRAPPER = Path(__file__).resolve().parent / "gh-capture"
 # The fake gh: what it does is set by FAKE_GH, so each test asks for the behaviour it needs.
@@ -64,6 +67,15 @@ class PassThroughTest(unittest.TestCase):
         self.assertEqual((record["argv"], record["exit"], record["stdout"], record["stderr"]),
                          (["pr", "view", "1"], 3, "out pr view 1\n", "err\n"))
         self.assertEqual(wrapper.log.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(record["chain"] and all(isinstance(command, str) and command for command in record["chain"]))
+
+    def test_no_ps_and_no_proc_only_cut_the_chain_short(self):
+        spec = importlib.util.spec_from_loader("gh_capture", importlib.machinery.SourceFileLoader("gh_capture", str(WRAPPER)))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with mock.patch.object(module.os.path, "exists", return_value=False), \
+                mock.patch.object(module.subprocess, "run", side_effect=FileNotFoundError("/bin/ps")):
+            self.assertEqual(module.process_chain(), [])
 
 
 class ArgvTest(unittest.TestCase):
