@@ -32,9 +32,10 @@ from pathlib import Path
 
 USER = "<user>"
 SUFFIXES = {".jsonl", ".log", ".graphql", ".vars", ".json"}
-# Tokens by their prefix (GitHub, GitLab, Forgejo, npm, PyPI, OpenAI and Anthropic, Slack, AWS)
+# Tokens by their prefix (GitHub, GitLab, Forgejo and its OAuth secrets, npm, PyPI, OpenAI and
+# Anthropic, Slack, AWS)
 # and JSON web tokens. gh's masked `gho_****` stays.
-TOKEN = re.compile(r"(?<![A-Za-z0-9_-])(?:(?:github_pat_|gh[pousr]_|glpat-|glrt-|gitea_|npm_|pypi-|sk-|xox[abposr]-)"
+TOKEN = re.compile(r"(?<![A-Za-z0-9_-])(?:(?:github_pat_|gh[pousr]_|glpat-|glrt-|gitea_|gto_|npm_|pypi-|sk-|xox[abposr]-)"
                    r"[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?)")
 # A header that carries a token by itself, as Forgejo's and GitLab's `PRIVATE-TOKEN` does.
 TOKEN_HEADER = re.compile(r"(?i)\b((?:private-token|x-api-key|api-key|x-auth-token|x-access-token|x-gitea-otp):\s*)"

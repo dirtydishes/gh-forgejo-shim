@@ -464,7 +464,7 @@ class LeaksTest(unittest.TestCase):
         cases = {
             "ghp_" + "a1" * 18: "token", "eyJhbGciOiJI.eyJzdWIiOiIx.sig": "token", "sk-ant-api03-" + "x" * 20: "token",
             "xoxb-1234567890-abc": "token", "AKIA" + "ABCDEFGHIJKLMNOP": "token", "npm_" + "x" * 30: "token",
-            "PRIVATE-TOKEN: abc123": "credential",
+            "PRIVATE-TOKEN: abc123": "credential", "gto_" + "q" * 30: "token",
             "a" * 40: "token or unredacted commit ID", "Authorization: bearer abc": "credential",
             "Cookie: a=b": "credential", "password=hunter2": "credential", "me@private.dev": "email",
             "/home/octo/x": "home directory", "C:\\Users\\octo": "home directory", "%2Fhome%2Focto": "home directory", "198.51.100.7": "IP address",
