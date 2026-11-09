@@ -19,12 +19,23 @@ import subprocess
 import sys
 import time
 
+# The credential rules come from redact.py beside this script (scripts/capture), so install it as a
+# link to the checkout's copy. Without them nothing is recorded.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    import redact
+except ImportError:
+    redact = None
+
 REAL = os.environ.get("GH_CAPTURE_REAL", "/opt/homebrew/bin/gh")
 LOG = os.path.expanduser(os.environ.get("GH_CAPTURE_LOG", "~/.gh-capture/calls.jsonl"))
 ENV_KEYS = ("GH_HOST", "GH_REPO", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER", "GH_PAGER",
             "NO_COLOR", "CLICOLOR", "GIT_TERMINAL_PROMPT", "TERM")
 SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 MAX_STREAM = 256 * 1024
+# gh flags with a sensitive word in their name that take no value.
+VALUELESS_FLAGS = {"--with-token", "--show-token"}
 
 
 def process_chain(limit=6):
@@ -40,6 +51,42 @@ def process_chain(limit=6):
         chain.append(comm.strip())
         pid = int(ppid)
     return chain
+
+
+def scrub(text):
+    """Credentials out of text: a token, an Authorization or token header, a cookie, a `key=value`
+    secret, a URL's password, a signature. Everything else stays for redact.py."""
+    text = redact.ARMOR.sub(r"-----BEGIN \1-----<redacted>-----END \1-----", text)
+    text = redact.USERINFO.sub(r"\1<redacted>@", text)
+    text = redact.TOKEN.sub("<token>", text)
+    text = redact.AUTHORIZATION.sub(r"\1<token>", text)
+    text = redact.TOKEN_HEADER.sub(r"\1<token>", text)
+    text = redact.COOKIE.sub(r"\1<redacted>", text)
+    return redact.SECRET_ASSIGNMENT.sub(r"\1<redacted>", text)
+
+
+def redact_argv(argv):
+    """argv without its credentials: a sensitive flag's value (`--token X`), `gh secret`'s body,
+    and whatever scrub() finds in any argument (`-H 'Authorization: token X'`, `-f token=X`)."""
+    secret_command = "secret" in argv
+    out = []
+    hide_next = False
+    for arg in argv:
+        if hide_next:
+            out.append("<redacted>")
+            hide_next = False
+            continue
+        flag, equal, _ = arg.partition("=")
+        sensitive = (flag.startswith("--") and bool(redact.SENSITIVE_KEY.search(flag)) and flag not in VALUELESS_FLAGS
+                     or secret_command and flag in ("--body", "-b"))
+        if sensitive:
+            out.append(f"{flag}=<redacted>" if equal else arg)
+            hide_next = not equal
+        elif secret_command and arg.startswith("-b") and not arg.startswith("--") and len(arg) > 2:
+            out.append("-b<redacted>")
+        else:
+            out.append(scrub(arg))
+    return out
 
 
 def secret_output(argv):
@@ -70,6 +117,8 @@ def write(record):
     """Append one record, owner-only. A log that can't be written never stops the gh call; on a
     terminal it says so."""
     try:
+        if redact is None:
+            raise RuntimeError("redact.py isn't beside gh-capture, so its credential rules aren't either")
         directory = os.path.dirname(LOG)
         if directory:
             os.makedirs(directory, mode=0o700, exist_ok=True)
@@ -86,7 +135,7 @@ def main():
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "chain": process_chain(),
         "cwd": os.getcwd(),
-        "argv": argv,
+        "argv": redact_argv(argv) if redact else None,
         "env": {k: os.environ[k] for k in ENV_KEYS if k in os.environ},
         "env_secrets_present": [k for k in SECRET_ENV if os.environ.get(k)],
         "stdin_tty": sys.stdin.isatty(),
