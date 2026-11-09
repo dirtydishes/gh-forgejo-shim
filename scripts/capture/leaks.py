@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from redact import (ARMOR, EMAIL, EPOCH_SECONDS, GIT_IDENT, IPV4, IPV6, KEPT_DATES, MONTHS, TIME_KEY, TOKEN,
-                    embedded, is_email, is_ip)
+                    ZONE_OFFSET, ZONE_WORDS, embedded, is_email, is_ip)
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
@@ -51,7 +51,8 @@ DATE = re.compile(r"(?<!\d)\d{4}([-/])\d\d\1\d\d(?!\d)|\b\d{1,2}[/ ](?:" + MONTH
                   r"\b(?:" + MONTHS + r") +\d{1,2} \d\d:\d\d:\d\d(?: (?:[A-Z][A-Za-z]*|[+-]\d{2,4}))? \d{4}\b")
 PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|0?1[/ ]Jan[/ ]2000|Jan +1 \d\d:\d\d:\d\d(?: UTC)? 2000")
 # A zone after a placeholder time other than its own UTC: a name or Go's `-03` that redact.py left.
-ZONE_AFTER = re.compile(r"(?:\+0000|\+00:00) \(?(?!UTC\b)(?:[A-Z]{2,5}|ChST|[+-]\d\d(?:\d\d)?)(?![\w:])")
+ZONE_AFTER = re.compile(r"(?:\+0000|\+00:00) (?:(?!UTC\b)(?:[A-Z]{2,5}|ChST|[+-]\d\d(?:\d\d)?)(?![\w:])|"
+                        r"\((?!UTC\))(?:[A-Z]{2,5}|ChST|" + ZONE_WORDS + "|" + ZONE_OFFSET + r")\))")
 HOST_FLAGS = {"--hostname", "--host", "-h"}
 REPO_FLAGS = {"--repo", "-R"}
 HOST_VARIABLES = {"GH_HOST", "GH_ENTERPRISE_HOST", "GITHUB_SERVER_URL"}
