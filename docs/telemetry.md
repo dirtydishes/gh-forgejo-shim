@@ -126,7 +126,12 @@ Each install sends at most one report a day, so a day's reports count the instal
 day. A week's `installs` is its busiest day's count, the most the counts can prove ran that week.
 
 Any count below 3 is left out, with its labels. So are enough other counts that a left-out count
-can't be worked out by subtracting what's shown from a total.
+can't be worked out by subtracting what's shown from a total, or read from a week's busiest day.
+
+That protects counts from people who only read the totals. Reports carry no ID, so anyone can send
+them, and someone who sends their own reports with a rare set of values could subtract those to
+learn whether one or two real installs share them
+([#285](https://github.com/dirtydishes/gh-forgejo-shim/issues/285)).
 
 A week's totals, and its days', appear once the week ends, Monday to Sunday in UTC. The collector
 works them out once, early on the Monday after, and never changes them. Totals that changed while
