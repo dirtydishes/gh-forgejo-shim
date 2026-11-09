@@ -192,6 +192,14 @@ class RedactTest(unittest.TestCase):
         redactor.learn(['{"data":{"x":{"login":"someone-else"},"viewer":{"login":"octo-person"}}}'])
         self.assertEqual(redactor.names["octo-person"], "<user>")
 
+    def test_every_token_family_and_token_header(self):
+        redactor = redact.Redactor([])
+        tokens = ["sk-ant-api03-" + "x" * 20, "sk-proj-" + "y" * 20, "xoxp-1234567890-abc", "AKIA" + "ABCDEFGHIJKLMNOP",
+                  "glrt-" + "z" * 20, "pypi-" + "w" * 20, "eyJhbGciOiJI.eyJzdWIiOiIx.c2ln"]
+        self.assertEqual(redactor.text(" ".join(tokens)), " ".join(["<token>"] * len(tokens)))
+        self.assertEqual(redactor.text("PRIVATE-TOKEN: abc123\nX-Api-Key: k1"), "PRIVATE-TOKEN: <token>\nX-Api-Key: <token>")
+        self.assertEqual(redactor.text("task-runner desk-lamp gho_****"), "task-runner desk-lamp gho_****")
+
     def test_versions_and_workflow_commands_are_left_alone(self):
         redactor = redact.Redactor([])
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
@@ -285,7 +293,9 @@ class LeaksTest(unittest.TestCase):
 
     def test_each_kind(self):
         cases = {
-            "ghp_" + "a1" * 18: "token", "eyJhbGciOiJI.eyJzdWIiOiIx.sig": "token",
+            "ghp_" + "a1" * 18: "token", "eyJhbGciOiJI.eyJzdWIiOiIx.sig": "token", "sk-ant-api03-" + "x" * 20: "token",
+            "xoxb-1234567890-abc": "token", "AKIA" + "ABCDEFGHIJKLMNOP": "token", "npm_" + "x" * 30: "token",
+            "PRIVATE-TOKEN: abc123": "credential",
             "a" * 40: "token or unredacted commit ID", "Authorization: bearer abc": "credential",
             "Cookie: a=b": "credential", "password=hunter2": "credential", "me@private.dev": "email",
             "/home/octo/x": "home directory", "C:\\Users\\octo": "home directory", "%2Fhome%2Focto": "home directory", "198.51.100.7": "IP address",
