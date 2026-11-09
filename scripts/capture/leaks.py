@@ -2,8 +2,8 @@
 
     python3 scripts/capture/leaks.py fixtures/clients
 
-It looks for tokens and credentials, IP addresses, emails, home directories, avatar URLs and any
-host but GitHub's own and reserved test names, in every file under the given paths, and inside the
+It looks for tokens and credentials, IP addresses, emails, home directories, avatar URLs, dates
+other than the placeholders' and any host but GitHub's own and reserved test names, in every file under the given paths, and inside the
 JSON answers captured logs carry. It prints the file, line and kind of each finding, never the
 text, so a leak doesn't reach a CI log. Values redact.py writes as placeholders pass.
 """
@@ -47,6 +47,10 @@ BARE_HOST = re.compile(r"(?<![\w./-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z
 # a host flag or variable in text such as a log. Records' argv and env are read in value_findings.
 NAMED_HOST = re.compile(r"Logged in to (\S+) account|(?<![\w/])[\w.-]+@([A-Za-z0-9][\w.-]*):(?!//)|"
                         r"(?:--hostname|--host|GH_HOST)[= ]\s*([^\s\"',]+)")
+# Dates other than the placeholders' 2000-01-01; gh's own release date in `gh --version` stays.
+GH_VERSION = re.compile(r"gh version \S+ \(\d{4}-\d\d-\d\d\)")
+DATE = re.compile(r"\b(\d{4})([-/])(\d\d)\2(\d\d)\b|\b\d\d/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}\b|"
+                  r"\b\d\d (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\b")
 HOST_FLAGS = {"--hostname", "--host", "-h"}
 REPO_FLAGS = {"--repo", "-R"}
 HOST_VARIABLES = {"GH_HOST", "GH_ENTERPRISE_HOST", "GITHUB_SERVER_URL"}
@@ -80,6 +84,9 @@ def text_findings(text):
     for match in EMAIL.finditer(text):
         if not allowed_host(match.group(1)):
             kinds.add("email")
+    if any(match.group(0).replace("/", "-") != "2000-01-01" and match.group(0) != "01 Jan 2000"
+           for match in DATE.finditer(GH_VERSION.sub("", text))):
+        kinds.add("date")
     if HOME.search(text):
         kinds.add("home directory")
     if any(is_ip(match.group(0)) for pattern in (IPV4, IPV6) for match in pattern.finditer(text)):

@@ -60,7 +60,7 @@ argv.
 | `<token>`, `<redacted>` | A token or credential, and any other hidden value: a profile field, a value under a sensitive key |
 | `0000000000000000000000000000000000000001` | A commit ID, numbered in order of first appearance |
 | `/actions/runs/1/job/1` | Actions run and job IDs, numbered the same way |
-| `2000-01-01T00:00:00Z` | A timestamp. They keep their order, one second apart |
+| `2000-01-01T00:00:00Z` | A date and time, in the format it had. They keep their order, one second apart. A date alone is `2000-01-01`, except gh's release date in `gh --version` |
 | `[+9s]` | An access log line's time, since the file's first line |
 
 A user's numeric ID and follower counts are `0`. Screenshots taken during the captures aren't kept:
