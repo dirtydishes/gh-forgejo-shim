@@ -503,6 +503,21 @@ fn process(pid: u32) -> Option<(u32, String)> {
     Some((parent, fields.next().unwrap_or_default().trim().to_string()))
 }
 
+/// The app bundle a command line's program runs from, such as `/applications/codex.app/`: the
+/// first `.app/` in the program's own path, never in an argument, such as a shell's `-c` text. An
+/// app's path may hold spaces (`Cursor Helper (Plugin).app`), so the path ends where an argument
+/// begins: at ` -`, ` /`, ` .` or ` ~`.
+fn bundle(lower: &str) -> Option<&str> {
+    if !lower.starts_with('/') {
+        return None;
+    }
+    let path = &lower[..lower.find(".app/")? + ".app/".len()];
+    (![" -", " /", " .", " ~"]
+        .iter()
+        .any(|start| path.contains(start)))
+    .then_some(path)
+}
+
 /// Which of [`usage::CLIENTS`] a command line is, if any.
 fn classify(command: &str) -> Option<&'static str> {
     let lower = command.to_ascii_lowercase();
@@ -510,16 +525,17 @@ fn classify(command: &str) -> Option<&'static str> {
     let base = |word: &str| word.rsplit('/').next().unwrap_or(word).to_string();
     let program = base(words.next()?);
     let script = words.next().map(base).unwrap_or_default();
-    if lower.contains("/chatgpt.app/") || program == "chatgpt" {
+    let app = bundle(&lower).unwrap_or_default();
+    if app.ends_with("/chatgpt.app/") || program == "chatgpt" {
         return Some("chatgpt");
     }
-    if lower.contains("/claude.app/") {
+    if app.ends_with("/claude.app/") {
         return Some("claude-desktop");
     }
-    if lower.contains("/cursor.app/") || program == "cursor" || program == "cursor-agent" {
+    if app.ends_with("/cursor.app/") || program == "cursor" || program == "cursor-agent" {
         return Some("cursor");
     }
-    if lower.contains("/codex.app/") || program == "codex" || program.starts_with("codex-") {
+    if app.ends_with("/codex.app/") || program == "codex" || program.starts_with("codex-") {
         return Some("codex");
     }
     if program == "claude" {
@@ -555,6 +571,13 @@ mod tests {
             ("/Users/me/.local/bin/claude --resume", Some("claude-code")),
             ("node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", Some("claude-code")),
             ("/bin/zsh -c gh pr view", None),
+            // An app's path in an argument isn't the program's.
+            ("/bin/zsh -c ls /Applications/Codex.app/Contents && gh pr view", None),
+            ("/bin/sh /tmp/x/ChatGPT.app/run gh pr view", None),
+            ("/usr/bin/env ./Claude.app/Contents/MacOS/Claude", None),
+            ("node ./Cursor.app/x.js", None),
+            ("/Applications/T3 Code (Nightly).app/Contents/MacOS/T3 Code --type=/codex.app/", None),
+            ("/tmp/x/Codex.app/bash /tmp/x/run gh pr view", Some("codex")),
             ("node server.js", None),
             ("", None),
         ];
