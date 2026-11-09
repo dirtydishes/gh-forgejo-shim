@@ -361,9 +361,9 @@ pub fn show(env: &EnvMap) -> String {
 }
 
 /// Keeps the unsupported counts a launched call's gateway gathered, for the next report. It counts
-/// only while reports are on ([`usage::count_unsupported`]).
+/// only while reports are on ([`usage::start_counting`]).
 pub fn keep_unsupported(env: Env) {
-    let counts = usage::take_unsupported();
+    let counts = usage::take_counts().unsupported;
     if counts.is_empty() {
         return;
     }

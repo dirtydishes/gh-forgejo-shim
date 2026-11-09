@@ -260,7 +260,7 @@ pub fn launch(
         crate::telemetry::status(&|name| env.get(name).cloned()),
         crate::telemetry::Status::On(_)
     ) {
-        fga_server::usage::count_unsupported();
+        fga_server::usage::start_counting();
     }
     let code = run::run(Launch {
         gh,

@@ -248,7 +248,7 @@ pub fn app(state: AppState) -> Router {
             post(graphql_request).layer(DefaultBodyLimit::max(MAX_GRAPHQL_REQUEST_BYTES)),
         )
         .fallback(|| async { rest_error(Error::NotFound) })
-        .layer(middleware::from_fn(count_unsupported))
+        .layer(middleware::from_fn(count_requests))
         .layer(middleware::from_fn(authenticate));
     Router::new()
         // Browsers follow these links without a token.
@@ -458,6 +458,14 @@ async fn graphql_request(
                 .pointer("/extensions/type")
                 .cloned()
                 .unwrap_or(json!("GRAPHQL_VALIDATION_FAILED"));
+            // A field that failed on the gateway's side, by the name fga-core gave it.
+            if kind == "INTERNAL" {
+                usage::graphql_failed(
+                    error
+                        .pointer(&format!("/extensions/{}", graphql::FAILED_FIELD))
+                        .and_then(Value::as_str),
+                );
+            }
             error["type"] = kind;
             if error.get("path").is_none() {
                 error["path"] = json!([]);
@@ -538,9 +546,11 @@ fn sorted<S: serde::Serializer>(
     }
 }
 
-/// Counts a REST request the gateway has no route for (the fallback's 404) or no method for (405),
-/// by GitHub's name for its resource ([`usage::rest_name`]).
-async fn count_unsupported(request: HttpRequest, next: Next) -> Response {
+/// Counts, by GitHub's name for its resource ([`usage::rest_name`]), a REST request the gateway has
+/// no route for (the fallback's 404) or no method for (405), and one it failed: a 5xx, which it
+/// answers only when Forgejo timed out, failed, or sent an answer it can't read or hold. A request
+/// its token check turns away never gets here.
+async fn count_requests(request: HttpRequest, next: Next) -> Response {
     let routed = request
         .extensions()
         .get::<axum::extract::MatchedPath>()
@@ -550,6 +560,8 @@ async fn count_unsupported(request: HttpRequest, next: Next) -> Response {
     let status = response.status();
     if status == StatusCode::METHOD_NOT_ALLOWED || (status == StatusCode::NOT_FOUND && !routed) {
         usage::rest_unsupported(&path);
+    } else if status.is_server_error() && path != "/api/graphql" {
+        usage::rest_failed(&path);
     }
     response
 }

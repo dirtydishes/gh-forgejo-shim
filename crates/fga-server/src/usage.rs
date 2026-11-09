@@ -148,46 +148,88 @@ pub fn endpoint(override_url: Option<String>) -> Option<String> {
     }
 }
 
-static UNSUPPORTED: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
-/// Whether the gateway counts what it lacks: only once reports are on.
+/// What the gateway counted since the last [`take_counts`], by vocabulary name: what it lacked, and
+/// what it failed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Counts {
+    /// A GitHub REST resource or GraphQL field the gateway doesn't have.
+    pub unsupported: BTreeMap<String, u64>,
+    /// A request for one it has that failed on the gateway's side: see [`rest_failed`] and
+    /// [`graphql_failed`].
+    pub failed: BTreeMap<String, u64>,
+}
+
+impl Counts {
+    pub fn is_empty(&self) -> bool {
+        self.unsupported.is_empty() && self.failed.is_empty()
+    }
+}
+
+static COUNTS: Mutex<Counts> = Mutex::new(Counts {
+    unsupported: BTreeMap::new(),
+    failed: BTreeMap::new(),
+});
+/// Whether the gateway counts: only once reports are on.
 static COUNTING: AtomicBool = AtomicBool::new(false);
 
-/// Starts counting what the gateway lacks, for a process whose reports are on. Until then, nothing
-/// is counted.
-pub fn count_unsupported() {
+/// Starts counting what the gateway lacks and fails, for a process whose reports are on. Until
+/// then, nothing is counted.
+pub fn start_counting() {
     COUNTING.store(true, Ordering::Relaxed);
 }
 
-/// What the gateway lacked since the last call, emptying the count.
-pub fn take_unsupported() -> BTreeMap<String, u64> {
+/// What the gateway counted since the last call, emptying the counts.
+pub fn take_counts() -> Counts {
     std::mem::take(
-        &mut *UNSUPPORTED
+        &mut *COUNTS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
 }
 
-fn count(name: String) {
+fn count(failed: bool, name: String) {
     if !COUNTING.load(Ordering::Relaxed) {
         return;
     }
-    let mut counts = UNSUPPORTED
+    let mut counts = COUNTS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let counts = if failed {
+        &mut counts.failed
+    } else {
+        &mut counts.unsupported
+    };
     let count = counts.entry(name).or_default();
     *count = (*count + 1).min(MAX_COUNT);
 }
 
 /// Counts a REST path the gateway has no route or method for.
 pub(crate) fn rest_unsupported(path: &str) {
-    count(rest_name(path));
+    count(false, rest_name(path));
 }
 
 /// Counts each field a GraphQL error says the gateway's schema lacks.
 pub(crate) fn graphql_unsupported(message: &str) {
     if let Some(name) = graphql_name(message) {
-        count(name);
+        count(false, name);
     }
+}
+
+/// Counts a REST request the gateway answered with a 5xx: Forgejo timed out, failed, or sent an
+/// answer the gateway can't read or hold. Its ordinary answers (404, 401, 403, 422) aren't
+/// failures.
+pub(crate) fn rest_failed(path: &str) {
+    count(true, rest_name(path));
+}
+
+/// Counts a GraphQL field whose resolver failed the same way, an `INTERNAL` error, by the
+/// `Type.field` fga-core names it with ([`fga_core::graphql::FAILED_FIELD`]).
+pub(crate) fn graphql_failed(field: Option<&str>) {
+    let name = field.and_then(|field| field.split_once('.')).map_or_else(
+        || "graphql:other".to_string(),
+        |(type_name, field)| graphql_field(type_name, field),
+    );
+    count(true, name);
 }
 
 /// GitHub's name for a REST path, from the vocabulary: `rest:repos.<resource>` below a repository,
@@ -206,9 +248,8 @@ pub fn rest_name(path: &str) -> String {
     known(name).unwrap_or_else(|| "rest:other".to_string())
 }
 
-/// GitHub's name for the field async-graphql's `Unknown field "x" on type "Y".` names:
-/// `graphql:Y.x` if it's in the vocabulary, `graphql:Y.other` for one of the vocabulary's types,
-/// else `graphql:other`. Other errors name nothing.
+/// GitHub's name for the field async-graphql's `Unknown field "x" on type "Y".` names
+/// ([`graphql_field`]). Other errors name nothing.
 pub fn graphql_name(message: &str) -> Option<String> {
     let rest = message.strip_prefix("Unknown field \"")?;
     let (field, rest) = rest.split_once('"')?;
@@ -217,17 +258,21 @@ pub fn graphql_name(message: &str) -> Option<String> {
         .and_then(|rest| rest.split_once('"'))
         .map(|(type_name, _)| type_name)
         .unwrap_or_default();
-    Some(
-        known(format!("graphql:{type_name}.{field}"))
-            .or_else(|| {
-                contract()
-                    .graphql_types
-                    .iter()
-                    .any(|known| known == type_name)
-                    .then(|| format!("graphql:{type_name}.other"))
-            })
-            .unwrap_or_else(|| "graphql:other".to_string()),
-    )
+    Some(graphql_field(type_name, field))
+}
+
+/// GitHub's name for field `field` of type `type_name`: `graphql:Y.x` if it's in the vocabulary,
+/// `graphql:Y.other` for one of the vocabulary's types, else `graphql:other`.
+pub fn graphql_field(type_name: &str, field: &str) -> String {
+    known(format!("graphql:{type_name}.{field}"))
+        .or_else(|| {
+            contract()
+                .graphql_types
+                .iter()
+                .any(|known| known == type_name)
+                .then(|| format!("graphql:{type_name}.other"))
+        })
+        .unwrap_or_else(|| "graphql:other".to_string())
 }
 
 fn known(name: String) -> Option<String> {
@@ -345,7 +390,7 @@ pub fn spawn_server_reporter(forgejo_url: url::Url) {
         return;
     };
     let state = server_state_dir(get);
-    count_unsupported();
+    start_counting();
     log(
         "fga-server sends one anonymous usage report a day (version, OS, forge; no hosts, \
          repositories or IDs). FGA_TELEMETRY=0 turns it off. See docs/telemetry.md.",
@@ -418,7 +463,7 @@ async fn server_report(
         forge_major,
         gh: None,
         first_week: first_week(state),
-        unsupported: take_unsupported(),
+        unsupported: take_counts().unsupported,
     }
 }
 
@@ -524,6 +569,16 @@ mod tests {
             Some("graphql:other".to_string())
         );
         assert_eq!(graphql_name("Unknown argument \"x\""), None);
+        // A failed field, by the schema's names.
+        assert_eq!(
+            graphql_field("Repository", "pullRequest"),
+            "graphql:Repository.pullRequest"
+        );
+        assert_eq!(
+            graphql_field("Repository", "acmeSecret"),
+            "graphql:Repository.other"
+        );
+        assert_eq!(graphql_field("[Commit]", "oid"), "graphql:other");
     }
 
     #[test]
