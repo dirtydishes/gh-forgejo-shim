@@ -387,7 +387,10 @@ fn the_notice_shows_once_from_setup_commands_and_never_from_gh() {
     assert!(!stdout(&gh).contains("usage report") && gh.stderr.is_empty());
     let first = stdout(&fixture.run(&["doctor"], &[]));
     assert!(
-        first.contains("\ngh-forgejo-shim sends one anonymous usage report a day"),
+        first.contains(
+            "\ngh-forgejo-shim has one maintainer, who can't test it with every agent. To find \
+             what breaks, it sends one anonymous usage report a day"
+        ),
         "{first}"
     );
     assert!(first.contains("gfj telemetry off") && first.contains("docs/telemetry.md"));

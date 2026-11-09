@@ -24,10 +24,11 @@ pub const URL_ENV: &str = "GFJ_TELEMETRY_URL";
 
 /// What the notice says, once, from `bootstrap`, `install-shim` or `doctor`.
 pub const NOTICE: &str =
-    "gh-forgejo-shim sends one anonymous usage report a day: its version, OS, \
-which agent ran gh, and the forge's software. No hosts, repositories, commands or IDs. Turn it off \
-with `gfj telemetry off` or GFJ_TELEMETRY=0, and see the report with `gfj telemetry show`. \
-Details: https://github.com/dirtydishes/gh-forgejo-shim/blob/main/docs/telemetry.md";
+    "gh-forgejo-shim has one maintainer, who can't test it with every agent. To find what breaks, \
+it sends one anonymous usage report a day: its version, OS, which agent ran gh, the forge's \
+software, and which GitHub features were missing or failed. No hosts, repositories, commands or \
+IDs. Turn it off with `gfj telemetry off` or GFJ_TELEMETRY=0, and see the report with \
+`gfj telemetry show`. Details: https://github.com/dirtydishes/gh-forgejo-shim/blob/main/docs/telemetry.md";
 
 /// A variable's value, from whichever environment the caller holds.
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
