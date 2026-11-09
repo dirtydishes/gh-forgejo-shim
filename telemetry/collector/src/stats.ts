@@ -55,20 +55,23 @@ interface Cell {
 interface Group {
   parent: Cell;
   parts: Cell[];
+  /** A week over its days: its `installs` is its busiest day's, not their sum. */
+  busiest: boolean;
 }
 
 /**
  * Hides every cell with fewer than [`MINIMUM`] installs, then enough others that no hidden cell can
  * be worked out by adding or subtracting published ones: wherever a published figure's parts
  * include hidden ones, at least two are hidden and they sum to [`MINIMUM`] or more, and a hidden
- * figure always has a hidden part. Each pass hides the smallest published part of a group that
- * breaks the rule, until none does.
+ * figure always has a hidden part. A published week also has a published day as busy as it, since
+ * its `installs` would otherwise give that day away. Each pass hides the smallest published part of
+ * a group that breaks the rule, or the figure itself when it has none, until none does.
  */
 export function suppress(cells: Cell[], groups: Group[]): void {
   for (const cell of cells) cell.hidden ||= cell.installs < MINIMUM;
   for (let changed = true; changed; ) {
     changed = false;
-    for (const { parent, parts } of groups) {
+    for (const { parent, parts, busiest } of groups) {
       const shown = parts.filter((part) => !part.hidden);
       const hidden = parts.filter((part) => part.hidden);
       const sum = hidden.reduce((total, part) => total + part.reports, 0);
@@ -81,6 +84,9 @@ export function suppress(cells: Cell[], groups: Group[]): void {
         changed = true;
       } else if (exposed) {
         shown.reduce((smallest, part) => (part.reports < smallest.reports ? part : smallest)).hidden = true;
+        changed = true;
+      } else if (busiest && !parent.hidden && !shown.some((part) => part.installs === parent.installs)) {
+        parent.hidden = true;
         changed = true;
       }
     }
@@ -169,7 +175,8 @@ export function figures(rows: Row[], cohortRows: CohortRow[], unsupported: Unsup
   const split = groups.flatMap(({ parent, parts }) => {
     const tablesOf = new Map<string, Cell[]>();
     for (const part of parts) tablesOf.set(part.table, [...(tablesOf.get(part.table) ?? []), part]);
-    return [...tablesOf.values()].map((same) => ({ parent, parts: same }));
+    // Only a week over its days has parts from its own table.
+    return [...tablesOf.values()].map((same) => ({ parent, parts: same, busiest: same[0].table === parent.table }));
   });
   suppress([...cells.values()], split);
 
