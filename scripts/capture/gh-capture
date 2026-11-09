@@ -92,12 +92,18 @@ def redact_argv(argv):
 
 def secret_output(argv):
     """Whether gh may print a token: `auth token` wherever its flags sit (`gh --hostname h auth
-    token`), and `auth` with `--show-token` in any form or `-t` alone or among short flags."""
-    if "auth" not in argv:
-        return False
-    shown = any(arg == "--show-token" or arg.startswith("--show-token=") or
-                re.fullmatch(r"-[A-Za-z]*t[A-Za-z]*", arg) for arg in argv)
-    return "token" in argv or shown
+    token`), `auth` with `--show-token` in any form or `-t` alone or among short flags, `auth
+    git-credential`, `config get` and `config list` (gh's config holds `oauth_token`), and `api`
+    on a path about tokens (`…/registration-token`, `…/access_tokens`, `authorizations`)."""
+    if "auth" in argv:
+        shown = any(arg == "--show-token" or arg.startswith("--show-token=") or
+                    re.fullmatch(r"-[A-Za-z]*t[A-Za-z]*", arg) for arg in argv)
+        if "token" in argv or "git-credential" in argv or shown:
+            return True
+    if "config" in argv and ("get" in argv or "list" in argv):
+        return True
+    paths = [arg.lower() for arg in argv if not arg.startswith("-") and "=" not in arg]
+    return "api" in argv and any("token" in path or "authorizations" in path for path in paths)
 
 
 def fake_token(argv):
@@ -114,9 +120,30 @@ def fake_token(argv):
 
 
 def text(data):
+    """Output as stored: its credentials scrubbed, the values under a JSON answer's sensitive keys
+    hidden, and cut short past MAX_STREAM. Nothing without redact.py's rules."""
+    if redact is None:
+        return None
     if len(data) > MAX_STREAM:
-        return {"truncated": True, "bytes": len(data), "head": data[:MAX_STREAM].decode("utf-8", "replace")}
-    return data.decode("utf-8", "replace")
+        return {"truncated": True, "bytes": len(data), "head": scrub(data[:MAX_STREAM].decode("utf-8", "replace"))}
+    value = data.decode("utf-8", "replace")
+    spans = redact.json_spans(value)
+    if spans:
+        out, last = [], 0
+        for start, end, answer in spans:
+            out += [value[last:start], redact.dump_like(secretless(answer), value[start:end])]
+            last = end
+        value = "".join(out) + value[last:]
+    return scrub(value)
+
+
+def secretless(value):
+    if isinstance(value, dict):
+        return {key: "<redacted>" if redact.SENSITIVE_KEY.search(key) and isinstance(item, str) and item
+                else secretless(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [secretless(item) for item in value]
+    return value
 
 
 def write(record):

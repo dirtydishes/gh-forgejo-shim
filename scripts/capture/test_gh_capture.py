@@ -112,6 +112,25 @@ class TokenOutputTest(unittest.TestCase):
         for flag in ("--show-token", "--show-token=true", "-t", "-at"):
             self.hidden("auth", "status", flag)
 
+    def test_other_commands_that_print_tokens(self):
+        self.hidden("config", "get", "oauth_token")
+        self.hidden("config", "get", "-h", "forge.test", "oauth_token")
+        self.hidden("config", "list", "-h", "forge.test")
+        self.hidden("api", "-X", "POST", "repos/o/r/actions/runners/registration-token",
+                    output='{"token":"AABBCCDDEEFF","expires_at":"2026-10-30T20:17:03Z"}')
+        self.hidden("api", "--method", "POST", "/app/installations/1/access_tokens", output='{"token":"ghs_x"}')
+        self.hidden("auth", "git-credential", "get", output="protocol=https\nhost=forge.test\npassword=S1\n")
+
+    def test_any_other_output_loses_its_credentials(self):
+        wrapper = Wrapper(self)
+        answer = '{"login":"octo","token":"AABBCC","nested":{"client_secret":"S2"}}'
+        wrapper.run("api", "user", FAKE_GH="print", FAKE_OUT=answer + "\n")
+        wrapper.run("pr", "view", FAKE_GH="print", FAKE_OUT="see " + TOKEN)
+        first, second = wrapper.records()
+        self.assertEqual(json.loads(first["stdout"]), {"login": "octo", "token": "<redacted>",
+                                                       "nested": {"client_secret": "<redacted>"}})
+        self.assertEqual(second["stdout"], "see <token>\n")
+
 
 class LogFailureTest(unittest.TestCase):
     """#197 defect 6: a log that can't be written never breaks the gh call."""
@@ -121,6 +140,16 @@ class LogFailureTest(unittest.TestCase):
         result = wrapper.run("pr", "list", GH_CAPTURE_LOG="calls.jsonl")
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"out pr list\n", b"err\n"))
         self.assertEqual(json.loads((wrapper.root / "calls.jsonl").read_text())["argv"], ["pr", "list"])
+
+    def test_without_redact_py_nothing_is_recorded_and_gh_still_runs(self):
+        wrapper = Wrapper(self)
+        alone = wrapper.root / "alone" / "gh-capture"
+        alone.parent.mkdir()
+        alone.write_text(WRAPPER.read_text())
+        result = subprocess.run([sys.executable, str(alone), "pr", "list"], env=wrapper.env, cwd=wrapper.root,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"out pr list\n", b"err\n"))
+        self.assertFalse(wrapper.log.exists())
 
     def test_a_log_that_cant_be_written(self):
         wrapper = Wrapper(self)
