@@ -567,7 +567,7 @@ mod tests {
             ("/bin/zsh -c gh pr view", None),
             // An app's path in an argument isn't the program's.
             ("/bin/zsh -c ls /Applications/Codex.app/Contents && gh pr view", None),
-            ("/bin/sh /tmp/x/ChatGPT.app/run gh pr view", None),
+            ("/bin/sh /opt/x/ChatGPT.app/run gh pr view", None),
             ("/usr/bin/env ./Claude.app/Contents/MacOS/Claude", None),
             ("/usr/bin/env PATH=/Applications/Codex.app/Contents/Resources:/usr/bin bash -c gh", None),
             ("/bin/bash build/Codex.app/run.sh", None),
@@ -579,7 +579,7 @@ mod tests {
                 "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node /Applications/ChatGPT.app/Contents/Resources/x.mjs",
                 Some("chatgpt"),
             ),
-            ("/tmp/x/Codex.app/bash /tmp/x/run gh pr view", Some("codex")),
+            ("/opt/x/Codex.app/bash /opt/x/run gh pr view", Some("codex")),
             ("node server.js", None),
             ("", None),
         ];
