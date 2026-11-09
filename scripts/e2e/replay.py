@@ -172,6 +172,12 @@ def differences(expected, actual, exact, path="$", context=None):
     return []
 
 
+def unversioned(text):
+    """gh's version text without its version: the e2e's gh may be newer than the capture's (the
+    weekly upstream workflow runs the newest)."""
+    return re.sub(r"\d+\.\d+\.\d+(?: \(\d{4}-\d\d-\d\d\))?", "<version>", text)
+
+
 def auth_lines(text):
     """`gh auth status` without what differs by design: the token's source, mask and scopes."""
     keep = []
@@ -202,6 +208,9 @@ def compare(case, mode, code, stdout, delegated):
         if case["forge"][:2] == ["auth", "status"]:
             if auth_lines(stdout) != auth_lines(wanted):
                 problems.append(f"auth status {auth_lines(stdout)}, expected {auth_lines(wanted)}")
+        elif case["forge"] == ["--version"]:
+            if unversioned(stdout) != unversioned(wanted):
+                problems.append(f"stdout {stdout[:200]!r}, expected the form of {wanted[:200]!r}")
         elif stdout != wanted:
             problems.append(f"stdout {stdout[:200]!r}, expected {wanted[:200]!r}")
         return problems
