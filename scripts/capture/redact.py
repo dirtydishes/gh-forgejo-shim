@@ -75,16 +75,16 @@ ACTIONS = re.compile(r"(/actions/runs/)(\d+)(?:(/jobs?/)(\d+))?")
 # A date and time: ISO 8601 and RFC 3339, git's `2026-10-30 15:16:57 -0400`, Forgejo's log
 # `2026/10/30 15:16:57`, Go's `2026-10-30 15:16:57.123 -0400 EDT`, seconds and zone optional; git's
 # and date(1)'s `Fri Oct 30 15:16:57 2026 -0400` and `Fri Oct 30 15:16:57 EDT 2026`; and HTTP's
-# `Fri, 30 Oct 2026 19:02:30 GMT`. A zone's name, or Go's `-03` after an offset, becomes UTC.
+# `Fri, 30 Oct 2026 19:02:30 GMT`. A zone's name, or Go's `-03` or `+0545` name, becomes UTC.
 ZONE_NAMES = ("UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|AKST|AKDT|HST|BST|CET|CEST|EET|EEST|WET|WEST|IST|"
               "JST|KST|AEST|AEDT|ACST|AWST|NZST|NZDT|MSK")
 TIMESTAMP = re.compile(r"(?<!\d)(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
                        r"( ?)(Z|[+-]\d\d:?\d\d)?( (?:" + ZONE_NAMES + r"|(?:(?<=[+-]\d{4} )|(?<=[+-]\d\d:\d\d ))"
-                       r"(?:[A-Z]{2,5}|[+-]\d\d)))?(?![\w:])")
+                       r"(?:[A-Z]{2,5}|[+-]\d\d(?:\d\d)?)))?(?![\w:])")
 DAYS = "Mon|Tue|Wed|Thu|Fri|Sat|Sun"
 MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
-CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\d\d):(\d\d)( (?:" + ZONE_NAMES
-                   + r"))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
+CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\d\d):(\d\d)"
+                   r"( (?:[A-Z]{2,5}|[+-]\d\d(?:\d\d)?))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
 HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), \d\d (?:" + MONTHS + r") \d{4} \d\d:\d\d:\d\d GMT")
 HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 # A date alone, as in a search (`closed:>2026-09-30`). Dates that are versions, not times, stay:
@@ -199,7 +199,7 @@ class Redactor:
                             add(found["viewers"], answer["login"])
                     login = value["stdout"].strip().strip('"')
                     if (jq_expression(argv) == ".login" and value.get("exit") == 0 and login != "null"
-                            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", login)):
+                            and re.fullmatch(r"[A-Za-z0-9][\w.-]*", login)):
                         add(found["viewers"], login)
             viewer = value.get("viewer")
             if isinstance(viewer, dict) and isinstance(viewer.get("login"), str):
