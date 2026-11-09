@@ -24,6 +24,7 @@ PRIVATE = [
     "octo@private.dev", GHO, FORGEJO_TOKEN, "Real Name", "Somewhere Town", "my own bio", "octo_tw",
     "1234567", "MDQ6VXNlcjEyMzQ1Njc", "avatars.githubusercontent.com", SHA, "41111899791",
     "124255789264", "2026-10-30", "-0400", "AABBCCDDEEFF00112233", "sess-value", "someone-else",
+    "my status", "they/them", "en-US",
 ]
 USER = {
     "login": "octo-person", "id": 1234567, "node_id": "MDQ6VXNlcjEyMzQ1Njc",
@@ -40,6 +41,16 @@ BATCH = {"data": {"viewer": {"login": "octo-person"}, "p0": {"pullRequest": {
         "completedAt": "2026-10-30T19:02:35Z",
         "detailsUrl": "https://github.com/octo-person/secret-repo/actions/runs/41111899791/job/124255789264",
     }]}}}}]}}}}}
+# Forgejo's user, GitHub GraphQL's, and git's record of who wrote a commit.
+FORGEJO_USER = {"id": 3, "login": "octo-person", "full_name": "Real Name", "email": "octo@private.dev",
+                "avatar_url": "https://forge.private.dev/avatars/abc", "language": "en-US", "is_admin": True,
+                "location": "Somewhere Town", "website": "https://forge.private.dev", "description": "my own bio",
+                "followers_count": 7}
+GRAPHQL_USER = {"data": {"viewer": {"login": "octo-person", "websiteUrl": "https://forge.private.dev",
+                                    "twitterUsername": "octo_tw", "pronouns": "they/them",
+                                    "status": {"message": "my status"}, "bioHTML": "<p>my own bio</p>"},
+                         "commit": {"author": {"name": "Real Name", "email": "octo@private.dev",
+                                               "date": "2026-10-30T19:02:30Z", "user": {"login": "octo-person"}}}}}
 
 
 def record(ts, argv, stdout="", stderr="", cwd="/", **extra):
@@ -65,6 +76,8 @@ RECORDS = [
     record("2026-10-30T15:21:01-0400", ["config", "get", "oauth_token", "-h", "forge.private.dev"], GHO + "\n"),
     record("2026-10-30T15:22:00-0400", ["pr", "merge", "1", "--match-head-commit", SHA, "--repo",
                                         "https://octo:pw@forge.private.dev/octo-person/secret-repo"]),
+    record("2026-10-30T15:23:00-0400", ["api", "user", "--hostname", "forge.private.dev"], json.dumps(FORGEJO_USER)),
+    record("2026-10-30T15:23:30-0400", ["api", "graphql", "-f", "query=query{viewer{login}}"], json.dumps(GRAPHQL_USER)),
 ]
 MARKS = "MARK first 15:17:00\nMARK second 15:21:00\n"
 LOG = ('203.0.113.9 - - [30/Oct/2026:20:06:03 +0000] "GET /api/v3/repos/octo-person/secret-repo HTTP/1.1" 401 139 "-" "client/1"\n'
@@ -125,11 +138,26 @@ class RedactTest(unittest.TestCase):
         self.assertEqual((user["node_id"], user["avatar_url"]), ("<node-id>", "<avatar-url>"))
         self.assertEqual(user["html_url"], "https://github.com/<user>")
 
+    def test_other_users_and_commit_authors_keep_only_their_logins(self):
+        self.capture.redact()
+        rows = self.capture.records()
+        forgejo = json.loads(rows[7]["stdout"])
+        self.assertEqual(forgejo["login"], "<user>")
+        self.assertEqual((forgejo["full_name"], forgejo["website"], forgejo["description"], forgejo["language"]),
+                         ("<redacted>",) * 4)
+        self.assertEqual((forgejo["id"], forgejo["followers_count"], forgejo["is_admin"]), (0, 0, True))
+        data = json.loads(rows[8]["stdout"])["data"]
+        self.assertEqual(data["viewer"], {"login": "<user>", "websiteUrl": "<redacted>", "twitterUsername": "<redacted>",
+                                          "pronouns": "<redacted>", "status": {"message": "<redacted>"},
+                                          "bioHTML": "<redacted>"})
+        author = data["commit"]["author"]
+        self.assertEqual((author["name"], author["email"], author["user"]), ("<redacted>", "<redacted>", {"login": "<user>"}))
+
     def test_times_become_offsets_and_marks_labels(self):
         self.capture.redact()
         rows = self.capture.records()
-        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303])
-        self.assertEqual([row.get("mark") for row in rows], [None, "first", "first", "first", "second", "second", "second"])
+        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393])
+        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 5)
         self.assertFalse(any("ts" in row for row in rows))
         log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
         self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])

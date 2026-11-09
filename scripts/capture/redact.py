@@ -10,9 +10,9 @@ writes each under --out with its own name. It refuses anything else, screenshots
 
 What it replaces, everywhere: the names given with --name; every login seen in a JSON answer or an
 `auth status`; home directories, emails, IP addresses, tokens, Authorization and Cookie values,
-avatar URLs, commit IDs, Actions run and job IDs and timestamps. In JSON it also hides a user's
-profile (name, bio, location and the like), their numeric ID and counts, node IDs and any value
-under a sensitive key. One table serves every file in a run, so a value always maps to the same
+avatar URLs, commit IDs, Actions run and job IDs and timestamps. In JSON, a user object keeps only
+its login, type and URLs, a commit author loses its name and email, and node IDs and any value
+under a sensitive key are hidden. One table serves every file in a run, so a value always maps to the same
 placeholder. A record's `ts` becomes `t`, seconds since the file's first record, and its `.marks`
 labels become each record's `mark`. An answer repeated within a file is stored once: later copies
 say `{"same_as": <line index>}`.
@@ -52,11 +52,15 @@ LOG_TIME = re.compile(r"\[(\d\d/[A-Z][a-z]{2}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]"
 ACCOUNT = re.compile(r"Logged in to \S+ account (\S+)")
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 SENSITIVE_KEY = re.compile(r"(?i)token|secret|passw(?:or)?d|passphrase|credential|api[_-]?key|private[_-]?key|cookie")
-# A person's details in a JSON object that names them (a `login`, `email` or `user` beside them).
-PROFILE_KEYS = {"name", "company", "blog", "location", "email", "bio", "twitter_username",
-                "notification_email", "hireable"}
-COUNT_KEYS = {"id", "public_repos", "public_gists", "private_gists", "followers", "following",
-              "total_private_repos", "owned_private_repos", "disk_usage", "collaborators"}
+# A user object (any object with a `login`) keeps only these keys; the rest are hidden. GitHub's
+# REST and GraphQL users and Forgejo's each add profile fields of their own (`bio`, `full_name`,
+# `websiteUrl`, `pronouns`, `status`), so a list of what to hide would miss the next one.
+USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view_type", "gravatar_id",
+             "url", "html_url", "resourcePath", "avatar_url", "avatarUrl", "created_at", "updated_at",
+             "createdAt", "updatedAt", "followers_url", "following_url", "gists_url", "starred_url",
+             "subscriptions_url", "organizations_url", "repos_url", "events_url", "received_events_url"}
+# Who wrote a commit, as git records it: a name beside an email, a date or a user.
+IDENTITY_KEYS = {"name", "email"}
 NODE_KEYS = {"node_id", "nodeId", "id"}
 
 
@@ -142,17 +146,16 @@ class Redactor:
     def value(self, value):
         """A JSON value: strings by the text rules, and a person's details hidden by key."""
         if isinstance(value, dict):
-            person = bool({"login", "email", "user"} & set(value))
+            user = "login" in value
+            identity = not user and ("email" in value or "name" in value and bool({"user", "date"} & set(value)))
             result = {}
             for key, item in value.items():
                 if SENSITIVE_KEY.search(key) and isinstance(item, str) and item:
                     result[key] = "<redacted>"
-                elif person and key in PROFILE_KEYS and isinstance(item, str) and item:
-                    result[key] = "<redacted>"
-                elif person and key in COUNT_KEYS and isinstance(item, int) and not isinstance(item, bool):
-                    result[key] = 0
                 elif key in NODE_KEYS and isinstance(item, str) and item:
                     result[key] = "<node-id>"
+                elif user and key not in USER_KEYS or identity and key in IDENTITY_KEYS:
+                    result[key] = hidden(item)
                 else:
                     result[key] = self.value(item)
             return result
@@ -164,6 +167,19 @@ class Redactor:
                 return dump_like(self.value(parsed), value)
             return self.text(value)
         return value
+
+
+def hidden(value):
+    """A value with nothing left of it but its type: strings `<redacted>`, numbers 0."""
+    if isinstance(value, dict):
+        return {key: hidden(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [hidden(item) for item in value]
+    if isinstance(value, str):
+        return "<redacted>" if value else value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return 0
+    return value
 
 
 def parse_time(text):
