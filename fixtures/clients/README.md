@@ -57,6 +57,7 @@ argv.
 | `forge.test` | The Forgejo host. `github.com` stays as sent |
 | `<user-2>` | Any other account, numbered in order of first appearance. Bots keep their names |
 | `<home>`, `<local-user>` | The home directory, and the local user's name wherever else it appears |
+| `<id>` | A hex folder name in a path, which may be an install's own ID |
 | `<ip>`, `<email>`, `<avatar-url>` | An IP address, an email, an avatar URL |
 | `<node-id-1>` | A GraphQL or REST node ID, numbered in order of first appearance |
 | `<token>`, `<redacted>` | A token or credential, and any other hidden value: a profile field, a value under a sensitive key |
