@@ -504,18 +504,12 @@ fn process(pid: u32) -> Option<(u32, String)> {
 }
 
 /// The app bundle a command line's program runs from, such as `/applications/codex.app/`: the
-/// first `.app/` in the program's own path, never in an argument, such as a shell's `-c` text. An
-/// app's path may hold spaces (`Cursor Helper (Plugin).app`), so the path ends where an argument
-/// begins: at ` -`, ` /`, ` .` or ` ~`.
+/// first `.app/` in its first word, the program's own path, never in an argument such as a shell's
+/// `-c` text or an `env` setting. The agents' bundle names hold no spaces, so a helper's path with
+/// spaces further on (`Cursor.app/…/Cursor Helper (Plugin).app/…`) still starts with its bundle.
 fn bundle(lower: &str) -> Option<&str> {
-    if !lower.starts_with('/') {
-        return None;
-    }
-    let path = &lower[..lower.find(".app/")? + ".app/".len()];
-    (![" -", " /", " .", " ~"]
-        .iter()
-        .any(|start| path.contains(start)))
-    .then_some(path)
+    let program = lower.split_whitespace().next()?;
+    Some(&program[..program.find(".app/")? + ".app/".len()])
 }
 
 /// Which of [`usage::CLIENTS`] a command line is, if any.
@@ -575,8 +569,16 @@ mod tests {
             ("/bin/zsh -c ls /Applications/Codex.app/Contents && gh pr view", None),
             ("/bin/sh /tmp/x/ChatGPT.app/run gh pr view", None),
             ("/usr/bin/env ./Claude.app/Contents/MacOS/Claude", None),
+            ("/usr/bin/env PATH=/Applications/Codex.app/Contents/Resources:/usr/bin bash -c gh", None),
+            ("/bin/bash build/Codex.app/run.sh", None),
+            ("/usr/bin/git clone https://example.com/Cursor.app/x", None),
+            ("/bin/zsh x:/Claude.app/y", None),
             ("node ./Cursor.app/x.js", None),
             ("/Applications/T3 Code (Nightly).app/Contents/MacOS/T3 Code --type=/codex.app/", None),
+            (
+                "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node /Applications/ChatGPT.app/Contents/Resources/x.mjs",
+                Some("chatgpt"),
+            ),
             ("/tmp/x/Codex.app/bash /tmp/x/run gh pr view", Some("codex")),
             ("node server.js", None),
             ("", None),
