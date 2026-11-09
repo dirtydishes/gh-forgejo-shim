@@ -1,0 +1,4 @@
+<ip> - - [+0s] "GET /api/v3/repos/<user>/<repo> HTTP/1.1" 401 139 "-" "claude-code/2.1.309"
+<ip> - - [+0s] "GET /api/v3/repos/<user>/<repo>/pulls?head=<user>:s%2Ffj-probe&state=open&per_page=1 HTTP/1.1" 401 139 "-" "claude-code/2.1.309"
+<ip> - - [+9s] "GET /api/v3/repos/<user>/<repo> HTTP/1.1" 401 139 "-" "claude-code/2.1.309"
+<ip> - - [+9s] "GET /api/v3/repos/<user>/<repo>/pulls?head=<user>:s%2Ffj-probe&state=open&per_page=1 HTTP/1.1" 401 139 "-" "claude-code/2.1.309"

@@ -1,4 +1,5 @@
-"""redact.py and leaks.py on a made-up capture holding every kind of identifying data."""
+"""redact.py and leaks.py on a made-up capture holding every kind of identifying data, and the
+committed captures against both."""
 
 import contextlib
 import io
@@ -10,6 +11,8 @@ from pathlib import Path
 import leaks
 import redact
 
+ROOT = Path(__file__).resolve().parents[2]
+FIXTURES = ROOT / "fixtures/clients"
 FORGEJO_TOKEN = "f" * 8 + "0123456789abcdef0123456789abcdef"
 SHA = "4b3e7049b6173d786b9c12f7d4d8b5355df8d3d0"
 GHO = "gho_" + "Zx9" * 12
@@ -211,6 +214,32 @@ class LeaksTest(unittest.TestCase):
         self.assertIn("credential", self.kinds(line + "\n", ".jsonl"))
         line = json.dumps({"stdout": json.dumps({"token": "<redacted>"})})
         self.assertEqual(self.kinds(line + "\n", ".jsonl"), set())
+
+
+class CommittedCapturesTest(unittest.TestCase):
+    def test_nothing_identifying(self):
+        self.assertEqual(leaks.check([FIXTURES]), [])
+
+    def test_each_document_is_a_captured_query_with_its_flags(self):
+        records = [json.loads(line) for path in FIXTURES.glob("*.jsonl") for line in path.read_text().splitlines()]
+        documents = sorted((FIXTURES / "chatgpt-22943-documents").glob("*.graphql"))
+        self.assertEqual(len(documents), 7)
+        for document in documents:
+            query = "query=" + document.read_text()
+            flags = document.with_suffix(".vars").read_text().split()
+            sent = [r["argv"] for r in records if any(a in (query, query.rstrip("\n")) for a in r["argv"])]
+            self.assertTrue(sent, f"{document.name} was never sent")
+            pairs = [" ".join(argv[i:i + 2]) for argv in sent for i in range(len(argv) - 1)]
+            for flag, value in zip(flags[::2], flags[1::2]):
+                self.assertIn(f"{flag} {value}", pairs, f"{document.name}: {flag} {value}")
+
+    def test_redaction_was_applied(self):
+        for path in FIXTURES.glob("*.jsonl"):
+            for line in path.read_text().splitlines():
+                row = json.loads(line)
+                self.assertIn("t", row)
+                self.assertNotIn("ts", row)
+                self.assertFalse(leaks.HOME.search(row["cwd"] + "".join(row["chain"])))
 
 
 if __name__ == "__main__":

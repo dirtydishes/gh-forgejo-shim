@@ -1,0 +1,10 @@
+
+  query($owner: String!, $repo: String!, $number: Int!) {
+    viewer { login }
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        body
+        bodyHTML
+      }
+    }
+  }
