@@ -1,0 +1,90 @@
+name: upstream
+
+# An early warning: the e2e suites against the newest gh and Forgejo, and cargo audit against
+# today's advisories. ci.yml keeps the pinned versions, so pull request results stay stable.
+# GitHub emails the workflow's owner when a scheduled run fails.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  latest-e2e:
+    name: e2e on latest gh and Forgejo
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find the latest gh release and stable Forgejo image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub's latest release skips drafts and prereleases.
+          gh_tag="$(gh api repos/cli/cli/releases/latest --jq .tag_name)"
+          gh_version="${gh_tag#v}"
+          # Forgejo's registry tags each stable release X.Y.Z; release candidates and rootless
+          # images carry a suffix.
+          token="$(curl -fsS 'https://codeberg.org/v2/token?service=container_registry&scope=repository:forgejo/forgejo:pull' | jq -er .token)"
+          forgejo_version="$(curl -fsS -H "Authorization: Bearer $token" \
+            'https://codeberg.org/v2/forgejo/forgejo/tags/list?n=10000' |
+            jq -r '.tags[]' | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n 1)"
+          [[ "$gh_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected gh tag: $gh_tag" >&2; exit 1; }
+          [ -n "$forgejo_version" ] || { echo 'no stable Forgejo tag found' >&2; exit 1; }
+          forgejo_image="codeberg.org/forgejo/forgejo:$forgejo_version"
+          docker pull -q "$forgejo_image" >/dev/null
+          forgejo_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$forgejo_image")"
+          {
+            echo "E2E_GH_VERSION=$gh_version"
+            echo "E2E_FORGEJO_IMAGE=$forgejo_image"
+          } >> "$GITHUB_ENV"
+          {
+            echo '### Upstream versions under test'
+            echo
+            echo "- gh $gh_version (pinned in CI: 2.103.3)"
+            echo "- Forgejo $forgejo_version, \`$forgejo_digest\` (pinned in CI: 15)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run gh against the gateway and a real Forgejo
+        run: scripts/e2e.sh
+
+      - name: Run gh and Claude's lookups through the server-mode image and nginx snippet
+        run: scripts/e2e-server.sh
+
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-e2e-results
+          path: .local/e2e/
+
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      # As ci.yml's advisories job: fails on a vulnerability advisory against any crate in
+      # Cargo.lock; unmaintained and unsound notices only warn.
+      - name: Check Cargo.lock against the RustSec advisory database
+        run: cargo audit
