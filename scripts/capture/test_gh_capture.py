@@ -33,6 +33,15 @@ if mode == "fd":
         sys.stdout.write(handle.read())
 if mode == "stdin":
     sys.stdout.write(sys.stdin.read())
+if mode == "grandchild":
+    # Something gh starts and leaves running, holding gh's output (a credential cache, a browser).
+    print("bye", flush=True)
+    import subprocess
+    subprocess.Popen(["sleep", "8"])
+if mode == "interleave":
+    for line in range(1, 41):
+        (sys.stdout if line % 2 else sys.stderr).write(f"{line}\n")
+        (sys.stdout if line % 2 else sys.stderr).flush()
 if mode == "long":
     sys.stdout.write(os.environ.get("FAKE_PREFIX", "") + "x" * int(os.environ["FAKE_SIZE"]))
 if mode == "stream":
@@ -285,6 +294,14 @@ class StreamTest(unittest.TestCase):
                                     stderr=subprocess.DEVNULL, timeout=30)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(wrapper.records()[0]["stdout"]["bytes"], 500000)
+
+    def test_something_gh_leaves_running_doesnt_hold_the_caller(self):
+        wrapper = Wrapper(self)
+        started = time.monotonic()
+        result = wrapper.run("pr", "view", "--web", FAKE_GH="grandchild")
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertEqual((result.returncode, result.stdout), (0, b"bye\n"))
+        self.assertEqual(wrapper.records()[0]["stdout"], "bye\n")
 
     def test_long_output_is_cut_short_in_the_log_only(self):
         wrapper = Wrapper(self)
