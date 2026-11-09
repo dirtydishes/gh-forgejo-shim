@@ -171,55 +171,57 @@ describe("GET /v1/stats", () => {
     expect(await stats()).toEqual(before);
   });
 
-  it("publishes a finished week's totals with small counts left out", async () => {
+  it("publishes a finished week's rounded one-field totals and nothing else", async () => {
     await env.DB.batch([
-      counted(lastWeek, 3),
+      counted(lastWeek, 13),
       counted(lastWeek, 1, "cursor"),
-      env.DB.prepare("INSERT INTO cohorts VALUES (?, ?, 4)").bind(lastWeek, isoWeek(lastWeek)),
-      env.DB.prepare("INSERT INTO unsupported VALUES (?, 'graphql:Repository.projectsV2', 4, 8)").bind(lastWeek),
+      env.DB.prepare("INSERT INTO cohorts VALUES (?, ?, 14)").bind(lastWeek, isoWeek(lastWeek)),
+      env.DB.prepare("INSERT INTO unsupported VALUES (?, 'graphql:Repository.projectsV2', 14, 28)").bind(lastWeek),
     ]);
     await freeze(env, today);
     const response = await exports.default.fetch("https://telemetry.example/v1/stats");
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
     const body = (await response.json()) as Record<string, any>;
+    expect(Object.keys(body)).toEqual(["generated", "rounded_to", "weeks"]);
     expect(body.generated).toBe(today);
-    expect(body.minimum_count).toBe(3);
-    expect(body.totals.days).toEqual([{ day: lastWeek, installs: 4, reports: 4 }]);
-    expect(body.totals.weeks).toEqual([{ week: isoWeek(lastWeek), installs: 4, reports: 4 }]);
-    // codex's 3 would give away cursor's 1 by subtraction, so neither shows.
-    expect(body.by_field.client.days).toEqual([]);
-    expect(JSON.stringify(body)).not.toContain("cursor");
-    expect(body.retention).toEqual([{ first_week: isoWeek(lastWeek), week: isoWeek(lastWeek), installs: 4 }]);
-    // Four reports named it on one day, twice each.
-    expect(body.unsupported).toEqual([
-      { week: isoWeek(lastWeek), name: "graphql:Repository.projectsV2", installs: 4, total: 8 },
-    ]);
+    expect(body.rounded_to).toBe(10);
+    expect(body.weeks.at(-1)).toMatchObject({
+      week: isoWeek(lastWeek),
+      installs: 10,
+      reports: 10,
+      client: { codex: 10, cursor: "under 10", chatgpt: "under 10" },
+      version: { "0.3.0": 10, other: "under 10" },
+    });
+    // First weeks and unsupported names stay in the database.
+    expect(JSON.stringify(body)).not.toContain("projectsV2");
+    expect(JSON.stringify(body)).not.toContain("first_week");
   });
 
   it("never changes a week's figures once they're published", async () => {
-    await env.DB.batch([counted(lastWeek, 3), counted(daysBefore(lastWeek, -1), 5)]);
+    await env.DB.batch([counted(lastWeek, 13), counted(daysBefore(lastWeek, -1), 25)]);
     await freeze(env, today);
     const before = await stats();
-    expect(before.totals.weeks).toEqual([{ week: isoWeek(lastWeek), installs: 5, reports: 8 }]);
-    await env.DB.batch([counted(lastWeek, 4, "cursor"), counted(daysBefore(lastWeek, -2), 9)]);
+    expect(before.weeks.at(-1)).toMatchObject({ week: isoWeek(lastWeek), installs: 30, reports: 40 });
+    await env.DB.batch([counted(lastWeek, 40, "cursor"), counted(daysBefore(lastWeek, -2), 90)]);
     await freeze(env, today);
     expect(await stats()).toEqual(before);
   });
 
-  it("publishes 90 days and 26 weeks", async () => {
+  it("publishes the last 26 weeks", async () => {
     const fifteenWeeks = daysBefore(monday(today), 15 * 7);
     await env.DB.batch([
-      counted(daysBefore(monday(today), 27 * 7), 9),
-      counted(fifteenWeeks, 4),
-      counted(lastWeek, 3),
+      counted(daysBefore(monday(today), 27 * 7), 90),
+      counted(fifteenWeeks, 40),
+      counted(lastWeek, 30),
     ]);
     await freeze(env, today);
-    const body = await stats();
-    expect(body.totals.days.map((cell: Record<string, string>) => cell.day)).toEqual([lastWeek]);
-    expect(body.totals.weeks.map((cell: Record<string, string>) => cell.week)).toEqual([
-      isoWeek(fifteenWeeks),
-      isoWeek(lastWeek),
+    const weeks = (await stats()).weeks as Array<Record<string, any>>;
+    expect(weeks.length).toBe(26);
+    expect(weeks[0].week).toBe(isoWeek(daysBefore(monday(today), 26 * 7)));
+    expect(weeks.filter((found) => found.installs !== "under 10").map((found) => [found.week, found.installs])).toEqual([
+      [isoWeek(fifteenWeeks), 40],
+      [isoWeek(lastWeek), 30],
     ]);
     expect((await rows("published")).length).toBe(26);
   });

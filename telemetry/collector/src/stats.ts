@@ -1,4 +1,4 @@
-import { isoWeek } from "./week";
+import contract from "../../../contract/telemetry.json";
 
 /** One `reports` row: a day, a combination of values, and how many reports had them. */
 export interface Row {
@@ -14,218 +14,82 @@ export interface Row {
   count: number;
 }
 
-/** One `cohorts` row: a day, a first week, and how many reports that day named it. */
-export interface CohortRow {
-  day: string;
-  first_week: string;
-  count: number;
-}
+/** Every published figure is rounded to the nearest multiple of this. */
+export const ROUNDING = 10;
+/** What a figure below [`ROUNDING`] reads instead of a number. */
+export const UNDER = "under 10";
 
-/** One `unsupported` row. */
-export interface UnsupportedRow {
-  day: string;
-  name: string;
-  reports: number;
-  total: number;
-}
+/** A published figure: a multiple of [`ROUNDING`], or [`UNDER`]. */
+export type Rounded = number | typeof UNDER;
 
-/** No published figure counts fewer installs than this. */
-export const MINIMUM = 3;
+/** `count` rounded to the nearest 10, halves up; a count from 0 to 9 reads "under 10". */
+export function rounded(count: number): Rounded {
+  return count < ROUNDING ? UNDER : Math.round(count / ROUNDING) * ROUNDING;
+}
 
 /** The one-field breakdowns. */
 export const FIELDS = ["client", "forge", "mode", "os", "version"] as const;
-/** The combination's fields. */
-const COMBINATION = ["mode", "client", "forge", "forge_major", "os", "arch", "version", "gh"] as const;
-
-type Labels = Record<string, string | number>;
-
-/** One figure: a table, a day or week, and its labels. */
-interface Cell {
-  table: string;
-  period: string;
-  labels: Labels;
-  /** Reports: additive, so a parent's is its parts' sum. */
-  reports: number;
-  /** The most installs the counts prove: a day's reports, or a week's busiest day's. */
-  installs: number;
-  hidden: boolean;
-}
-
-/** A figure and the figures that sum to it. */
-interface Group {
-  parent: Cell;
-  parts: Cell[];
-  /** A week over its days: its `installs` is its busiest day's, not their sum. */
-  busiest: boolean;
-}
 
 /**
- * Hides every cell with fewer than [`MINIMUM`] installs, then enough others that no hidden cell can
- * be worked out by adding or subtracting published ones: wherever a published figure's parts
- * include hidden ones, at least two are hidden and they sum to [`MINIMUM`] or more, and a hidden
- * figure always has a hidden part. A published week also has a published day as busy as it, since
- * its `installs` would otherwise give that day away. Each pass hides the smallest published part of
- * a group that breaks the rule, or the figure itself when it has none, until none does.
+ * Each fixed field's values, every one listed every week, so that a value's presence says nothing:
+ * "under 10" may be 0. An absent value reads `none`.
  */
-export function suppress(cells: Cell[], groups: Group[]): void {
-  for (const cell of cells) cell.hidden ||= cell.installs < MINIMUM;
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const { parent, parts, busiest } of groups) {
-      const shown = parts.filter((part) => !part.hidden);
-      const hidden = parts.filter((part) => part.hidden);
-      const sum = hidden.reduce((total, part) => total + part.reports, 0);
-      const exposed = parent.hidden
-        ? hidden.length === 0
-        : hidden.length > 0 && (hidden.length < 2 || sum < MINIMUM);
-      if (exposed && shown.length === 0) {
-        // Every part is hidden, so the published figure is what gives them away.
-        parent.hidden = true;
-        changed = true;
-      } else if (exposed) {
-        shown.reduce((smallest, part) => (part.reports < smallest.reports ? part : smallest)).hidden = true;
-        changed = true;
-      } else if (busiest && !parent.hidden && !shown.some((part) => part.installs === parent.installs)) {
-        parent.hidden = true;
-        changed = true;
-      }
-    }
-  }
-}
+const VALUES: Record<Exclude<(typeof FIELDS)[number], "version">, readonly string[]> = {
+  client: [...contract.client, "none"],
+  forge: [...contract.forge, "none"],
+  mode: contract.mode,
+  os: contract.os,
+};
 
-/** What `/v1/stats` publishes for a set of weeks. */
-export type Figures = ReturnType<typeof figures>;
+/** The label versions below [`ROUNDING`] are counted under together. */
+export const OTHER_VERSION = "other";
+
+/** What `/v1/stats` publishes for one finished week. */
+export type Week = ReturnType<typeof weekFigures>;
 
 /**
- * Every install sends at most one report a day, so a day's reports count the installs that ran
- * that day. A week's `reports` sums its days; its `installs` is its busiest day's, the most installs
- * the counts can prove ran that week. An absent value reads `none`.
+ * One finished week's published figures, from that week's `reports` rows.
  *
- * No sum it guards crosses from one ISO week to another, so the figures for several weeks are each
- * week's figures side by side.
+ * Every install sends at most one report a day, so a day's reports count the installs that ran
+ * that day. `installs` is the week's busiest day's count, the most installs the counts prove ran
+ * that week, and `reports` sums its days. Each breakdown gives a value its own busiest day, so a
+ * field's figures needn't add up to `installs`. Versions with fewer than 10 installs are counted
+ * together as `other`, so no version's presence shows that it ran. Nothing is published per day,
+ * per combination of values, per first week or per unsupported name.
  */
-export function figures(rows: Row[], cohortRows: CohortRow[], unsupported: UnsupportedRow[]) {
-  const label = (row: Row, field: string): string | number => {
-    const value = row[field as keyof Row];
-    return value === "" || value === -1 ? "none" : value;
-  };
-  const tables: Array<[string, readonly string[]]> = [
-    ["totals", []],
-    ...FIELDS.map((field): [string, readonly string[]] => [field, [field]]),
-    ["combinations", COMBINATION],
-  ];
-
-  // Daily cells, then weekly ones built from them.
-  const cells = new Map<string, Cell>();
-  const cell = (table: string, period: string, labels: Labels, hidden: boolean): Cell => {
-    const key = JSON.stringify([table, period, labels]);
-    let found = cells.get(key);
-    if (!found) {
-      found = { table, period, labels, reports: 0, installs: 0, hidden };
-      cells.set(key, found);
+export function weekFigures(week: string, rows: Row[]) {
+  // For each label, its count on each day.
+  const byDay = (label: (row: Row) => string) => {
+    const counts = new Map<string, Map<string, number>>();
+    for (const row of rows) {
+      const days = counts.get(label(row)) ?? new Map<string, number>();
+      days.set(row.day, (days.get(row.day) ?? 0) + row.count);
+      counts.set(label(row), days);
     }
-    return found;
+    return counts;
   };
-  for (const row of rows) {
-    for (const [table, fields] of tables) {
-      const labels = Object.fromEntries(fields.map((field) => [field, label(row, field)]));
-      const day = cell(table, row.day, labels, false);
-      day.reports += row.count;
-      day.installs += row.count;
-    }
-  }
-  // Retention: each first week's reports are a part of the day's total too. Its daily cells are
-  // never published, but they're counted as if they were, since a week's figure is its busiest
-  // day's, so a week's retention can't be subtracted from its total.
-  for (const row of cohortRows) {
-    const day = cell("retention", row.day, { first_week: row.first_week }, false);
-    day.reports += row.count;
-    day.installs += row.count;
-  }
-  const days = [...cells.values()];
-  const weekOf = new Map<Cell, Cell>();
-  for (const day of days) {
-    const week = isoWeek(day.period);
-    const total = cell(day.table, week, day.labels, false);
-    total.reports += day.reports;
-    total.installs = Math.max(total.installs, day.installs);
-    weekOf.set(day, total);
-  }
+  const busiest = (days?: Map<string, number>) => Math.max(0, ...(days?.values() ?? []));
+  const value = (row: Row, field: string) => String(row[field as keyof Row] || "none");
 
-  // The sums a reader could subtract: each period's total over each table's cells, each one-field
-  // cell over the combinations with its value, and each week's cell over its days.
-  const byParent = new Map<Cell, Cell[]>();
-  const add = (parent: Cell, part: Cell) => {
-    const parts = byParent.get(parent) ?? [];
-    parts.push(part);
-    byParent.set(parent, parts);
-  };
-  for (const part of cells.values()) {
-    if (part.table === "totals") continue;
-    add(cell("totals", part.period, {}, false), part);
-    if (part.table === "combinations") {
-      for (const field of FIELDS) {
-        add(cell(field, part.period, { [field]: part.labels[field] }, false), part);
-      }
-    }
-  }
-  for (const [day, week] of weekOf) add(week, day);
-  const groups = [...byParent].map(([parent, parts]) => ({ parent, parts }));
-  // Grouped by table, so a table's cells only ever sum to its own total.
-  const split = groups.flatMap(({ parent, parts }) => {
-    const tablesOf = new Map<string, Cell[]>();
-    for (const part of parts) tablesOf.set(part.table, [...(tablesOf.get(part.table) ?? []), part]);
-    // Only a week over its days has parts from its own table.
-    return [...tablesOf.values()].map((same) => ({ parent, parts: same, busiest: same[0].table === parent.table }));
-  });
-  suppress([...cells.values()], split);
+  const fixed = Object.fromEntries(
+    Object.entries(VALUES).map(([field, values]) => {
+      const counts = byDay((row) => value(row, field));
+      return [field, Object.fromEntries(values.map((found) => [found, rounded(busiest(counts.get(found)))]))];
+    }),
+  ) as Record<keyof typeof VALUES, Record<string, Rounded>>;
 
-  const publish = (table: string) => {
-    const shown = [...cells.values()].filter((found) => found.table === table && !found.hidden);
-    return {
-      days: shown
-        .filter((found) => found.period.length === 10)
-        .map((found) => ({ day: found.period, ...found.labels, installs: found.installs, reports: found.reports }))
-        .sort(order),
-      weeks: shown
-        .filter((found) => found.period.length === 8)
-        .map((found) => ({ week: found.period, ...found.labels, installs: found.installs, reports: found.reports }))
-        .sort(order),
-    };
-  };
-
-  // Unsupported names: a week's installs is its busiest day's reports naming it, since one install
-  // names it at most once a day; `total` sums the times they counted it.
-  const names = new Map<string, { week: string; name: string; installs: number; total: number }>();
-  for (const row of unsupported) {
-    const week = isoWeek(row.day);
-    const found = names.get(`${week} ${row.name}`) ?? { week, name: row.name, installs: 0, total: 0 };
-    found.installs = Math.max(found.installs, row.reports);
-    found.total += row.total;
-    names.set(`${week} ${row.name}`, found);
-  }
+  const versions = byDay((row) => row.version);
+  const named = [...versions.keys()].filter((found) => busiest(versions.get(found)) >= ROUNDING).sort();
+  const other = byDay((row) => (named.includes(row.version) ? "" : OTHER_VERSION)).get(OTHER_VERSION);
 
   return {
-    totals: publish("totals"),
-    by_field: Object.fromEntries(FIELDS.map((field) => [field, publish(field)])),
-    combinations: publish("combinations"),
-    // For each first week, the installs the counts prove ran in each later week.
-    retention: publish("retention").weeks.map((found) => ({
-      first_week: (found as Labels).first_week,
-      week: found.week,
-      installs: found.installs,
-    })),
-    unsupported: [...names.values()]
-      .filter((found) => found.installs >= MINIMUM)
-      .sort(order),
+    week,
+    installs: rounded(busiest(byDay(() => "").get(""))),
+    reports: rounded(rows.reduce((sum, row) => sum + row.count, 0)),
+    ...fixed,
+    version: {
+      ...Object.fromEntries(named.map((found) => [found, rounded(busiest(versions.get(found)))])),
+      [OTHER_VERSION]: rounded(busiest(other)),
+    } as Record<string, Rounded>,
   };
-}
-
-/** Oldest first, then by the cell's labels, so the output is stable. */
-export function order(a: object, b: object): number {
-  const key = (found: object) =>
-    JSON.stringify(
-      Object.entries(found).filter(([name]) => !["installs", "reports", "total"].includes(name)),
-    );
-  return key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIELDS, MINIMUM, figures, type Row } from "../src/stats";
+import { FIELDS, UNDER, rounded, weekFigures, type Rounded, type Row } from "../src/stats";
 import { isoWeek } from "../src/week";
 
 const row = (day: string, count: number, values: Partial<Row> = {}): Row => ({
@@ -16,142 +16,129 @@ const row = (day: string, count: number, values: Partial<Row> = {}): Row => ({
   ...values,
 });
 
-type Figure = Record<string, string | number>;
+// 2026-11-02 is a Monday, in 2026-W45.
+const WEEK = "2026-W45";
+const DAYS = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"];
+const week = (rows: Row[]) => weekFigures(WEEK, rows);
 
-describe("figures", () => {
-  // 2026-11-02 is a Monday, in 2026-W45.
-
-  it("counts installs per day and proves installs per week from the busiest day", () => {
-    const rows = [row("2026-11-02", 3), row("2026-11-03", 5), row("2026-11-04", 4)];
-    const result = figures(rows, [], []);
-    expect(result.totals.days).toEqual([
-      { day: "2026-11-02", installs: 3, reports: 3 },
-      { day: "2026-11-03", installs: 5, reports: 5 },
-      { day: "2026-11-04", installs: 4, reports: 4 },
-    ]);
-    expect(result.totals.weeks).toEqual([{ week: "2026-W45", installs: 5, reports: 12 }]);
-    expect(result.by_field.client.weeks).toEqual([
-      { week: "2026-W45", client: "codex", installs: 5, reports: 12 },
-    ]);
-  });
-
-  it("never lets a total minus what's shown give away a small count", () => {
-    // Three client reports and one server report: total 4, so mode client's 3 would give away the
-    // server's 1. Neither mode shows; the total does.
-    const result = figures(
-      [row("2026-11-02", 3), row("2026-11-02", 1, { mode: "server", client: "", gh: "" })],
-      [],
-      [],
-    );
-    expect(result.totals.days).toEqual([{ day: "2026-11-02", installs: 4, reports: 4 }]);
-    expect(result.by_field.mode.days).toEqual([]);
-    expect(JSON.stringify(result)).not.toContain("server");
-  });
-
-  it("shows a field's values once what's hidden is two or more cells summing to 3 or more", () => {
-    const result = figures(
-      [
-        row("2026-11-02", 5),
-        row("2026-11-02", 2, { client: "cursor" }),
-        row("2026-11-02", 1, { client: "claude-code" }),
-      ],
-      [],
-      [],
-    );
-    expect(result.by_field.client.days).toEqual([
-      { day: "2026-11-02", client: "codex", installs: 5, reports: 5 },
-    ]);
-  });
-
-  it("never lets a week minus its shown days give away a small day", () => {
-    // codex: 5 on Monday, 2 on Tuesday. The week's 7 less Monday's 5 would show Tuesday's 2, and
-    // with Monday hidden, the week's installs of 5 would still show Monday's.
-    const result = figures([row("2026-11-02", 5), row("2026-11-03", 2)], [], []);
-    const shown = (cells: Figure[]) => cells.map((cell) => cell.day ?? cell.week);
-    expect(shown(result.totals.weeks)).toEqual([]);
-    expect(shown(result.totals.days)).toEqual([]);
-  });
-
-  it("never lets a week's busiest day give away a hidden day", () => {
-    // codex: 1 on Monday, 10 on Tuesday, 4 each later day; cursor's only report is Tuesday's 1.
-    // A week showing installs 10 beside shown days of 4 would put 10 on a hidden day; the week's
-    // reports less the shown days would then leave Monday's 1, and Tuesday's total less 10, cursor's.
-    const days = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"];
-    const other = { client: "cursor", os: "linux" };
-    const rows = [
-      row(days[0], 1),
-      row(days[1], 10),
-      row(days[1], 1, other),
-      ...days.slice(2).map((day) => row(day, 4)),
-      ...[0, 2, 3, 4, 5, 6].map((i) => row(days[i], 3, { ...other, arch: "x86_64" })),
+describe("rounded", () => {
+  it("rounds to the nearest 10 and never shows a count below 10", () => {
+    const cases: Array<[number, Rounded]> = [
+      [0, UNDER], [1, UNDER], [9, UNDER], [10, 10], [14, 10], [15, 20], [24, 20], [124, 120], [125, 130],
     ];
-    const result = figures(rows, [], []);
-    const codex = (cell: Figure) => cell.client === "codex" && cell.os === "macos";
-    for (const week of result.combinations.weeks.filter(codex)) {
-      const shown = result.combinations.days.filter(codex).map((cell) => cell.installs);
-      expect(shown).toContain(week.installs);
+    for (const [count, shown] of cases) expect(rounded(count), String(count)).toBe(shown);
+  });
+
+  it("gives every figure a range of at least five counts, wherever a sender shifts it", () => {
+    // Someone who sends k reports of their own knows k, so they read a figure as the real count
+    // plus k. For any k, each real count shares its figure with another: one figure never pins it.
+    for (let k = 0; k <= 30; k++) {
+      for (let real = 1; real <= 30; real++) {
+        const same = [...Array(60).keys()].filter((other) => rounded(other + k) === rounded(real + k));
+        expect(same.length, `k ${k}, real ${real}`).toBeGreaterThanOrEqual(2);
+      }
     }
   });
+});
 
-  it("never publishes a figure equal to its only part when that part is hidden", () => {
-    // codex reports only on Tuesday, 10 of them; cursor's 1 hides Tuesday's codex. A week of 10
-    // from one day would give that day away, and Tuesday's total less it, cursor's 1.
-    const other = { client: "cursor", os: "linux" };
+describe("weekFigures", () => {
+  it("publishes installs as the busiest day, reports as the week's sum, and one breakdown per field", () => {
     const rows = [
-      row("2026-11-03", 10),
-      row("2026-11-03", 1, other),
-      ...["2026-11-02", "2026-11-04", "2026-11-05"].map((day) => row(day, 3, { ...other, arch: "x86_64" })),
+      row(DAYS[0], 30),
+      row(DAYS[1], 50),
+      row(DAYS[1], 12, { client: "cursor", os: "linux", version: "0.3.1" }),
+      row(DAYS[2], 40),
     ];
-    const result = figures(rows, [], []);
-    const codex = (cell: Figure) => cell.client === "codex" && cell.os === "macos";
-    expect(result.combinations.days.filter(codex)).toEqual([]);
-    expect(result.combinations.weeks.filter(codex)).toEqual([]);
+    expect(week(rows)).toEqual({
+      week: WEEK,
+      installs: 60,
+      reports: 130,
+      client: {
+        codex: 50, chatgpt: UNDER, "claude-code": UNDER, "claude-desktop": UNDER, cursor: 10, other: UNDER,
+        none: UNDER,
+      },
+      forge: { forgejo: 60, gitea: UNDER, other: UNDER, none: UNDER },
+      mode: { client: 60, server: UNDER },
+      os: { macos: 50, linux: 10, other: UNDER },
+      version: { "0.3.0": 50, "0.3.1": 10, other: UNDER },
+    });
+  });
+
+  it("lists every fixed value, so under 10 may be none at all", () => {
+    expect(week([])).toEqual(week([row(DAYS[0], 1, { client: "cursor", forge: "gitea", os: "other" })]));
+  });
+
+  it("counts versions below 10 together as other", () => {
+    const rows = [
+      row(DAYS[0], 20, { version: "0.3.1" }),
+      row(DAYS[0], 6, { version: "0.2.0" }),
+      row(DAYS[0], 6, { version: "0.4.0-rc.1" }),
+    ];
+    expect(week(rows).version).toEqual({ "0.3.1": 20, other: 10 });
+    expect(JSON.stringify(week(rows))).not.toContain("0.4.0-rc.1");
   });
 
   it("names an absent value none", () => {
-    const rows = [row("2026-11-02", 3, { mode: "server", client: "", gh: "", forge_major: -1 })];
-    expect(figures(rows, [], []).by_field.client.days).toEqual([
-      { day: "2026-11-02", client: "none", installs: 3, reports: 3 },
-    ]);
+    const server = week([row(DAYS[0], 12, { mode: "server", client: "", gh: "", forge: "", forge_major: -1 })]);
+    expect(server.client.none).toBe(10);
+    expect(server.forge.none).toBe(10);
   });
 
-  it("follows each first week's installs into later weeks", () => {
-    const days: Array<[string, string, number]> = [
-      ["2026-11-02", "2026-W45", 4],
-      ["2026-11-03", "2026-W45", 6],
-      ["2026-11-10", "2026-W45", 3],
-      ["2026-11-10", "2026-W46", 3],
-      ["2026-11-17", "2026-W45", 3],
-      ["2026-11-17", "2026-W46", 2],
+  it("publishes nothing per day, per combination, per first week or per unsupported name", () => {
+    expect(Object.keys(week([row(DAYS[0], 30)]))).toEqual(["week", "installs", "reports", ...FIELDS]);
+  });
+
+  it("no longer lets three fields on one day solve for a hidden count (#287)", () => {
+    // #287's first shape. Four small combinations on one day, codex/macos/0.3.0 = A, beside two
+    // large ones. With combinations published, codex's, 0.3.0's and linux's hidden parts gave
+    // A = (3 + 3 - 4) / 2 = 1. Now no combination is published, and A of 0, 1 or 2 reads the same.
+    const shape = (a: number) => [
+      row(DAYS[0], a),
+      row(DAYS[0], 2, { client: "cursor", os: "linux" }),
+      row(DAYS[0], 2, { os: "linux", version: "0.3.1" }),
+      row(DAYS[0], 2, { client: "cursor", version: "0.3.1" }),
+      row(DAYS[0], 50, { version: "0.3.1" }),
+      row(DAYS[0], 50, { client: "cursor", os: "linux", version: "0.3.1" }),
     ];
-    const rows = [...new Set(days.map(([day]) => day))].map((day) =>
-      row(day, days.filter(([d]) => d === day).reduce((sum, [, , n]) => sum + n, 0)),
-    );
-    const cohorts = days.map(([day, first_week, count]) => ({ day, first_week, count }));
-    expect(figures(rows, cohorts, []).retention).toEqual([
-      { first_week: "2026-W45", week: "2026-W45", installs: 6 },
-      { first_week: "2026-W45", week: "2026-W46", installs: 3 },
-      { first_week: "2026-W46", week: "2026-W46", installs: 3 },
-      // 2026-W47: the week's 5 less W45's 3 would show W46's 2, so neither shows.
-    ]);
+    expect(week(shape(1))).toEqual(week(shape(0)));
+    expect(week(shape(1))).toEqual(week(shape(2)));
   });
 
-  it("counts an unsupported name by its busiest day, so one install can't pass for three", () => {
-    const days = ["2026-11-02", "2026-11-03", "2026-11-04"];
-    const once = days.map((day) => ({ day, name: "rest:repos.releases", reports: 1, total: 5 }));
-    expect(figures([], [], once).unsupported).toEqual([]);
-    const three = [{ day: "2026-11-02", name: "rest:repos.releases", reports: 3, total: 4 }];
-    expect(figures([], [], three).unsupported).toEqual([
-      { week: "2026-W45", name: "rest:repos.releases", installs: 3, total: 4 },
-    ]);
+  it("no longer lets one field over a week's days solve for a hidden count (#287)", () => {
+    // #287's second shape: codex and chatgpt hidden on Monday and Tuesday, cursor and other on
+    // Wednesday and Thursday, joined by codex on Wednesday = A. With daily figures published, the
+    // row and column totals fixed A at 1. Now nothing is published per day, and A of 0, 1 or 2
+    // reads the same.
+    const shape = (a: number) => [
+      ...DAYS.slice(0, 4).map((day) => row(day, 41, { client: "claude-code" })),
+      ...DAYS.slice(0, 2).flatMap((day) => [row(day, 2), row(day, 2, { client: "chatgpt" })]),
+      ...DAYS.slice(2, 4).flatMap((day) => [row(day, 2, { client: "cursor" }), row(day, 2, { client: "other" })]),
+      row(DAYS[2], a),
+    ];
+    expect(week(shape(1))).toEqual(week(shape(0)));
+    expect(week(shape(1))).toEqual(week(shape(2)));
+  });
+
+  it("no longer shows a sender who tops up a rare set how many real installs share it (#285)", () => {
+    // #285: send two reports with a rare set of values and see whether the published figure says 3.
+    // Now no set of values is published, each value's figure rounds, and 0, 1 or 2 real installs
+    // with that set read the same.
+    const rare = { client: "cursor", os: "linux", forge: "gitea", forge_major: 1, gh: "2.99" };
+    const shape = (real: number) => [
+      row(DAYS[1], 40),
+      row(DAYS[1], 2, rare), // the sender's own
+      row(DAYS[1], real, rare),
+    ];
+    expect(week(shape(1))).toEqual(week(shape(0)));
+    expect(week(shape(1))).toEqual(week(shape(2)));
   });
 
   /**
-   * For many made-up weeks of reports: every published figure counts at least 3, and wherever a
-   * published figure's parts aren't all shown, the hidden parts are two or more and sum to 3 or
-   * more, so subtraction never isolates one.
+   * For many made-up weeks: a reader who takes each figure as its range, and assumes each field's
+   * figures add up to `installs` (the most they could assume), can narrow an "under 10" figure, but
+   * never to one count from 1 to 8.
    */
-  it("holds its rule on made-up data", () => {
+  it("never lets a reader work out a count from 1 to 8 on made-up data", () => {
     let seed = 7;
     const random = (n: number) => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -159,65 +146,51 @@ describe("figures", () => {
     };
     const values = {
       client: ["codex", "chatgpt", "claude-code", "cursor", "other"],
+      forge: ["forgejo", "gitea", ""],
       os: ["macos", "linux"],
-      version: ["0.3.0", "0.3.1"],
+      version: ["0.3.0", "0.3.1", "0.2.0", "0.4.0", "0.4.1", "0.5.0"],
     };
-    for (let trial = 0; trial < 40; trial++) {
+    const range = (figure: Rounded): [number, number] =>
+      figure === UNDER ? [0, 9] : figure === 10 ? [10, 14] : [figure - 5, figure + 4];
+    let narrowed = 0;
+    for (let trial = 0; trial < 300; trial++) {
       const rows: Row[] = [];
-      for (let i = 0; i < 25; i++) {
+      // One day in three trials, so each field's figures really do add up to `installs`.
+      const days = trial % 3 === 0 ? 1 : 1 + random(7);
+      for (let i = 0; i < 4 + random(30); i++) {
         rows.push(
-          row(`2026-11-0${2 + random(5)}`, 1 + random(4), {
+          row(DAYS[random(days)], 1 + random(trial % 2 ? 12 : 5), {
             client: values.client[random(5)],
+            forge: values.forge[random(3)],
             os: values.os[random(2)],
-            version: values.version[random(2)],
+            version: values.version[random(trial % 2 ? 6 : 2)],
           }),
         );
       }
-      const result = figures(rows, [], []);
-      const all: Figure[] = [
-        ...result.totals.days, ...result.totals.weeks,
-        ...result.combinations.days, ...result.combinations.weeks,
-        ...Object.values(result.by_field).flatMap((table) => [...table.days, ...table.weeks]),
-      ];
-      for (const figure of all) expect(figure.installs).toBeGreaterThanOrEqual(MINIMUM);
-
-      // Each published week has a published day as busy as it, so its installs shows no hidden day.
-      const tables = [result.totals, result.combinations, ...Object.values(result.by_field)];
-      for (const table of tables) {
-        for (const { week, installs, reports: _, ...labels } of table.weeks as Figure[]) {
-          const same = (table.days as Figure[]).filter(
-            ({ day, installs: __, reports: ___, ...rest }) =>
-              JSON.stringify(rest) === JSON.stringify(labels) && week === isoWeek(String(day)),
-          );
-          expect(same.map((cell) => cell.installs), `${week} ${JSON.stringify(labels)}`).toContain(installs);
-        }
+      const result = week(rows);
+      const tables = FIELDS.map((field) => Object.values(result[field] as Record<string, Rounded>));
+      for (const figure of [result.installs, result.reports, ...tables.flat()]) {
+        expect(figure === UNDER || (figure >= 10 && figure % 10 === 0), String(figure)).toBe(true);
       }
 
-      // Each day: the total over each field's values.
-      const truth = (day: string, field: string) => {
-        const sums = new Map<string, number>();
-        for (const r of rows.filter((r) => r.day === day)) {
-          const key = String(r[field as keyof Row]);
-          sums.set(key, (sums.get(key) ?? 0) + r.count);
-        }
-        return sums;
-      };
-      for (const total of result.totals.days) {
-        for (const field of FIELDS) {
-          const shown = new Set(
-            (result.by_field[field].days as Figure[])
-              .filter((cell) => cell.day === total.day)
-              .map((cell) => String(cell[field])),
-          );
-          const hidden = [...truth(String(total.day), field)].filter(([value]) => !shown.has(value));
-          const sum = hidden.reduce((s, [, n]) => s + n, 0);
-          if (hidden.length > 0 && shown.size > 0) {
-            expect(hidden.length, `${total.day} ${field}`).toBeGreaterThanOrEqual(2);
-            expect(sum, `${total.day} ${field}`).toBeGreaterThanOrEqual(MINIMUM);
-          }
-        }
+      let [low, high] = range(result.installs);
+      for (const table of tables) {
+        low = Math.max(low, table.reduce<number>((sum, figure) => sum + range(figure)[0], 0));
+        high = Math.min(high, table.reduce<number>((sum, figure) => sum + range(figure)[1], 0));
+      }
+      for (const table of tables) {
+        table.forEach((figure, i) => {
+          if (figure !== UNDER) return;
+          const others = table.filter((_, j) => j !== i).map(range);
+          const least = Math.max(0, low - others.reduce((sum, [, most]) => sum + most, 0));
+          const most = Math.min(9, high - others.reduce((sum, [fewest]) => sum + fewest, 0));
+          if (most < 9 || least > 0) narrowed++;
+          expect(least === most && least >= 1 && least <= 8, `${JSON.stringify(rows)}`).toBe(false);
+        });
       }
     }
+    // The check has teeth: some figures do narrow.
+    expect(narrowed).toBeGreaterThan(0);
   });
 });
 
@@ -227,23 +200,5 @@ describe("isoWeek", () => {
     expect(isoWeek("2027-01-01")).toBe("2026-W53");
     expect(isoWeek("2024-12-30")).toBe("2025-W01");
     expect(isoWeek("2021-01-03")).toBe("2020-W53");
-  });
-});
-
-describe("retention", () => {
-  it("never lets a week's total minus its first weeks give away a small cohort", () => {
-    // Four reports on 2026-01-05: three from installs that began that week, one from the next
-    // week's only other possible first week. The week's 4 less W01's 3 would show W02's 1.
-    const rows = [
-      { day: "2026-01-05", mode: "client", client: "codex", forge: "forgejo", forge_major: 15, os: "macos",
-        arch: "aarch64", version: "0.3.0", gh: "2.103", count: 4 },
-    ];
-    const cohorts = [
-      { day: "2026-01-05", first_week: "2026-W01", count: 3 },
-      { day: "2026-01-05", first_week: "2026-W02", count: 1 },
-    ];
-    const result = figures(rows, cohorts, []);
-    expect(result.totals.weeks).toEqual([{ week: "2026-W02", installs: 4, reports: 4 }]);
-    expect(result.retention).toEqual([]);
   });
 });
