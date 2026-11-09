@@ -25,7 +25,9 @@ pub struct Run {
     pub html_url: String,
     pub created: String,
     pub updated: String,
-    pub started: String,
+    /// Forgejo 17 sends `null` for a run it never started; earlier versions send Unix time 0.
+    #[serde(default)]
+    pub started: Option<String>,
 }
 #[derive(Clone, Serialize)]
 pub struct Workflow {
@@ -55,13 +57,16 @@ pub fn status(native: &str) -> Result<(&'static str, Option<&'static str>), Erro
 
 pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
     let (status, conclusion) = status(&run.status)?;
-    // A run Forgejo never started carries Unix time 0 in its display timezone, which is
-    // 1969-12-31 west of UTC. GitHub reports the creation time, as gh does for a missing start.
-    let started = if run.started.starts_with("1970-01-01") || run.started.starts_with("1969-12-31")
-    {
-        &run.created
-    } else {
-        &run.started
+    // A run Forgejo never started carries no start (Forgejo 17) or Unix time 0 in its display
+    // timezone, which is 1969-12-31 west of UTC (Forgejo 15). GitHub reports the creation time,
+    // as gh does for a missing start.
+    let started = match run.started.as_deref() {
+        Some(started)
+            if !started.starts_with("1970-01-01") && !started.starts_with("1969-12-31") =>
+        {
+            started
+        }
+        _ => &run.created,
     };
     // Forgejo 15 reruns a run's jobs in place and keeps no attempt per run (only per job), so
     // every run is its first attempt; GitHub numbers attempts from 1.
@@ -239,8 +244,9 @@ mod tests {
         assert_ne!(workflow_id("ci.yml"), workflow_id("other.yml"));
     }
 
-    /// Forgejo sends a run it never started with Unix time 0 in its display timezone; GitHub's
-    /// `run_started_at` then takes the creation time, as gh itself does for a missing start.
+    /// Forgejo sends a run it never started with no start (17) or Unix time 0 in its display
+    /// timezone (15); GitHub's `run_started_at` then takes the creation time, as gh itself does
+    /// for a missing start.
     #[test]
     fn a_run_that_never_started_starts_when_it_was_created() {
         let workflow = Workflow {
@@ -250,7 +256,7 @@ mod tests {
             state: "active",
         };
         let created = "2026-11-03T00:00:00Z";
-        let mapped = |status: &str, started: &str| {
+        let mapped = |status: &str, started: Option<&str>| {
             let source = Run {
                 id: 5,
                 workflow_id: "ci.yml".into(),
@@ -263,7 +269,7 @@ mod tests {
                 html_url: "https://forge.test/o/r/actions/runs/1".into(),
                 created: created.into(),
                 updated: "2026-11-03T00:00:09Z".into(),
-                started: started.into(),
+                started: started.map(Into::into),
             };
             run(&source, &workflow).unwrap()["run_started_at"].clone()
         };
@@ -272,12 +278,27 @@ mod tests {
             "1970-01-01T01:00:00+01:00",
             "1969-12-31T19:00:00-05:00",
         ] {
-            assert_eq!(mapped("waiting", unset), created, "{unset}");
-            assert_eq!(mapped("failure", unset), created, "{unset}");
+            assert_eq!(mapped("waiting", Some(unset)), created, "{unset}");
+            assert_eq!(mapped("failure", Some(unset)), created, "{unset}");
         }
+        assert_eq!(mapped("waiting", None), created);
         assert_eq!(
-            mapped("running", "2026-11-03T00:00:03Z"),
+            mapped("running", Some("2026-11-03T00:00:03Z")),
             "2026-11-03T00:00:03Z"
         );
+    }
+
+    /// Forgejo 17 lists a run that hasn't started with `"started": null`.
+    #[test]
+    fn a_run_list_decodes_a_null_start() {
+        let list: RunList = serde_json::from_value(json!({"total_count": 1, "workflow_runs": [{
+            "id": 5, "workflow_id": "ci.yml", "index_in_repo": 1, "title": "t",
+            "prettyref": "refs/heads/main", "commit_sha": "abc", "status": "waiting",
+            "event": "push", "html_url": "https://forge.test/o/r/actions/runs/1",
+            "created": "2026-11-03T00:00:00Z", "updated": "2026-11-03T00:00:00Z",
+            "started": null, "stopped": null,
+        }]}))
+        .unwrap();
+        assert_eq!(list.workflow_runs[0].started, None);
     }
 }
