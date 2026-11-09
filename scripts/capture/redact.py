@@ -46,7 +46,17 @@ SHA = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9a-f]{64}|[0-9a-f]{40})(?![0-9A-Fa-f])"
 # Placeholders this script writes: leaks.py accepts these and nothing else of their shape.
 PLACEHOLDER_SHA = re.compile(r"0{24}[0-9a-f]{16}")
 ACTIONS = re.compile(r"(/actions/runs/)(\d+)(?:(/jobs?/)(\d+))?")
-TIMESTAMP = re.compile(r"\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)")
+# A date and time: ISO 8601 and RFC 3339, git's `2026-10-30 15:16:57 -0400`, Forgejo's log
+# `2026/10/30 15:16:57`, with or without a zone, and HTTP's `Fri, 30 Oct 2026 19:02:30 GMT`.
+TIMESTAMP = re.compile(r"\b(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d):(\d\d)(?:\.(\d+))?"
+                       r"( ?)(Z|[+-]\d\d:?\d\d)?(?![\d:])")
+HTTP_DATE = re.compile(r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d\d (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+                       r"\d{4} \d\d:\d\d:\d\d GMT")
+HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
+# A date alone, as in a search (`closed:>2026-09-30`), but not gh's own release date.
+DATE = re.compile(r"(gh version \S+ \(\d{4}-\d\d-\d\d\))|\b\d{4}([-/])\d\d\2\d\d\b")
+# An integer time under a key that says so (`reset` in `gh api rate_limit`, `created_at`).
+TIME_KEY = re.compile(r"(?i)reset|(?:^|_)(?:at|time|date)$|[a-z](?:At|Time|Date)$")
 LOG_TIME = re.compile(r"\[(\d\d/[A-Z][a-z]{2}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]")
 # gh's `auth status`: "Logged in to <host> account <login> (<source>)".
 ACCOUNT = re.compile(r"Logged in to \S+ account (\S+)")
@@ -98,7 +108,7 @@ class Redactor:
             self.names[login] = USER if users == 1 else f"<user-{users}>"
             known.add(login.lower())
         for index, instant in enumerate(sorted(instants)):
-            self.times[instant] = (EPOCH + timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self.times[instant] = EPOCH + timedelta(seconds=index)
 
     def _collect(self, value, logins, instants):
         if isinstance(value, dict):
@@ -114,7 +124,9 @@ class Redactor:
                 if login not in logins:
                     logins.append(login)
             for match in TIMESTAMP.finditer(value):
-                instants.add(parse_time(match.group(0)))
+                instants.add(parse_time(match))
+            for match in HTTP_DATE.finditer(value):
+                instants.add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
             for parsed in embedded(value):
                 self._collect(parsed, logins, instants)
 
@@ -136,7 +148,11 @@ class Redactor:
         value = IPV6.sub(lambda m: "<ip>" if is_ip(m.group(0)) else m.group(0), value)
         value = SHA.sub(self._sha, value)
         value = ACTIONS.sub(self._actions, value)
-        return TIMESTAMP.sub(lambda m: self.times.get(parse_time(m.group(0)), "<timestamp>"), value)
+        # A time pass one didn't see (none should be left) still becomes the first placeholder.
+        value = TIMESTAMP.sub(lambda m: format_time(self.times.get(parse_time(m), EPOCH), m), value)
+        value = HTTP_DATE.sub(lambda m: self.times.get(datetime.strptime(m.group(0), HTTP_FORMAT).replace(
+            tzinfo=timezone.utc), EPOCH).strftime(HTTP_FORMAT), value)
+        return DATE.sub(lambda m: m.group(1) or "2000{0}01{0}01".format(m.group(2)), value)
 
     def _sha(self, match):
         sha = match.group(0)
@@ -159,6 +175,8 @@ class Redactor:
             for key, item in value.items():
                 if SENSITIVE_KEY.search(key) and isinstance(item, str) and item:
                     result[key] = "<redacted>"
+                elif TIME_KEY.search(key) and isinstance(item, int) and not isinstance(item, bool) and item > 10 ** 9:
+                    result[key] = int(EPOCH.timestamp()) * (1000 if item > 10 ** 12 else 1)
                 elif key in NODE_KEYS and isinstance(item, str) and item:
                     result[key] = "<node-id>"
                 elif user and key not in USER_KEYS or identity and key in IDENTITY_KEYS:
@@ -210,14 +228,25 @@ def hidden(value):
     return value
 
 
-def parse_time(text):
-    """An ISO 8601 time in any of the forms TIMESTAMP matches, as UTC (Python 3.9's
-    fromisoformat takes only `+HH:MM` and six-digit fractions)."""
-    text = text.replace("Z", "+00:00")
-    if re.search(r"[+-]\d{4}$", text):
-        text = text[:-2] + ":" + text[-2:]
-    text = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], text)
-    return datetime.fromisoformat(text).astimezone(timezone.utc)
+def parse_time(match):
+    """A TIMESTAMP match as a UTC instant; one without a zone counts as UTC."""
+    year, _, month, day, _, hour, minute, second, fraction, _, zone = match.groups()
+    offset = timedelta(0)
+    if zone and zone != "Z":
+        offset = timedelta(hours=int(zone[1:3]), minutes=int(zone[-2:])) * (1 if zone[0] == "+" else -1)
+    micro = int((fraction or "0")[:6].ljust(6, "0"))
+    local = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second), micro,
+                     tzinfo=timezone(offset))
+    return local.astimezone(timezone.utc)
+
+
+def format_time(instant, match):
+    """An instant written the way the match wrote its time, in UTC, without a fraction."""
+    _, dash, _, _, separator, _, _, _, _, space, zone = match.groups()
+    text = instant.strftime(f"%Y{dash}%m{dash}%d{separator}%H:%M:%S")
+    if zone:
+        text += space + ("Z" if zone == "Z" else "+00:00" if ":" in zone else "+0000")
+    return text
 
 
 def is_ip(text):

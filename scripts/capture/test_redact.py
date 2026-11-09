@@ -81,6 +81,11 @@ RECORDS = [
     # Two pages back to back, and headers before the body.
     record("2026-10-30T15:24:00-0400", ["api", "--paginate", "users/octo-person/followers"],
            json.dumps([FORGEJO_USER]) + json.dumps([USER]) + "\n"),
+    record("2026-10-30T15:24:15-0400", ["issue", "list", "--search", "closed:>2026-09-30", "-q",
+                                        ".[] | select(.closedAt > \"2026/10/30 15:16:57\")"],
+           "abc1234 2026-10-30 15:16:57 -0400 first\nlast seen Fri, 30 Oct 2026 19:24:15 GMT\n"),
+    record("2026-10-30T15:24:20-0400", ["api", "rate_limit"],
+           '{"resources":{"core":{"reset":1793395470}},"t":"2026-10-30T19:24:15"}' "\n"),
     record("2026-10-30T15:24:30-0400", ["api", "-i", "user"],
            "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: Fri, 30 Oct 2026 19:24:30 GMT\r\n"
            "X-Ratelimit-Reset: 1793395470\r\n\r\n" + json.dumps(USER)),
@@ -166,16 +171,28 @@ class RedactTest(unittest.TestCase):
         self.assertEqual([page[0]["login"] for page in pages], ["<user>", "<user>"])
         self.assertEqual((pages[0][0]["full_name"], pages[1][0]["bio"]), ("<redacted>", "<redacted>"))
         self.assertTrue(rows[9]["stdout"].endswith("]\n"))
-        head, blank, body = redact.http_parts(rows[10]["stdout"])
+        head, blank, body = redact.http_parts(rows[12]["stdout"])
         self.assertEqual(head, "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: <redacted>\r\n"
                                "X-Ratelimit-Reset: <redacted>")
         self.assertEqual((blank, json.loads(body)["location"]), ("\r\n\r\n", "<redacted>"))
 
+    def test_every_kind_of_time_and_date(self):
+        self.capture.redact()
+        row, rate = self.capture.records()[10:12]
+        self.assertEqual(row["argv"][3], "closed:>2000-01-01")
+        self.assertRegex(row["argv"][5], r'"2000/01/01 00:00:\d\d"')
+        lines = row["stdout"].splitlines()
+        self.assertRegex(lines[0], r"^abc1234 2000-01-01 00:00:\d\d \+0000 first$")
+        self.assertRegex(lines[1], r"^last seen Sat, 01 Jan 2000 00:00:\d\d GMT$")
+        answer = json.loads(rate["stdout"])
+        self.assertEqual(answer["resources"]["core"]["reset"], 946684800)
+        self.assertRegex(answer["t"], r"^2000-01-01T00:00:\d\d$")
+
     def test_times_become_offsets_and_marks_labels(self):
         self.capture.redact()
         rows = self.capture.records()
-        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 453])
-        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 7)
+        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 438, 443, 453])
+        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 9)
         self.assertFalse(any("ts" in row for row in rows))
         log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
         self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])
@@ -242,7 +259,8 @@ class LeaksTest(unittest.TestCase):
             "https://forge.private.dev/x": "host", "git.example.ts.net": "host", "box.local": "host",
             "--repo forge.private.dev/o/r": "host", "forge.octo.sh": "host", "--hostname homebox": "host",
             "git@homebox:o/r.git": "host", "Logged in to homebox account x (keyring)": "host",
-            "GH_HOST=homebox": "host",
+            "GH_HOST=homebox": "host", "closed:>2026-09-30": "date", "2026/10/30 15:16:57": "date",
+            "Fri, 30 Oct 2026 19:24:15 GMT": "date", "[30/Oct/2026:20:06:03 +0000]": "date",
         }
         for text, kind in cases.items():
             self.assertIn(kind, self.kinds(text), text)
@@ -252,6 +270,7 @@ class LeaksTest(unittest.TestCase):
             "<user> <repo> <home>/Code <ip> <email> <token> <avatar-url> forge.test github.com",
             "https://api.github.com/users/<user> https://<redacted>@forge.test/x",
             "Authorization: token <token>", "Cookie: <redacted>", "0" * 39 + "1 2000-01-01T00:00:00Z",
+            "closed:>2000-01-01 2000/01/01 00:00:01 Sat, 01 Jan 2000 00:00:00 GMT gh version 2.103.3 (2026-10-26)",
             "gh version 2.103.3 Versions/156.0.8078.48/Helpers /Applications/ChatGPT.app/Contents 19:02:38",
             "Codex (Service).app <home>/.claude/settings.local.json git@github.com:o/r.git",
             "ci / check (pull_request) e2e@example.invalid notes/nopr.txt",
