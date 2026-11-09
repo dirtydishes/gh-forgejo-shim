@@ -60,6 +60,21 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
+  captures:
+    name: client captures
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test the capture tools
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/capture -p 'test_*.py' -v
+
+      # Prints where a finding is, never its text.
+      - name: Check committed captures for anything identifying
+        run: python3 scripts/capture/leaks.py fixtures/clients
+
   advisories:
     name: advisories
     runs-on: ubuntu-latest
