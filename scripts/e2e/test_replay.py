@@ -79,6 +79,10 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(replay.compare(version, "client", 0, "gh version 2.103.3\n", []),
                          ["expected to reach real gh, and didn't"])
         self.assertEqual(replay.compare(version, "server", 0, "gh version 2.103.3\n", []), [])
+        newer = "gh version 2.110.0 (2027-01-05)\nhttps://github.com/cli/cli/releases/tag/v2.110.0\n"
+        captured = case(["--version"], "gh version 2.103.3 (2026-10-26)\nhttps://github.com/cli/cli/releases/tag/v2.103.3\n")
+        self.assertEqual(replay.compare(captured, "server", 0, newer, []), [])
+        self.assertEqual(len(replay.compare(captured, "server", 0, "gh: unknown flag\n", [])), 1)
         token = case(["auth", "token"], {"bytes": 41, "redacted": True}, where="checkout")
         self.assertEqual(replay.compare(token, "client", 0, "secret\n", []), [])
 
