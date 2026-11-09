@@ -96,6 +96,8 @@ brew install dirtydishes/tap/gh-forgejo-shim
 gfj --version
 ```
 
+It sends one anonymous [usage report](#usage-reports) a day. `gfj telemetry show` prints it, and `gfj telemetry off` stops it.
+
 Release tarballs for macOS and Linux, checksums and upgrades: [docs/installation.md](docs/installation.md).
 Coming from the old pipx install: [docs/pipx-to-rust-migration.md](docs/pipx-to-rust-migration.md).
 PyPI is not a supported product runtime.
