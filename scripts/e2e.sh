@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 run="fga-g2a-$$"
 image="fga-g2a-e2e:local"
 artifacts="$PWD/.local/e2e/$run"
+# The pinned upstream versions. The weekly upstream workflow sets these to the latest releases.
+gh_version="${E2E_GH_VERSION:-2.103.3}"
+forgejo_image="${E2E_FORGEJO_IMAGE:-codeberg.org/forgejo/forgejo:15}"
 mkdir -p "$artifacts"
 cleanup() {
     result=$?
@@ -23,7 +26,7 @@ trap 'exit 143' TERM
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/test_oracle.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/e2e/test_seed.py
 docker info >/dev/null
-docker build -f scripts/e2e/Dockerfile -t "$image" .
+docker build -f scripts/e2e/Dockerfile --build-arg GH_VERSION="$gh_version" -t "$image" .
 docker network create "$run" >/dev/null
 docker volume create "$run-tls" >/dev/null
 docker run --rm --name "$run-cert" -v "$run-tls:/tls" "$image" openssl req -x509 -newkey rsa:2048 -nodes \
@@ -34,7 +37,7 @@ docker run -d --name "$run-forgejo" --network "$run" --network-alias forgejo \
     -e FORGEJO__server__ROOT_URL=https://forge.test/ -e FORGEJO__server__DOMAIN=forge.test \
     -e FORGEJO__service__DISABLE_REGISTRATION=true -e FORGEJO__service__REGISTER_EMAIL_CONFIRM=false \
     -e FORGEJO__mailer__ENABLED=false -e FORGEJO__repository__DEFAULT_BRANCH=main \
-    codeberg.org/forgejo/forgejo:15 >/dev/null
+    "$forgejo_image" >/dev/null
 for attempt in $(seq 1 90); do
     if docker exec "$run-forgejo" wget -q -O /dev/null http://localhost:3000/api/v1/version 2>/dev/null; then break; fi
     if [ "$attempt" -eq 90 ]; then echo 'Forgejo did not become ready' >&2; exit 1; fi
@@ -53,5 +56,5 @@ docker run -d --name "$run-gateway" --network "$run" --network-alias forge.test 
     "$image" /usr/local/bin/fga-server >/dev/null
 docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" \
     -v "$artifacts:/artifacts" "$image" bash -c 'bash /test/client.sh && bash /test/g2.sh'
-printf 'PASS e2e: gh 2.103.3 and Claude lookups against Forgejo 15\n'
+printf 'PASS e2e: gh %s and Claude lookups against %s\n' "$gh_version" "$forgejo_image"
 printf 'Captured query and results: %s\n' "$artifacts"
