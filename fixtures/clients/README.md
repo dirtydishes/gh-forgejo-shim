@@ -31,7 +31,8 @@ Each `.jsonl` line is one `gh` call:
 | `env_secrets_present` | Token variables that were set, by name only |
 | `stdin_tty`, `stdout_tty` | Whether those were terminals |
 | `exit`, `duration_ms` | gh's exit code and run time |
-| `stdout`, `stderr` | gh's output. `{"bytes": N, "redacted": true}` for output that can hold a token, never stored; `{"same_as": I}` for output equal to the record at 0-based line I |
+| `stdout`, `stderr` | gh's output. `{"bytes": N, "redacted": true}` for output that can hold a token, never stored; `{"same_as": I}` for output equal to the record at 0-based line I; `{"merged_into_stdout": true}` for stderr when the caller sent both to one place |
+| `signal` | The signal that killed gh, if one did |
 | `t` | Seconds since the file's first call |
 | `mark` | The step of the capture the call belongs to, when the capture marked its steps |
 | `faked`, `stubbed` | The wrapper answered instead of gh: a fake token, or the stub at that index |
