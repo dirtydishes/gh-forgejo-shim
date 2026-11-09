@@ -37,6 +37,10 @@ class GhForgejoShim < Formula
       as a dependency. After installing or upgrading, run this from inside your
       Forgejo checkout to set up or refresh the managed gh wrapper:
         gfj bootstrap
+
+      It sends one anonymous usage report a day: the version, OS, agent and forge
+      software, never hosts, repositories or commands. `gfj telemetry show` prints
+      it, and `gfj telemetry off` stops it. See docs/telemetry.md in the repository.
     EOS
   end
 
