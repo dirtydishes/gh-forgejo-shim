@@ -164,6 +164,37 @@ impl Session {
         .await
     }
 
+    /// The commit a SHA, branch or tag names; 404 when there is none, and for a name git wouldn't
+    /// allow ([`is_ref_name`]), which is never sent. A name with a slash, such as
+    /// `feature/topic`, can't be one path segment, so it goes to the commit list as its `sha`
+    /// parameter: Forgejo resolves both the same way, and a query can't move the request's path.
+    pub async fn resolve_commit(
+        &self,
+        owner: &str,
+        repo: &str,
+        rev: &str,
+    ) -> Result<GitCommit, Error> {
+        if !is_ref_name(rev) {
+            return Err(Error::NotFound);
+        }
+        if !climbs(rev) {
+            return self.git_commit(owner, repo, rev).await;
+        }
+        let commits: Vec<GitCommit> = self
+            .get(
+                &["repos", owner, repo, "commits"],
+                &[
+                    ("sha", rev.to_owned()),
+                    ("limit", "1".into()),
+                    ("stat", "false".into()),
+                    ("verification", "false".into()),
+                    ("files", "false".into()),
+                ],
+            )
+            .await?;
+        commits.into_iter().next().ok_or(Error::NotFound)
+    }
+
     /// The entry at `path` in `rev`, or the default branch: one object for a file, an array for a
     /// directory, 404 for no such path or revision. An empty `path` is the root directory.
     pub async fn contents(

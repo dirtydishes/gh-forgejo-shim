@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex},
 };
 
 static FIXTURE: LazyLock<Value> = LazyLock::new(|| {
@@ -28,9 +28,17 @@ fn head() -> &'static str {
     FIXTURE["head"].as_str().unwrap()
 }
 
-/// Forgejo, answering each path in `routes` with its reply and anything else with 404.
+/// Forgejo, answering each path in `routes` with its reply and anything else with 404. The commit
+/// list's `sha` parameter is part of its key, as `{path}?sha={sha}`.
 fn answer(routes: &Value, uri: &Uri) -> axum::response::Response {
-    match routes.get(uri.path()) {
+    let sha = url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
+        .find(|(name, _)| name == "sha")
+        .map(|(_, sha)| sha.into_owned());
+    let key = match sha {
+        Some(sha) => format!("{}?sha={sha}", uri.path()),
+        None => uri.path().to_owned(),
+    };
+    match routes.get(key) {
         Some(Value::String(text)) => text.clone().into_response(),
         Some(value) => axum::Json(value.clone()).into_response(),
         None => (
@@ -46,11 +54,19 @@ async fn gateway() -> SocketAddr {
 }
 
 async fn gateway_with(routes: Value) -> SocketAddr {
-    let routes = std::sync::Arc::new(routes);
+    gateway_logged(routes).await.0
+}
+
+/// [`gateway_with`], also recording each request that reaches Forgejo, as its path and query.
+async fn gateway_logged(routes: Value) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+    let routes = Arc::new(routes);
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let seen = log.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = Router::new().fallback(move |uri: Uri| {
         let routes = routes.clone();
+        seen.lock().unwrap().push(uri.to_string());
         async move { answer(&routes, &uri) }
     });
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
@@ -63,7 +79,7 @@ async fn gateway_with(routes: Value) -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
     tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
-    addr
+    (addr, log)
 }
 
 struct Reply {
@@ -578,4 +594,130 @@ async fn an_object_expression_naming_a_commit_has_its_metadata() {
     assert_eq!(commit["messageHeadline"], "docs: drop the old guide");
     assert_eq!(commit["messageBody"], "The README covers it now.");
     assert!(!commit["authoredDate"].as_str().unwrap().is_empty());
+}
+
+/// The fixture with `main` and `feature/topic` naming its base and head, as the commit list
+/// resolves branch names with slashes.
+fn branch_routes() -> Value {
+    let mut routes = FIXTURE["routes"].clone();
+    let commit = |sha: &str| routes[format!("/api/v1/repos/e2e/demo/git/commits/{sha}")].clone();
+    let (main, topic) = (json!([commit(base())]), json!([commit(head())]));
+    routes["/api/v1/repos/e2e/demo/git/commits/main"] = main[0].clone();
+    routes["/api/v1/repos/e2e/demo/commits?sha=feature/topic"] = topic;
+    routes
+}
+
+/// `compare/main...feature/topic`, the slash as written or encoded, is the comparison of the two
+/// commits; the branch reaches Forgejo only as the commit list's `sha` parameter.
+#[tokio::test]
+async fn compare_resolves_branch_names_with_slashes() {
+    let (addr, log) = gateway_logged(branch_routes()).await;
+    for basehead in ["main...feature/topic", "main...feature%2Ftopic"] {
+        let reply = get(addr, &format!("/api/v3/repos/e2e/demo/compare/{basehead}")).await;
+        assert_eq!(reply.status, 200, "{basehead}: {}", reply.body);
+        let compare = reply.json();
+        assert_eq!(compare["base_commit"]["sha"], base());
+        assert_eq!(compare["merge_base_commit"]["sha"], base());
+        assert_eq!(compare["commits"][2]["sha"], head());
+        assert_eq!(compare["status"], "ahead");
+        assert_eq!(compare["files"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            compare["url"],
+            "https://forge.test/api/v3/repos/e2e/demo/compare/main...feature/topic"
+        );
+        assert_eq!(
+            compare["permalink_url"],
+            format!(
+                "https://forge.test/e2e/demo/compare/{}...{}",
+                base(),
+                head()
+            )
+        );
+    }
+    let log = log.lock().unwrap();
+    assert!(
+        log.iter()
+            .any(|uri| uri.starts_with("/api/v1/repos/e2e/demo/commits?sha=feature%2Ftopic&")),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|uri| uri.split('?').next().unwrap().contains("topic")),
+        "a branch name went into a path: {log:?}"
+    );
+}
+
+/// Names git refuses, or that decode to one, are 404 at either end of a comparison, and none of
+/// them reaches Forgejo, in a path or a query. Two dots is a 404, as on GitHub.
+#[tokio::test]
+async fn compare_refuses_climbing_names_before_any_request() {
+    let (addr, log) = gateway_logged(branch_routes()).await;
+    let refused = [
+        "a/../b",
+        "../x",
+        "..",
+        "%2e%2e",
+        "%2e%2e/x",
+        "%252e%252e",
+        "%25252e%25252e",
+        "a%5Cb",
+        "a%255Cb",
+        "a%0Ab",
+        ".hidden/x",
+        "a~1",
+        "fork:topic",
+    ];
+    for name in refused {
+        for basehead in [format!("main...{name}"), format!("{name}...main")] {
+            let reply = get(addr, &format!("/api/v3/repos/e2e/demo/compare/{basehead}")).await;
+            assert_eq!(reply.status, 404, "{basehead}: {}", reply.body);
+        }
+    }
+    let reply = get(addr, "/api/v3/repos/e2e/demo/compare/main..feature/topic").await;
+    assert_eq!(reply.status, 404, "{}", reply.body);
+    let log = log.lock().unwrap();
+    assert!(
+        log.iter().all(|uri| uri == "/api/v1/user"),
+        "a refused name reached Forgejo: {log:?}"
+    );
+}
+
+/// `object(expression: "feature/topic")` is the branch's commit, and `feature/topic:PATH` its blob;
+/// a name git refuses is null without a request.
+#[tokio::test]
+async fn object_expressions_resolve_branch_names_with_slashes() {
+    let (addr, log) = gateway_logged(branch_routes()).await;
+    let query = r#"query{repository(owner:"e2e",name:"demo"){c: object(expression:"feature/topic"){oid} b: object(expression:"feature/topic:.gitattributes"){... on Blob{text}}}}"#;
+    let repository = &graphql(addr, json!({"query": query})).await["data"]["repository"];
+    assert_eq!(repository["c"]["oid"], head());
+    assert!(repository["b"]["text"].is_string(), "{repository}");
+    assert!(
+        log.lock().unwrap().iter().any(|uri| uri
+            .starts_with("/api/v1/repos/e2e/demo/contents/.gitattributes?ref=feature%2Ftopic")),
+        "{log:?}"
+    );
+    log.lock().unwrap().clear();
+    for name in [
+        "a/../b",
+        "../x",
+        "%2e%2e",
+        "%252e%252e",
+        "a\\\\b",
+        "a%5Cb",
+        ".hidden",
+    ] {
+        let query = format!(
+            r#"query{{repository(owner:"e2e",name:"demo"){{object(expression:"{name}"){{oid}}}}}}"#
+        );
+        let value = graphql(addr, json!({"query": query})).await;
+        assert!(
+            value["data"]["repository"]["object"].is_null(),
+            "{name}: {value}"
+        );
+    }
+    let log = log.lock().unwrap();
+    assert!(
+        log.iter().all(|uri| !uri.contains("/commits")),
+        "a refused name reached Forgejo: {log:?}"
+    );
 }

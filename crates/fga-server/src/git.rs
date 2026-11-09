@@ -8,7 +8,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fga_core::{
-    forgejo::{Comparison, Error, GitCommit, PullRequest, Session},
+    forgejo::{Comparison, Error, GitCommit, PullRequest, Session, is_ref_name},
     map,
 };
 use serde::Deserialize;
@@ -127,16 +127,19 @@ fn no_diff() -> Response {
 }
 
 /// `GET /repos/{o}/{r}/compare/{base}...{head}`: GitHub's comparison, or with
-/// `Accept: application/vnd.github.diff` (or `.patch`) the raw diff.
+/// `Accept: application/vnd.github.diff` (or `.patch`) the raw diff. Each end is a SHA, branch or
+/// tag, and a branch may hold slashes (`main...feature/topic`); both are resolved to commits
+/// first. GitHub's API refuses two dots, and so does the gateway.
 pub async fn compare(
     Extension(host): Extension<Arc<Host>>,
     Extension(session): Extension<Session>,
     Path((owner, repo, basehead)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    // Both ends are checked before either is looked up.
     let Some((base, head)) = basehead
         .split_once("...")
-        .filter(|(base, head)| !base.is_empty() && !head.is_empty())
+        .filter(|(base, head)| is_ref_name(base) && is_ref_name(head))
     else {
         return rest_error(Error::NotFound);
     };
@@ -160,9 +163,11 @@ pub async fn compare(
         None
     };
     let result = async {
-        let comparison = session.compare(&owner, &repo, base, head).await?;
-        let base_commit = session.git_commit(&owner, &repo, base).await?;
-        let head_commit = session.git_commit(&owner, &repo, head).await?;
+        let base_commit = session.resolve_commit(&owner, &repo, base).await?;
+        let head_commit = session.resolve_commit(&owner, &repo, head).await?;
+        let comparison = session
+            .compare(&owner, &repo, &base_commit.sha, &head_commit.sha)
+            .await?;
         let Some(merge_base) =
             merge_base(&session, &owner, &repo, &comparison, &head_commit.sha).await?
         else {
@@ -188,7 +193,7 @@ pub async fn compare(
             return Ok(([("content-type", "text/plain; charset=utf-8")], text).into_response());
         }
         let behind_by = session
-            .compare(&owner, &repo, head, base)
+            .compare(&owner, &repo, &head_commit.sha, &base_commit.sha)
             .await?
             .total_commits;
         let ahead_by = comparison.total_commits;
@@ -227,8 +232,11 @@ pub async fn compare(
             host.public_url.as_str().trim_end_matches('/')
         );
         let html_url = format!("{web}/{basehead}");
+        // A branch's slashes stay slashes, as in GitHub's own `url`.
+        let mut url = vec!["compare"];
+        url.extend(basehead.split('/'));
         Ok(Json(json!({
-            "url": map::api_url(&host.public_url, &owner, &repo, &["compare", &basehead]).as_str(),
+            "url": map::api_url(&host.public_url, &owner, &repo, &url).as_str(),
             "html_url": html_url,
             "permalink_url": format!("{web}/{}...{}", base_commit.sha, head_commit.sha),
             "diff_url": format!("{html_url}.diff"),

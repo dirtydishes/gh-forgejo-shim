@@ -81,6 +81,15 @@ content=$(gh api --hostname forge.test "repos/e2e/oracle/contents/src/cli/comman
 check 'printf "%s" "$content" | base64 -d | grep -qx "export const line45 = 450;"' 'gh api contents/PATH?ref=SHA as object+json: base64'
 blobs=$(gh api graphql --hostname forge.test -f query="query{repository(owner:\"e2e\",name:\"oracle\"){f0: object(expression:\"$head:.gitattributes\"){... on Blob{text isTruncated}} f1: object(expression:\"$head:src/.gitattributes\"){... on Blob{text isTruncated}} f2: object(expression:\"$head:src/cli/.gitattributes\"){... on Blob{text isTruncated}}}}" --jq .data.repository | jq -cS .)
 check '[ "$blobs" = "{\"f0\":{\"isTruncated\":false,\"text\":\"*.ts text eol=lf\\n\"},\"f1\":{\"isTruncated\":false,\"text\":\"*.snap binary\\n\"},\"f2\":null}" ]' 'object(expression:"SHA:dir/.gitattributes"): text, and null for a missing path'
+# The same comparison and commit by branch name, with a slash.
+git -C /tmp/seed -c "http.extraHeader=Authorization: token $token" push -q http://forgejo:3000/e2e/oracle.git agents:refs/heads/feature/agents
+check '[ "$(gh api --hostname forge.test "repos/e2e/oracle/compare/main...feature/agents" --jq ".merge_base_commit.sha, .commits[-1].sha, .ahead_by, (.files | length), .url")" = "$base
+$head
+3
+4
+https://forge.test/api/v3/repos/e2e/oracle/compare/main...feature/agents" ]' 'gh api compare/main...feature/agents: a branch with a slash'
+check '[ "$(gh api graphql --hostname forge.test -f query="query{repository(owner:\"e2e\",name:\"oracle\"){c: object(expression:\"feature/agents\"){oid} b: object(expression:\"feature/agents:.gitattributes\"){... on Blob{text}}}}" --jq ".data.repository | .c.oid, .b.text")" = "$head
+*.ts text eol=lf" ]' 'object(expression:"feature/agents") and "feature/agents:PATH"'
 
 # Other reads agents run on a PR.
 check '[ "$(gh pr diff "$n" -R "$R" --patch | head -1)" = "From $(git -C /tmp/seed rev-parse agents~2) Mon Sep 17 00:00:00 2001" ]' 'gh pr diff --patch prints a patch'

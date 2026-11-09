@@ -189,7 +189,7 @@ pub fn app(state: AppState) -> Router {
             get(pull_parts::issue_comments),
         )
         .route(
-            "/api/v3/repos/{owner}/{repo}/compare/{basehead}",
+            "/api/v3/repos/{owner}/{repo}/compare/{*basehead}",
             get(git::compare),
         )
         .route(

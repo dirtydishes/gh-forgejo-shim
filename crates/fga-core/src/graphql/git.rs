@@ -131,7 +131,7 @@ pub(super) async fn object(
         rev => rev,
     };
     let Some(path) = path else {
-        return match session.git_commit(owner, repo, rev).await {
+        return match session.resolve_commit(owner, repo, rev).await {
             Ok(commit) => Ok(Some(GitObject::Commit(Box::new(Commit {
                 owner: owner.into(),
                 repo: repo.into(),
