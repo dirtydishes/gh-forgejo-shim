@@ -1,0 +1,217 @@
+"""redact.py and leaks.py on a made-up capture holding every kind of identifying data."""
+
+import contextlib
+import io
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import leaks
+import redact
+
+FORGEJO_TOKEN = "f" * 8 + "0123456789abcdef0123456789abcdef"
+SHA = "4b3e7049b6173d786b9c12f7d4d8b5355df8d3d0"
+GHO = "gho_" + "Zx9" * 12
+# Split so a repository-wide search for private paths finds only real ones.
+MAC_HOME = "/" + "Users/octo"
+# Everything the made-up capture says about its person and machine.
+PRIVATE = [
+    "octo-person", "secret-repo", "forge.private.dev", MAC_HOME, "203.0.113.9", "2001:db8::9",
+    "octo@private.dev", GHO, FORGEJO_TOKEN, "Real Name", "Somewhere Town", "my own bio", "octo_tw",
+    "1234567", "MDQ6VXNlcjEyMzQ1Njc", "avatars.githubusercontent.com", SHA, "41111899791",
+    "124255789264", "2026-10-30", "-0400", "AABBCCDDEEFF00112233", "sess-value", "someone-else",
+]
+USER = {
+    "login": "octo-person", "id": 1234567, "node_id": "MDQ6VXNlcjEyMzQ1Njc",
+    "avatar_url": "https://avatars.githubusercontent.com/u/1234567?v=4", "type": "User",
+    "html_url": "https://github.com/octo-person", "name": "Real Name", "blog": "https://forge.private.dev",
+    "location": "Somewhere Town", "email": "octo@private.dev", "bio": "my own bio",
+    "twitter_username": "octo_tw", "followers": 7, "created_at": "2018-01-16T03:58:33Z",
+}
+BATCH = {"data": {"viewer": {"login": "octo-person"}, "p0": {"pullRequest": {
+    "url": "https://github.com/octo-person/secret-repo/pull/1", "headRefOid": SHA,
+    "author": {"login": "someone-else"},
+    "commits": {"nodes": [{"commit": {"oid": SHA, "statusCheckRollup": {"contexts": {"nodes": [{
+        "__typename": "CheckRun", "name": "check", "startedAt": "2026-10-30T19:02:30Z",
+        "completedAt": "2026-10-30T19:02:35Z",
+        "detailsUrl": "https://github.com/octo-person/secret-repo/actions/runs/41111899791/job/124255789264",
+    }]}}}}]}}}}}
+
+
+def record(ts, argv, stdout="", stderr="", cwd="/", **extra):
+    return {"argv": argv, "chain": [MAC_HOME + "/Library/Application Support/Client/client"], "cwd": cwd,
+            "duration_ms": 10, "env": {"GH_PROMPT_DISABLED": "1"}, "env_secrets_present": ["GH_TOKEN"],
+            "exit": 0, "stderr": stderr, "stdin_tty": False, "stdout": stdout, "stdout_tty": False,
+            "ts": ts, **extra}
+
+
+RECORDS = [
+    record("2026-10-30T15:16:57-0400", ["api", "user", "--hostname", "github.com"], json.dumps(USER, separators=(",", ":"))),
+    record("2026-10-30T15:17:00-0400", ["auth", "status", "--hostname", "forge.private.dev"],
+           "forge.private.dev\n  ✓ Logged in to forge.private.dev account octo-person (keyring)\n"
+           "  - Token: gho_************************************\n"),
+    record("2026-10-30T15:17:03-0400", ["api", "-H", f"Authorization: token {FORGEJO_TOKEN}",
+                                        "repos/octo-person/secret-repo/actions/runners/registration-token"],
+           '{"token":"AABBCCDDEEFF00112233","expires_at":"2026-10-30T20:17:03Z"}\n',
+           stderr="Set-Cookie: user_session=sess-value\n", cwd=MAC_HOME + "/Code/secret-repo-fj"),
+    record("2026-10-30T15:20:00-0400", ["api", "graphql", "--hostname", "github.com", "-f",
+                                        'query=query { p0: repository(owner:"octo-person",name:"secret-repo") { id } }'],
+           json.dumps(BATCH, separators=(",", ":")) + "\n"),
+    record("2026-10-30T15:21:00-0400", ["api", "user", "--hostname", "github.com"], json.dumps(USER, separators=(",", ":"))),
+    record("2026-10-30T15:21:01-0400", ["config", "get", "oauth_token", "-h", "forge.private.dev"], GHO + "\n"),
+    record("2026-10-30T15:22:00-0400", ["pr", "merge", "1", "--match-head-commit", SHA, "--repo",
+                                        "https://octo:pw@forge.private.dev/octo-person/secret-repo"]),
+]
+MARKS = "MARK first 15:17:00\nMARK second 15:21:00\n"
+LOG = ('203.0.113.9 - - [30/Oct/2026:20:06:03 +0000] "GET /api/v3/repos/octo-person/secret-repo HTTP/1.1" 401 139 "-" "client/1"\n'
+       '2001:db8::9 - - [30/Oct/2026:20:06:12 +0000] "GET /api/v3/user?access_token=AABBCCDDEEFF00112233 HTTP/1.1" 401 0 "-" "client/1"\n')
+DOCUMENT = 'query { p0: repository(owner:"octo-person",name:"secret-repo") { pullRequest(number:1) { headRefOid } } }\n'
+STUBS = [{"contains": ["api", "user", "forge.private.dev"], "stdout": {"login": "octo-person", "avatar_url": None}}]
+NAMES = ["--name", "secret-repo=<repo>", "--name", "forge.private.dev=forge.test"]
+
+
+class Capture:
+    """The made-up capture written out, and its redacted copy."""
+
+    def __init__(self):
+        self.directory = tempfile.TemporaryDirectory()
+        root = Path(self.directory.name)
+        self.source = root / "source"
+        self.out = root / "out"
+        self.source.mkdir()
+        (self.source / "client-1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+        (self.source / "client-1.marks").write_text(MARKS)
+        (self.source / "client-1-requests.log").write_text(LOG)
+        (self.source / "doc.graphql").write_text(DOCUMENT)
+        (self.source / "client-1.stubs.json").write_text(json.dumps(STUBS))
+        self.files = sorted(str(p) for p in self.source.iterdir())
+
+    def redact(self, *extra):
+        return redact.main(["--out", str(self.out), *NAMES, *extra, *self.files])
+
+    def records(self):
+        return [json.loads(line) for line in (self.out / "client-1.jsonl").read_text().splitlines()]
+
+
+class RedactTest(unittest.TestCase):
+    def setUp(self):
+        self.capture = Capture()
+        self.addCleanup(self.capture.directory.cleanup)
+
+    def test_leaks_finds_each_kind_in_the_raw_capture(self):
+        kinds = {line.rsplit(": ", 1)[1] for line in leaks.check([self.capture.source])}
+        self.assertTrue({"token", "token or unredacted commit ID", "credential", "IP address", "email",
+                         "home directory", "avatar URL", "host"} <= kinds, kinds)
+
+    def test_nothing_private_survives_and_leaks_passes(self):
+        self.assertEqual(self.capture.redact(), 0)
+        for path in self.capture.out.iterdir():
+            text = path.read_text().lower()
+            for value in PRIVATE:
+                self.assertNotIn(value.lower(), text, f"{value} in {path.name}")
+        self.assertEqual(leaks.check([self.capture.out]), [])
+
+    def test_a_users_profile_keeps_its_shape(self):
+        self.capture.redact()
+        user = json.loads(self.capture.records()[0]["stdout"])
+        self.assertEqual(list(user), list(USER))
+        self.assertEqual(user["login"], "<user>")
+        self.assertEqual((user["id"], user["followers"]), (0, 0))
+        self.assertEqual((user["name"], user["bio"], user["location"], user["blog"]), ("<redacted>",) * 4)
+        self.assertEqual((user["node_id"], user["avatar_url"]), ("<node-id>", "<avatar-url>"))
+        self.assertEqual(user["html_url"], "https://github.com/<user>")
+
+    def test_times_become_offsets_and_marks_labels(self):
+        self.capture.redact()
+        rows = self.capture.records()
+        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303])
+        self.assertEqual([row.get("mark") for row in rows], [None, "first", "first", "first", "second", "second", "second"])
+        self.assertFalse(any("ts" in row for row in rows))
+        log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
+        self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])
+        self.assertTrue(all(line.startswith("<ip> ") for line in log))
+
+    def test_placeholders_are_stable_across_files_and_keep_order(self):
+        self.capture.redact()
+        rows = self.capture.records()
+        batch = json.loads(rows[3]["stdout"])["data"]["p0"]["pullRequest"]
+        sha = "0" * 39 + "1"
+        self.assertEqual(batch["headRefOid"], sha)
+        self.assertEqual(rows[6]["argv"][4], sha)
+        self.assertEqual(batch["author"]["login"], "<user-2>")
+        check = batch["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"][0]
+        self.assertLess(check["startedAt"], check["completedAt"])
+        self.assertEqual(check["detailsUrl"], "https://github.com/<user>/<repo>/actions/runs/1/job/1")
+        self.assertIn('owner:"<user>",name:"<repo>"', (self.capture.out / "doc.graphql").read_text())
+        stubs = json.loads((self.capture.out / "client-1.stubs.json").read_text())
+        self.assertEqual(stubs[0]["contains"][2], "forge.test")
+
+    def test_credentials_are_hidden(self):
+        self.capture.redact()
+        rows = self.capture.records()
+        self.assertEqual(rows[2]["argv"][2], "Authorization: token <token>")
+        self.assertEqual(json.loads(rows[2]["stdout"])["token"], "<redacted>")
+        self.assertEqual(rows[2]["stderr"], "Set-Cookie: <redacted>\n")
+        self.assertEqual(rows[5]["stdout"], "<token>\n")
+        self.assertEqual(rows[6]["argv"][-1], "https://<redacted>@forge.test/<user>/<repo>")
+        self.assertIn("Token: gho_****", rows[1]["stdout"])
+        self.assertIn("access_token=<redacted>", (self.capture.out / "client-1-requests.log").read_text())
+
+    def test_a_repeated_answer_is_stored_once(self):
+        self.capture.redact()
+        rows = self.capture.records()
+        self.assertEqual(rows[4]["stdout"], {"same_as": 0})
+
+    def test_screenshots_are_refused(self):
+        (self.capture.source / "shot.png").write_bytes(b"\x89PNG\r\n")
+        self.capture.files.append(str(self.capture.source / "shot.png"))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.capture.redact()
+        self.assertIn("refusing files it can't redact", stderr.getvalue())
+        self.assertFalse(self.capture.out.exists())
+
+
+class LeaksTest(unittest.TestCase):
+    def kinds(self, text, suffix=".log"):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ("capture" + suffix)
+            path.write_text(text)
+            findings = leaks.check([path])
+        for finding in findings:
+            self.assertNotIn(text.strip(), finding)
+        return {finding.rsplit(": ", 1)[1] for finding in findings}
+
+    def test_each_kind(self):
+        cases = {
+            "ghp_" + "a1" * 18: "token", "eyJhbGciOiJI.eyJzdWIiOiIx.sig": "token",
+            "a" * 40: "token or unredacted commit ID", "Authorization: bearer abc": "credential",
+            "Cookie: a=b": "credential", "password=hunter2": "credential", "me@private.dev": "email",
+            "/home/octo/x": "home directory", "C:\\Users\\octo": "home directory", "198.51.100.7": "IP address",
+            "2001:db8::1": "IP address", "https://forge.test/avatars/abc": "avatar URL",
+            "https://avatars.githubusercontent.com/u/1": "avatar URL", "https://me:pw@forge.test/": "credential",
+            "https://forge.private.dev/x": "host", "git.example.ts.net": "host", "box.local": "host",
+            "--repo forge.private.dev/o/r": "host",
+        }
+        for text, kind in cases.items():
+            self.assertIn(kind, self.kinds(text), text)
+
+    def test_placeholders_and_ordinary_text_pass(self):
+        ordinary = [
+            "<user> <repo> <home>/Code <ip> <email> <token> <avatar-url> forge.test github.com",
+            "https://api.github.com/users/<user> https://<redacted>@forge.test/x",
+            "Authorization: token <token>", "Cookie: <redacted>", "0" * 39 + "1 2000-01-01T00:00:00Z",
+            "gh version 2.103.3 Versions/156.0.8078.48/Helpers ChatGPT.app 19:02:38",
+            "ci / check (pull_request) e2e@example.invalid notes/nopr.txt",
+        ]
+        self.assertEqual(self.kinds("\n".join(ordinary) + "\n"), set())
+
+    def test_a_sensitive_json_key_needs_a_placeholder(self):
+        line = json.dumps({"stdout": json.dumps({"token": "AABB", "other": "x"})})
+        self.assertIn("credential", self.kinds(line + "\n", ".jsonl"))
+        line = json.dumps({"stdout": json.dumps({"token": "<redacted>"})})
+        self.assertEqual(self.kinds(line + "\n", ".jsonl"), set())
+
+
+if __name__ == "__main__":
+    unittest.main()
