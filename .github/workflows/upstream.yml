@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Find the latest gh release and stable Forgejo image
+        id: versions
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -58,7 +59,10 @@ jobs:
       - name: Run gh against the gateway and a real Forgejo
         run: scripts/e2e.sh
 
+      # The suites are independent, so a gateway failure doesn't hide this one. Without the
+      # lookup, the scripts would fall back to the pins.
       - name: Run gh and Claude's lookups through the server-mode image and nginx snippet
+        if: ${{ !cancelled() && steps.versions.outcome == 'success' }}
         run: scripts/e2e-server.sh
 
       - name: Upload e2e results
