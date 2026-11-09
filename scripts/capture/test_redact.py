@@ -200,6 +200,18 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(redactor.text("PRIVATE-TOKEN: abc123\nX-Api-Key: k1"), "PRIVATE-TOKEN: <token>\nX-Api-Key: <token>")
         self.assertEqual(redactor.text("task-runner desk-lamp gho_****"), "task-runner desk-lamp gho_****")
 
+    def test_answers_keep_their_json_style(self):
+        redactor = redact.Redactor([("octo-person", "<user>")])
+        answer = {"login": "octo-person", "bio": "café", "html_url": "https://github.com/octo-person?a=1&b=2"}
+        for original in (json.dumps(answer, indent=2), json.dumps(answer, separators=(",", ":")),
+                         json.dumps(answer, ensure_ascii=True), json.dumps(answer, separators=(",", ":"))
+                         .replace("&", "\\u0026")):
+            redacted = redactor.structured(original)
+            expected = original.replace("octo-person", "<user>").replace("café", "<redacted>").replace("caf\\u00e9", "<redacted>")
+            if "\\u0026" in original:
+                expected = expected.replace("<user>", "\\u003cuser\\u003e").replace("<redacted>", "\\u003credacted\\u003e")
+            self.assertEqual(redacted, expected)
+
     def test_versions_and_workflow_commands_are_left_alone(self):
         redactor = redact.Redactor([])
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"

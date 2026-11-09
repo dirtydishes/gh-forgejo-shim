@@ -85,6 +85,7 @@ IDENTITY_KEYS = {"name", "email"}
 NODE_KEYS = {"node_id", "nodeId", "id"}
 # GitHub's node IDs in text, such as a mutation's argv: `PR_kwDO…`, and the older base64 `MDQ6…`.
 NODE_ID = re.compile(r"\b(?:[A-Z]{1,5}_kw[A-Za-z0-9_-]{4,}|MD[A-Za-z0-9+/]{10,}={0,2})(?![\w+/=-])")
+JSON_STYLES = [{"separators": (",", ":")}, {"separators": (", ", ": ")}, {"indent": 2}, {"indent": 4}]
 HTTP_STATUS = re.compile(r"HTTP/[\d.]+ \d{3}")
 # Response headers whose values stay (redacted like any text); every other value is hidden, which
 # covers dates, request IDs, rate-limit reset times and cookies.
@@ -342,12 +343,21 @@ def embedded(text):
 
 
 def dump_like(value, original):
-    """Re-encode in the original's style: gh writes compact JSON, a stub may not."""
+    """Re-encode in the original's style, when one of the usual ones reproduces it exactly: gh's
+    compact JSON, Python's spaced, pretty-printed, with non-ASCII escaped, or with Go's escaping of
+    `<`, `>` and `&`. Compact otherwise."""
     parsed = json.loads(original)
-    separators = (",", ":")
-    if json.dumps(parsed, ensure_ascii=False) == original:
-        separators = (", ", ": ")
-    return json.dumps(value, ensure_ascii=False, separators=separators)
+    for style in JSON_STYLES:
+        for ascii_only in (False, True):
+            for escape in (False, True):
+                if dumps(parsed, style, ascii_only, escape) == original:
+                    return dumps(value, style, ascii_only, escape)
+    return dumps(value, JSON_STYLES[0], False, False)
+
+
+def dumps(value, style, ascii_only, escape):
+    text = json.dumps(value, ensure_ascii=ascii_only, **style)
+    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026") if escape else text
 
 
 def read_marks(path):
