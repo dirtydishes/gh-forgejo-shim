@@ -8,7 +8,7 @@
  * keeps no address, header, user agent or body, and logs nothing.
  */
 import { validate } from "./report";
-import { ROUNDING, weekFigures, type Row, type Week } from "./stats";
+import { FIELDS, ROUNDING, weekFigures, type Sum, type Week } from "./stats";
 import { daysBefore, isoWeek, monday, utcDay } from "./week";
 
 export interface Env {
@@ -94,10 +94,25 @@ async function report(request: Request, env: Env): Promise<Response> {
 }
 
 /**
+ * Between ?1 and ?2, each day's total (`field` ""), then each day's count for each value of each
+ * published field. The database does the summing, so the Worker handles a few rows a day however
+ * many counters there are.
+ */
+const SUMS = [
+  "SELECT '' AS field, '' AS value, day, SUM(count) AS n FROM reports WHERE day BETWEEN ?1 AND ?2 GROUP BY day",
+  ...FIELDS.map(
+    (field) =>
+      `SELECT '${field}' AS field, ${field} AS value, day, SUM(count) AS n FROM reports
+       WHERE day BETWEEN ?1 AND ?2 GROUP BY day, ${field}`,
+  ),
+];
+
+/**
  * Works out and stores the figures for each of the last [`WEEKS`] finished weeks that has none
  * stored. A report counts on the day it arrives, so a finished week's counters never change; its
  * figures are worked out from them once and never again, so two responses never differ in a figure
- * and can't be subtracted from each other.
+ * and can't be subtracted from each other. It makes at most three database calls, however many
+ * weeks are missing, to stay within the Workers Free plan's limits.
  */
 export async function freeze(env: Env, today: string): Promise<void> {
   const thisWeek = monday(today);
@@ -105,18 +120,27 @@ export async function freeze(env: Env, today: string): Promise<void> {
     .bind(isoWeek(daysBefore(thisWeek, WEEKS * 7)))
     .all<{ week: string }>();
   const done = new Set(stored.results.map((row) => row.week));
+  const missing: string[] = [];
   for (let back = WEEKS; back >= 1; back--) {
-    const first = daysBefore(thisWeek, back * 7);
-    const week = isoWeek(first);
-    if (done.has(week)) continue;
-    const rows = await env.DB.prepare("SELECT * FROM reports WHERE day BETWEEN ? AND ?")
-      .bind(first, daysBefore(first, -6))
-      .all<Row>();
-    const worked = weekFigures(week, rows.results);
-    await env.DB.prepare("INSERT INTO published (week, figures) VALUES (?, ?) ON CONFLICT (week) DO NOTHING")
-      .bind(week, JSON.stringify(worked))
-      .run();
+    if (!done.has(isoWeek(daysBefore(thisWeek, back * 7)))) missing.push(daysBefore(thisWeek, back * 7));
   }
+  if (missing.length === 0) return;
+  const range = [missing[0], daysBefore(missing[missing.length - 1], -6)];
+  const sums = await env.DB.batch<Sum>(SUMS.map((query) => env.DB.prepare(query).bind(...range)));
+  const byWeek = new Map<string, Sum[]>();
+  for (const sum of sums.flatMap((found) => found.results)) {
+    const week = byWeek.get(isoWeek(sum.day)) ?? [];
+    week.push(sum);
+    byWeek.set(isoWeek(sum.day), week);
+  }
+  await env.DB.batch(
+    missing.map((first) =>
+      env.DB.prepare("INSERT INTO published (week, figures) VALUES (?, ?) ON CONFLICT (week) DO NOTHING").bind(
+        isoWeek(first),
+        JSON.stringify(weekFigures(isoWeek(first), byWeek.get(isoWeek(first)) ?? [])),
+      ),
+    ),
+  );
 }
 
 /** The stored figures for the last [`WEEKS`] finished weeks, oldest first; never the current week. */
