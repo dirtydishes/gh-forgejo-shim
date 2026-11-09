@@ -19,3 +19,8 @@ export function isoWeek(day: string): string {
 export function daysBefore(day: string, days: number): string {
   return utcDay(new Date(new Date(`${day}T00:00:00Z`).getTime() - days * 86_400_000));
 }
+
+/** The Monday that starts `day`'s ISO week. */
+export function monday(day: string): string {
+  return daysBefore(day, (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7);
+}

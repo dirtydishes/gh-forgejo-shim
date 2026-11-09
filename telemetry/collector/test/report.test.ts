@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { expire } from "../src/index";
-import { isoWeek, utcDay } from "../src/week";
+import { expire, freeze } from "../src/index";
+import { daysBefore, isoWeek, monday, utcDay } from "../src/week";
 
 const today = utcDay(new Date());
 
@@ -32,9 +32,11 @@ const post = (body: unknown, headers: Record<string, string> = {}) =>
 const rows = async (table: string) =>
   (await env.DB.prepare(`SELECT * FROM ${table}`).all()).results;
 
-// Each test starts from empty counters.
+// Each test starts from empty counters and nothing published.
 beforeEach(async () => {
-  await env.DB.batch(["reports", "cohorts", "unsupported"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)));
+  await env.DB.batch(
+    ["reports", "cohorts", "unsupported", "published"].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
+  );
 });
 
 describe("POST /v1/report", () => {
@@ -133,31 +135,92 @@ describe("retention", () => {
       ),
       env.DB.prepare("INSERT INTO cohorts VALUES ('2025-01-01', '2026-W45', 5)"),
       env.DB.prepare("INSERT INTO unsupported VALUES ('2025-01-01', 'rest:other', 3, 3)"),
+      env.DB.prepare("INSERT INTO published VALUES ('2025-W01', '{}')"),
+      env.DB.prepare("INSERT INTO published VALUES ('2026-W44', '{}')"),
     ]);
     await expire(env, "2026-11-07");
     expect((await rows("reports")).map((row) => row.day)).toEqual(["2026-11-01"]);
     expect(await rows("unsupported")).toEqual([]);
     expect(await rows("cohorts")).toEqual([]);
+    expect((await rows("published")).map((row) => row.week)).toEqual(["2026-W44"]);
   });
 });
 
+/** Monday of last week, the most recent finished week. */
+const lastWeek = daysBefore(monday(today), 7);
+
+/** A counter for `day`, as if `count` installs had reported those values. */
+const counted = (day: string, count: number, client = "codex") =>
+  env.DB.prepare(
+    "INSERT INTO reports VALUES (?, 'client', ?, 'forgejo', 15, 'macos', 'aarch64', '0.3.0', '2.103', ?)",
+  ).bind(day, client, count);
+
+const stats = async () =>
+  (await (await exports.default.fetch("https://telemetry.example/v1/stats")).json()) as Record<string, any>;
+
 describe("GET /v1/stats", () => {
-  it("publishes totals with small counts left out", async () => {
+  it("gives two responses nothing to subtract", async () => {
+    // Saving the stats before and after one more report would show that report's values.
     for (let i = 0; i < 3; i++) await post(example());
+    await freeze(env, today);
+    const before = await stats();
     const other = example();
     other.client = "cursor";
     await post(other);
+    await freeze(env, today);
+    expect(await stats()).toEqual(before);
+  });
+
+  it("publishes a finished week's totals with small counts left out", async () => {
+    await env.DB.batch([
+      counted(lastWeek, 3),
+      counted(lastWeek, 1, "cursor"),
+      env.DB.prepare("INSERT INTO cohorts VALUES (?, ?, 4)").bind(lastWeek, isoWeek(lastWeek)),
+      env.DB.prepare("INSERT INTO unsupported VALUES (?, 'graphql:Repository.projectsV2', 4, 8)").bind(lastWeek),
+    ]);
+    await freeze(env, today);
     const response = await exports.default.fetch("https://telemetry.example/v1/stats");
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
     const body = (await response.json()) as Record<string, any>;
-    expect(body.totals.days).toEqual([{ day: today, installs: 4, reports: 4 }]);
+    expect(body.generated).toBe(today);
+    expect(body.minimum_count).toBe(3);
+    expect(body.totals.days).toEqual([{ day: lastWeek, installs: 4, reports: 4 }]);
+    expect(body.totals.weeks).toEqual([{ week: isoWeek(lastWeek), installs: 4, reports: 4 }]);
     // codex's 3 would give away cursor's 1 by subtraction, so neither shows.
     expect(body.by_field.client.days).toEqual([]);
     expect(JSON.stringify(body)).not.toContain("cursor");
+    expect(body.retention).toEqual([{ first_week: isoWeek(lastWeek), week: isoWeek(lastWeek), installs: 4 }]);
     // Four reports named it on one day, twice each.
     expect(body.unsupported).toEqual([
-      { week: isoWeek(today), name: "graphql:Repository.projectsV2", installs: 4, total: 8 },
+      { week: isoWeek(lastWeek), name: "graphql:Repository.projectsV2", installs: 4, total: 8 },
     ]);
+  });
+
+  it("never changes a week's figures once they're published", async () => {
+    await env.DB.batch([counted(lastWeek, 3), counted(daysBefore(lastWeek, -1), 5)]);
+    await freeze(env, today);
+    const before = await stats();
+    expect(before.totals.weeks).toEqual([{ week: isoWeek(lastWeek), installs: 5, reports: 8 }]);
+    await env.DB.batch([counted(lastWeek, 4, "cursor"), counted(daysBefore(lastWeek, -2), 9)]);
+    await freeze(env, today);
+    expect(await stats()).toEqual(before);
+  });
+
+  it("publishes 90 days and 26 weeks", async () => {
+    const fifteenWeeks = daysBefore(monday(today), 15 * 7);
+    await env.DB.batch([
+      counted(daysBefore(monday(today), 27 * 7), 9),
+      counted(fifteenWeeks, 4),
+      counted(lastWeek, 3),
+    ]);
+    await freeze(env, today);
+    const body = await stats();
+    expect(body.totals.days.map((cell: Record<string, string>) => cell.day)).toEqual([lastWeek]);
+    expect(body.totals.weeks.map((cell: Record<string, string>) => cell.week)).toEqual([
+      isoWeek(fifteenWeeks),
+      isoWeek(lastWeek),
+    ]);
+    expect((await rows("published")).length).toBe(26);
   });
 });
