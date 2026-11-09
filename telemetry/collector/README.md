@@ -5,7 +5,7 @@ report holds, what the collector keeps and what it publishes.
 
 - `POST /v1/report` checks a report against [`contract/telemetry.json`](../../contract/telemetry.json)
   and adds one to that day's counters.
-- `GET /v1/stats` publishes each finished week's rounded one-field totals.
+- `GET /v1/stats` publishes each finished week's one-field totals, with noise and rounded.
 - A daily cron works out each finished week's totals once, stores them, and deletes counters older
   than 400 days.
 
@@ -62,4 +62,4 @@ FROM unsupported GROUP BY week_of, name ORDER BY week_of, installs DESC;
 ```
 
 Don't publish what these queries show. The detailed counts include counts of 1 and 2, which
-`/v1/stats` rounds away.
+`/v1/stats` hides with noise and rounding.
