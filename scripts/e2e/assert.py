@@ -10,7 +10,8 @@ def check(condition, message):
     assert condition, message
     print('PASS ' + message)
 
-check((root / 'gh-version.txt').read_text().startswith('gh version 2.103.3 '), 'official gh 2.103.3')
+gh_version = os.environ.get('E2E_GH_VERSION', '2.103.3')
+check((root / 'gh-version.txt').read_text().startswith(f'gh version {gh_version} '), f'official gh {gh_version}')
 check(read('user.json')['login'] == 'e2e', 'gh auth login and gh api user: e2e')
 for number, branch, title, draft in [(1, 's/pass', 'scenario: checks pass', False), (2, 's/draft', 'scenario: draft', True)]:
     expected = dict(number=number, title=title, state='OPEN', url=f'https://forge.test/e2e/oracle/pull/{number}', isDraft=draft, headRefName=branch, baseRefName='main')
