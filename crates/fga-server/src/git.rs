@@ -231,8 +231,15 @@ pub async fn compare(
             "{}/{owner}/{repo}/compare",
             host.public_url.as_str().trim_end_matches('/')
         );
-        let html_url = format!("{web}/{basehead}");
-        // A branch's slashes stay slashes, as in GitHub's own `url`.
+        // A branch's slashes stay slashes, as in GitHub's own links; anything else a name may hold,
+        // such as `#` or `%`, is escaped.
+        let mut html = host.public_url.clone();
+        html.path_segments_mut()
+            .expect("validated base URL")
+            .pop_if_empty()
+            .extend([owner.as_str(), repo.as_str(), "compare"])
+            .extend(basehead.split('/'));
+        let html_url = html.to_string();
         let mut url = vec!["compare"];
         url.extend(basehead.split('/'));
         Ok(Json(json!({

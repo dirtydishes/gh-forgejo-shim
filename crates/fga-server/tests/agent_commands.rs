@@ -603,7 +603,8 @@ fn branch_routes() -> Value {
     let commit = |sha: &str| routes[format!("/api/v1/repos/e2e/demo/git/commits/{sha}")].clone();
     let (main, topic) = (json!([commit(base())]), json!([commit(head())]));
     routes["/api/v1/repos/e2e/demo/git/commits/main"] = main[0].clone();
-    routes["/api/v1/repos/e2e/demo/commits?sha=feature/topic"] = topic;
+    routes["/api/v1/repos/e2e/demo/commits?sha=feature/topic"] = topic.clone();
+    routes["/api/v1/repos/e2e/demo/commits?sha=feature/#12"] = topic;
     routes
 }
 
@@ -634,6 +635,17 @@ async fn compare_resolves_branch_names_with_slashes() {
             )
         );
     }
+    // A `#` in a branch name stays in the links' paths, never a fragment.
+    let reply = get(addr, "/api/v3/repos/e2e/demo/compare/main...feature/%2312").await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let compare = reply.json();
+    let web = "https://forge.test/e2e/demo/compare/main...feature/%2312";
+    assert_eq!(compare["html_url"], web);
+    assert_eq!(compare["diff_url"], format!("{web}.diff"));
+    assert_eq!(
+        compare["url"],
+        "https://forge.test/api/v3/repos/e2e/demo/compare/main...feature/%2312"
+    );
     let log = log.lock().unwrap();
     assert!(
         log.iter()
