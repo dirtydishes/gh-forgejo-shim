@@ -165,7 +165,12 @@ class ProbeTest(unittest.TestCase):
 
     def test_an_unreadable_host_list_falls_through_to_gh(self):
         wrapper = Wrapper(self)
-        (wrapper.root / ".gh-capture" / "fake-token-hosts").mkdir(parents=True)
+        hosts = wrapper.root / ".gh-capture" / "fake-token-hosts"
+        hosts.mkdir(parents=True)
+        result = wrapper.run("auth", "token", "--hostname", "forge.test")
+        self.assertEqual((result.returncode, result.stdout), (0, b"out auth token --hostname forge.test\n"))
+        hosts.rmdir()
+        hosts.write_bytes(b"\xff\xfe forge.test\n")
         result = wrapper.run("auth", "token", "--hostname", "forge.test")
         self.assertEqual((result.returncode, result.stdout), (0, b"out auth token --hostname forge.test\n"))
 
@@ -287,6 +292,18 @@ class TokenOutputTest(unittest.TestCase):
         self.assertIn('"client_secret":"<redacted>"', first["stdout"])
         self.assertNotIn("gto_", first["stdout"])
         self.assertTrue(second["stdout"]["head"].startswith('{"token": "<redacted>", '))
+
+    def test_scrubbing_is_quick_and_keeps_empty_values(self):
+        wrapper = Wrapper(self)
+        patch = "a token and a secret and a password " * 3000  # under Linux's 128 KiB for one variable
+        answer = 'HTTP/2.0 200 OK\r\n\r\n{"temp_clone_token":"","patch":"' + patch + '","token":"ab"}'
+        started = time.monotonic()
+        wrapper.run("api", "-i", "repos/o/r/pulls/1/files", FAKE_GH="print", FAKE_OUT=answer)
+        self.assertLess(time.monotonic() - started, 2)
+        stored = wrapper.records()[0]["stdout"]
+        self.assertIn('"temp_clone_token":""', stored)
+        self.assertIn('"token":"<redacted>"', stored)
+        self.assertIn(patch, stored)
 
     def test_command_words_not_any_word(self):
         wrapper = Wrapper(self)
