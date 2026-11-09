@@ -95,7 +95,7 @@ The wrapper keeps a few small files in `$XDG_STATE_HOME/gh-forgejo-shim/telemetr
 - `sent-YYYY-MM-DD`: today's report has gone.
 - `counts`: what waits for the next report, a line each: its kind (`unsupported` or `failed`),
   agent, name and number. 0.4.0 kept its counts in `unsupported`, without the agent; the next
-  report deletes that file unsent.
+  report deletes that file, and any `unsupported.sending-*` a 0.4.0 sender left, unsent.
 - `notice-shown`: `bootstrap`, `install-shim` or `doctor` has printed the notice.
 
 Turning reports off, in any of the ways below, deletes these files, and while reports are off
