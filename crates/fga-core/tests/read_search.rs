@@ -207,8 +207,9 @@ async fn project_cards_are_an_empty_connection() {
 /// owner stays as GitHub reports it; an open PR's `isCrossRepository` is true unless the branch is the
 /// PR's head, so `gh pr close -d`/`merge -d` never delete a branch that isn't it. gh deletes no remote
 /// branch for a closed or merged PR, so one from the same repository is not cross-repository, as on
-/// GitHub, and `gh pr list` shows its branch without an owner. `headRefName` is always Forgejo's own
-/// name, so no made-up name can equal a real branch's.
+/// GitHub, and `gh pr list` shows its branch without an owner. `headRefName` is Forgejo's own name, so
+/// no made-up name can equal a real branch's, except that a branch named like a ref shows the PR's
+/// own ref `refs/pull/N/head`: gh would fetch into a local ref of that name.
 #[tokio::test]
 async fn a_head_branch_that_is_gone_has_no_head_repository() {
     let repo = |owner: &str| json!({"name":"r","owner":{"id":1,"login":owner,"avatar_url":""}});
@@ -295,8 +296,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         ),
         // The PR's ref can't be read: unknown counts as moved.
         ("feature", "feature", "o", "aaa", "open", false, None),
-        // A real branch named like a ref keeps its name, so it can't be taken for `topic`, but
-        // counts as gone: gh fetches the PR's own ref.
+        // A real branch named like a ref shows the PR's own ref, so it can't be taken for `topic`,
+        // and counts as gone: gh fetches the PR's own ref.
         (
             "refs/topic",
             "refs/topic",
@@ -318,8 +319,8 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             false,
             Some("aaa"),
         ),
-        // r5#2, the GitHub-equivalent residue: a closed PR from `refs/topic` keeps that name and
-        // gets no head repository, as on GitHub once its fork is deleted.
+        // r5#2: a closed PR from `refs/topic` gets no head repository, as on GitHub once its fork
+        // is deleted, and shows its own ref.
         (
             "refs/topic",
             "refs/topic",
@@ -383,6 +384,9 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "agit:pullRequests(headRefName:\"refs/pull/3/head\",first:5){nodes{number}}".into(),
             "pull3:pullRequests(headRefName:\"pull/3/head\",first:5){nodes{number}}".into(),
             "topic:pullRequests(headRefName:\"topic\",first:5){nodes{number}}".into(),
+            // gh pr list --head takes the name gh was shown, or Forgejo's own.
+            "shown:pullRequests(headRefName:\"refs/pull/12/head\",first:5){nodes{number}}".into(),
+            "forgejo:pullRequests(headRefName:\"refs/refs/topic\",first:5){nodes{number}}".into(),
         ])
         .collect::<Vec<_>>()
         .join(" ");
@@ -412,16 +416,18 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "p7":head("feature", false, Value::Null, "o"),
             "p8":head("feature", false, Value::Null, "o"),
             "p9":head("feature", true, Value::Null, "o"),
-            "p10":head("refs/refs/topic", true, Value::Null, "o"),
+            // A branch named like a ref shows the PR's own ref, which no local branch can be.
+            "p10":head("refs/pull/10/head", true, Value::Null, "o"),
             "p11":head("feature", true, Value::Null, "o"),
-            // gh pr list --head takes the name gh was shown.
-            "p12":head("refs/topic", true, Value::Null, "o"),
+            "p12":head("refs/pull/12/head", true, Value::Null, "o"),
             "p13":head("topic", false, r.clone(), "o"),
             "p14":head("pull/3/head", false, r, "o"),
-            "p15":head("refs/topic", false, Value::Null, "o"),
+            "p15":head("refs/pull/15/head", false, Value::Null, "o"),
             "agit":{"nodes":[{"number":3}]},
             "pull3":{"nodes":[{"number":14}]},
             "topic":{"nodes":[{"number":13}]},
+            "shown":{"nodes":[{"number":12}]},
+            "forgejo":{"nodes":[{"number":10}]},
         })
     );
 }

@@ -127,80 +127,20 @@ async fn an_agit_checkout_lands_detached_on_the_pr_head() {
     std::fs::set_permissions(&ssh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
     let user = json!({"id":1,"login":"o","full_name":"","avatar_url":""});
-    let repository = json!({"id":1,"name":"r","full_name":"o/r","private":false,"owner":user,
-        "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,"archived":false,
-        "permissions":{"admin":false,"push":true,"pull":true}});
     let pull = json!({"number":3,"title":"agit","state":"open","merged":false,"draft":false,
         "html_url":"https://forge.test/o/r/pulls/3","user":user,"merged_at":null,
         "allow_maintainer_edit":false,
         "head":{"label":"","ref":"refs/pull/3/head","sha":c,"repo":{"name":"r","owner":user}},
         "base":{"label":"main","ref":"main","sha":a,"repo":{"name":"r","owner":user}}});
-    let upstream_api = Router::new()
-        .route("/api/v1/user", get(move || async move { Json(user) }))
-        .route(
-            "/api/v1/repos/o/r",
-            get(move || async move { Json(repository) }),
-        )
-        .route(
-            "/api/v1/repos/o/r/pulls/3",
-            get(move || async move { Json(pull) }),
-        );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let forgejo = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, upstream_api).await.unwrap() });
-    let host = Host::new(
-        "https://forge.test".parse().unwrap(),
-        Forgejo::new(forgejo.parse().unwrap()).unwrap(),
-        WipPrefixes::default(),
-    );
-    let socket = root.join("gw.sock");
-    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-    let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
-    tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
-
-    let config = root.join("gh");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(
-        config.join("config.yml"),
-        format!(
-            "http_unix_socket: {}\ngit_protocol: ssh\n",
-            socket.display()
-        ),
+    let checkout = gh_through_gateway(
+        &gh,
+        &root,
+        &work,
+        &ssh,
+        pull,
+        &["pr", "checkout", "3", "-R", "forge.test/o/r"],
     )
-    .unwrap();
-    // A disposable token for the fake forge; the gateway sends it to Forgejo as is.
-    std::fs::write(
-        config.join("hosts.yml"),
-        "forge.test:\n    oauth_token: t\n    git_protocol: ssh\n    user: o\n",
-    )
-    .unwrap();
-    let checkout = {
-        let (gh, work, config, root, ssh) = (
-            gh.clone(),
-            work.clone(),
-            config.clone(),
-            root.clone(),
-            ssh.clone(),
-        );
-        tokio::task::spawn_blocking(move || {
-            let mut command = Command::new(gh);
-            command.env_clear();
-            isolated(&mut command, &root)
-                .args(["pr", "checkout", "3", "-R", "forge.test/o/r"])
-                .current_dir(&work)
-                .env("PATH", std::env::var("PATH").unwrap())
-                .env("GH_CONFIG_DIR", &config)
-                .env("GH_PROMPT_DISABLED", "1")
-                .env("GH_NO_UPDATE_NOTIFIER", "1")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_SSH_COMMAND", &ssh)
-                .output()
-                .unwrap()
-        })
-        .await
-        .unwrap()
-    };
+    .await;
     let head = text(&git(&work, &["rev-parse", "HEAD"]));
     let branch = git(&work, &["symbolic-ref", "-q", "HEAD"]);
     let refs = text(&git(&work, &["for-each-ref", "--format=%(refname)"]));
@@ -234,4 +174,190 @@ async fn an_agit_checkout_lands_detached_on_the_pr_head() {
         branches.contains("branch.refs/pull/3/head.merge refs/pull/3/head"),
         "{branches}"
     );
+}
+
+/// Forgejo allows a branch whose name starts with `refs/`, such as `refs/heads/main`. gh fetches a PR
+/// with no head repository into a local ref named by `headRefName`, which git reads as a full ref
+/// name, so with `--force` that name would replace the user's own `main` and its unpushed commits.
+#[tokio::test]
+#[ignore = "needs real gh 2.103.3 and git"]
+async fn a_branch_named_like_a_ref_never_replaces_a_local_branch() {
+    let Some(gh) = real_gh() else {
+        eprintln!("skipped: no gh 2.103.3 (set GFJS_REAL_GH)");
+        return;
+    };
+    let root = std::env::temp_dir().join(format!("fga-refs-branch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // The forge: main at A, and PR 1 from the branch `refs/heads/main` at C.
+    let upstream = root.join("up.git");
+    let seed = root.join("seed");
+    git(
+        &root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            upstream.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(&seed).unwrap();
+    git(&seed, &["init", "-q", "-b", "main"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "A"]);
+    let a = text(&git(&seed, &["rev-parse", "HEAD"]));
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "C"]);
+    let c = text(&git(&seed, &["rev-parse", "HEAD"]));
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            upstream.to_str().unwrap(),
+            &format!("{a}:refs/heads/main"),
+            &format!("{c}:refs/heads/refs/heads/main"),
+            &format!("{c}:refs/pull/1/head"),
+        ],
+    );
+    // The user's clone: an unpushed commit U on main, and another branch checked out.
+    let work = root.join("work");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            upstream.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "U"]);
+    let unpushed = text(&git(&work, &["rev-parse", "HEAD"]));
+    git(&work, &["switch", "-q", "-c", "other", &a]);
+    git(
+        &work,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://git@forge.test/o/r.git",
+        ],
+    );
+    let ssh = root.join("ssh");
+    std::fs::write(
+        &ssh,
+        format!("#!/bin/sh\nexec git-upload-pack '{}'\n", upstream.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+
+    let user = json!({"id":1,"login":"o","full_name":"","avatar_url":""});
+    let pull = json!({"number":1,"title":"refs","state":"open","merged":false,"draft":false,
+        "html_url":"https://forge.test/o/r/pulls/1","user":user,"merged_at":null,
+        "allow_maintainer_edit":false,
+        "head":{"label":"refs/heads/main","ref":"refs/heads/main","sha":c,
+            "repo":{"name":"r","owner":user}},
+        "base":{"label":"main","ref":"main","sha":a,"repo":{"name":"r","owner":user}}});
+    let checkout = gh_through_gateway(
+        &gh,
+        &root,
+        &work,
+        &ssh,
+        pull,
+        &["pr", "checkout", "1", "--force", "-R", "forge.test/o/r"],
+    )
+    .await;
+    let head = text(&git(&work, &["rev-parse", "HEAD"]));
+    let main = text(&git(&work, &["rev-parse", "refs/heads/main"]));
+    eprintln!(
+        "REFS exit={:?}\nstdout={}\nstderr={}\nHEAD={head} (C={c})\nmain={main} (U={unpushed})",
+        checkout.status.code(),
+        String::from_utf8_lossy(&checkout.stdout),
+        String::from_utf8_lossy(&checkout.stderr),
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(checkout.status.success(), "gh pr checkout failed");
+    assert_eq!(head, c, "HEAD is not the PR's head");
+    assert_eq!(main, unpushed, "the local main lost its unpushed commit");
+}
+
+/// Runs real gh's `args` in `work` against the gateway, in front of a fake Forgejo that serves
+/// `pull` as PR `number` of `o/r`. `ssh` serves the forge's git repository.
+async fn gh_through_gateway(
+    gh: &Path,
+    root: &Path,
+    work: &Path,
+    ssh: &Path,
+    pull: serde_json::Value,
+    args: &[&str],
+) -> Output {
+    let number = pull["number"].as_u64().unwrap();
+    let user = pull["user"].clone();
+    let repository = json!({"id":1,"name":"r","full_name":"o/r","private":false,"owner":user,
+        "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,"archived":false,
+        "permissions":{"admin":false,"push":true,"pull":true}});
+    let upstream_api = Router::new()
+        .route("/api/v1/user", get(move || async move { Json(user) }))
+        .route(
+            "/api/v1/repos/o/r",
+            get(move || async move { Json(repository) }),
+        )
+        .route(
+            &format!("/api/v1/repos/o/r/pulls/{number}"),
+            get(move || async move { Json(pull) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, upstream_api).await.unwrap() });
+    let host = Host::new(
+        "https://forge.test".parse().unwrap(),
+        Forgejo::new(forgejo.parse().unwrap()).unwrap(),
+        WipPrefixes::default(),
+    );
+    let socket = root.join("gw.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
+    tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
+
+    let config = root.join("gh");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.yml"),
+        format!(
+            "http_unix_socket: {}\ngit_protocol: ssh\n",
+            socket.display()
+        ),
+    )
+    .unwrap();
+    // A disposable token for the fake forge; the gateway sends it to Forgejo as is.
+    std::fs::write(
+        config.join("hosts.yml"),
+        "forge.test:\n    oauth_token: t\n    git_protocol: ssh\n    user: o\n",
+    )
+    .unwrap();
+    let (gh, work, root, ssh) = (
+        gh.to_owned(),
+        work.to_owned(),
+        root.to_owned(),
+        ssh.to_owned(),
+    );
+    let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        let mut command = Command::new(gh);
+        command.env_clear();
+        isolated(&mut command, &root)
+            .args(args)
+            .current_dir(&work)
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("GH_CONFIG_DIR", &config)
+            .env("GH_PROMPT_DISABLED", "1")
+            .env("GH_NO_UPDATE_NOTIFIER", "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_SSH_COMMAND", &ssh)
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap()
 }
