@@ -37,3 +37,7 @@ curl -fsS -u reader:e2e-disposable-password -H 'Content-Type: application/json' 
 mine=$(GH_ENTERPRISE_TOKEN="$reader" gh issue list -R forge.test/dirtydishes/gfj-oracle --author @me --state all --json title --jq '[.[].title]')
 test "$mine" = '["reader issue"]'
 printf 'PASS @me is the reader for a non-admin\n'
+# The gh calls agent apps made (fixtures/clients), as they made them: through the wrapper the shim
+# installs, then plain gh against the gateway.
+E2E_TOKEN="$token" python3 /test/replay.py client
+E2E_TOKEN="$token" python3 /test/replay.py server
