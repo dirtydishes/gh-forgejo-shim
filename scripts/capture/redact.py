@@ -75,18 +75,18 @@ ACTIONS = re.compile(r"(/actions/runs/)(\d+)(?:(/jobs?/)(\d+))?")
 # A date and time: ISO 8601 and RFC 3339, git's `2026-10-30 15:16:57 -0400`, Forgejo's log
 # `2026/10/30 15:16:57`, Go's `2026-10-30 15:16:57.123 -0400 EDT`, seconds and zone optional; git's
 # and date(1)'s `Fri Oct 30 15:16:57 2026 -0400` and `Fri Oct 30 15:16:57 EDT 2026`; and HTTP's
-# `Fri, 30 Oct 2026 19:02:30 GMT`. A zone's name, or Go's `-03` or `+0545` name, becomes UTC.
+# `Fri, 30 Oct 2026 19:02:30 GMT` or RFC 2822's `-0400`. A zone's name, `ChST` too, or Go's `-03`
+# or `+0545` name, becomes UTC.
 ZONE_NAMES = ("UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|AKST|AKDT|HST|BST|CET|CEST|EET|EEST|WET|WEST|IST|"
               "JST|KST|AEST|AEDT|ACST|AWST|NZST|NZDT|MSK")
 TIMESTAMP = re.compile(r"(?<!\d)(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
                        r"( ?)(Z|[+-]\d\d:?\d\d)?( (?:" + ZONE_NAMES + r"|(?:(?<=[+-]\d{4} )|(?<=[+-]\d\d:\d\d ))"
-                       r"(?:[A-Z]{2,5}|[+-]\d\d(?:\d\d)?)))?(?![\w:])")
+                       r"(?:[A-Z][A-Za-z]{1,4}|[+-]\d\d(?:\d\d)?)))?(?![\w:])")
 DAYS = "Mon|Tue|Wed|Thu|Fri|Sat|Sun"
 MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\d\d):(\d\d)"
-                   r"( (?:[A-Z]{2,5}|[+-]\d\d(?:\d\d)?))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
-HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), \d\d (?:" + MONTHS + r") \d{4} \d\d:\d\d:\d\d GMT")
-HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
+                   r"( (?:[A-Z][A-Za-z]{1,4}|[+-]\d\d(?:\d\d)?))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
+HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), (\d\d) (" + MONTHS + r") (\d{4}) (\d\d):(\d\d):(\d\d) (GMT|[+-]\d{4})\b")
 # A date alone, as in a search (`closed:>2026-09-30`). Dates that are versions, not times, stay:
 # gh's release date in `gh --version`, and GitHub's REST API version (`X-GitHub-Api-Version` and
 # the `-Selected` answer).
@@ -222,7 +222,7 @@ class Redactor:
             for match in CTIME.finditer(value):
                 found["instants"].add(parse_ctime(match))
             for match in HTTP_DATE.finditer(value):
-                found["instants"].add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
+                found["instants"].add(parse_http(match))
             parsed = embedded(value)
             for item in parsed:
                 self._collect(item, found)
@@ -256,8 +256,7 @@ class Redactor:
         # A time pass one didn't see (none should be left) still becomes the first placeholder.
         value = TIMESTAMP.sub(lambda m: format_time(self.times.get(parse_time(m), EPOCH), m), value)
         value = CTIME.sub(lambda m: format_ctime(self.times.get(parse_ctime(m), EPOCH), m), value)
-        value = HTTP_DATE.sub(lambda m: self.times.get(datetime.strptime(m.group(0), HTTP_FORMAT).replace(
-            tzinfo=timezone.utc), EPOCH).strftime(HTTP_FORMAT), value)
+        value = HTTP_DATE.sub(lambda m: format_http(self.times.get(parse_http(m), EPOCH), m), value)
         return DATE.sub(lambda m: m.group(1) or "2000{0}01{0}01".format(m.group(2)), value)
 
     def _sha(self, match):
@@ -385,6 +384,17 @@ def format_time(instant, match):
     if zone:
         text += space + ("Z" if zone == "Z" else "+00:00" if ":" in zone else "+0000")
     return text + (" UTC" if name else "")
+
+
+def parse_http(match):
+    """An HTTP or RFC 2822 date (`GMT` or a numeric zone, as `git log --date=rfc` writes) as UTC."""
+    day, month, year, hour, minute, second, zone = match.groups()
+    return utc(int(year), MONTHS.split("|").index(month) + 1, int(day), int(hour), int(minute), int(second), 0,
+               None if zone == "GMT" else zone)
+
+
+def format_http(instant, match):
+    return instant.strftime("%a, %d %b %Y %H:%M:%S ") + ("GMT" if match.group(7) == "GMT" else "+0000")
 
 
 def parse_ctime(match):
