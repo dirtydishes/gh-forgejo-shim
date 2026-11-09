@@ -149,10 +149,16 @@ async fn every_captured_document_is_within_the_limits() {
         let document = async_graphql::parser::parse_query(&query).expect("parses");
         let steps =
             cost::check(&document, &async_graphql::Variables::default()).expect("within cost");
-        let depth = cost::nesting(&query).expect("block strings closed");
+        let shape = cost::shape(&query).expect("block strings closed");
         assert!(
-            depth * 4 <= cost::MAX_NESTING,
-            "{source}: nests {depth}: raise MAX_NESTING"
+            shape.depth * 4 <= cost::MAX_NESTING,
+            "{source}: nests {}: raise MAX_NESTING",
+            shape.depth
+        );
+        assert!(
+            shape.longest_word * 4 <= cost::MAX_WORD,
+            "{source}: has a {}-character name: raise MAX_WORD",
+            shape.longest_word
         );
         assert!(
             steps * 4 <= cost::MAX_COST,
@@ -475,17 +481,52 @@ async fn a_differing_argument_is_named_as_the_rule_names_it() {
     );
 }
 
+fn depth(query: &str) -> Option<usize> {
+    cost::shape(query).map(|shape| shape.depth)
+}
+
 #[test]
 fn nesting_skips_strings_and_comments() {
-    assert_eq!(cost::nesting("{a(b:[1,{c:2}])}"), Some(4));
-    assert_eq!(cost::nesting(r#"{a(b:"[[[[\"[[")}"#), Some(2));
-    assert_eq!(cost::nesting("{a(b:\"\"\"[[[\\\"\"\"[[[\"\"\")}"), Some(2));
-    assert_eq!(cost::nesting("{a # [[[[\n}"), Some(1));
-    assert_eq!(cost::nesting("{a(b:\"x\ny\")}"), Some(2));
-    assert_eq!(cost::nesting("{a(b:\"\"\"x\"\"\"[[1]])}"), Some(4));
+    assert_eq!(depth("{a(b:[1,{c:2}])}"), Some(4));
+    assert_eq!(depth(r#"{a(b:"[[[[\"[[")}"#), Some(2));
+    assert_eq!(depth("{a(b:\"\"\"[[[\\\"\"\"[[[\"\"\")}"), Some(2));
+    assert_eq!(depth("{a # [[[[\n}"), Some(1));
+    assert_eq!(depth("{a(b:\"x\ny\")}"), Some(2));
+    assert_eq!(depth("{a(b:\"\"\"x\"\"\"[[1]])}"), Some(4));
     // The parser would read an unclosed block string as `""` and then an ordinary string.
-    assert_eq!(cost::nesting(r#"{a(b:["""x"[[[[1]]]]])}"#), None);
-    assert_eq!(cost::nesting(r#"{a(b:"x""""")}"#), None);
+    assert_eq!(depth(r#"{a(b:["""x"[[[[1]]]]])}"#), None);
+    assert_eq!(depth(r#"{a(b:"x""""")}"#), None);
+}
+
+#[test]
+fn words_are_measured_outside_strings_and_comments() {
+    let word = |query: &str| cost::shape(query).map(|shape| shape.longest_word);
+    assert_eq!(word("{viewer{login}}"), Some(6));
+    assert_eq!(
+        word(
+            r#"{a(b:"aaaaaaaa") # bbbbbbbb
+}"#
+        ),
+        Some(1)
+    );
+    assert_eq!(word("{a(b:12345678)}"), Some(8));
+}
+
+/// async-graphql copies an operation's name into the error for each variable it leaves unused,
+/// so a long name times many variables would build gigabytes of error text.
+#[tokio::test]
+async fn a_long_name_is_refused_before_parsing() {
+    let name = "A".repeat(cost::MAX_WORD + 1);
+    let variables: String = (0..100).map(|n| format!("$v{n}:Int ")).collect();
+    let query = format!("query {name}({variables}){{__typename}}");
+    assert_eq!(
+        refused(&query).await,
+        "Query has a name or number that is too long."
+    );
+    // At the limit it reaches validation, which reports each unused variable.
+    let query = format!("query {}({variables}){{__typename}}", &name[1..]);
+    let response = builder().finish().execute(query).await;
+    assert_eq!(response.errors.len(), 100, "{:?}", response.errors[0]);
 }
 
 /// Reading on past an unclosed block string takes quadratic time in the scan and the parser.
