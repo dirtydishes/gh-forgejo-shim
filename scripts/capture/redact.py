@@ -11,8 +11,8 @@ writes each under --out with its own name. It refuses anything else, screenshots
 What it replaces, everywhere: the names given with --name; every login seen in a JSON answer or an
 `auth status`; home directories and the local user's name wherever it appears; emails, IP addresses, tokens, Authorization and Cookie values,
 avatar URLs, commit IDs, Actions run and job IDs and timestamps. In JSON, a user object keeps only
-its login, type and URLs, a commit author loses its name and email, and node IDs and any value
-under a sensitive key are hidden. One table serves every file in a run, so a value always maps to the same
+its login, type and URLs, a commit author loses its name and email, node IDs are numbered and any
+value under a sensitive key is hidden. One table serves every file in a run, so a value always maps to the same
 placeholder. A record's `ts` becomes `t`, seconds since the file's first record, and its `.marks`
 labels become each record's `mark`. An answer repeated within a file is stored once: later copies
 say `{"same_as": <line index>}`.
@@ -74,6 +74,8 @@ USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view
 # Who wrote a commit, as git records it: a name beside an email, a date or a user.
 IDENTITY_KEYS = {"name", "email"}
 NODE_KEYS = {"node_id", "nodeId", "id"}
+# GitHub's node IDs in text, such as a mutation's argv: `PR_kwDO…`, and the older base64 `MDQ6…`.
+NODE_ID = re.compile(r"\b(?:[A-Z]{1,5}_kw[A-Za-z0-9_-]{4,}|MD[A-Za-z0-9+/]{10,}={0,2})(?![\w+/=-])")
 HTTP_STATUS = re.compile(r"HTTP/[\d.]+ \d{3}")
 # Response headers whose values stay (redacted like any text); every other value is hidden, which
 # covers dates, request IDs, rate-limit reset times and cookies.
@@ -90,6 +92,7 @@ class Redactor:
     def __init__(self, names):
         self.names = dict(names)
         self.shas = {}
+        self.nodes = {}
         self.runs = {}
         self.jobs = {}
         self.times = {}
@@ -158,6 +161,7 @@ class Redactor:
         value = IPV4.sub(lambda m: "<ip>" if is_ip(m.group(0)) else m.group(0), value)
         value = IPV6.sub(lambda m: "<ip>" if is_ip(m.group(0)) else m.group(0), value)
         value = SHA.sub(self._sha, value)
+        value = NODE_ID.sub(lambda m: self._node(m.group(0)), value)
         value = ACTIONS.sub(self._actions, value)
         # A time pass one didn't see (none should be left) still becomes the first placeholder.
         value = TIMESTAMP.sub(lambda m: format_time(self.times.get(parse_time(m), EPOCH), m), value)
@@ -170,6 +174,11 @@ class Redactor:
         if PLACEHOLDER_SHA.fullmatch(sha):
             return sha
         return self.shas.setdefault(sha, f"{len(self.shas) + 1:040x}")
+
+    def _node(self, node):
+        if node.startswith("<node-id"):
+            return node
+        return self.nodes.setdefault(node, f"<node-id-{len(self.nodes) + 1}>")
 
     def _actions(self, match):
         run = self.runs.setdefault(match.group(2), str(len(self.runs) + 1))
@@ -189,7 +198,7 @@ class Redactor:
                 elif TIME_KEY.search(key) and isinstance(item, int) and not isinstance(item, bool) and item > 10 ** 9:
                     result[key] = int(EPOCH.timestamp()) * (1000 if item > 10 ** 12 else 1)
                 elif key in NODE_KEYS and isinstance(item, str) and item:
-                    result[key] = "<node-id>"
+                    result[key] = self._node(item)
                 elif user and key not in USER_KEYS or identity and key in IDENTITY_KEYS:
                     result[key] = hidden(item)
                 else:
