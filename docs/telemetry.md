@@ -118,8 +118,8 @@ Nothing serves them over the web.
 ## Published totals
 
 `https://telemetry.dirtydishes.dev/v1/stats` publishes a small summary as JSON, for anyone to read:
-for each of the last 26 finished ISO weeks, the week's installs and reports, and its installs by
-each of `client`, `forge`, `mode`, `os` and `version` on its own.
+for each of the last 26 finished ISO weeks, the week's installs, and its installs by each of
+`client`, `forge`, `mode`, `os` and `version` on its own.
 
 ```json
 {
@@ -129,7 +129,6 @@ each of `client`, `forge`, `mode`, `os` and `version` on its own.
     {
       "week": "2026-W46",
       "installs": 120,
-      "reports": 610,
       "client": {"codex": 50, "chatgpt": 20, "claude-code": 40, "claude-desktop": "under 10", "cursor": "under 10", "other": "under 10", "none": 10},
       "forge": {"forgejo": 110, "gitea": 10, "other": "under 10", "none": "under 10"},
       "mode": {"client": 110, "server": 10},
@@ -143,15 +142,15 @@ each of `client`, `forge`, `mode`, `os` and `version` on its own.
 - Every figure is rounded to the nearest 10, and a figure from 0 to 9 reads `"under 10"`, never a
   number.
 - Each install sends at most one report a day, so a day's reports count the installs that ran that
-  day. `installs` is the week's busiest day's count, the most the counts can prove ran that week,
-  and `reports` sums its days. In a breakdown, each value's figure is its own busiest day's, so a
-  field's figures needn't add up to `installs`.
+  day. `installs` is the week's busiest day's count, the most the counts can prove ran that week.
+  In a breakdown, each value's figure is its own busiest day's, so a field's figures needn't add
+  up to `installs`.
 - Every value of `client`, `forge`, `mode` and `os` is listed every week, so `"under 10"` may mean
   none. `none` counts reports without that field: fga-server's have no `client`, and `forge` is
   absent when the forge didn't answer. Versions with fewer than 10 installs that week are counted
   together under `other`.
-- Nothing else is published: no daily figures, no combinations of values, no retention, no
-  `unsupported` names, and no `arch`, `forge_major` or `gh`. The maintainer reads those from the
+- Nothing else is published: no daily figures or sums of days, no combinations of values, no
+  retention, no `unsupported` names, and no `arch`, `forge_major` or `gh`. The maintainer reads those from the
   counters.
 
 A week's totals appear once it ends, Monday to Sunday in UTC. The collector works them out once,
@@ -160,13 +159,15 @@ change.
 
 ### What rounding doesn't hide
 
-Rounding turns each figure into a range, such as 15 to 24 for `20`. Adding and subtracting figures
-can narrow an `"under 10"`, but never to a single count from 1 to 8. At most it narrows to two
-counts, such as "0 or 1", or shows that the figure is exactly 0 or exactly 9.
+Rounding turns each figure into a range, such as 15 to 24 for `20`. Nothing published says which
+day a figure comes from, so no figure is a sum of others. Comparing figures can show that an
+`"under 10"` is at least some count, or exactly 9, but never pins one to a count from 1 to 8.
 
-Reports carry no ID, so anyone can send them, and someone who does knows how many of a figure's
-reports are theirs. By sending enough to move a figure to where its rounding changes, they can
-learn which side of that line the real count falls on: whether any other install used a value on a
-day they choose, or more than one did
-([#285](https://github.com/dirtydishes/gh-forgejo-shim/issues/285)). They can't learn which
-installs those are, and no combination of values is published to aim at.
+Reports carry no ID, so anyone can send them, and a sender knows how many of each figure's
+reports are theirs. By sending many on one day, they can choose where each figure's rounding
+changes, and learn which side of that line everyone else's reports fall on: for example, whether
+any other install used `cursor` that day. In a week when almost no one else reports, that goes
+further. A sender who brings a day's total to the top of its range can learn that exactly one other
+report came that day, and from the breakdowns, which values it carried. The more installs report
+on a day, the less this shows. Only random noise in the figures would stop it
+([#285](https://github.com/dirtydishes/gh-forgejo-shim/issues/285)).
