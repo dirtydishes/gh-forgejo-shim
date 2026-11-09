@@ -2,7 +2,8 @@
 
 gh-forgejo-shim and its gateway, fga-server, send one anonymous report a day. The reports count
 installs, show how many keep running week after week, and show which agents and forges people use
-the shim with. They hold as little as that needs, and the totals are public.
+the shim with. They hold as little as that needs. Rounded weekly totals are public; the detailed
+counts stay private.
 
 Turn them off with `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`. See
 [Turning reports off](#turning-reports-off).
@@ -105,36 +106,67 @@ Reports go to `https://telemetry.dirtydishes.dev/v1/report`, a Cloudflare Worker
 [`telemetry/collector`](../telemetry/collector). For each report, it adds one to a counter for that
 UTC day and that combination of values, one to a counter for that day and the report's first week,
 and one to a counter for each `unsupported` name. That's all it stores. The first week is counted
-apart from the other values, so no stored counter ties a combination to the week an install began. It keeps no IP address, header, user agent or report body, and its request logs are
-off. After each week ends, it also stores that week's published totals. It deletes counters and
-published totals older than 400 days.
+apart from the other values, so no stored counter ties a combination to the week an install began.
+It keeps no IP address, header, user agent or report body, and its request logs are off. After
+each week ends, it also stores that week's published totals. It deletes counters and published
+totals older than 400 days.
+
+The counters are private. Only the maintainer reads them, straight from the database, with the
+queries in [`telemetry/collector/README.md`](../telemetry/collector/README.md#reading-the-detailed-counts).
+Nothing serves them over the web.
 
 ## Published totals
 
-`https://telemetry.dirtydishes.dev/v1/stats` publishes the totals as JSON, for anyone to read:
+`https://telemetry.dirtydishes.dev/v1/stats` publishes a small summary as JSON, for anyone to read:
+for each of the last 26 finished ISO weeks, the week's installs and reports, and its installs by
+each of `client`, `forge`, `mode`, `os` and `version` on its own.
 
-- `totals`: installs and reports per day (the last 90 days) and per week (the last 26 weeks), for
-  finished ISO weeks only.
-- `by_field`: the same, for each value of `client`, `forge`, `mode`, `os` and `version` on its own.
-- `combinations`: the same, for each combination of `mode`, `client`, `forge`, `forge_major`, `os`,
-  `arch`, `version` and `gh`.
-- `retention`: for each `first_week`, the installs seen in each later week.
-- `unsupported`: per week, the installs that named each unsupported name (its busiest day's
-  reports, since an install names it at most once a day), and how many times they counted it.
+```json
+{
+  "generated": "2026-11-16",
+  "rounded_to": 10,
+  "weeks": [
+    {
+      "week": "2026-W46",
+      "installs": 120,
+      "reports": 610,
+      "client": {"codex": 50, "chatgpt": 20, "claude-code": 40, "claude-desktop": "under 10", "cursor": "under 10", "other": "under 10", "none": 10},
+      "forge": {"forgejo": 110, "gitea": 10, "other": "under 10", "none": "under 10"},
+      "mode": {"client": 110, "server": 10},
+      "os": {"macos": 80, "linux": 40, "other": "under 10"},
+      "version": {"0.3.1": 30, "0.4.0": 90, "other": "under 10"}
+    }
+  ]
+}
+```
 
-Each install sends at most one report a day, so a day's reports count the installs that ran that
-day. A week's `installs` is its busiest day's count, the most the counts can prove ran that week.
+- Every figure is rounded to the nearest 10, and a figure from 0 to 9 reads `"under 10"`, never a
+  number.
+- Each install sends at most one report a day, so a day's reports count the installs that ran that
+  day. `installs` is the week's busiest day's count, the most the counts can prove ran that week,
+  and `reports` sums its days. In a breakdown, each value's figure is its own busiest day's, so a
+  field's figures needn't add up to `installs`.
+- Every value of `client`, `forge`, `mode` and `os` is listed every week, so `"under 10"` may mean
+  none. `none` counts reports without that field: fga-server's have no `client`, and `forge` is
+  absent when the forge didn't answer. Versions with fewer than 10 installs that week are counted
+  together under `other`.
+- Nothing else is published: no daily figures, no combinations of values, no retention, no
+  `unsupported` names, and no `arch`, `forge_major` or `gh`. The maintainer reads those from the
+  counters.
 
-Any count below 3 is left out, with its labels. So are enough other counts that a left-out count
-can't be worked out by subtracting what's shown from any one total, or read from a week's busiest
-day.
+A week's totals appear once it ends, Monday to Sunday in UTC. The collector works them out once,
+early on the Monday after, and never changes them, so two responses can't be compared to find a
+change.
 
-Two gaps remain. Combining several totals can still give a left-out count away
-([#287](https://github.com/dirtydishes/gh-forgejo-shim/issues/287)). And reports carry no ID, so
-anyone can send them: someone who sends their own reports with a rare set of values could subtract
-those to learn whether one or two real installs share them
-([#285](https://github.com/dirtydishes/gh-forgejo-shim/issues/285)).
+### What rounding doesn't hide
 
-A week's totals, and its days', appear once the week ends, Monday to Sunday in UTC. The collector
-works them out once, early on the Monday after, and never changes them. Totals that changed while
-a week went on could be compared from one response to the next to find a left-out count.
+Rounding turns each figure into a range, such as 15 to 24 for `20`. Adding and subtracting figures
+can narrow an `"under 10"`, but never to a single count from 1 to 8. At most it narrows to two
+counts, such as "0 or 1", or shows that the figure is exactly 0 or exactly 9.
+
+Reports carry no ID, so anyone can send them, and someone who does knows how many of a figure's
+reports are theirs. By sending enough to move a figure to where its rounding changes, they can
+learn which side of that line the real count falls on: whether any other install used a value on a
+day they choose, or more than one did
+([#285](https://github.com/dirtydishes/gh-forgejo-shim/issues/285)). They can't learn which
+installs those are, and no combination of values is published to aim at.
