@@ -23,6 +23,8 @@ if mode == "echo":
     sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 if mode == "print":
     sys.stdout.write(os.environ["FAKE_OUT"])
+if mode == "long":
+    sys.stdout.write("x" * int(os.environ["FAKE_SIZE"]))
 if mode == "stream":
     # One line, then wait until the caller has read it, as `gh pr checks --watch` does between polls.
     print("first", flush=True)
@@ -177,9 +179,9 @@ class StreamTest(unittest.TestCase):
 
     def test_long_output_is_cut_short_in_the_log_only(self):
         wrapper = Wrapper(self)
-        output = "x" * 300000
-        result = wrapper.run("api", "repos/o/r/contents", FAKE_GH="print", FAKE_OUT=output)
-        self.assertEqual(result.stdout, output.encode())
+        # Made by the fake: Linux takes no environment value over 128 KiB.
+        result = wrapper.run("api", "repos/o/r/contents", FAKE_GH="long", FAKE_SIZE="300000")
+        self.assertEqual(result.stdout, b"x" * 300000)
         [record] = wrapper.records()
         self.assertEqual((record["stdout"]["truncated"], record["stdout"]["bytes"], len(record["stdout"]["head"])),
                          (True, 300000, 256 * 1024))
