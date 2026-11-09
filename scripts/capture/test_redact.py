@@ -24,7 +24,7 @@ PRIVATE = [
     "octo@private.dev", GHO, FORGEJO_TOKEN, "Real Name", "Somewhere Town", "my own bio", "octo_tw",
     "1234567", "MDQ6VXNlcjEyMzQ1Njc", "avatars.githubusercontent.com", SHA, "41111899791",
     "124255789264", "2026-10-30", "-0400", "AABBCCDDEEFF00112233", "sess-value", "someone-else",
-    "my status", "they/them", "en-US", "Fri, 30 Oct", "1793395470",
+    "my status", "they/them", "en-US", "Fri, 30 Oct", "1793395470", "octo",
 ]
 USER = {
     "login": "octo-person", "id": 1234567, "node_id": "MDQ6VXNlcjEyMzQ1Njc",
@@ -53,8 +53,9 @@ GRAPHQL_USER = {"data": {"viewer": {"login": "octo-person", "websiteUrl": "https
                                                "date": "2026-10-30T19:02:30Z", "user": {"login": "octo-person"}}}}}
 
 
-def record(ts, argv, stdout="", stderr="", cwd="/", **extra):
-    return {"argv": argv, "chain": [MAC_HOME + "/Library/Application Support/Client/client"], "cwd": cwd,
+def record(ts, argv, stdout="", stderr="", cwd="/", chain=(MAC_HOME + "/Library/Application Support/Client/client",),
+           **extra):
+    return {"argv": argv, "chain": list(chain), "cwd": cwd,
             "duration_ms": 10, "env": {"GH_PROMPT_DISABLED": "1"}, "env_secrets_present": ["GH_TOKEN"],
             "exit": 0, "stderr": stderr, "stdin_tty": False, "stdout": stdout, "stdout_tty": False,
             "ts": ts, **extra}
@@ -86,6 +87,8 @@ RECORDS = [
            "abc1234 2026-10-30 15:16:57 -0400 first\nlast seen Fri, 30 Oct 2026 19:24:15 GMT\n"),
     record("2026-10-30T15:24:20-0400", ["api", "rate_limit"],
            '{"resources":{"core":{"reset":1793395470}},"t":"2026-10-30T19:24:15"}' "\n"),
+    record("2026-10-30T15:24:25-0400", ["api", "repos/o/r/contents/%2FUsers%2Focto%2Fnotes"], "logged in as octo\n",
+           chain=["login -pfl octo"]),
     record("2026-10-30T15:24:30-0400", ["api", "-i", "user"],
            "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: Fri, 30 Oct 2026 19:24:30 GMT\r\n"
            "X-Ratelimit-Reset: 1793395470\r\n\r\n" + json.dumps(USER)),
@@ -171,10 +174,17 @@ class RedactTest(unittest.TestCase):
         self.assertEqual([page[0]["login"] for page in pages], ["<user>", "<user>"])
         self.assertEqual((pages[0][0]["full_name"], pages[1][0]["bio"]), ("<redacted>", "<redacted>"))
         self.assertTrue(rows[9]["stdout"].endswith("]\n"))
-        head, blank, body = redact.http_parts(rows[12]["stdout"])
+        head, blank, body = redact.http_parts(rows[13]["stdout"])
         self.assertEqual(head, "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: <redacted>\r\n"
                                "X-Ratelimit-Reset: <redacted>")
         self.assertEqual((blank, json.loads(body)["location"]), ("\r\n\r\n", "<redacted>"))
+
+    def test_the_local_user_name_goes_wherever_it_appears(self):
+        self.capture.redact()
+        row = self.capture.records()[12]
+        self.assertEqual((row["argv"][1], row["stdout"], row["chain"]),
+                         ("repos/o/r/contents/<home>%2Fnotes", "logged in as <local-user>\n", ["login -pfl <local-user>"]))
+        self.assertEqual(self.capture.records()[0]["chain"], ["<home>/Library/Application Support/Client/client"])
 
     def test_every_kind_of_time_and_date(self):
         self.capture.redact()
@@ -191,8 +201,8 @@ class RedactTest(unittest.TestCase):
     def test_times_become_offsets_and_marks_labels(self):
         self.capture.redact()
         rows = self.capture.records()
-        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 438, 443, 453])
-        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 9)
+        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 438, 443, 448, 453])
+        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 10)
         self.assertFalse(any("ts" in row for row in rows))
         log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
         self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])
@@ -253,7 +263,7 @@ class LeaksTest(unittest.TestCase):
             "ghp_" + "a1" * 18: "token", "eyJhbGciOiJI.eyJzdWIiOiIx.sig": "token",
             "a" * 40: "token or unredacted commit ID", "Authorization: bearer abc": "credential",
             "Cookie: a=b": "credential", "password=hunter2": "credential", "me@private.dev": "email",
-            "/home/octo/x": "home directory", "C:\\Users\\octo": "home directory", "198.51.100.7": "IP address",
+            "/home/octo/x": "home directory", "C:\\Users\\octo": "home directory", "%2Fhome%2Focto": "home directory", "198.51.100.7": "IP address",
             "2001:db8::1": "IP address", "https://forge.test/avatars/abc": "avatar URL",
             "https://avatars.githubusercontent.com/u/1": "avatar URL", "https://me:pw@forge.test/": "credential",
             "https://forge.private.dev/x": "host", "git.example.ts.net": "host", "box.local": "host",

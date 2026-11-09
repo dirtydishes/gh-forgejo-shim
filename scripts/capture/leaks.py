@@ -29,7 +29,7 @@ SECRET_ASSIGNMENT = re.compile(r"(?i)\b[\w.-]*(?:token|secret|passw(?:or)?d|cred
 SENSITIVE_KEY = re.compile(r"(?i)token|secret|passw(?:or)?d|passphrase|credential|api[_-]?key|private[_-]?key|cookie")
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+)")
-HOME = re.compile(r"/(?:Users|home)/|[A-Za-z]:\\+Users\\")
+HOME = re.compile(r"(?:/|%2[Ff])(?:Users|home)(?:/|%2[Ff])|[A-Za-z]:\\+Users\\")
 IPV4 = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
 IPV6 = re.compile(r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])")
 URL_HOST = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^/\s\"'<>@]*@)?([^/\s\"'<>@?#\\]+)")
