@@ -263,6 +263,20 @@ class RedactTest(unittest.TestCase):
         learner.learn(['{"login":"someone-else","bio":"b"', '{"login":"octo-person"}'])
         self.assertIn("someone-else", learner.names)
 
+    def test_a_signed_commits_payload_and_signature(self):
+        redactor = redact.Redactor([])
+        payload = ("tree abc\nauthor Real Name <octo@private.dev> 1793000000 -0500\n"
+                   "committer Real Name <octo@private.dev> 1793000000 -0500\n\nmessage\n")
+        signature = "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQ\n-----END SSH SIGNATURE-----\n"
+        answer = redactor.value({"commit": {"verification": {"verified": True, "payload": payload, "signature": signature}}})
+        verification = answer["commit"]["verification"]
+        self.assertEqual(verification["payload"], "tree abc\nauthor <redacted> <email> 946684800 +0000\n"
+                                                  "committer <redacted> <email> 946684800 +0000\n\nmessage\n")
+        self.assertEqual(verification["signature"], "-----BEGIN SSH SIGNATURE-----<redacted>-----END SSH SIGNATURE-----\n")
+        self.assertEqual(leaks.value_findings(answer), set())
+        kinds = leaks.value_findings({"payload": payload, "signature": signature})
+        self.assertTrue({"git identity", "signature"} <= kinds, kinds)
+
     def test_the_viewer_from_a_bare_login(self):
         redactor = redact.Redactor([])
         redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "stdout": "octo-person\n"},

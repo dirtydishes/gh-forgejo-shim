@@ -15,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-from redact import EMAIL, EPOCH_SECONDS, IPV4, IPV6, MONTHS, TIME_KEY, TOKEN, embedded, is_email, is_ip
+from redact import ARMOR, EMAIL, EPOCH_SECONDS, GIT_IDENT, IPV4, IPV6, MONTHS, TIME_KEY, TOKEN, embedded, is_email, is_ip
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
@@ -71,6 +71,10 @@ def text_findings(text):
     for pattern in (AUTHORIZATION, TOKEN_HEADER, COOKIE, SECRET_ASSIGNMENT, USERINFO):
         if any(match.group(1).strip() not in PLACEHOLDER_VALUES for match in pattern.finditer(text)):
             kinds.add("credential")
+    if any(match.group(0) != f"{match.group(1)}<redacted> <email> {EPOCH_SECONDS} +0000" for match in GIT_IDENT.finditer(text)):
+        kinds.add("git identity")
+    if any("<redacted>" not in match.group(0) for match in ARMOR.finditer(text)):
+        kinds.add("signature")
     for match in EMAIL.finditer(text):
         if is_email(match.group(0)) and not allowed_host(match.group(0).rsplit("@", 1)[1]):
             kinds.add("email")
