@@ -34,12 +34,17 @@ import threading
 import time
 
 # The credential rules come from redact.py beside this script (scripts/capture), so install it as a
-# link to the checkout's copy. Without them nothing is recorded.
+# link to the checkout's copy. Without them, or with a redact.py that's broken or lacks one, nothing
+# is recorded and gh still runs.
+RULES = ("ARMOR", "USERINFO", "TOKEN", "AUTHORIZATION", "TOKEN_HEADER", "COOKIE", "SECRET_ASSIGNMENT", "SENSITIVE_KEY",
+         "json_spans", "dump_like")
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 try:
     import redact
-except ImportError:
+    if not all(hasattr(redact, rule) for rule in RULES):
+        raise ImportError("redact.py lacks rules gh-capture uses")
+except Exception:  # a broken redact.py may raise anything; it must not stop gh
     redact = None
 
 REAL = os.environ.get("GH_CAPTURE_REAL", "/opt/homebrew/bin/gh")
@@ -214,8 +219,6 @@ def secretless(value):
 def die_like(number):
     """Exit the way gh did when a signal killed it, so the caller sees the same death, not 128+N
     folded into an exit code (#197 defect 5)."""
-    sys.stdout.flush()
-    sys.stderr.flush()
     signal.signal(number, signal.SIG_DFL)
     signal.pthread_sigmask(signal.SIG_UNBLOCK, [number])
     os.kill(os.getpid(), number)
@@ -223,44 +226,82 @@ def die_like(number):
     sys.exit(128 + number)
 
 
+def begin(argv):
+    """The record of a call before gh runs, or None: nothing about recording may stop the call
+    (a deleted cwd, a closed stream, a redact.py that fails)."""
+    if redact is None:
+        return None
+    try:
+        return {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "chain": process_chain(),
+            "cwd": cwd(),
+            "argv": redact_argv(argv),
+            "env": {k: os.environ[k] for k in ENV_KEYS if k in os.environ},
+            "env_secrets_present": [k for k in SECRET_ENV if os.environ.get(k)],
+            "stdin_tty": os.isatty(0),
+            "stdout_tty": os.isatty(1),
+        }
+    except Exception:
+        return None
+
+
+def cwd():
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
+def finish(record, argv, code, started, pumps):
+    """The record once gh is done, written; any failure only loses the record."""
+    if record is None:
+        return
+    try:
+        record["duration_ms"] = round((time.time() - started) * 1000)
+        record["exit"] = code
+        if code < 0:
+            record["signal"] = signal.Signals(-code).name
+        for name, pump in zip(("stdout", "stderr"), pumps):
+            record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
+    except Exception:
+        return
+    write(record)
+
+
 def write(record):
     """Append one record, owner-only. A log that can't be written never stops the gh call; on a
     terminal it says so."""
+    if record is None:
+        return
     try:
-        if redact is None:
-            raise RuntimeError("redact.py isn't beside gh-capture, so its credential rules aren't either")
         directory = os.path.dirname(LOG)
         if directory:
             os.makedirs(directory, mode=0o700, exist_ok=True)
         with os.fdopen(os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception as error:  # nothing about the log may break the call
-        if sys.stderr.isatty():
-            print(f"gh-capture: call not recorded: {error}", file=sys.stderr)
+        if os.isatty(2):
+            os.write(2, f"gh-capture: call not recorded: {error}\n".encode())
 
 
 def main():
     argv = sys.argv[1:]
-    record = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "chain": process_chain(),
-        "cwd": os.getcwd(),
-        "argv": redact_argv(argv) if redact else None,
-        "env": {k: os.environ[k] for k in ENV_KEYS if k in os.environ},
-        "env_secrets_present": [k for k in SECRET_ENV if os.environ.get(k)],
-        "stdin_tty": sys.stdin.isatty(),
-        "stdout_tty": sys.stdout.isatty(),
-    }
+    record = begin(argv)
     fake = fake_token(argv)
     if fake:
         # Probe mode: answer `auth token --hostname H` for hosts listed in ~/.gh-capture/fake-token-hosts
         # so we can see what a client does next with a non-GitHub host.
-        record.update({"faked": True, "exit": 0, "stdout": {"redacted": True, "bytes": len(fake) + 1}})
+        if record is not None:
+            record.update({"faked": True, "exit": 0, "stdout": {"redacted": True, "bytes": len(fake) + 1}})
         write(record)
-        print(fake)
+        try:
+            os.write(1, (fake + "\n").encode())
+        except OSError:
+            pass
         sys.exit(0)
 
-    if sys.stdout.isatty():
+    if os.isatty(1):
         write(record)
         os.execv(REAL, [REAL] + argv)
 
@@ -287,20 +328,14 @@ def main():
     child.append(proc)
     for number in waiting:
         proc.send_signal(number)
-    pumps = [Pump(proc.stdout, sys.stdout.fileno()), Pump(proc.stderr, sys.stderr.fileno())]
+    pumps = [Pump(proc.stdout, 1), Pump(proc.stderr, 2)]
     for pump in pumps:
         pump.start()
     for pump in pumps:
         while pump.is_alive():
             pump.join(0.1)
     code = proc.wait()
-    record["duration_ms"] = round((time.time() - start) * 1000)
-    record["exit"] = code
-    if code < 0:
-        record["signal"] = signal.Signals(-code).name
-    for name, pump in zip(("stdout", "stderr"), pumps):
-        record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
-    write(record)
+    finish(record, argv, code, start, pumps)
     if code < 0:
         die_like(-code)
     sys.exit(code)
