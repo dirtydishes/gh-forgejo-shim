@@ -24,6 +24,29 @@ export function rounded(count: number): Rounded {
   return count < ROUNDING ? UNDER : Math.round(count / ROUNDING) * ROUNDING;
 }
 
+/**
+ * The noise's scale. Each figure's noise is a whole number k, drawn with probability in proportion
+ * to e^(-|k| / NOISE_SCALE): 0 is likeliest, and about three draws in four fall within ±8. One
+ * report moves at most six figures (installs and one value of each field) by one each, so it moves
+ * the odds of what they show together by at most e^(6 / NOISE_SCALE), under 3 times, except when it
+tips its version over 10 and so moves that version's count out of `other`.
+ */
+export const NOISE_SCALE = 6;
+
+/** A uniform number in (0, 1]. */
+export type Uniform = () => number;
+
+const cryptoUniform: Uniform = () => (crypto.getRandomValues(new Uint32Array(1))[0] + 1) / 2 ** 32;
+
+/**
+ * One figure's noise, from the two-sided geometric distribution: the difference of two geometric
+ * draws, each at least k with probability e^(-k / NOISE_SCALE).
+ */
+export function noise(uniform: Uniform = cryptoUniform): number {
+  const geometric = () => Math.floor(Math.log(uniform()) * -NOISE_SCALE);
+  return geometric() - geometric();
+}
+
 /** The one-field breakdowns. */
 export const FIELDS = ["client", "forge", "mode", "os", "version"] as const;
 
@@ -54,8 +77,12 @@ export type Week = ReturnType<typeof weekFigures>;
  * days, and a field's figures needn't add up to `installs`. Versions with fewer than 10 installs
  * are counted together as `other`, so no version's presence shows that it ran. Nothing is
  * published per day, per combination of values, per first week or per unsupported name.
+ *
+ * Each figure gets its own [`noise`] before it's rounded, and whether a version is named depends on
+ * its count with noise. A sender who knows how many of a figure's reports are theirs can't place it
+ * at a rounding line, since the noise moves that line by more than one report. `draw` is for tests.
  */
-export function weekFigures(week: string, sums: Sum[]) {
+export function weekFigures(week: string, sums: Sum[], draw: () => number = noise) {
   // For each field and value, its count on each day.
   const counts = new Map<string, Map<string, Map<string, number>>>();
   for (const { field, value, day, n } of sums) {
@@ -67,30 +94,32 @@ export function weekFigures(week: string, sums: Sum[]) {
   }
   const busiest = (days?: Map<string, number>) => Math.max(0, ...(days?.values() ?? []));
   const of = (field: string) => counts.get(field) ?? new Map<string, Map<string, number>>();
+  const shown = (count: number) => rounded(count + draw());
 
   const fixed = Object.fromEntries(
     Object.entries(VALUES).map(([field, values]) => [
       field,
-      Object.fromEntries(values.map((found) => [found, rounded(busiest(of(field).get(found)))])),
+      Object.fromEntries(values.map((found) => [found, shown(busiest(of(field).get(found)))])),
     ]),
   ) as Record<keyof typeof VALUES, Record<string, Rounded>>;
 
   const versions = of("version");
-  const named = [...versions.keys()].filter((found) => busiest(versions.get(found)) >= ROUNDING).sort();
+  const noisy = new Map([...versions].map(([found, days]) => [found, busiest(days) + draw()]));
+  const named = [...noisy.keys()].filter((found) => noisy.get(found)! >= ROUNDING).sort();
   const other = new Map<string, number>();
   for (const [found, days] of versions) {
-    if (busiest(days) >= ROUNDING) continue;
+    if (noisy.get(found)! >= ROUNDING) continue;
     for (const [day, n] of days) other.set(day, (other.get(day) ?? 0) + n);
   }
 
   return {
     week,
     // The day's total has field "" and value "", read as none.
-    installs: rounded(busiest(of("").get("none"))),
+    installs: shown(busiest(of("").get("none"))),
     ...fixed,
     version: {
-      ...Object.fromEntries(named.map((found) => [found, rounded(busiest(versions.get(found)))])),
-      [OTHER_VERSION]: rounded(busiest(other)),
+      ...Object.fromEntries(named.map((found) => [found, rounded(noisy.get(found)!)])),
+      [OTHER_VERSION]: shown(busiest(other)),
     } as Record<string, Rounded>,
   };
 }

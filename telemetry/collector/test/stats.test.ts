@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIELDS, UNDER, rounded, weekFigures, type Rounded, type Sum } from "../src/stats";
+import { FIELDS, NOISE_SCALE, UNDER, noise, rounded, weekFigures, type Rounded, type Sum } from "../src/stats";
 import { isoWeek } from "../src/week";
 
 /** One `reports` counter: a day, a combination of values, and how many reports had them. */
@@ -39,7 +39,16 @@ const sums = (rows: Row[]): Sum[] =>
     { field: "", value: "", day: r.day, n: r.count },
     ...FIELDS.map((field) => ({ field, value: String(r[field]), day: r.day, n: r.count })),
   ]);
-const week = (rows: Row[]) => weekFigures(WEEK, sums(rows));
+/** The week's figures without noise, so a test can check what rounding alone shows. */
+const week = (rows: Row[]) => weekFigures(WEEK, sums(rows), () => 0);
+
+/** A repeatable stand-in for the crypto source (mulberry32): uniform in (0, 1]. */
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return (((t ^ (t >>> 14)) >>> 0) + 1) / 2 ** 32;
+};
 
 describe("rounded", () => {
   it("rounds to the nearest 10 and never shows a count below 10", () => {
@@ -58,6 +67,27 @@ describe("rounded", () => {
         expect(same.length, `k ${k}, real ${real}`).toBeGreaterThanOrEqual(2);
       }
     }
+  });
+});
+
+describe("noise", () => {
+  it("draws whole numbers, symmetric about 0, at the stated scale", () => {
+    const uniform = seeded(11);
+    const draws = Array.from({ length: 200_000 }, () => noise(uniform));
+    expect(draws.every(Number.isInteger)).toBe(true);
+    const share = (test: (n: number) => boolean) => draws.filter(test).length / draws.length;
+    const alpha = Math.exp(-1 / NOISE_SCALE);
+    // P(k) = (1 - α) / (1 + α) · α^|k|.
+    expect(share((n) => n === 0)).toBeCloseTo((1 - alpha) / (1 + alpha), 2);
+    expect(share((n) => n > 0)).toBeCloseTo(share((n) => n < 0), 2);
+    const within8 = [...Array(17).keys()].reduce((sum, k) => sum + ((1 - alpha) / (1 + alpha)) * alpha ** Math.abs(k - 8), 0);
+    expect(share((n) => Math.abs(n) <= 8)).toBeCloseTo(within8, 2);
+    expect(draws.reduce((sum, n) => sum + n, 0) / draws.length).toBeCloseTo(0, 1);
+  });
+
+  it("comes from the crypto source by default", () => {
+    const draws = Array.from({ length: 1000 }, () => noise());
+    expect(new Set(draws).size).toBeGreaterThan(5);
   });
 });
 
@@ -173,6 +203,36 @@ describe("weekFigures", () => {
       row(DAYS[1], real, rare),
     ];
     expect(week(shape(1))).toEqual(week(shape(2)));
+  });
+
+  it("adds noise to each figure before rounding it", () => {
+    const rows = [row(DAYS[0], 12), row(DAYS[0], 3, { client: "cursor", version: "0.3.1" })];
+    const noisy = weekFigures(WEEK, sums(rows), () => 4);
+    expect(noisy.installs).toBe(20); // 15 + 4
+    expect(noisy.client).toMatchObject({ codex: 20, cursor: UNDER, chatgpt: UNDER }); // 16, 7, 4
+    expect(noisy.version).toEqual({ "0.3.0": 20, other: UNDER }); // 16; 0.3.1's 7 joins other
+    expect(weekFigures(WEEK, sums(rows), () => 7).version).toEqual({ "0.3.0": 20, "0.3.1": 10, other: UNDER });
+  });
+
+  it("no longer lets a sender at a rounding line tell whether one real report came (#285)", () => {
+    // The sender sends 14 reports with a rare client, one short of where 10 becomes 20. Without
+    // noise, one real report with that client turns the figure to 20, every time. With noise, the
+    // figure reads 20 about as often whether that report came or not.
+    const shape = (real: number) => [row(DAYS[1], 14, { client: "cursor" }), row(DAYS[1], real, { client: "cursor" })];
+    expect(week(shape(0)).client.cursor).toBe(10);
+    expect(week(shape(1)).client.cursor).toBe(20);
+    const uniform = seeded(5);
+    const twenty = (real: number) => {
+      let hits = 0;
+      for (let i = 0; i < 20_000; i++) {
+        if (weekFigures(WEEK, sums(shape(real)), () => noise(uniform)).client.cursor === 20) hits++;
+      }
+      return hits / 20_000;
+    };
+    const [without, with1] = [twenty(0), twenty(1)];
+    // One report shifts a figure by one, so the odds move by at most e^(1 / NOISE_SCALE).
+    expect(with1 / without).toBeLessThan(Math.exp(1 / NOISE_SCALE) * 1.05);
+    expect(with1).toBeLessThan(0.6);
   });
 
   /**
