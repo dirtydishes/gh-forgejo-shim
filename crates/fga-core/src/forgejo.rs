@@ -162,6 +162,40 @@ pub fn climbs(segment: &str) -> bool {
     true
 }
 
+/// Whether `name` could name a commit: a SHA, or a branch or tag name as `git check-ref-format`
+/// allows one, the rule Forgejo applies to `git/commits/{sha}` (`modules/git/ref.go`
+/// `IsValidRefPattern`). It holds no `..`, no part starting with `.`, no `\`, no control character
+/// or any other character git refuses, and so no part [`climbs`]. As there, each of up to three
+/// rounds of percent-decoding must pass too, so `%2e%2e` and its double-encoded forms are refused
+/// like `..`. Forgejo resolves a name sent in a query without checking it, so the gateway checks.
+pub fn is_ref_name(name: &str) -> bool {
+    let mut text = name.to_owned();
+    for _ in 0..=3 {
+        if !ref_format(&text) {
+            return false;
+        }
+        let decoded = percent_decode(&text);
+        if decoded == text {
+            return true;
+        }
+        text = decoded;
+    }
+    false
+}
+
+fn ref_format(name: &str) -> bool {
+    !name.is_empty()
+        && name != "@"
+        && !name.starts_with(['/', '.'])
+        && !name.ends_with(['/', '.'])
+        && !name.ends_with(".lock")
+        && !name.contains([' ', '~', '^', ':', '?', '*', '[', '\\'])
+        && !name.chars().any(|c| c.is_ascii_control())
+        && !["/.", "..", "//", "@{", ".lock/"]
+            .iter()
+            .any(|part| name.contains(part))
+}
+
 /// One round of percent-decoding; an escape that isn't two hex digits stays as written.
 fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -965,6 +999,66 @@ mod tests {
             "%0D",
         ] {
             assert!(climbs(name), "{name}");
+        }
+    }
+
+    /// Branch and tag names with slashes are names; anything `git check-ref-format` refuses, or
+    /// that decodes to one, is not.
+    #[test]
+    fn only_names_git_allows_are_revisions() {
+        for name in [
+            "main",
+            "feature/topic",
+            "refs/heads/feature/topic",
+            "release/v1.2",
+            "HEAD",
+            "d1af82ca1f38838d9316683eab5811e751b3474a",
+            "100%",
+            "50%25off",
+            "a%2Fb",
+            "fix-#12",
+        ] {
+            assert!(is_ref_name(name), "{name}");
+        }
+        for name in [
+            "",
+            "@",
+            "..",
+            "../x",
+            "a/../b",
+            "a/..",
+            "a..b",
+            ".hidden",
+            "a/.b",
+            "a/",
+            "/a",
+            "a//b",
+            "a.",
+            "a.lock",
+            "a.lock/b",
+            "a\\b",
+            "a b",
+            "a~1",
+            "a^",
+            "a:b",
+            "a?",
+            "a*",
+            "a[",
+            "a@{1}",
+            "a\nb",
+            "a\tb",
+            "a\x7fb",
+            "%2e%2e",
+            "a/%2E%2E/b",
+            "%252e%252e",
+            "%25252e%25252e",
+            "%2525252e",
+            "a%5Cb",
+            "a%255Cb",
+            "a%0Ab",
+            "a%2F%2Fb",
+        ] {
+            assert!(!is_ref_name(name), "{name:?}");
         }
     }
 
