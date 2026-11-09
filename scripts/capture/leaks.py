@@ -49,7 +49,9 @@ NAMED_HOST = re.compile(r"Logged in to (\S+) account|(?<![\w/])[\w.-]+@([A-Za-z0
 KEPT = re.compile(KEPT_DATES)
 DATE = re.compile(r"(?<!\d)\d{4}([-/])\d\d\1\d\d(?!\d)|\b\d\d[/ ](?:" + MONTHS + r")[/ ]\d{4}\b|"
                   r"\b(?:" + MONTHS + r") +\d{1,2} \d\d:\d\d:\d\d(?: [A-Z]+)? \d{4}\b")
-PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|01[/ ]Jan[/ ]2000|Jan +1 00:00:\d\d(?: [A-Z]+)? 2000")
+PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|01[/ ]Jan[/ ]2000|Jan +1 \d\d:\d\d:\d\d(?: [A-Z]+)? 2000")
+# A zone after a placeholder time other than its own UTC: a name or Go's `-03` that redact.py left.
+ZONE_AFTER = re.compile(r"(?:\+0000|\+00:00) (?!UTC\b)(?:[A-Z]{2,5}|[+-]\d\d)(?![\w:])")
 HOST_FLAGS = {"--hostname", "--host", "-h"}
 REPO_FLAGS = {"--repo", "-R"}
 HOST_VARIABLES = {"GH_HOST", "GH_ENTERPRISE_HOST", "GITHUB_SERVER_URL"}
@@ -81,6 +83,8 @@ def text_findings(text):
             kinds.add("email")
     if any(not PLACEHOLDER_DATES.fullmatch(match.group(0)) for match in DATE.finditer(KEPT.sub("", text))):
         kinds.add("date")
+    if ZONE_AFTER.search(text):
+        kinds.add("time zone")
     if HOME.search(text):
         kinds.add("home directory")
     if any(is_ip(match.group(0)) for pattern in (IPV4, IPV6) for match in pattern.finditer(text)):
