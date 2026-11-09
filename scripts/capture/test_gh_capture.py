@@ -55,6 +55,39 @@ class PassThroughTest(unittest.TestCase):
         self.assertEqual(wrapper.log.stat().st_mode & 0o777, 0o600)
 
 
+class ArgvTest(unittest.TestCase):
+    """#197 defect 1: no credential in a call's argv reaches the log."""
+
+    def test_credentials_in_argv(self):
+        wrapper = Wrapper(self)
+        calls = [
+            ["api", "-H", "Authorization: token S1", "repos/o/r"],
+            ["api", "-f", "token=S2", "--field", "password=S3", "-F", "client_secret=S4", "repos/o/r"],
+            ["secret", "set", "NAME", "--body", "S5"], ["secret", "set", "NAME", "-b", "S6"],
+            ["secret", "set", "NAME", "--body=S7"], ["-R", "o/r", "secret", "set", "NAME", "-bS8"],
+            ["api", "--token", "S9", "user"], ["api", "https://octo:S10@forge.test/api/v3/user"],
+            ["api", "user", "-H", "X-Api-Key: S11"], ["api", "-f", "key=ghp_" + "S12" * 12],
+        ]
+        for argv in calls:
+            self.assertEqual(wrapper.run(*argv, FAKE_GH="print", FAKE_OUT="ok\n").returncode, 0)
+        log = wrapper.log.read_text()
+        for secret in ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12"):
+            self.assertNotRegex(log, secret + r"\b", secret)
+        argvs = [record["argv"] for record in wrapper.records()]
+        self.assertEqual(argvs[0], ["api", "-H", "Authorization: token <token>", "repos/o/r"])
+        self.assertEqual(argvs[1], ["api", "-f", "token=<redacted>", "--field", "password=<redacted>", "-F",
+                                    "client_secret=<redacted>", "repos/o/r"])
+        self.assertEqual([argvs[2][-1], argvs[3][-1], argvs[4][-1], argvs[5][-1]],
+                         ["<redacted>", "<redacted>", "--body=<redacted>", "-b<redacted>"])
+        self.assertEqual(argvs[6], ["api", "--token", "<redacted>", "user"])
+
+    def test_ordinary_argv_stays(self):
+        wrapper = Wrapper(self)
+        argv = ["pr", "list", "--head", "s/pass", "--json", "number,url", "--repo", "forge.test/o/r", "--body", "b"]
+        wrapper.run(*argv)
+        self.assertEqual(wrapper.records()[0]["argv"], argv)
+
+
 class LogFailureTest(unittest.TestCase):
     """#197 defect 6: a log that can't be written never breaks the gh call."""
 
