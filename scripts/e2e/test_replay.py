@@ -24,12 +24,19 @@ class CasesTests(unittest.TestCase):
         commands = {" ".join(call["forge"][:2]) for call in calls}
         self.assertEqual(commands, {"--version", "api graphql", "api user", "auth status", "auth token", "pr list",
                                     "pr view"})
-        self.assertEqual(sum(len(which) for which in skipped.values()), 11)
+        self.assertEqual(skipped, {"the capture tool answered, not gh": 25,
+                                   "it names a GitHub repository outside the twin": 1,
+                                   "a write: the twin cases cover it (contract/cases/twin-pr-merge-match-head.json, "
+                                   "twin-pr-create.json)": 2})
+
+    def test_every_capture_has_a_place_in_the_order(self):
+        names = sorted(path.name for path in replay.FIXTURES.glob("*.jsonl"))
+        self.assertEqual(names, sorted(replay.ORDER))
 
     def test_github_answers_win_over_the_forge_before_the_shim(self):
         calls, _ = replay.cases()
         token = [call for call in calls if call["forge"] == ["auth", "token", "--hostname", "forge.test"]]
-        self.assertEqual([call["exit"] for call in token], [0])
+        self.assertEqual(sorted((call["where"], call["exit"]) for call in token), [("checkout", 0), ("elsewhere", 0)])
         merged = [call for call in calls if call["forge"][:2] == ["pr", "list"] and "s/merge-me" in call["forge"]]
         self.assertEqual(json.loads(merged[0]["stdout"])[0]["state"], "MERGED")
 
@@ -57,6 +64,23 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(replay.differences({"login": "a"}, {"login": "a", "x": 1}, exact=False),
                          ["$: unexpected x"])
 
+    def test_checks_pair_by_name_and_keep_their_states(self):
+        check = {"__typename": "CheckRun", "name": "check", "status": "COMPLETED", "conclusion": "SUCCESS"}
+        lint = {**check, "name": "lint"}
+        want = {"number": 1, "nodes": [check, lint]}
+        self.assertEqual(replay.differences(want, {"number": 1, "nodes": [lint, check]}, exact=True), [])
+        self.assertEqual(replay.differences(want, {"number": 1, "nodes": [check]}, exact=True), ["$.nodes: 1 items, GitHub 2"])
+        failed = {**check, "conclusion": "FAILURE"}
+        self.assertEqual(replay.differences(want, {"number": 1, "nodes": [failed, lint]}, exact=True),
+                         ["$.nodes[check].conclusion: 'FAILURE', GitHub 'SUCCESS'"])
+        status = {"__typename": "StatusContext", "name": "check", "status": "COMPLETED", "conclusion": "SUCCESS"}
+        self.assertEqual(replay.differences(want, {"number": 1, "nodes": [status, lint]}, exact=True),
+                         ["$.nodes: StatusContext 'check', which GitHub's answer lacks"])
+        # PR 3's check is stuck in progress on GitHub, and finished in the seed.
+        running = {**check, "status": "IN_PROGRESS", "conclusion": None}
+        self.assertEqual(replay.differences({"number": 3, "nodes": [running]}, {"number": 3, "nodes": [check]}, exact=True), [])
+        self.assertEqual(len(replay.differences({"number": 2, "nodes": [running]}, {"number": 2, "nodes": [check]}, exact=True)), 3)
+
     def test_lists_and_documented_differences(self):
         checks = [{"__typename": "CheckRun", "name": "check"}]
         self.assertEqual(replay.differences({"nodes": checks}, {"nodes": []}, exact=True), ["$.nodes: 0 items, GitHub 1"])
@@ -71,20 +95,21 @@ class CompareTests(unittest.TestCase):
         status = case(["auth", "status", "--active", "--hostname", "forge.test"],
                       "github.com\n  ✓ Logged in to github.com account <user> (keyring)\n  - Token: gho_***\n")
         good = "forge.test\n  ✓ Logged in to forge.test account dirtydishes (<run dir>/hosts.yml)\n  - Token: ***\n"
-        self.assertEqual(replay.compare(status, "client", 0, good, []), [])
-        self.assertEqual(len(replay.compare(status, "client", 0, good.replace("dirtydishes", "other"), [])), 1)
-        self.assertEqual(replay.compare(status, "client", 1, good, ["auth status"]),
+        self.assertEqual(replay.compare(status, "client", 0, good, [], "t0k"), [])
+        self.assertEqual(len(replay.compare(status, "client", 0, good.replace("dirtydishes", "other"), [], "t0k")), 1)
+        self.assertEqual(replay.compare(status, "client", 1, good, ["auth status"], "t0k"),
                          ["exit 1, expected 0", "reached real gh outside a launch: auth status"])
         version = case(["--version"], "gh version 2.103.3\n")
-        self.assertEqual(replay.compare(version, "client", 0, "gh version 2.103.3\n", []),
+        self.assertEqual(replay.compare(version, "client", 0, "gh version 2.103.3\n", [], "t0k"),
                          ["expected to reach real gh, and didn't"])
-        self.assertEqual(replay.compare(version, "server", 0, "gh version 2.103.3\n", []), [])
+        self.assertEqual(replay.compare(version, "server", 0, "gh version 2.103.3\n", [], "t0k"), [])
         newer = "gh version 2.110.0 (2027-01-05)\nhttps://github.com/cli/cli/releases/tag/v2.110.0\n"
         captured = case(["--version"], "gh version 2.103.3 (2026-10-26)\nhttps://github.com/cli/cli/releases/tag/v2.103.3\n")
-        self.assertEqual(replay.compare(captured, "server", 0, newer, []), [])
-        self.assertEqual(len(replay.compare(captured, "server", 0, "gh: unknown flag\n", [])), 1)
+        self.assertEqual(replay.compare(captured, "server", 0, newer, [], "t0k"), [])
+        self.assertEqual(len(replay.compare(captured, "server", 0, "gh: unknown flag\n", [], "t0k")), 1)
         token = case(["auth", "token"], {"bytes": 41, "redacted": True}, where="checkout")
-        self.assertEqual(replay.compare(token, "client", 0, "secret\n", []), [])
+        self.assertEqual(replay.compare(token, "client", 0, "t0k\n", [], "t0k"), [])
+        self.assertEqual(replay.compare(token, "client", 0, "\n", [], "t0k"), ["didn't print the forge's token alone"])
 
 
 if __name__ == "__main__":

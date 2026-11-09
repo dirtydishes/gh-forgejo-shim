@@ -12,6 +12,12 @@ test "$(gh api repos/dirtydishes/gfj-oracle/pulls/4 --jq .title)" = 'scenario: d
 test "$(gh api repos/dirtydishes/gfj-oracle/pulls --jq '.[] | select(.number == 4) | .title')" = 'scenario: draft'
 printf 'PASS REST draft titles on single and list routes\n'
 E2E_TOKEN="$token" python3 /test/read-contract.py
+# The gh calls agent apps made (fixtures/clients), as they made them, on the seeded twin: through
+# the wrapper the shim installs, then plain gh against the gateway. Both run before either fails.
+replayed=0
+E2E_TOKEN="$token" python3 /test/replay.py client || replayed=1
+E2E_TOKEN="$token" python3 /test/replay.py server || replayed=1
+[ "$replayed" = 0 ]
 cd /tmp/g2-seed
 python3 /test/oracle-scripts/run.py forge.test /artifacts/oracle
 python3 /test/oracle-scripts/compare.py /test/oracle /artifacts/oracle /artifacts/forgejo-pulls.json
@@ -37,7 +43,3 @@ curl -fsS -u reader:e2e-disposable-password -H 'Content-Type: application/json' 
 mine=$(GH_ENTERPRISE_TOKEN="$reader" gh issue list -R forge.test/dirtydishes/gfj-oracle --author @me --state all --json title --jq '[.[].title]')
 test "$mine" = '["reader issue"]'
 printf 'PASS @me is the reader for a non-admin\n'
-# The gh calls agent apps made (fixtures/clients), as they made them: through the wrapper the shim
-# installs, then plain gh against the gateway.
-E2E_TOKEN="$token" python3 /test/replay.py client
-E2E_TOKEN="$token" python3 /test/replay.py server

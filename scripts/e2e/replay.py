@@ -12,7 +12,7 @@ the contract's twin cases.
 
     E2E_TOKEN=<dirtydishes' token> python3 replay.py client|server
 
-g2.sh runs it in the e2e client container, after the twin is seeded and the writes are done.
+g2.sh runs it in the e2e client container, right after the twin is seeded.
 """
 
 import json
@@ -21,8 +21,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 FIXTURES = Path(os.environ.get("REPLAY_FIXTURES", "/test/clients"))
@@ -30,10 +28,14 @@ HOST, OWNER, REPO = "forge.test", "dirtydishes", "gfj-oracle"
 REAL_GH = "/usr/local/bin/gh"
 # The environment a record may carry into the replay; anything else stays out.
 SAFE_ENV = {"GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT", "GH_PAGER", "NO_COLOR", "TERM", "CLICOLOR"}
-# Fields whose values the twin's seed reproduces, so the shim's must equal GitHub's.
+# Fields whose values the twin's seed reproduces, so the shim's must equal GitHub's; a check's own
+# fields too, which the PR card shows.
 SAME_VALUE = {"number", "title", "state", "isDraft", "headRefName", "baseRefName", "body", "login"}
-# The seed's commits carry this email (scripts/e2e/seed.py); on GitHub it's the owner's.
-SEED_EMAIL = f"{OWNER}@users.noreply.invalid"
+CHECK_TYPES = {"CheckRun", "StatusContext"}
+CHECK_VALUE = {"__typename", "name", "context", "status", "conclusion", "state"}
+# The order the captures were made in, so a later answer wins over an earlier one.
+ORDER = ["chatgpt-22943-pr-card-s-pass.jsonl", "chatgpt-22943-states.jsonl", "claude-desktop-4.4212.jsonl",
+         "claude-code-cli-2.1.309-314.jsonl", "chatgpt-22943-fj-probe.jsonl"]
 
 
 def headless(path, actual, context):
@@ -44,16 +46,25 @@ def unchecked(path, actual, context):
     return path.endswith(".statusCheckRollup") and actual is None and context.get("number") == 6
 
 
-# (test, reason): a departure from GitHub's shape that the test accepts.
+def stale(path, actual, context):
+    return context.get("number") == 3 and path.rsplit(".", 1)[-1] in ("status", "conclusion", "completedAt")
+
+
+# (test, reason): a departure from GitHub's answer that the test accepts.
 DIFFERENCES = [
     (headless, "the gateway reports a head repository only for an open PR whose branch is its head (MAPPING §10)"),
     (unchecked, "the e2e seed posts no statuses on PR 6 (scripts/e2e/seed.py); GitHub's PR 6 has two checks"),
+    (stale, "GitHub's PR 3 check is stuck in progress (a stale job, contract/README.md); the e2e seed finishes it"),
 ]
+
+
+def allowed(path, actual, context):
+    return any(test(path, actual, context) for test, _ in DIFFERENCES)
 
 
 def records():
     """Every captured call, with its file and its stdout resolved through `same_as`."""
-    for path in sorted(FIXTURES.glob("*.jsonl")):
+    for path in sorted(FIXTURES.glob("*.jsonl"), key=lambda path: ORDER.index(path.name)):
         rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
         for row in rows:
             if isinstance(row.get("stdout"), dict) and "same_as" in row["stdout"]:
@@ -100,13 +111,13 @@ def cases():
         forge = forge_argv(row["argv"])
         reason = skip_reason(row)
         if reason:
-            skipped.setdefault(reason, set()).add(" ".join(forge)[:80])
+            skipped[reason] = skipped.get(reason, 0) + 1
             continue
-        where = "checkout" if row["cwd"] != "/" else "root"
+        where = "checkout" if "<repo>" in row["cwd"] else "root" if row["cwd"] == "/" else "elsewhere"
         # GitHub's answer wins over one from the Forgejo host before the shim (a call there shows
-        # only what the app sends), and a later answer over an earlier one: the captures changed
-        # the twin as they went (ChatGPT merged PR 8 and its agent opened PR 9), and the seed has
-        # the final states.
+        # only what the app sends), and a later answer (ORDER, then line) over an earlier one: the
+        # captures changed the twin as they went (ChatGPT merged PR 8 and its agent opened PR 9), and
+        # the seed has the final states.
         rank = (HOST not in row["argv"] and f"{HOST}/" not in " ".join(row["argv"]), index)
         case = {"forge": forge, "where": where, "source": name, "exit": row["exit"], "stdout": row["stdout"],
                 "env": {key: value for key, value in row.get("env", {}).items() if key in SAFE_ENV}, "rank": rank}
@@ -137,13 +148,22 @@ def shape(value):
     return "null" if value is None else type(value).__name__
 
 
+def identity(item):
+    """What names a list item across the two answers: a check, by its type and name."""
+    if isinstance(item, dict) and item.get("__typename") in CHECK_TYPES:
+        return item["__typename"], item.get("name") or item.get("context")
+    return None
+
+
 def differences(expected, actual, exact, path="$", context=None):
     """Where actual departs from expected: `exact` (GraphQL, `--json`) wants the same keys,
-    otherwise (REST) actual may lack keys GitHub has but not add its own. Types must match, and
-    SAME_VALUE fields must be equal. `context` is the nearest object's fields, for DIFFERENCES."""
+    otherwise (REST) actual may lack keys GitHub has but not add its own. Types must match, lists
+    the same length, and SAME_VALUE fields, and CHECK_VALUE fields of a check, the same values.
+    `context` holds the enclosing objects' plain fields, for DIFFERENCES."""
     context = context or {}
     if isinstance(expected, dict) and isinstance(actual, dict):
         context = {**context, **{key: value for key, value in actual.items() if not isinstance(value, (dict, list))}}
+        values = SAME_VALUE | (CHECK_VALUE if expected.get("__typename") in CHECK_TYPES else set())
         out = []
         missing = [key for key in expected if key not in actual]
         extra = [key for key in actual if key not in expected]
@@ -152,22 +172,29 @@ def differences(expected, actual, exact, path="$", context=None):
         if extra:
             out.append(f"{path}: unexpected {', '.join(extra)}")
         for key in expected:
-            if key in actual:
-                out += differences(expected[key], actual[key], exact, f"{path}.{key}", context)
-                if key in SAME_VALUE and not isinstance(expected[key], (dict, list)) and expected[key] != actual[key]:
-                    out.append(f"{path}.{key}: {actual[key]!r}, GitHub {expected[key]!r}")
+            if key not in actual:
+                continue
+            where = f"{path}.{key}"
+            out += differences(expected[key], actual[key], exact, where, context)
+            mismatch = key in values and not isinstance(expected[key], (dict, list)) and expected[key] != actual[key]
+            if mismatch and not allowed(where, actual[key], context):
+                out.append(f"{where}: {actual[key]!r}, GitHub {expected[key]!r}")
         return out
     if isinstance(expected, list) and isinstance(actual, list):
-        if bool(expected) != bool(actual):
+        if len(expected) != len(actual):
             return [f"{path}: {len(actual)} items, GitHub {len(expected)}"]
+        theirs = {identity(item): item for item in expected}
         out = []
-        for item in actual:
-            # Each item must match one of GitHub's: a list holds one type, or a union's members.
-            options = [differences(other, item, exact, f"{path}[]", context) for other in expected]
-            if all(options):
-                out += min(options, key=len)
+        for index, item in enumerate(actual):
+            key = identity(item)
+            if key and key in theirs:
+                out += differences(theirs[key], item, exact, f"{path}[{key[1]}]", context)
+            elif key:
+                out.append(f"{path}: {key[0]} {key[1]!r}, which GitHub's answer lacks")
+            else:
+                out += differences(expected[index], item, exact, f"{path}[{index}]", context)
         return out
-    if shape(expected) != shape(actual) and not any(test(path, actual, context) for test, _ in DIFFERENCES):
+    if shape(expected) != shape(actual) and not allowed(path, actual, context):
         return [f"{path}: {json.dumps(shape(actual))}, GitHub {json.dumps(shape(expected))}"]
     return []
 
@@ -188,7 +215,7 @@ def auth_lines(text):
     return keep
 
 
-def compare(case, mode, code, stdout, delegated):
+def compare(case, mode, code, stdout, delegated, token):
     """The ways this run departs from what it must do."""
     exit, wanted, delegates, _ = expectation(case, mode)
     problems = []
@@ -198,8 +225,12 @@ def compare(case, mode, code, stdout, delegated):
         problems.append(f"reached real gh outside a launch: {delegated[0][:100]}")
     if delegates and not delegated:
         problems.append("expected to reach real gh, and didn't")
+    if case["forge"][:2] == ["auth", "token"]:
+        # The capture never kept the token, but here it's the forge's own, and nothing else.
+        if exit == 0 and stdout.strip() != token:
+            problems.append("didn't print the forge's token alone")
+        return problems
     if wanted is None and not isinstance(case["stdout"], str):
-        # Output the capture never stored, such as a token: only the exit code is compared.
         return problems
     wanted = forge_text(case["stdout"] if wanted is None else wanted)
     try:
@@ -267,19 +298,6 @@ class Server:
         return []
 
 
-def link_seed_commits(token):
-    """Give the account the seed's commit email, so Forgejo links those commits to it as GitHub
-    does: the PR pane's `authors { user { login } }`."""
-    request = urllib.request.Request("http://forgejo:3000/api/v1/user/emails", method="POST",
-                                     data=json.dumps({"emails": [SEED_EMAIL]}).encode(),
-                                     headers={"Authorization": f"token {token}", "Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(request).close()
-    except urllib.error.HTTPError as error:
-        if error.code != 422:  # already added, by an earlier mode's run
-            raise
-
-
 def checkout(root):
     """A checkout of the twin on `s/pass`, as the apps had one open."""
     path = root / "checkout"
@@ -294,19 +312,20 @@ def main():
     if mode not in ("client", "server"):
         raise SystemExit("usage: replay.py client|server")
     token = os.environ["E2E_TOKEN"]
-    link_seed_commits(token)
     calls, skipped = cases()
     failed = 0
     with tempfile.TemporaryDirectory(prefix="replay-") as directory:
         root = Path(directory)
         target = Client(root, token) if mode == "client" else Server(root, token)
-        work = checkout(root)
+        # Where each call ran: the twin's checkout, `/`, or any other folder.
+        places = {"checkout": checkout(root), "root": Path("/"), "elsewhere": root / "elsewhere"}
+        places["elsewhere"].mkdir()
         for case in sorted(calls, key=lambda case: case["forge"]):
-            result = subprocess.run(["gh", *case["forge"]], cwd=work if case["where"] == "checkout" else "/",
+            result = subprocess.run(["gh", *case["forge"]], cwd=places[case["where"]],
                                     env=target.env | case["env"], stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             stdout = result.stdout.decode()
-            problems = compare(case, mode, result.returncode, stdout, target.delegated())
+            problems = compare(case, mode, result.returncode, stdout, target.delegated(), token)
             if token in stdout or token in result.stderr.decode():
                 # A token only ever reaches stdout for `auth token`, whose output the capture never kept.
                 if case["forge"][:2] != ["auth", "token"]:
@@ -320,8 +339,8 @@ def main():
             for problem in problems:
                 print(f"  {problem}")
             failed += bool(problems)
-    for reason, which in sorted(skipped.items()):
-        print(f"skipped {len(which)} calls: {reason}")
+    for reason, count in sorted(skipped.items()):
+        print(f"skipped {count} captured calls: {reason}")
     for _, reason in DIFFERENCES:
         print(f"allowed: {reason}")
     print(f"{'FAIL' if failed else 'PASS'} replay ({mode}): {len(calls) - failed} of {len(calls)} captured calls")
