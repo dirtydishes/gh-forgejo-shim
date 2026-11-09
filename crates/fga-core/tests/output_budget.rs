@@ -121,16 +121,18 @@ async fn aliased_bodies_under_the_budget_are_whole() {
     assert!(size > 100 * BODY_LEN, "{size} bytes");
 }
 
-/// Errors count too: a failing field under a long alias, on each of 49 issues, gives one error
-/// per issue and alias, and each error's path repeats the alias. Unbounded, this builds 24 MB.
+/// Errors count too: a failing field under a long alias, on each issue of each issue's repository,
+/// gives one error per pair of issues and alias, and each error's path repeats the alias. Unbounded,
+/// this builds about 96,000 errors of over 300 bytes each.
 #[tokio::test]
 async fn errors_stop_at_the_output_budget() {
-    let prefix = "e".repeat(3000);
-    let fields: Vec<String> = (0..160)
+    let prefix = "e".repeat(250);
+    let fields: Vec<String> = (0..40)
         .map(|i| format!("{prefix}{i}:labels(first:-1){{totalCount}}"))
         .collect();
     let query = format!(
-        "{{repository(owner:\"o\",name:\"r\"){{issues(first:100){{nodes{{{}}}}}}}}}",
+        "{{repository(owner:\"o\",name:\"r\"){{issues(first:100){{nodes{{repository{{\
+         issues(first:100){{nodes{{{}}}}}}}}}}}}}}}",
         fields.join(" ")
     );
 
@@ -141,33 +143,37 @@ async fn errors_stop_at_the_output_budget() {
         response.errors.iter().any(|error| error
             .message
             .starts_with("This query's response would pass")),
-        "{} errors",
-        response.errors.len()
+        "{} errors: {:?}",
+        response.errors.len(),
+        response.errors.first().map(|error| &error.message)
     );
 }
 
-/// Errors that land after the budget ran out are dropped too. Each field here reads an issue's
-/// comments from a slow forge and then fails on `first:-1`, so all 7,840 are in flight when the
-/// budget runs out. Unbounded, they build 95 MB.
+/// Errors that land after the budget ran out are dropped too. Issue 1's body under 300 aliases
+/// runs the budget out at once, while each of 40 fields on each of 49 issues reads that issue's
+/// comments from a slow forge and then fails on `first:-1`, so all 1,960 are still in flight.
 #[tokio::test]
 async fn errors_landing_after_the_budget_are_dropped() {
-    let prefix = "e".repeat(12_000);
-    let fields: Vec<String> = (0..160)
-        .map(|i| format!("{prefix}{i}:comments(first:-1){{totalCount}}"))
+    let bodies: Vec<String> = (0..300).map(|i| format!("a{i}:body")).collect();
+    let fields: Vec<String> = (0..40)
+        .map(|i| format!("e{i}:comments(first:-1){{totalCount}}"))
         .collect();
     let query = format!(
-        "{{repository(owner:\"o\",name:\"r\"){{issues(first:100){{nodes{{{}}}}}}}}}",
+        "{{repository(owner:\"o\",name:\"r\"){{issue(number:1){{{}}} \
+         issues(first:100){{nodes{{{}}}}}}}}}",
+        bodies.join(" "),
         fields.join(" ")
     );
 
-    let (response, size) = run(String::new(), query).await;
+    let (response, size) = run("A".repeat(BODY_LEN), query).await;
 
     assert!(size <= MAX_OUTPUT_BYTES + SLACK, "{size} bytes");
     assert!(
         response.errors.iter().any(|error| error
             .message
             .starts_with("This query's response would pass")),
-        "{} errors",
-        response.errors.len()
+        "{} errors: {:?}",
+        response.errors.len(),
+        response.errors.first().map(|error| &error.message)
     );
 }

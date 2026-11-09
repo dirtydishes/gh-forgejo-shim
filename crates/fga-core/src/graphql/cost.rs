@@ -37,6 +37,11 @@ pub const MAX_COST: usize = 5_000;
 /// in a debug build and under 2 KB in a release build, and a worker thread has 2 MiB.
 pub const MAX_NESTING: usize = 64;
 
+/// The longest one name or number may be. gh's longest is under 64. Validation copies names
+/// into its errors, some once per other definition (an operation's name into each of its unused
+/// variables' errors), so an unbounded name multiplies into gigabytes of error text.
+pub const MAX_WORD: usize = 256;
+
 pub(super) struct DocumentCost;
 
 impl ExtensionFactory for DocumentCost {
@@ -56,17 +61,16 @@ impl Extension for DocumentCost {
     ) -> ServerResult<async_graphql::parser::types::ExecutableDocument> {
         // The parser recurses once per level of a value, list type or selection, with no limit
         // of its own on values: a few KB of `[` would overflow a worker thread's stack.
-        match nesting(query) {
-            None => {
-                return Err(ServerError::new(
-                    "Query has an unclosed block string.",
-                    None,
-                ));
+        let refusal = match shape(query) {
+            None => Some("Query has an unclosed block string."),
+            Some(shape) if shape.depth > MAX_NESTING => Some("Query is nested too deep."),
+            Some(shape) if shape.longest_word > MAX_WORD => {
+                Some("Query has a name or number that is too long.")
             }
-            Some(depth) if depth > MAX_NESTING => {
-                return Err(ServerError::new("Query is nested too deep.", None));
-            }
-            Some(_) => {}
+            Some(_) => None,
+        };
+        if let Some(message) = refusal {
+            return Err(ServerError::new(message, None));
         }
         // A document that doesn't parse gets async-graphql's own error.
         if let Ok(document) = parse_query(query)
@@ -395,14 +399,29 @@ fn const_value_nodes(value: &ConstValue) -> usize {
     count
 }
 
-/// How deep `query` nests `[`, `{` and `(`, outside strings, block strings and comments, read
-/// once without parsing. Unbalanced text only needs to read no shallower than the parser would.
-/// `None` when a block string is never closed: no client sends one, and reading on past it
-/// the way the parser does makes both the scan and the parse take quadratic time.
-pub(super) fn nesting(query: &str) -> Option<usize> {
+/// What [`shape`] reads from a document's text.
+pub(super) struct Shape {
+    /// How deep `[`, `{` and `(` nest.
+    pub depth: usize,
+    /// The longest run of name characters: a name, or a number's digits.
+    pub longest_word: usize,
+}
+
+/// The [`Shape`] of `query` outside strings, block strings and comments, read once without
+/// parsing. Unbalanced text only needs to read no shallower than the parser would. `None` when a
+/// block string is never closed: no client sends one, and reading on past it the way the parser
+/// does makes both the scan and the parse take quadratic time.
+pub(super) fn shape(query: &str) -> Option<Shape> {
     let bytes = query.as_bytes();
     let (mut depth, mut deepest, mut i) = (0usize, 0usize, 0usize);
+    let (mut word, mut longest_word) = (0usize, 0usize);
     while i < bytes.len() {
+        if bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric() {
+            word += 1;
+            longest_word = longest_word.max(word);
+        } else {
+            word = 0;
+        }
         match bytes[i] {
             b'#' => {
                 while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
@@ -439,5 +458,8 @@ pub(super) fn nesting(query: &str) -> Option<usize> {
         }
         i += 1;
     }
-    Some(deepest)
+    Some(Shape {
+        depth: deepest,
+        longest_word,
+    })
 }
