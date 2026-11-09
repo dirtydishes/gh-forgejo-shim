@@ -58,6 +58,22 @@ MAX_STREAM = 256 * 1024
 FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 # gh flags with a sensitive word in their name that take no value.
 VALUELESS_FLAGS = {"--with-token", "--show-token"}
+# gh's own commands. Any other first word is an alias or an extension, which may print anything, a
+# token too (`gh alias set tok 'auth token'`), so only its output's length is kept.
+COMMANDS = {"accessibility", "agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace",
+            "completion", "config", "copilot", "extension", "gist", "gpg-key", "help", "issue", "label", "licenses",
+            "org", "pr", "preview", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key",
+            "status", "variable", "version", "workflow"}
+# Flags whose value is no command word.
+VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--field", "--raw-field", "-X", "--method",
+               "--jq", "-q", "--template", "-t", "--input", "-p", "--preview", "--cache"}
+# `gh api` paths that answer with a credential, and a `--jq` or `--template` that picks one out.
+SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|password")
+if redact:
+    # A sensitive key's value in JSON text that isn't one clean answer: after `-i` headers, or cut short.
+    SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
+    SECRET_FIELD = re.compile(r'("[^"\n]*(?:' + SECRET_KEY.pattern.replace("(?i)", "") + r')[^"\n]*"\s*:\s*)'
+                              r'"(?:[^"\\\n]|\\.)*"', re.IGNORECASE)
 
 
 def process_chain(limit=6):
@@ -98,13 +114,14 @@ def scrub(text):
     text = redact.AUTHORIZATION.sub(r"\1<token>", text)
     text = redact.TOKEN_HEADER.sub(r"\1<token>", text)
     text = redact.COOKIE.sub(r"\1<redacted>", text)
+    text = SECRET_FIELD.sub(r'\1"<redacted>"', text)
     return redact.SECRET_ASSIGNMENT.sub(r"\1<redacted>", text)
 
 
 def redact_argv(argv):
     """argv without its credentials: a sensitive flag's value (`--token X`), `gh secret`'s body,
     and whatever scrub() finds in any argument (`-H 'Authorization: token X'`, `-f token=X`)."""
-    secret_command = "secret" in argv
+    secret_command = words(argv)[:1] == ["secret"]
     out = []
     hide_next = False
     for arg in argv:
@@ -125,20 +142,49 @@ def redact_argv(argv):
     return out
 
 
+def words(argv):
+    """argv's words, not its flags or their values: the command, its subcommands and arguments."""
+    out, skip = [], False
+    for arg in argv:
+        if skip:
+            skip = False
+        elif arg.startswith("-"):
+            skip = arg in VALUE_FLAGS
+        else:
+            out.append(arg)
+    return out
+
+
+def expressions(argv):
+    """The values of `--jq`, `-q` and `--template` (and `-t`, outside `auth`)."""
+    flags = ("--jq", "-q", "--template") + (() if "auth" in argv else ("-t",))
+    found = []
+    for index, arg in enumerate(argv):
+        flag, equal, value = arg.partition("=")
+        if flag in flags:
+            found.append(value if equal else argv[index + 1] if index + 1 < len(argv) else "")
+    return found
+
+
 def secret_output(argv):
     """Whether gh may print a token: `auth token` wherever its flags sit (`gh --hostname h auth
     token`), `auth` with `--show-token` in any form or `-t` alone or among short flags, `auth
     git-credential`, `config get` and `config list` (gh's config holds `oauth_token`), and `api`
-    on a path about tokens (`…/registration-token`, `…/access_tokens`, `authorizations`)."""
+    on a path about credentials (`…/registration-token`, `…/access_tokens`, `generate-jitconfig`),
+    a `--jq` or `--template` that picks one out, and any alias or extension."""
+    command = words(argv)
+    if command and command[0] not in COMMANDS:
+        return True
+    if any(SECRET_KEY.search(expression) for expression in expressions(argv)):
+        return True
     if "auth" in argv:
         shown = any(arg == "--show-token" or arg.startswith("--show-token=") or
                     re.fullmatch(r"-[A-Za-z]*t[A-Za-z]*", arg) for arg in argv)
         if "token" in argv or "git-credential" in argv or shown:
             return True
-    if "config" in argv and ("get" in argv or "list" in argv):
+    if command[:1] == ["config"] and command[1:2] in (["get"], ["list"]):
         return True
-    paths = [arg.lower() for arg in argv if not arg.startswith("-") and "=" not in arg]
-    return "api" in argv and any("token" in path or "authorizations" in path for path in paths)
+    return command[:1] == ["api"] and any(SECRET_PATH.search(word) for word in command[1:])
 
 
 def fake_token(argv):
@@ -209,7 +255,7 @@ def text(pump):
 
 def secretless(value):
     if isinstance(value, dict):
-        return {key: "<redacted>" if redact.SENSITIVE_KEY.search(key) and isinstance(item, str) and item
+        return {key: "<redacted>" if SECRET_KEY.search(key) and isinstance(item, str) and item
                 else secretless(item) for key, item in value.items()}
     if isinstance(value, list):
         return [secretless(item) for item in value]

@@ -34,7 +34,7 @@ if mode == "fd":
 if mode == "stdin":
     sys.stdout.write(sys.stdin.read())
 if mode == "long":
-    sys.stdout.write("x" * int(os.environ["FAKE_SIZE"]))
+    sys.stdout.write(os.environ.get("FAKE_PREFIX", "") + "x" * int(os.environ["FAKE_SIZE"]))
 if mode == "stream":
     # One line, then wait until the caller has read it, as `gh pr checks --watch` does between polls.
     print("first", flush=True)
@@ -196,6 +196,32 @@ class TokenOutputTest(unittest.TestCase):
                     output='{"token":"AABBCCDDEEFF","expires_at":"2026-10-30T20:17:03Z"}')
         self.hidden("api", "--method", "POST", "/app/installations/1/access_tokens", output='{"token":"ghs_x"}')
         self.hidden("auth", "git-credential", "get", output="protocol=https\nhost=forge.test\npassword=S1\n")
+
+    def test_aliases_extensions_and_more_token_paths(self):
+        self.hidden("tok")
+        self.hidden("my-extension", "--flag")
+        self.hidden("api", "-X", "POST", "orgs/o/actions/runners/generate-jitconfig", output='{"encoded_jit_config":"e30="}')
+        self.hidden("api", "repos/o/r/actions/runners/registration-token?per_page=1", output='{"token":"AABB"}')
+        self.hidden("api", "user/applications/oauth2", "--jq", ".client_secret", output="gto_" + "q" * 30 + "\n")
+        self.hidden("pr", "view", "--template", "{{.token}}")
+
+    def test_credentials_in_headers_cut_short_answers_and_new_prefixes(self):
+        wrapper = Wrapper(self)
+        answer = 'HTTP/2.0 201 Created\r\nContent-Type: application/json\r\n\r\n{"client_id":"c1","client_secret":"gto_' + "q" * 30 + '"}'
+        wrapper.run("api", "-i", "-X", "POST", "user/applications/oauth2", FAKE_GH="print", FAKE_OUT=answer)
+        wrapper.run("api", "repos/o/r/contents", FAKE_GH="long", FAKE_SIZE="300000", FAKE_PREFIX='{"token": "AABBCC", ')
+        first, second = wrapper.records()
+        self.assertIn('"client_secret":"<redacted>"', first["stdout"])
+        self.assertNotIn("gto_", first["stdout"])
+        self.assertTrue(second["stdout"]["head"].startswith('{"token": "<redacted>", '))
+
+    def test_command_words_not_any_word(self):
+        wrapper = Wrapper(self)
+        wrapper.run("pr", "create", "--title", "secret", "--body", "the body")
+        wrapper.run("search", "issues", "config", "get", FAKE_GH="print", FAKE_OUT="[]\n")
+        first, second = wrapper.records()
+        self.assertEqual(first["argv"][-1], "the body")
+        self.assertEqual(second["stdout"], "[]\n")
 
     def test_any_other_output_loses_its_credentials(self):
         wrapper = Wrapper(self)
