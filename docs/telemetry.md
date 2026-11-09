@@ -18,8 +18,8 @@ stay private. Turn reports off with `gfj telemetry off`, `GFJ_TELEMETRY=0` or `D
   call of the day starts a separate background process and doesn't wait for it. That process has
   no input or output, sends the report with a 2-second timeout, and stops. Sending never slows,
   changes or fails a `gh` call, and nothing is printed, whether the report goes or not. A call
-  that hit a missing or failing feature reads the local process list once as it ends, to note
-  which agent ran it.
+  that hit a missing or failing feature takes a few milliseconds as it ends to note which agent ran
+  it, reading only the processes above it.
 - **fga-server** sends one report a day while it runs, from ten minutes after it starts, so a
   server restarting in a loop sends nothing.
 - **Only release builds report.** The release archives, the Homebrew formula's downloads and the
