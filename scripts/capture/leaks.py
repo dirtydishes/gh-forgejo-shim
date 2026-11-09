@@ -15,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-from redact import EMAIL, IPV4, IPV6, MONTHS, TOKEN, embedded, is_email, is_ip
+from redact import EMAIL, EPOCH_SECONDS, IPV4, IPV6, MONTHS, TIME_KEY, TOKEN, embedded, is_email, is_ip
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
@@ -114,6 +114,9 @@ def value_findings(value):
             kinds |= text_findings(key)
             if SENSITIVE_KEY.search(key) and isinstance(item, str) and item not in PLACEHOLDER_VALUES:
                 kinds.add("credential")
+            if (TIME_KEY.search(key) and isinstance(item, int) and not isinstance(item, bool) and item > 10 ** 9
+                    and item not in (EPOCH_SECONDS, EPOCH_SECONDS * 1000)):
+                kinds.add("date")
             if key in HOST_VARIABLES and isinstance(item, str) and "://" not in item and not allowed_host(item):
                 kinds.add("host")
             kinds |= value_findings(item)

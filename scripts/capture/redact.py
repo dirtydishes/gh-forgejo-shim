@@ -77,8 +77,11 @@ HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), \d\d (?:" + MONTHS + r") \d{4} \d\
 HTTP_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 # A date alone, as in a search (`closed:>2026-09-30`), but not gh's own release date.
 DATE = re.compile(r"(gh version \S+ \(\d{4}-\d\d-\d\d\))|(?<!\d)\d{4}([-/])\d\d\2\d\d(?!\d)")
-# An integer time under a key that says so (`reset` in `gh api rate_limit`, `created_at`).
-TIME_KEY = re.compile(r"(?i)reset|(?:^|_)(?:at|time|date)$|[a-z](?:At|Time|Date)$")
+# An integer time (epoch seconds or milliseconds) under a key that says so: `reset` in
+# `gh api rate_limit`, `created_at`, `timestamp`, `expires`, a JWT's `exp` and `iat`.
+TIME_KEY = re.compile(r"(?i)time|date|reset|expire|created|updated|modified|since|until|seen|^(?:exp|iat|nbf)$|"
+                      r"(?:^|_)at$|[a-z]At$")
+EPOCH_SECONDS = 946684800
 LOG_TIME = re.compile(r"\[(\d\d/[A-Z][a-z]{2}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]")
 # An access log line's client, ident and user fields, before its time.
 LOG_FIELDS = re.compile(r"^(\S+) (\S+) (\S+) (?=\[)")
@@ -229,7 +232,7 @@ class Redactor:
                 if SENSITIVE_KEY.search(key) and isinstance(item, str) and item:
                     result[key] = "<redacted>"
                 elif TIME_KEY.search(key) and isinstance(item, int) and not isinstance(item, bool) and item > 10 ** 9:
-                    result[key] = int(EPOCH.timestamp()) * (1000 if item > 10 ** 12 else 1)
+                    result[key] = EPOCH_SECONDS * (1000 if item > 10 ** 12 else 1)
                 elif key in NODE_KEYS and isinstance(item, str) and item:
                     result[key] = self._node(item)
                 elif user and key not in USER_KEYS or identity and key in IDENTITY_KEYS:
