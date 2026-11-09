@@ -83,12 +83,15 @@ ZONE_NAMES = ("UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|AKST|AKDT|HST|BST|CET|CES
 TIMESTAMP = re.compile(r"(?<!\d)(\d{4})([-/])(\d\d)\2(\d\d)([T ])(\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
                        r"( ?)(Z|[+-]\d\d:?\d\d)?( (?:" + ZONE_NAMES + r"|(?:(?<=[+-]\d{4} )|(?<=[+-]\d\d:\d\d ))"
                        r"(?:[A-Z]{2,5}|ChST|[+-]\d\d(?:\d\d)?)))?(?![\w:])")
+# A zone comment's own forms: `(Eastern Daylight Time)`, `(UTC-04:00)`.
+ZONE_WORDS = "[A-Z][a-z]+(?: [A-Z][a-z]+){1,3}"
+ZONE_OFFSET = "(?:UTC|GMT)?[+-]\\d\\d(?::?\\d\\d)?"
 DAYS = "Mon|Tue|Wed|Thu|Fri|Sat|Sun"
 MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 CTIME = re.compile(r"\b(?:" + DAYS + r") (" + MONTHS + r") ( ?\d{1,2}) (\d\d):(\d\d):(\d\d)"
                    r"( (?:[A-Z]{2,5}|ChST|[+-]\d\d(?:\d\d)?))? (\d{4})(?: ([+-]\d{4}))?(?![\w:])")
 HTTP_DATE = re.compile(r"\b(?:" + DAYS + r"), (\d{1,2}) (" + MONTHS + r") (\d{4}) (\d\d):(\d\d):(\d\d) (GMT|[+-]\d{4})\b"
-                       r"( \([A-Za-z ]+\))?")
+                       r"( \((?:" + "|".join(["[A-Z]{2,5}", "ChST", ZONE_WORDS, ZONE_OFFSET]) + r")\))?")
 # A date alone, as in a search (`closed:>2026-09-30`). Dates that are versions, not times, stay:
 # gh's release date in `gh --version`, and GitHub's REST API version (`X-GitHub-Api-Version` and
 # the `-Selected` answer).
