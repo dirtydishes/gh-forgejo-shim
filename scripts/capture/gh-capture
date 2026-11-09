@@ -69,7 +69,8 @@ COMMANDS = {"accessibility", "agent-task", "alias", "api", "attestation", "auth"
             "status", "variable", "version", "workflow"}
 # Flags whose value is no command word.
 VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--field", "--raw-field", "-X", "--method",
-               "--jq", "-q", "--template", "-t", "--input", "-p", "--preview", "--cache"}
+               "--jq", "-q", "--template", "-t", "--input", "-p", "--preview", "--cache", "-o", "--org", "-e", "--env",
+               "-a", "--app"}
 # `gh api` paths that answer with a credential, and a `--jq` or `--template` that picks one out.
 SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|password")
 if redact:
@@ -124,7 +125,8 @@ def scrub(text):
 def redact_argv(argv):
     """argv without its credentials: a sensitive flag's value (`--token X`), `gh secret`'s body,
     and whatever scrub() finds in any argument (`-H 'Authorization: token X'`, `-f token=X`)."""
-    secret_command = words(argv)[:1] == ["secret"]
+    # `gh secret`, wherever gh's flags put the word: gh finds it past `--org o` or `-e prod`.
+    secret_command = next((word for word in words(argv) if word in COMMANDS), None) == "secret"
     out = []
     hide_next = False
     for arg in argv:
@@ -159,13 +161,16 @@ def words(argv):
 
 
 def expressions(argv):
-    """The values of `--jq`, `-q` and `--template` (and `-t`, outside `auth`)."""
+    """The values of `--jq`, `-q` and `--template` (and `-t`, outside `auth`), in every form gh
+    takes: `-q EXPR`, `-q=EXPR`, `-qEXPR`, `--jq=EXPR`."""
     flags = ("--jq", "-q", "--template") + (() if "auth" in argv else ("-t",))
     found = []
     for index, arg in enumerate(argv):
         flag, equal, value = arg.partition("=")
         if flag in flags:
             found.append(value if equal else argv[index + 1] if index + 1 < len(argv) else "")
+        elif arg[:2] in flags and len(arg) > 2 and not arg.startswith("--"):
+            found.append(arg[2:])
     return found
 
 
