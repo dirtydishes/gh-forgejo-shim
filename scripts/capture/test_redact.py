@@ -291,6 +291,15 @@ class RedactTest(unittest.TestCase):
         self.assertIn("found no capturing account", stderr.getvalue())
         self.assertEqual(self.capture.redact("--name", "octo-person=<user>"), 0)
 
+    def test_forgejo_usernames_are_learned(self):
+        redactor = redact.Redactor([("octo-person", "<user>")])
+        signer = {"verification": {"signer": {"name": "Real Name", "email": "a@private.dev", "username": "someone-else"}}}
+        redactor.learn([signer])
+        self.assertEqual(redactor.names["someone-else"], "<user-2>")
+        self.assertEqual(redactor.value(signer)["verification"]["signer"],
+                         {"name": "<redacted>", "email": "<redacted>", "username": "<user-2>"})
+        self.assertEqual(redactor.text("https://forge.test/someone-else/x"), "https://forge.test/<user-2>/x")
+
     def test_logins_that_are_path_words_are_kept(self):
         redactor = redact.Redactor([])
         redactor.learn([{"data": {"viewer": {"login": "octo-person"}, "a": {"owner": {"login": "actions"}},
