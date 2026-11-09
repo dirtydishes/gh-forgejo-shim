@@ -334,10 +334,11 @@ same-repository PR is not cross-repository, as on GitHub, and `gh pr list` shows
 an owner.
 
 `headRefName` is Forgejo's own name. A made-up name could equal a real branch's, and gh's branch
-finder (`gh pr checkout {branch}`) would then take one PR for the other. A branch whose name starts
-with `refs/` is the one exception: it counts as gone, so gh fetches the PR's own ref into a local ref
-named by `headRefName`, and git reads that name as a full ref name. `refs/heads/main` would replace the
-user's own `main`, unpushed commits and all, under `gh pr checkout --force`. So such a PR shows its
+finder (`gh pr checkout {branch}`) would then take one PR for the other. A branch named like a ref is
+the one exception: a name starting with `refs/`, or with `heads/`, `tags/` or `remotes/`, which git
+completes with only `refs/`. Such a branch counts as gone, so gh fetches the PR's own ref into a local
+ref named by `headRefName`, and git reads `refs/heads/main` or `heads/main` there as the user's own
+`main`, replacing it, unpushed commits and all, under `gh pr checkout --force`. So such a PR shows its
 own ref, `refs/pull/N/head`, as an AGit PR does; no local branch can have that name, and it can't be
 taken for another PR. `gh pr list --head` finds it by either name. REST `head.ref`, which Claude
 desktop reads, keeps Forgejo's name.
