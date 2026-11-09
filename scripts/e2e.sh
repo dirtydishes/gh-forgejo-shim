@@ -54,7 +54,7 @@ docker run -d --name "$run-gateway" --network "$run" --network-alias forge.test 
     -v "$run-tls:/tls:ro" -e FGA_FORGEJO_URL=http://forgejo:3000 -e FGA_PUBLIC_URL=https://forge.test \
     -e FGA_LISTEN=0.0.0.0:443 -e FGA_TLS_CERT=/tls/cert.pem -e FGA_TLS_KEY=/tls/key.pem \
     "$image" /usr/local/bin/fga-server >/dev/null
-docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" \
+docker run --name "$run-client" --network "$run" -v "$run-tls:/tls:ro" -e E2E_GH_VERSION="$gh_version" \
     -v "$artifacts:/artifacts" "$image" bash -c 'bash /test/client.sh && bash /test/g2.sh'
 printf 'PASS e2e: gh %s and Claude lookups against %s\n' "$gh_version" "$forgejo_image"
 printf 'Captured query and results: %s\n' "$artifacts"
