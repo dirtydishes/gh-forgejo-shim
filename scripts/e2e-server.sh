@@ -55,7 +55,8 @@ for attempt in $(seq 1 90); do
 done
 docker exec --user git "$run-forgejo" forgejo --config /data/gitea/conf/app.ini admin user create \
     --username e2e --password e2e-disposable-password --email e2e@example.invalid --admin --must-change-password=false >/dev/null
-docker run -d --name "$run-gateway" --network "$run" --network-alias gateway \
+# The image is a release build, so it would report usage; a test run never does.
+docker run -d --name "$run-gateway" --network "$run" --network-alias gateway -e FGA_TELEMETRY=0 \
     -e FGA_FORGEJO_URL=http://forgejo:3000 -e FGA_PUBLIC_URL=https://forge.test fga-server:e2e >/dev/null
 docker run -d --name "$run-nginx" --network "$run" --network-alias forge.test -v "$run-tls:/tls:ro" \
     -v "$PWD/packaging/gateway/nginx/fga-locations.conf:/etc/nginx/fga-locations.conf:ro" \

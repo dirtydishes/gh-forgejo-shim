@@ -206,7 +206,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # A release build reports usage unless told not to; the runner's CI isn't passed in.
           docker run -d --name fga-server -p 127.0.0.1:8080:8080 \
+            -e FGA_TELEMETRY=0 \
             -e FGA_FORGEJO_URL=http://127.0.0.1:9 \
             -e FGA_PUBLIC_URL=https://forge.example.com \
             fga-server:ci
