@@ -176,9 +176,10 @@ async fn an_agit_checkout_lands_detached_on_the_pr_head() {
     );
 }
 
-/// Forgejo allows a branch whose name starts with `refs/`, such as `refs/heads/main`. gh fetches a PR
-/// with no head repository into a local ref named by `headRefName`, which git reads as a full ref
-/// name, so with `--force` that name would replace the user's own `main` and its unpushed commits.
+/// Forgejo allows a branch named like a ref, such as `refs/heads/main` or `heads/main`. gh fetches a
+/// PR with no head repository into a local ref named by `headRefName`, which git reads as
+/// `refs/heads/main` either way, so with `--force` that name would replace the user's own `main` and
+/// its unpushed commits. An open PR and a closed one each have no head repository here.
 #[tokio::test]
 #[ignore = "needs real gh 2.103.3 and git"]
 async fn a_branch_named_like_a_ref_never_replaces_a_local_branch() {
@@ -186,7 +187,18 @@ async fn a_branch_named_like_a_ref_never_replaces_a_local_branch() {
         eprintln!("skipped: no gh 2.103.3 (set GFJS_REAL_GH)");
         return;
     };
-    let root = std::env::temp_dir().join(format!("fga-refs-branch-{}", std::process::id()));
+    for (case, (branch, state)) in [("refs/heads/main", "open"), ("heads/main", "closed")]
+        .into_iter()
+        .enumerate()
+    {
+        keeps_local_main(&gh, case, branch, state).await;
+    }
+}
+
+/// `gh pr checkout --force` of a PR from `branch`, in `state`, leaves the clone's own `main` and
+/// writes no ref outside `refs/pull/`, `refs/remotes/` and the user's own.
+async fn keeps_local_main(gh: &Path, case: usize, branch: &str, state: &str) {
+    let root = std::env::temp_dir().join(format!("fga-refs-branch-{}-{case}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     // The forge: main at A, and PR 1 from the branch `refs/heads/main` at C.
@@ -216,7 +228,7 @@ async fn a_branch_named_like_a_ref_never_replaces_a_local_branch() {
             "-q",
             upstream.to_str().unwrap(),
             &format!("{a}:refs/heads/main"),
-            &format!("{c}:refs/heads/refs/heads/main"),
+            &format!("{c}:refs/heads/{branch}"),
             &format!("{c}:refs/pull/1/head"),
         ],
     );
@@ -252,14 +264,14 @@ async fn a_branch_named_like_a_ref_never_replaces_a_local_branch() {
     std::fs::set_permissions(&ssh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
     let user = json!({"id":1,"login":"o","full_name":"","avatar_url":""});
-    let pull = json!({"number":1,"title":"refs","state":"open","merged":false,"draft":false,
+    let pull = json!({"number":1,"title":"refs","state":state,"merged":false,"draft":false,
         "html_url":"https://forge.test/o/r/pulls/1","user":user,"merged_at":null,
         "allow_maintainer_edit":false,
-        "head":{"label":"refs/heads/main","ref":"refs/heads/main","sha":c,
+        "head":{"label":branch,"ref":branch,"sha":c,
             "repo":{"name":"r","owner":user}},
         "base":{"label":"main","ref":"main","sha":a,"repo":{"name":"r","owner":user}}});
     let checkout = gh_through_gateway(
-        &gh,
+        gh,
         &root,
         &work,
         &ssh,
@@ -269,16 +281,27 @@ async fn a_branch_named_like_a_ref_never_replaces_a_local_branch() {
     .await;
     let head = text(&git(&work, &["rev-parse", "HEAD"]));
     let main = text(&git(&work, &["rev-parse", "refs/heads/main"]));
+    let refs = text(&git(&work, &["for-each-ref", "--format=%(refname)"]));
     eprintln!(
-        "REFS exit={:?}\nstdout={}\nstderr={}\nHEAD={head} (C={c})\nmain={main} (U={unpushed})",
+        "REFS {branch} ({state}) exit={:?}\nstdout={}\nstderr={}\nHEAD={head} (C={c})\nmain={main} (U={unpushed})\nrefs:\n{refs}",
         checkout.status.code(),
         String::from_utf8_lossy(&checkout.stdout),
         String::from_utf8_lossy(&checkout.stderr),
     );
     let _ = std::fs::remove_dir_all(&root);
-    assert!(checkout.status.success(), "gh pr checkout failed");
-    assert_eq!(head, c, "HEAD is not the PR's head");
-    assert_eq!(main, unpushed, "the local main lost its unpushed commit");
+    assert!(checkout.status.success(), "{branch}: gh pr checkout failed");
+    assert_eq!(head, c, "{branch}: HEAD is not the PR's head");
+    assert_eq!(
+        main, unpushed,
+        "{branch}: the local main lost its unpushed commit"
+    );
+    for name in refs.lines() {
+        assert!(
+            ["refs/heads/main", "refs/heads/other", "refs/pull/1/head"].contains(&name)
+                || name.starts_with("refs/remotes/"),
+            "{branch}: gh wrote {name}"
+        );
+    }
 }
 
 /// Runs real gh's `args` in `work` against the gateway, in front of a fake Forgejo that serves

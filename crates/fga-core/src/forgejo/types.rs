@@ -91,9 +91,10 @@ impl Branch {
     /// Whether the head is a branch that still exists. Forgejo puts the branch name in `ref` only
     /// then (`label` always holds it); an AGit PR, a deleted branch or a deleted fork has
     /// `refs/pull/N/head` there (`services/convert/pull.go:106-110,165-231`). A name starting with
-    /// `refs/` can't be told from that placeholder, so it counts as gone.
+    /// `refs/` can't be told from that placeholder, and one [`named_like_a_ref`] shows the PR's own
+    /// ref ([`PullRequest::head_ref_name`]), which gh can't fetch as a branch, so both count as gone.
     pub fn exists(&self) -> bool {
-        !self.label.is_empty() && self.ref_name == self.label && !self.ref_name.starts_with("refs/")
+        !self.label.is_empty() && self.ref_name == self.label && !named_like_a_ref(&self.ref_name)
     }
 
     pub fn label(&self) -> String {
@@ -153,15 +154,25 @@ pub struct PullRequest {
     pub merge_base: Option<String>,
 }
 
+/// Whether git reads `name`, as the local end of a fetch, as other than the branch of that name: a
+/// full ref name, or one of the prefixes git completes with only `refs/` (`heads/main` writes
+/// `refs/heads/main`, `tags/v1` a tag, `remotes/origin/main` a remote-tracking branch).
+pub fn named_like_a_ref(name: &str) -> bool {
+    ["refs/", "heads/", "tags/", "remotes/"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
 impl PullRequest {
-    /// The head branch name gh is shown: Forgejo's own, except for a branch named like a ref
-    /// (`refs/heads/main`). gh fetches a PR with no head repository, which such a branch always is
-    /// ([`Branch::exists`]), into a local ref named by this, and git reads it as a full ref name,
-    /// so `refs/heads/main` would replace the user's own `main`. Such a PR shows its own ref
-    /// `refs/pull/N/head` instead, which no local branch can be; an AGit PR's name is that already.
+    /// The head branch name gh is shown: Forgejo's own, except for a branch [`named_like_a_ref`]
+    /// (`refs/heads/main`, `heads/main`). gh fetches a PR with no head repository, which such a
+    /// branch always is ([`Branch::exists`]), into a local ref named by this, and git reads it as
+    /// another ref, so `refs/heads/main` would replace the user's own `main`. Such a PR shows its
+    /// own ref `refs/pull/N/head` instead, which no local branch can be; an AGit PR's name is that
+    /// already.
     pub fn head_ref_name(&self) -> std::borrow::Cow<'_, str> {
         let name = self.head.name();
-        if name.starts_with("refs/") {
+        if named_like_a_ref(name) {
             format!("refs/pull/{}/head", self.number).into()
         } else {
             name.into()

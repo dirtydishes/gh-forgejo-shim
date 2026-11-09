@@ -223,7 +223,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
         bool,
         Option<&'static str>,
     );
-    let cases: [Case; 15] = [
+    let cases: [Case; 16] = [
         ("feature", "feature", "o", "aaa", "open", false, Some("aaa")),
         (
             "feature",
@@ -330,6 +330,16 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             false,
             Some("aaa"),
         ),
+        // git completes `heads/topic` to `refs/heads/topic`, so it's named like a ref too.
+        (
+            "heads/topic",
+            "heads/topic",
+            "o",
+            "aaa",
+            "open",
+            false,
+            Some("aaa"),
+        ),
     ];
     let pulls: Vec<Value> = cases
         .iter()
@@ -423,6 +433,7 @@ async fn a_head_branch_that_is_gone_has_no_head_repository() {
             "p13":head("topic", false, r.clone(), "o"),
             "p14":head("pull/3/head", false, r, "o"),
             "p15":head("refs/pull/15/head", false, Value::Null, "o"),
+            "p16":head("refs/pull/16/head", true, Value::Null, "o"),
             "agit":{"nodes":[{"number":3}]},
             "pull3":{"nodes":[{"number":14}]},
             "topic":{"nodes":[{"number":13}]},
