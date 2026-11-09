@@ -185,7 +185,8 @@ class Redactor:
             if isinstance(viewer, dict) and isinstance(viewer.get("login"), str):
                 add(found["viewers"], viewer["login"])
             for key, item in value.items():
-                if key == "login" and isinstance(item, str):
+                # Forgejo names a commit's author and signer by `username`.
+                if key in ("login", "username") and isinstance(item, str) and item:
                     add(found["logins"], item)
                 self._collect(item, found)
         elif isinstance(value, list):
