@@ -354,13 +354,21 @@ If the local branch already holds commits on top of the PR's head, gh keeps them
 fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
 against GitHub, on either fetch path, so the gateway doesn't change it.
 
-**Residues**, each as gh behaves against GitHub:
+**Residues:**
 
 - **A force-push just before checkout.** For an open PR, Forgejo updates `refs/pull/N/head` after a
   push, in a queue. Between the push and that update, the branch tip and the PR's ref differ, so the
   gateway reports no head repository, and gh fetches the PR's ref, which is about to move. If the
   push lands just after the gateway's answer, gh fetches the branch by name and gets the new tip.
   Against GitHub, gh fetches an open PR's branch by name too and gets whatever it holds then.
+- **A local branch named `refs/pull/N/head`.** gh fetches an AGit or ref-named PR into the ref
+  `refs/pull/N/head`, then checks out that name. If the user's repository also has a branch with that
+  literal name (`refs/heads/refs/pull/N/head`), git warns that the name is ambiguous and checks out
+  the branch instead, leaving it as it was.
+- **Branch names that differ only in case, on macOS.** For a PR with no head repository (closed, or
+  its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
+  ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's
+  `main`, and `--force` replaces it. The gateway can't see local branch names to avoid it.
 
 ## 11. Files, review comments, comparisons and contents
 
