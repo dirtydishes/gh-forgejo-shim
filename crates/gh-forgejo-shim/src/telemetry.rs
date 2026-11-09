@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fga_server::usage::{self, Report};
+use fga_server::usage::{self, Report, Tally};
 
 use crate::config::{self, EnvMap};
 
@@ -222,10 +222,10 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     // Moved aside, under this sender's own name, so counts kept from now on go to the next report
     // and no other sender's cleanup can touch them.
     let taken = dir.as_deref().and_then(|dir| {
-        let taken = dir.join(format!("unsupported.sending-{ticket}"));
-        fs::rename(dir.join("unsupported"), &taken)
-            .ok()
-            .map(|()| taken)
+        // 0.4.0's counts, which don't say which agent ran gh: a report can't carry them.
+        let _ = fs::remove_file(dir.join("unsupported"));
+        let taken = dir.join(format!("counts.sending-{ticket}"));
+        fs::rename(dir.join(COUNTS), &taken).ok().map(|()| taken)
     });
     let report = build(env, client, dir.as_deref(), taken.as_deref());
     let cancelled = !owns(&marker);
@@ -239,7 +239,7 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     if cancelled {
         if let (Some(dir), Some(taken)) = (&dir, &taken) {
             if let Some(text) = read_state(taken) {
-                if let Some(mut file) = open_state(&dir.join("unsupported"), true) {
+                if let Some(mut file) = open_state(&dir.join(COUNTS), true) {
                     let _ = file.write_all(text.as_bytes());
                 }
             }
@@ -279,20 +279,16 @@ pub fn send(env: &EnvMap, caller: Option<u32>, ticket: &str) {
     }
 }
 
-/// The report for `client`, from `dir`'s first week and the unsupported counts in `unsupported`.
-/// It writes nothing.
-fn build(
-    env: &EnvMap,
-    client: &'static str,
-    dir: Option<&Path>,
-    unsupported: Option<&Path>,
-) -> Report {
+/// The report for `client`, from `dir`'s first week and the counts kept in `counts`. It writes
+/// nothing.
+fn build(env: &EnvMap, client: &'static str, dir: Option<&Path>, counts: Option<&Path>) -> Report {
     let get = |name: &str| env.get(name).cloned();
     let config = config::load_config_with_env(Some(&config_path(&get)), env).ok();
     let (forge, forge_major) = config
         .as_ref()
         .and_then(|config| forge(config, env))
         .unwrap_or((None, None));
+    let (unsupported, failed) = counts.map(kept).unwrap_or_default();
     Report {
         schema: usage::SCHEMA,
         version: usage::report_version(crate::VERSION),
@@ -308,7 +304,8 @@ fn build(
             .map(|week| week.trim().to_string())
             .filter(|week| usage::is_week(week))
             .unwrap_or_else(|| usage::iso_week(usage::now())),
-        unsupported: unsupported.map(counts).unwrap_or_default(),
+        unsupported: Tally::ByClient(unsupported),
+        failed: Tally::ByClient(failed),
     }
 }
 
@@ -356,14 +353,18 @@ pub fn show(env: &EnvMap) -> String {
     let get = |name: &str| env.get(name).cloned();
     let dir = state_dir(&get);
     let client = detect_client(caller_pid()).unwrap_or("other");
-    let kept = dir.as_ref().map(|dir| dir.join("unsupported"));
+    let kept = dir.as_ref().map(|dir| dir.join(COUNTS));
     serde_json::to_string(&build(env, client, dir.as_deref(), kept.as_deref())).unwrap_or_default()
 }
 
-/// Keeps the unsupported counts a launched call's gateway gathered, for the next report. It counts
-/// only while reports are on ([`usage::start_counting`]).
-pub fn keep_unsupported(env: Env) {
-    let counts = usage::take_counts().unsupported;
+/// Where counts wait for the next report, a line each: `<kind> <client> <name> <count>`.
+const COUNTS: &str = "counts";
+
+/// Keeps what a launched call's gateway counted, under the agent that ran gh, for the next report.
+/// It counts only while reports are on ([`usage::start_counting`]). Only a call with counts looks
+/// for its agent, which reads the local process list.
+pub fn keep_counts(env: Env) {
+    let counts = usage::take_counts();
     if counts.is_empty() {
         return;
     }
@@ -374,32 +375,60 @@ pub fn keep_unsupported(env: Env) {
     let Some(dir) = state_dir(env) else {
         return;
     };
-    let lines = counts
-        .iter()
-        .map(|(name, count)| format!("{name} {count}\n"))
-        .collect::<String>();
+    let client = detect_client(caller_pid()).unwrap_or("other");
+    let lines = [
+        ("unsupported", &counts.unsupported),
+        ("failed", &counts.failed),
+    ]
+    .into_iter()
+    .flat_map(|(kind, names)| {
+        names
+            .iter()
+            .map(move |(name, count)| format!("{kind} {client} {name} {count}\n"))
+    })
+    .collect::<String>();
     // One append-mode write, so calls at once each add whole lines.
     if crate::shim::create_dirs(&dir, 0o700).is_ok() {
-        if let Some(mut file) = open_state(&dir.join("unsupported"), true) {
+        if let Some(mut file) = open_state(&dir.join(COUNTS), true) {
             let _ = file.write_all(lines.as_bytes());
         }
     }
 }
 
-/// The counts in a file [`keep_unsupported`] wrote, vocabulary names only.
-fn counts(path: &Path) -> BTreeMap<String, u64> {
-    let mut counts = BTreeMap::new();
+/// Counts by client, then by name.
+type ByClient = BTreeMap<&'static str, BTreeMap<String, u64>>;
+
+/// The unsupported and failed counts in a file [`keep_counts`] wrote: known kinds and clients, and
+/// vocabulary names, only. Any other line is passed over.
+fn kept(path: &Path) -> (ByClient, ByClient) {
+    let (mut unsupported, mut failed) = (ByClient::new(), ByClient::new());
     for line in read_state(path).unwrap_or_default().lines() {
-        let Some((name, count)) = line.split_once(' ') else {
+        let mut fields = line.splitn(4, ' ');
+        let (Some(kind), Some(client), Some(name), Some(count)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
             continue;
         };
-        let (Some(name), Ok(count)) = (usage::known_name(name), count.parse::<u64>()) else {
+        let by_client = match kind {
+            "unsupported" => &mut unsupported,
+            "failed" => &mut failed,
+            _ => continue,
+        };
+        let (Some(client), Some(name), Ok(count)) = (
+            usage::CLIENTS.into_iter().find(|known| *known == client),
+            usage::known_name(name),
+            count.parse::<u64>(),
+        ) else {
             continue;
         };
-        let total: &mut u64 = counts.entry(name).or_default();
+        let total = by_client
+            .entry(client)
+            .or_default()
+            .entry(name)
+            .or_default();
         *total = total.saturating_add(count).min(usage::MAX_COUNT);
     }
-    counts
+    (unsupported, failed)
 }
 
 /// Prints the notice to `out` the first time one of the setup commands runs while reports are on.

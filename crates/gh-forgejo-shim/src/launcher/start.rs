@@ -255,7 +255,7 @@ pub fn launch(
         fga_core::scopes::set_sink(sink);
     }
 
-    // The in-process gateway counts what it lacks only while reports are on.
+    // The in-process gateway counts what it lacks and fails only while reports are on.
     if matches!(
         crate::telemetry::status(&|name| env.get(name).cloned()),
         crate::telemetry::Status::On(_)
@@ -307,8 +307,9 @@ pub fn launch(
             edits
         }),
     });
-    // What the gateway lacked during the call, kept for the next usage report if reports are on.
-    crate::telemetry::keep_unsupported(&|name| env.get(name).cloned());
+    // What the gateway lacked or failed during the call, kept for the next usage report if reports
+    // are on.
+    crate::telemetry::keep_counts(&|name| env.get(name).cloned());
     Some(code)
 }
 
