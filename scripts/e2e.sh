@@ -25,6 +25,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/test_oracle.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/e2e/test_seed.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/e2e/test_replay.py
 docker info >/dev/null
 docker build -f scripts/e2e/Dockerfile --build-arg GH_VERSION="$gh_version" -t "$image" .
 docker network create "$run" >/dev/null
