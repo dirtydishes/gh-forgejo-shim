@@ -3,9 +3,11 @@
     python3 scripts/capture/leaks.py fixtures/clients
 
 It looks for tokens and credentials, IP addresses, emails, home directories, avatar URLs, dates
-other than the placeholders' and any host but GitHub's own and reserved test names, in every file under the given paths, and inside the
-JSON answers captured logs carry. It prints the file, line and kind of each finding, never the
-text, so a leak doesn't reach a CI log. Values redact.py writes as placeholders pass.
+other than the placeholders' and any host but GitHub's own and reserved test names, in the names
+and contents of every file under the given paths and inside the JSON answers captured logs carry.
+It prints the file, line and kind of each finding, never the text, so a leak doesn't reach a CI
+log; a file whose name is a finding goes by its number. Values redact.py writes as placeholders
+pass.
 """
 
 import json
@@ -152,14 +154,17 @@ def file_findings(path):
 
 
 def check(paths):
-    """Every finding under the paths, as `file:line: kind` lines; line 0 is the file's name."""
+    """Every finding under the paths, as `file:line: kind` lines; line 0 is the file's name. A file
+    whose name is a finding goes by its place among the files checked, so its name isn't printed."""
     findings = []
     for root in map(Path, paths):
         files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else [root]
-        for path in files:
+        for index, path in enumerate(files, 1):
             name = path.relative_to(root) if root.is_dir() else Path(path.name)
-            findings += [f"{path}:0: {kind} in the file name" for kind in sorted(text_findings(str(name)))]
-            findings += [f"{path}:{line}: {kind}" for line, kind in file_findings(path)]
+            kinds = sorted(text_findings(str(name)))
+            shown = f"{root if root.is_dir() else root.parent}/<file {index} of {len(files)}>" if kinds else path
+            findings += [f"{shown}:0: {kind} in the file name" for kind in kinds]
+            findings += [f"{shown}:{line}: {kind}" for line, kind in file_findings(path)]
     return findings
 
 

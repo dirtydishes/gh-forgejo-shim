@@ -346,9 +346,15 @@ class LeaksTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory) / "homebox.local"
             folder.mkdir()
-            (folder / "capture-octo@private.dev.jsonl").write_text("")
+            (folder / "capture-octo@private.dev.log").write_text("198.51.100.7\n")
+            (Path(directory) / "clean.jsonl").write_text("")
             findings = leaks.check([directory])
-        self.assertEqual(sorted(f.rsplit(": ", 1)[1] for f in findings), ["email in the file name", "host in the file name"])
+        self.assertEqual(sorted(f.rsplit(": ", 1)[1] for f in findings),
+                         ["IP address", "email in the file name", "host in the file name"])
+        for finding in findings:
+            self.assertNotIn("homebox", finding)
+            self.assertNotIn("private.dev", finding)
+            self.assertIn("/<file 2 of 2>:", finding)
 
     def test_hosts_in_a_records_argv_and_env(self):
         for argv in (["auth", "status", "-h", "homebox"], ["api", "user", "--hostname=homebox"],
