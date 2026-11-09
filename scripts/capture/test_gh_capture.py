@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -198,6 +199,38 @@ class StreamTest(unittest.TestCase):
         self.assertEqual((process.returncode, rest, errors), (0, b"second\n", b"progress\n"))
         [record] = wrapper.records()
         self.assertEqual((record["stdout"], record["stderr"]), ("first\nsecond\n", "progress\n"))
+
+    def test_a_slow_caller_on_a_non_blocking_pipe_gets_everything(self):
+        wrapper = Wrapper(self)
+        read_end, write_end = os.pipe()
+        os.set_blocking(write_end, False)
+        process = subprocess.Popen([sys.executable, str(WRAPPER), "api", "repos/o/r/tarball"],
+                                   env=wrapper.env | {"FAKE_GH": "long", "FAKE_SIZE": "2000000"}, cwd=wrapper.root,
+                                   stdin=subprocess.DEVNULL, stdout=write_end, stderr=subprocess.DEVNULL)
+        os.close(write_end)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        received = 0
+        with os.fdopen(read_end, "rb") as pipe:
+            while True:
+                # A wrapper that stops forwarding hangs: fail after a quiet spell, don't wait forever.
+                ready, _, _ = select.select([pipe], [], [], 15)
+                self.assertTrue(ready, f"output stopped after {received} bytes")
+                chunk = pipe.read1(4096)
+                if not chunk:
+                    break
+                received += len(chunk)
+                time.sleep(0.0005)
+        self.assertEqual((process.wait(timeout=30), received), (0, 2000000))
+
+    @unittest.skipUnless(os.path.exists("/dev/full"), "needs /dev/full (Linux)")
+    def test_a_caller_that_cant_take_the_output(self):
+        wrapper = Wrapper(self)
+        with open("/dev/full", "wb") as full:
+            result = subprocess.run([sys.executable, str(WRAPPER), "api", "user"], env=wrapper.env | {"FAKE_GH": "long",
+                                    "FAKE_SIZE": "500000"}, cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=full,
+                                    stderr=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(wrapper.records()[0]["stdout"]["bytes"], 500000)
 
     def test_long_output_is_cut_short_in_the_log_only(self):
         wrapper = Wrapper(self)
