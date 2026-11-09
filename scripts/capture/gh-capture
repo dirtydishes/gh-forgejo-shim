@@ -66,12 +66,14 @@ QUIET = 0.5
 FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 # gh flags with a sensitive word in their name that take no value.
 VALUELESS_FLAGS = {"--with-token", "--show-token"}
-# gh's own commands. Any other first word is an alias or an extension, which may print anything, a
-# token too (`gh alias set tok 'auth token'`), so only its output's length is kept.
-COMMANDS = {"accessibility", "agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace",
-            "completion", "config", "copilot", "extension", "gist", "gpg-key", "help", "issue", "label", "licenses",
-            "org", "pr", "preview", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key",
-            "status", "variable", "version", "workflow"}
+# gh 2.103.3's own commands and their built-in aliases (`gh help`). Any other first word is an alias
+# or an extension, `co` included since a user can redefine it, and may print anything, a token too
+# (`gh alias set tok 'auth token'`), so only its output's length is kept; so is `extension exec`.
+COMMANDS = {"accessibility", "actions", "agent-task", "alias", "api", "at", "attestation", "auth", "browse", "cache",
+            "codespace", "completion", "config", "copilot", "credits", "cs", "discussion", "environment", "exit-codes",
+            "ext", "extension", "extensions", "formatting", "gist", "gpg-key", "help", "issue", "label", "licenses",
+            "mintty", "org", "pr", "preview", "project", "reference", "release", "repo", "ruleset", "run", "search",
+            "secret", "skill", "skills", "ssh-key", "status", "telemetry", "variable", "version", "workflow"}
 # Flags whose value is no command word.
 VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--field", "--raw-field", "-X", "--method",
                "--jq", "-q", "--template", "-t", "--input", "-p", "--preview", "--cache", "-o", "--org", "-e", "--env",
@@ -183,6 +185,8 @@ def secret_output(argv):
     a `--jq` or `--template` that picks one out, and any alias or extension."""
     command = words(argv)
     if command and command[0] not in COMMANDS:
+        return True
+    if command[:1] in (["extension"], ["extensions"], ["ext"]) and command[1:2] == ["exec"]:
         return True
     if any(SECRET_KEY.search(expression) for expression in expressions(argv)):
         return True
