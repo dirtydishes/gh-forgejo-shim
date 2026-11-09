@@ -240,7 +240,9 @@ class LeaksTest(unittest.TestCase):
             "2001:db8::1": "IP address", "https://forge.test/avatars/abc": "avatar URL",
             "https://avatars.githubusercontent.com/u/1": "avatar URL", "https://me:pw@forge.test/": "credential",
             "https://forge.private.dev/x": "host", "git.example.ts.net": "host", "box.local": "host",
-            "--repo forge.private.dev/o/r": "host",
+            "--repo forge.private.dev/o/r": "host", "forge.octo.sh": "host", "--hostname homebox": "host",
+            "git@homebox:o/r.git": "host", "Logged in to homebox account x (keyring)": "host",
+            "GH_HOST=homebox": "host",
         }
         for text, kind in cases.items():
             self.assertIn(kind, self.kinds(text), text)
@@ -250,10 +252,20 @@ class LeaksTest(unittest.TestCase):
             "<user> <repo> <home>/Code <ip> <email> <token> <avatar-url> forge.test github.com",
             "https://api.github.com/users/<user> https://<redacted>@forge.test/x",
             "Authorization: token <token>", "Cookie: <redacted>", "0" * 39 + "1 2000-01-01T00:00:00Z",
-            "gh version 2.103.3 Versions/156.0.8078.48/Helpers ChatGPT.app 19:02:38",
+            "gh version 2.103.3 Versions/156.0.8078.48/Helpers /Applications/ChatGPT.app/Contents 19:02:38",
+            "Codex (Service).app <home>/.claude/settings.local.json git@github.com:o/r.git",
             "ci / check (pull_request) e2e@example.invalid notes/nopr.txt",
         ]
         self.assertEqual(self.kinds("\n".join(ordinary) + "\n"), set())
+
+    def test_hosts_in_a_records_argv_and_env(self):
+        for argv in (["auth", "status", "-h", "homebox"], ["api", "user", "--hostname=homebox"],
+                     ["pr", "list", "-R", "homebox/o/r"], ["pr", "list", "-Rhomebox/o/r"]):
+            self.assertIn("host", self.kinds(json.dumps({"argv": argv}) + "\n", ".jsonl"), argv)
+        self.assertIn("host", self.kinds(json.dumps({"env": {"GH_HOST": "homebox"}}) + "\n", ".jsonl"))
+        line = json.dumps({"argv": ["pr", "list", "--repo", "<user>/<repo>", "--hostname", "forge.test"],
+                           "env": {"GH_HOST": "github.com"}})
+        self.assertEqual(self.kinds(line + "\n", ".jsonl"), set())
 
     def test_a_sensitive_json_key_needs_a_placeholder(self):
         line = json.dumps({"stdout": json.dumps({"token": "AABB", "other": "x"})})
