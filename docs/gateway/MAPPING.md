@@ -333,10 +333,14 @@ skips the remote branch of one already merged (`merge.go:523`). So a closed or m
 same-repository PR is not cross-repository, as on GitHub, and `gh pr list` shows its branch without
 an owner.
 
-`headRefName` is never made up. A made-up name could equal a real branch's, and gh's branch finder
-(`gh pr checkout {branch}`) would then take one PR for the other. A name starting with `refs/` counts
-as gone, so gh fetches the PR's own ref. REST `head.ref`, which Claude desktop reads, is the same
-name.
+`headRefName` is Forgejo's own name. A made-up name could equal a real branch's, and gh's branch
+finder (`gh pr checkout {branch}`) would then take one PR for the other. A branch whose name starts
+with `refs/` is the one exception: it counts as gone, so gh fetches the PR's own ref into a local ref
+named by `headRefName`, and git reads that name as a full ref name. `refs/heads/main` would replace the
+user's own `main`, unpushed commits and all, under `gh pr checkout --force`. So such a PR shows its
+own ref, `refs/pull/N/head`, as an AGit PR does; no local branch can have that name, and it can't be
+taken for another PR. `gh pr list --head` finds it by either name. REST `head.ref`, which Claude
+desktop reads, keeps Forgejo's name.
 
 **What `gh pr checkout` does for an AGit PR** (gh 2.103.3, pinned by `agit_checkout.rs`): it fetches
 `refs/pull/N/head` from the base remote into the raw ref `refs/pull/N/head`, and checks that out. It
@@ -356,11 +360,6 @@ against GitHub, on either fetch path, so the gateway doesn't change it.
   gateway reports no head repository, and gh fetches the PR's ref, which is about to move. If the
   push lands just after the gateway's answer, gh fetches the branch by name and gets the new tip.
   Against GitHub, gh fetches an open PR's branch by name too and gets whatever it holds then.
-- **A branch whose name starts with `refs/`, with no head repository** (gone, moved, or the PR
-  closed). gh fetches the PR's ref into the raw ref of that name and checks it out. If the user's
-  repository also has a local branch with that literal name (`refs/heads/refs/topic`), git checks
-  out the branch instead. Against GitHub, a PR whose fork is deleted has no head repository either,
-  and gh takes the same path with the same name.
 
 ## 11. Files, review comments, comparisons and contents
 

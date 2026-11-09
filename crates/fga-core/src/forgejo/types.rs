@@ -102,18 +102,6 @@ impl Branch {
             None => self.name().to_owned(),
         }
     }
-
-    pub(super) fn matches(&self, filter: &str) -> bool {
-        match filter.split_once(':') {
-            Some((owner, branch)) => {
-                self.label()
-                    .split_once(':')
-                    .is_some_and(|(login, _)| login.eq_ignore_ascii_case(owner))
-                    && self.name() == branch
-            }
-            None => self.name() == filter,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -163,6 +151,39 @@ pub struct PullRequest {
     /// The commit the head branched from, which the PR's diff starts at.
     #[serde(default)]
     pub merge_base: Option<String>,
+}
+
+impl PullRequest {
+    /// The head branch name gh is shown: Forgejo's own, except for a branch named like a ref
+    /// (`refs/heads/main`). gh fetches a PR with no head repository, which such a branch always is
+    /// ([`Branch::exists`]), into a local ref named by this, and git reads it as a full ref name,
+    /// so `refs/heads/main` would replace the user's own `main`. Such a PR shows its own ref
+    /// `refs/pull/N/head` instead, which no local branch can be; an AGit PR's name is that already.
+    pub fn head_ref_name(&self) -> std::borrow::Cow<'_, str> {
+        let name = self.head.name();
+        if name.starts_with("refs/") {
+            format!("refs/pull/{}/head", self.number).into()
+        } else {
+            name.into()
+        }
+    }
+
+    /// Whether `filter`, a branch or `owner:branch`, names this PR's head, by the name gh is shown
+    /// or by Forgejo's own.
+    pub(super) fn head_matches(&self, filter: &str) -> bool {
+        let shown = self.head_ref_name();
+        let named = |branch: &str| shown == branch || self.head.name() == branch;
+        match filter.split_once(':') {
+            Some((owner, branch)) => {
+                self.head
+                    .label()
+                    .split_once(':')
+                    .is_some_and(|(login, _)| login.eq_ignore_ascii_case(owner))
+                    && named(branch)
+            }
+            None => named(filter),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

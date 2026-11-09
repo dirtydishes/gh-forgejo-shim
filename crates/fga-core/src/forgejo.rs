@@ -758,7 +758,7 @@ impl Session {
         pulls.retain(|pr| {
             let state_matches =
                 state == "all" || (if pr.merged { "closed" } else { &pr.state }) == state;
-            state_matches && head.is_none_or(|filter| pr.head.matches(filter))
+            state_matches && head.is_none_or(|filter| pr.head_matches(filter))
         });
         // Numbers follow creation order; timestamps carry the server's offset and don't sort as text.
         pulls.sort_by_key(|pr| std::cmp::Reverse(pr.number));
