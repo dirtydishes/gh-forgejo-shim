@@ -247,6 +247,20 @@ class RedactTest(unittest.TestCase):
         text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
         self.assertEqual(redactor.text(text), "npx ripgrep@14.1.0 && echo ::add-mask::$X from <ip>")
 
+    def test_the_viewer_from_a_bare_login(self):
+        redactor = redact.Redactor([])
+        redactor.learn([[{"argv": ["api", "user", "--jq", ".login"], "stdout": "octo-person\n"},
+                         {"argv": ["pr", "list", "--author", "octo-person"], "stdout": "[]"}]])
+        self.assertEqual(redactor.names, {"octo-person": "<user>"})
+
+    def test_refuses_without_a_capturing_account(self):
+        (self.capture.source / "client-1.jsonl").write_text(json.dumps(record(
+            "2026-10-30T15:16:57-0400", ["auth", "token"], {"bytes": 41, "redacted": True})) + "\n")
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.capture.redact()
+        self.assertIn("found no capturing account", stderr.getvalue())
+        self.assertEqual(self.capture.redact("--name", "octo-person=<user>"), 0)
+
     def test_node_ids_are_numbered(self):
         self.capture.redact()
         row = self.capture.records()[12]

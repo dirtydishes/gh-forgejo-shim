@@ -126,18 +126,20 @@ class Redactor:
     def learn(self, values):
         """Pass one: logins, local user names and timestamps from every file, so placeholders are
         fixed before anything is written, and timestamps keep their order. The capturing account
-        (gh's viewer) is `<user>` whichever login appears first."""
+        (gh's viewer) is `<user>`, and no one else is."""
         found = {"viewers": [], "logins": [], "locals": [], "instants": set()}
         for value in values:
             self._collect(value, found)
         known = {name.lower() for name in self.names}
         users = sum(1 for placeholder in self.names.values() if re.fullmatch(r"<user(?:-\d+)?>", placeholder))
-        for login in found["viewers"] + found["logins"]:
-            if login.lower() in known or login.lower() in BOTS or login.endswith("[bot]") or login.startswith("<"):
-                continue
-            users += 1
-            self.names[login] = USER if users == 1 else f"<user-{users}>"
-            known.add(login.lower())
+        for viewer, logins in ((True, found["viewers"]), (False, found["logins"])):
+            for login in logins:
+                if login.lower() in known or login.lower() in BOTS or login.endswith("[bot]") or login.startswith("<"):
+                    continue
+                # `<user>` is only ever the viewer: anyone else is `<user-2>` on.
+                users = users + 1 if viewer else max(users, 1) + 1
+                self.names[login] = USER if users == 1 else f"<user-{users}>"
+                known.add(login.lower())
         for name in found["locals"]:
             if name.lower() not in known and name.lower() not in SHARED_HOMES:
                 self.names[name] = "<local-user>"
@@ -147,12 +149,16 @@ class Redactor:
 
     def _collect(self, value, found):
         if isinstance(value, dict):
-            if isinstance(value.get("argv"), list) and value["argv"][:1] == ["api"] and isinstance(value.get("stdout"), str):
-                # `gh api user`, or `/user`: the answer is the viewer's own user object.
-                if any(arg.strip("/") == "user" for arg in value["argv"][1:]):
+            argv = value.get("argv")
+            if isinstance(argv, list) and argv[:1] == ["api"] and isinstance(value.get("stdout"), str):
+                # `gh api user`, or `/user`: the answer is the viewer's own user object, or with
+                # `--jq .login` the bare login.
+                if any(arg.strip("/") == "user" for arg in argv[1:]):
                     for answer in embedded(value["stdout"]):
                         if isinstance(answer, dict) and isinstance(answer.get("login"), str):
                             add(found["viewers"], answer["login"])
+                    if jq_expression(argv) == ".login" and value["stdout"].strip():
+                        add(found["viewers"], value["stdout"].split()[0].strip('"'))
             viewer = value.get("viewer")
             if isinstance(viewer, dict) and isinstance(viewer.get("login"), str):
                 add(found["viewers"], viewer["login"])
@@ -269,6 +275,15 @@ class Redactor:
             out += [text[last:start], dump_like(self.value(item), text[start:end])]
             last = end
         return "".join(out) + text[last:]
+
+
+def jq_expression(argv):
+    """The expression given to `--jq` or `-q`, stripped, or None."""
+    for index, arg in enumerate(argv):
+        flag, equal, expression = arg.partition("=")
+        if flag in ("--jq", "-q"):
+            return (expression if equal else argv[index + 1] if index + 1 < len(argv) else "").strip()
+    return None
 
 
 def add(items, item):
@@ -493,6 +508,8 @@ def main(argv=None):
         parser.error("refusing files it can't redact: " + ", ".join(str(path) for path in refused))
     redactor = Redactor(args.name)
     redactor.learn([learnable(path) for path in files])
+    if USER not in redactor.names.values():
+        parser.error(f"found no capturing account in the captures: pass --name <your login>='{USER}'")
     args.out.mkdir(parents=True, exist_ok=True)
     for path in files:
         (args.out / redactor.text(path.name)).write_text(redact(path, redactor))
