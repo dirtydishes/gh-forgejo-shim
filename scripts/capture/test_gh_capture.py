@@ -216,6 +216,15 @@ class ArgvTest(unittest.TestCase):
                          ["<redacted>", "<redacted>", "--body=<redacted>", "-b<redacted>"])
         self.assertEqual(argvs[6], ["api", "--token", "<redacted>", "user"])
 
+    def test_a_secret_body_behind_gh_secrets_own_flags(self):
+        wrapper = Wrapper(self)
+        for argv in (["--org", "o", "secret", "set", "NAME", "--body", "S13"], ["-e", "prod", "secret", "set", "NAME", "-b", "S14"],
+                     ["--env=prod", "secret", "set", "NAME", "--body", "S15"]):
+            wrapper.run(*argv, FAKE_GH="print", FAKE_OUT="ok\n")
+        log = wrapper.log.read_text()
+        for secret in ("S13", "S14", "S15"):
+            self.assertNotIn(secret, log)
+
     def test_ordinary_argv_stays(self):
         wrapper = Wrapper(self)
         argv = ["pr", "list", "--head", "s/pass", "--json", "number,url", "--repo", "forge.test/o/r", "--body", "b"]
@@ -263,6 +272,8 @@ class TokenOutputTest(unittest.TestCase):
         self.hidden("api", "repos/o/r/actions/runners/registration-token?per_page=1", output='{"token":"AABB"}')
         self.hidden("api", "user/applications/oauth2", "--jq", ".client_secret", output="gto_" + "q" * 30 + "\n")
         self.hidden("pr", "view", "--template", "{{.token}}")
+        self.hidden("api", "user/applications/oauth2", "-q.client_secret", output="s3cr3t\n")
+        self.hidden("pr", "view", "-t{{.token}}", output="s3cr3t\n")
 
     def test_credentials_in_headers_cut_short_answers_and_new_prefixes(self):
         wrapper = Wrapper(self)
