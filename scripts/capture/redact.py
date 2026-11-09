@@ -9,13 +9,15 @@ It takes gh-capture logs (`.jsonl`, with an optional `.marks` beside each), web 
 writes each under --out with its own name. It refuses anything else, screenshots included.
 
 What it replaces, everywhere: the names given with --name; every login seen in a JSON answer or an
-`auth status`; home directories and the local user's name wherever it appears; emails, IP addresses, tokens, Authorization and Cookie values,
-avatar URLs, commit IDs, Actions run and job IDs and timestamps. In JSON, a user object keeps only
-its login, type and URLs, a commit author loses its name and email, node IDs are numbered and any
-value under a sensitive key is hidden. One table serves every file in a run, so a value always maps to the same
-placeholder. A record's `ts` becomes `t`, seconds since the file's first record, and its `.marks`
-labels become each record's `mark`. An answer repeated within a file is stored once: later copies
-say `{"same_as": <line index>}`.
+`auth status`, the capturing account's as `<user>`; home directories and the local user's name;
+emails, IP addresses, tokens and credentials (Authorization, token and Cookie headers, URL
+passwords, `key=value` secrets); avatar URLs, commit IDs, node IDs, hex folder names, Actions run
+and job IDs, and dates and times in any format. In JSON, a user object keeps only its login, type
+and URLs, a commit author loses its name and email, a value under a sensitive key is hidden, and
+so is every HTTP header value but a few harmless ones. One table serves every file in a run, so a
+value always maps to the same placeholder. A record's `ts` becomes `t`, seconds since the file's
+first record, and its `.marks` labels become each record's `mark`. An answer repeated within a
+file is stored once: later copies say `{"same_as": <line index>}`.
 
 Run leaks.py on the result before committing: it fails on anything that still looks identifying.
 """
@@ -71,6 +73,8 @@ DATE = re.compile(r"(gh version \S+ \(\d{4}-\d\d-\d\d\))|\b\d{4}([-/])\d\d\2\d\d
 # An integer time under a key that says so (`reset` in `gh api rate_limit`, `created_at`).
 TIME_KEY = re.compile(r"(?i)reset|(?:^|_)(?:at|time|date)$|[a-z](?:At|Time|Date)$")
 LOG_TIME = re.compile(r"\[(\d\d/[A-Z][a-z]{2}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]")
+# An access log line's client, ident and user fields, before its time.
+LOG_FIELDS = re.compile(r"^(\S+) (\S+) (\S+) (?=\[)")
 # gh's `auth status`: "Logged in to <host> account <login> (<source>)".
 ACCOUNT = re.compile(r"Logged in to \S+ account (\S+)")
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
@@ -409,7 +413,10 @@ def access_log(path, redactor):
     def relative(match):
         return "[+%ds]" % (datetime.strptime(match.group(1), "%d/%b/%Y:%H:%M:%S %z") - start).total_seconds()
 
-    return "".join(redactor.text(LOG_TIME.sub(relative, line)) + "\n" for line in lines)
+    def fields(match):
+        return " ".join([match.group(1)] + [field if field == "-" else "<redacted>" for field in match.group(2, 3)]) + " "
+
+    return "".join(redactor.text(LOG_FIELDS.sub(fields, LOG_TIME.sub(relative, line))) + "\n" for line in lines)
 
 
 def learnable(path):

@@ -24,7 +24,7 @@ PRIVATE = [
     "octo@private.dev", GHO, FORGEJO_TOKEN, "Real Name", "Somewhere Town", "my own bio", "octo_tw",
     "1234567", "MDQ6VXNlcjEyMzQ1Njc", "avatars.githubusercontent.com", SHA, "41111899791",
     "124255789264", "2026-10-30", "-0400", "AABBCCDDEEFF00112233", "sess-value", "someone-else",
-    "my status", "they/them", "en-US", "Fri, 30 Oct", "1793395470", "octo",
+    "my status", "they/them", "en-US", "Fri, 30 Oct", "1793395470", "octo", "octo-basic",
 ]
 USER = {
     "login": "octo-person", "id": 1234567, "node_id": "MDQ6VXNlcjEyMzQ1Njc",
@@ -97,7 +97,7 @@ RECORDS = [
 ]
 MARKS = "MARK first 15:17:00\nMARK second 15:21:00\n"
 LOG = ('203.0.113.9 - - [30/Oct/2026:20:06:03 +0000] "GET /api/v3/repos/octo-person/secret-repo HTTP/1.1" 401 139 "-" "client/1"\n'
-       '2001:db8::9 - - [30/Oct/2026:20:06:12 +0000] "GET /api/v3/user?access_token=AABBCCDDEEFF00112233 HTTP/1.1" 401 0 "-" "client/1"\n')
+       '2001:db8::9 - octo-basic [30/Oct/2026:20:06:12 +0000] "GET /api/v3/user?access_token=AABBCCDDEEFF00112233 HTTP/1.1" 401 0 "-" "client/1"\n')
 DOCUMENT = 'query { p0: repository(owner:"octo-person",name:"secret-repo") { pullRequest(number:1) { headRefOid } } }\n'
 STUBS = [{"contains": ["api", "user", "forge.private.dev"], "stdout": {"login": "octo-person", "avatar_url": None}}]
 NAMES = ["--name", "secret-repo=<repo>", "--name", "forge.private.dev=forge.test"]
@@ -259,6 +259,7 @@ class RedactTest(unittest.TestCase):
         log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
         self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])
         self.assertTrue(all(line.startswith("<ip> ") for line in log))
+        self.assertEqual([line.split(" ", 3)[1:3] for line in log], [["-", "-"], ["-", "<redacted>"]])
 
     def test_placeholders_are_stable_across_files_and_keep_order(self):
         self.capture.redact()
