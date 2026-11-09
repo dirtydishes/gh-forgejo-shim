@@ -291,6 +291,12 @@ class RedactTest(unittest.TestCase):
         self.assertIn("found no capturing account", stderr.getvalue())
         self.assertEqual(self.capture.redact("--name", "octo-person=<user>"), 0)
 
+    def test_a_gravatar_id_is_hidden_unless_empty(self):
+        redactor = redact.Redactor([])
+        hashed = redactor.value({"login": "octo-person", "gravatar_id": "0bc83cb571cd1c50ba6f3e8a78ef1346"})
+        self.assertEqual(hashed["gravatar_id"], "<redacted>")
+        self.assertEqual(redactor.value({"login": "octo-person", "gravatar_id": ""})["gravatar_id"], "")
+
     def test_forgejo_usernames_are_learned(self):
         redactor = redact.Redactor([("octo-person", "<user>")])
         signer = {"verification": {"signer": {"name": "Real Name", "email": "a@private.dev", "username": "someone-else"}}}
