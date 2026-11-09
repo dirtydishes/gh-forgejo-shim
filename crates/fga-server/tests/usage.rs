@@ -144,12 +144,60 @@ async fn requests_are_counted_by_github_s_names_only() {
         .await,
         200
     );
+    // A forge whose user lookup fails stops every request at the token check: a failure for
+    // REST and GraphQL alike. A token it refuses is only a 401.
+    let broken = Router::new().route(
+        "/api/v1/user",
+        get(|headers: axum::http::HeaderMap| async move {
+            match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                Some("token broken") => StatusCode::INTERNAL_SERVER_ERROR,
+                _ => StatusCode::UNAUTHORIZED,
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broken_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, broken).await.unwrap() });
+    let host = Host::new(
+        "https://forge.test".parse().unwrap(),
+        Forgejo::new(broken_url.parse().unwrap()).unwrap(),
+        WipPrefixes::default(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broken_gateway = format!("http://{}", listener.local_addr().unwrap());
+    let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
+    tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
+    for (token, status) in [("broken", 502), ("wrong", 401)] {
+        let rest = client
+            .get(format!(
+                "{broken_gateway}/api/v3/repos/acme/secret-repo/pulls/5"
+            ))
+            .header("host", "forge.test")
+            .header("authorization", format!("token {token}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rest.status().as_u16(), status, "{token}");
+        let graphql = client
+            .post(format!("{broken_gateway}/api/graphql"))
+            .header("host", "forge.test")
+            .header("authorization", format!("token {token}"))
+            .json(&json!({"query": "{ acmeViewer: viewer { login } }"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            graphql.status().as_u16(),
+            if token == "broken" { 200 } else { 401 }
+        );
+    }
     let counts = usage::take_counts();
     assert_eq!(
         counts.failed,
         BTreeMap::from([
             ("graphql:Repository.pullRequest".to_string(), 1),
-            ("rest:repos.pulls".to_string(), 2),
+            ("graphql:other".to_string(), 1),
+            ("rest:repos.pulls".to_string(), 3),
         ]),
     );
     assert_eq!(

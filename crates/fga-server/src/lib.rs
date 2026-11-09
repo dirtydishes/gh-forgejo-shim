@@ -248,8 +248,8 @@ pub fn app(state: AppState) -> Router {
             post(graphql_request).layer(DefaultBodyLimit::max(MAX_GRAPHQL_REQUEST_BYTES)),
         )
         .fallback(|| async { rest_error(Error::NotFound) })
-        .layer(middleware::from_fn(count_requests))
-        .layer(middleware::from_fn(authenticate));
+        .layer(middleware::from_fn(authenticate))
+        .layer(middleware::from_fn(count_requests));
     Router::new()
         // Browsers follow these links without a token.
         .route("/{owner}/{repo}/pull/{number}", get(pull_link))
@@ -360,6 +360,11 @@ async fn authenticate(
         // GitHub answers bad credentials with 401 on GraphQL too (Opus o2#1).
         Err(error @ Error::Unauthorized) => rest_error(error),
         Err(error) if req.uri().path() == "/api/graphql" => {
+            // The errors `graphql::error` calls INTERNAL fail the request on the gateway's side,
+            // before any field is read.
+            if matches!(error, Error::Timeout | Error::Upstream | Error::TooLarge) {
+                usage::graphql_failed(None);
+            }
             let error = graphql::error(error);
             Json(json!({"errors": [{"message": error.message, "type": error.extensions.unwrap().get("type"), "path": []}]})).into_response()
         }
@@ -548,8 +553,8 @@ fn sorted<S: serde::Serializer>(
 
 /// Counts, by GitHub's name for its resource ([`usage::rest_name`]), a REST request the gateway has
 /// no route for (the fallback's 404) or no method for (405), and one it failed: a 5xx, which it
-/// answers only when Forgejo timed out, failed, or sent an answer it can't read or hold. A request
-/// its token check turns away never gets here.
+/// answers only when Forgejo timed out, failed, or sent an answer it can't read or hold. It wraps
+/// the token check, so that check's 5xx counts too, and its 401 doesn't.
 async fn count_requests(request: HttpRequest, next: Next) -> Response {
     let routed = request
         .extensions()

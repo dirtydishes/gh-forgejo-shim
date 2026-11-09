@@ -78,13 +78,13 @@ public schema.
 
 A request fails when it gets no answer for a reason on the gateway's side, not the agent's or the
 user's: Forgejo timed out, answered with an error the gateway has no GitHub answer for, or sent
-something the gateway can't read or hold. For REST, that's any 5xx the gateway returns. For GraphQL, it's a field whose
-resolver ends in an `INTERNAL` error.
+something the gateway can't read or hold. For REST, that's any 5xx the gateway returns. For GraphQL,
+it's a field whose resolver ends in an `INTERNAL` error. When Forgejo fails this way while the
+gateway checks the token, before any field is read, a GraphQL request counts as `graphql:other`.
 
 Ordinary answers aren't failures: 404 for a PR that doesn't exist, 401 and 403, 422 for input
 Forgejo or the gateway refused, and a field or route the gateway doesn't have, which counts as
-`unsupported`. Nor is a request the gateway's token check turns away. A failure is counted by name
-alone, never with its error, status or path.
+`unsupported`. A failure is counted by name alone, never with its error, status or path.
 
 ## What's kept locally
 
