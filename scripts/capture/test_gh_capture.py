@@ -295,6 +295,16 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(wrapper.records()[0]["stdout"]["bytes"], 500000)
 
+    def test_one_place_for_both_streams_keeps_their_order(self):
+        wrapper = Wrapper(self)
+        for _ in range(5):
+            result = subprocess.run([sys.executable, str(WRAPPER), "pr", "checks"], env=wrapper.env | {"FAKE_GH": "interleave"},
+                                    cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=30)
+            self.assertEqual(result.stdout, "".join(f"{line}\n" for line in range(1, 41)).encode())
+        record = wrapper.records()[0]
+        self.assertEqual((record["stderr"], record["stdout"].count("\n")), ({"merged_into_stdout": True}, 40))
+
     def test_something_gh_leaves_running_doesnt_hold_the_caller(self):
         wrapper = Wrapper(self)
         started = time.monotonic()
