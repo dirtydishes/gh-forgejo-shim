@@ -1,9 +1,9 @@
-# The usage-report collector (docs/telemetry.md). Placeholder IDs: deploying needs a real D1
-# database ID, and the custom domain is attached in the Cloudflare dashboard.
+# The usage-report collector (docs/telemetry.md), served only at its custom domain.
 name = "gfj-telemetry"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
 workers_dev = false
+routes = [{ pattern = "telemetry.dirtydishes.dev", custom_domain = true }]
 
 # No request logs, traces or Logpush: the Worker keeps nothing about who sent a report.
 logpush = false
@@ -17,7 +17,7 @@ enabled = false
 [[d1_databases]]
 binding = "DB"
 database_name = "gfj-telemetry"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "da8ab4d5-fc83-492c-8691-4297e2365117"
 migrations_dir = "migrations"
 
 # Daily: work out and store each finished week's totals, then delete counts past the retention
