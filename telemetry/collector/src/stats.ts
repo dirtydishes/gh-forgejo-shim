@@ -27,11 +27,19 @@ export function rounded(count: number): Rounded {
 /**
  * The noise's scale. Each figure's noise is a whole number k, drawn with probability in proportion
  * to e^(-|k| / NOISE_SCALE): 0 is likeliest, and about three draws in four fall within ±8. One
- * report moves at most six figures (installs and one value of each field) by one each, so it moves
- * the odds of what they show together by at most e^(6 / NOISE_SCALE), under 3 times, except when it
-tips its version over 10 and so moves that version's count out of `other`.
+ * report moves at most seven noisy counts by one each: installs, one value of each fixed field,
+ * its version's, and `other` when that version isn't named. So it moves the odds of what they show
+ * together by at most e^(7 / NOISE_SCALE), about 3.2 times. The exception is a version only that
+ * report carried, which see [`NAMED_AT`].
  */
 export const NOISE_SCALE = 6;
+
+/**
+ * A version is published by name once its count with noise reaches this; below it, it's counted
+ * in `other`. A version no other install ran has a count of 1, and reaches 40 only on a draw of 39
+ * or more, about one week in 1,200, so its name almost never shows that one install ran it.
+ */
+export const NAMED_AT = 40;
 
 /** A uniform number in (0, 1]. */
 export type Uniform = () => number;
@@ -61,7 +69,7 @@ const VALUES: Record<Exclude<(typeof FIELDS)[number], "version">, readonly strin
   os: contract.os,
 };
 
-/** The label versions below [`ROUNDING`] are counted under together. */
+/** The label versions below [`NAMED_AT`] are counted under together. */
 export const OTHER_VERSION = "other";
 
 /** What `/v1/stats` publishes for one finished week. */
@@ -74,9 +82,9 @@ export type Week = ReturnType<typeof weekFigures>;
  * that day. `installs` is the week's busiest day's count, the most installs the counts prove ran
  * that week, and each breakdown gives a value its own busiest day. Nothing published says which
  * day that was or how many days had reports, so a figure can't be multiplied out into a sum of
- * days, and a field's figures needn't add up to `installs`. Versions with fewer than 10 installs
- * are counted together as `other`, so no version's presence shows that it ran. Nothing is
- * published per day, per combination of values, per first week or per unsupported name.
+ * days, and a field's figures needn't add up to `installs`. Versions whose count with noise is
+ * below [`NAMED_AT`] are counted together as `other`. Nothing is published per day, per
+ * combination of values, per first week or per unsupported name.
  *
  * Each figure gets its own [`noise`] before it's rounded, and whether a version is named depends on
  * its count with noise. A sender who knows how many of a figure's reports are theirs can't place it
@@ -105,10 +113,10 @@ export function weekFigures(week: string, sums: Sum[], draw: () => number = nois
 
   const versions = of("version");
   const noisy = new Map([...versions].map(([found, days]) => [found, busiest(days) + draw()]));
-  const named = [...noisy.keys()].filter((found) => noisy.get(found)! >= ROUNDING).sort();
+  const named = [...noisy.keys()].filter((found) => noisy.get(found)! >= NAMED_AT).sort();
   const other = new Map<string, number>();
   for (const [found, days] of versions) {
-    if (noisy.get(found)! >= ROUNDING) continue;
+    if (noisy.get(found)! >= NAMED_AT) continue;
     for (const [day, n] of days) other.set(day, (other.get(day) ?? 0) + n);
   }
 

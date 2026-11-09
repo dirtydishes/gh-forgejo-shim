@@ -109,7 +109,7 @@ describe("weekFigures", () => {
       forge: { forgejo: 60, gitea: UNDER, other: UNDER, none: UNDER },
       mode: { client: 60, server: UNDER },
       os: { macos: 50, linux: 10, other: UNDER },
-      version: { "0.3.0": 50, "0.3.1": 10, other: UNDER },
+      version: { "0.3.0": 50, other: 10 },
     });
   });
 
@@ -117,13 +117,14 @@ describe("weekFigures", () => {
     expect(week([])).toEqual(week([row(DAYS[0], 1, { client: "cursor", forge: "gitea", os: "other" })]));
   });
 
-  it("counts versions below 10 together as other", () => {
+  it("counts versions below 40 together as other", () => {
     const rows = [
-      row(DAYS[0], 20, { version: "0.3.1" }),
-      row(DAYS[0], 6, { version: "0.2.0" }),
+      row(DAYS[0], 40, { version: "0.3.1" }),
+      row(DAYS[0], 39, { version: "0.2.0" }),
       row(DAYS[0], 6, { version: "0.4.0-rc.1" }),
     ];
-    expect(week(rows).version).toEqual({ "0.3.1": 20, other: 10 });
+    expect(week(rows).version).toEqual({ "0.3.1": 40, other: 50 });
+    expect(JSON.stringify(week(rows))).not.toContain("0.2.0");
     expect(JSON.stringify(week(rows))).not.toContain("0.4.0-rc.1");
   });
 
@@ -210,8 +211,18 @@ describe("weekFigures", () => {
     const noisy = weekFigures(WEEK, sums(rows), () => 4);
     expect(noisy.installs).toBe(20); // 15 + 4
     expect(noisy.client).toMatchObject({ codex: 20, cursor: UNDER, chatgpt: UNDER }); // 16, 7, 4
-    expect(noisy.version).toEqual({ "0.3.0": 20, other: UNDER }); // 16; 0.3.1's 7 joins other
-    expect(weekFigures(WEEK, sums(rows), () => 7).version).toEqual({ "0.3.0": 20, "0.3.1": 10, other: UNDER });
+    expect(noisy.version).toEqual({ other: 20 }); // both below 40, so other: 15 + 4
+    // A version is named once its count with noise reaches 40.
+    const near = [row(DAYS[0], 33)];
+    expect(weekFigures(WEEK, sums(near), () => 7).version).toEqual({ "0.3.0": 40, other: UNDER });
+    expect(weekFigures(WEEK, sums(near), () => 6).version).toEqual({ other: 40 });
+  });
+
+  it("adds noise when no draw is passed", () => {
+    // Every figure would read the same each time without noise; 22 noisy figures rarely all do.
+    const rows = [row(DAYS[0], 14), row(DAYS[0], 25, { client: "cursor", os: "linux" })];
+    const seen = new Set(Array.from({ length: 50 }, () => JSON.stringify(weekFigures(WEEK, sums(rows)))));
+    expect(seen.size).toBeGreaterThan(1);
   });
 
   it("no longer lets a sender at a rounding line tell whether one real report came (#285)", () => {

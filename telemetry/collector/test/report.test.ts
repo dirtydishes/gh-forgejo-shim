@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expire, freeze } from "../src/index";
 import { daysBefore, isoWeek, monday, utcDay } from "../src/week";
 
@@ -193,8 +193,9 @@ describe("GET /v1/stats", () => {
       week: isoWeek(lastWeek),
       installs: 10,
       client: { codex: 10, cursor: "under 10", chatgpt: "under 10" },
-      version: { "0.3.0": 10, other: "under 10" },
     });
+    // 14 reports of 0.3.0 is below the 40 that names a version.
+    expect(body.weeks.at(-1).version).toEqual({ other: 10 });
     // First weeks and unsupported names stay in the database.
     expect(JSON.stringify(body)).not.toContain("projectsV2");
     expect(JSON.stringify(body)).not.toContain("first_week");
@@ -208,6 +209,17 @@ describe("GET /v1/stats", () => {
     await env.DB.batch([counted(lastWeek, 40, "cursor"), counted(daysBefore(lastWeek, -2), 90)]);
     await freeze(env, today);
     expect(await stats()).toEqual(before);
+  });
+
+  it("adds noise from the crypto source when it works a week out", async () => {
+    await env.DB.batch([counted(lastWeek, 13)]);
+    const random = vi.spyOn(crypto, "getRandomValues");
+    try {
+      await freeze(env, today);
+      expect(random).toHaveBeenCalled();
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("publishes the last 26 weeks", async () => {
