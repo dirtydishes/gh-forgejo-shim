@@ -172,16 +172,20 @@ impl Fixture {
             .expect("run shim")
     }
 
-    /// Runs the shim as `app` would: from a shell script under `<app>.app/`, a path the wrapper
-    /// recognises an agent by. The script waits for the shim, so it stays its parent.
+    /// Runs the shim as `app` would: the app's program is a shell at `<app>.app/bash`, the path
+    /// the wrapper recognises the agent by, and it runs gh through another shell, as agents do.
+    /// Each shell waits for the next, so the chain of parents stays whole.
     fn run_as(&self, app: &str, args: &[&str], extra: &[(&str, &str)]) -> Output {
         let bundle = self.dir.join(format!("{app}.app"));
         fs::create_dir_all(&bundle).expect("app dir");
-        let script = bundle.join("run");
-        fs::write(&script, "#!/bin/sh\n\"$@\"\nexit $?\n").expect("app script");
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
-        let mut command = Command::new(&script);
-        command.arg(SHIM);
+        let program = bundle.join("bash");
+        if fs::symlink_metadata(&program).is_err() {
+            std::os::unix::fs::symlink("/bin/bash", &program).expect("app program");
+        }
+        let run = self.dir.join("run");
+        fs::write(&run, "\"$@\"\nexit $?\n").expect("run script");
+        let mut command = Command::new(&program);
+        command.arg(&run).arg("/bin/sh").arg(&run).arg(SHIM);
         self.shim(command, args)
             .envs(extra.iter().copied())
             .output()
