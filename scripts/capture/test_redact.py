@@ -291,6 +291,15 @@ class RedactTest(unittest.TestCase):
         self.assertIn("found no capturing account", stderr.getvalue())
         self.assertEqual(self.capture.redact("--name", "octo-person=<user>"), 0)
 
+    def test_logins_that_are_path_words_are_kept(self):
+        redactor = redact.Redactor([])
+        redactor.learn([{"data": {"viewer": {"login": "octo-person"}, "a": {"owner": {"login": "actions"}},
+                                  "b": {"owner": {"login": "github"}}}}])
+        self.assertEqual(redactor.names, {"octo-person": "<user>"})
+        self.assertEqual(redactor.kept, ["actions", "github"])
+        url = "https://github.com/octo-person/homebox/actions/runs/123"
+        self.assertEqual(redactor.text(url), "https://github.com/<user>/homebox/actions/runs/1")
+
     def test_node_ids_are_numbered(self):
         self.capture.redact()
         row = self.capture.records()[12]
