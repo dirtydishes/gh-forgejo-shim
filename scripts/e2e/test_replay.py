@@ -75,11 +75,19 @@ class CompareTests(unittest.TestCase):
                          ["$.nodes[check].conclusion: 'FAILURE', GitHub 'SUCCESS'"])
         status = {"__typename": "StatusContext", "name": "check", "status": "COMPLETED", "conclusion": "SUCCESS"}
         self.assertEqual(replay.differences(want, {"number": 1, "nodes": [status, lint]}, exact=True),
-                         ["$.nodes: StatusContext 'check', which GitHub's answer lacks"])
+                         ["$.nodes: StatusContext 'check', which GitHub's answer lacks",
+                          "$.nodes: GitHub's CheckRun 'check' has no match"])
         # PR 3's check is stuck in progress on GitHub, and finished in the seed.
         running = {**check, "status": "IN_PROGRESS", "conclusion": None}
         self.assertEqual(replay.differences({"number": 3, "nodes": [running]}, {"number": 3, "nodes": [check]}, exact=True), [])
         self.assertEqual(len(replay.differences({"number": 2, "nodes": [running]}, {"number": 2, "nodes": [check]}, exact=True)), 3)
+        # Only that: a PR 3 check GitHub finished must match, and a running one must finish in the seed.
+        self.assertEqual(len(replay.differences({"number": 3, "nodes": [check]}, {"number": 3, "nodes": [failed]}, exact=True)), 1)
+        wrong = replay.differences({"number": 3, "nodes": [running]}, {"number": 3, "nodes": [failed]}, exact=True)
+        self.assertTrue(wrong and all(".conclusion:" in problem for problem in wrong), wrong)
+        # One to one: a duplicate can't stand in for a missing check.
+        self.assertEqual(replay.differences(want, {"number": 1, "nodes": [check, check]}, exact=True),
+                         ["$.nodes: CheckRun 'check', which GitHub's answer lacks", "$.nodes: GitHub's CheckRun 'lint' has no match"])
 
     def test_lists_and_documented_differences(self):
         checks = [{"__typename": "CheckRun", "name": "check"}]

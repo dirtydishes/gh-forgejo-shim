@@ -38,16 +38,21 @@ ORDER = ["chatgpt-22943-pr-card-s-pass.jsonl", "chatgpt-22943-states.jsonl", "cl
          "claude-code-cli-2.1.309-314.jsonl", "chatgpt-22943-fj-probe.jsonl"]
 
 
-def headless(path, actual, context):
+def headless(path, expected, actual, context):
     return path.endswith(".headRepository") and actual is None and context.get("state") in ("CLOSED", "MERGED")
 
 
-def unchecked(path, actual, context):
+def unchecked(path, expected, actual, context):
     return path.endswith(".statusCheckRollup") and actual is None and context.get("number") == 6
 
 
-def stale(path, actual, context):
-    return context.get("number") == 3 and path.rsplit(".", 1)[-1] in ("status", "conclusion", "completedAt")
+def stale(path, expected, actual, context):
+    """GitHub still running PR 3's check, and the shim reporting the seed's finished one."""
+    field = path.rsplit(".", 1)[-1]
+    running = expected in (None, "IN_PROGRESS", "QUEUED", "PENDING")
+    finished = actual == {"status": "COMPLETED", "conclusion": "SUCCESS"}.get(field) or (
+        field == "completedAt" and isinstance(actual, str))
+    return context.get("number") == 3 and running and finished
 
 
 # (test, reason): a departure from GitHub's answer that the test accepts.
@@ -58,8 +63,8 @@ DIFFERENCES = [
 ]
 
 
-def allowed(path, actual, context):
-    return any(test(path, actual, context) for test, _ in DIFFERENCES)
+def allowed(path, expected, actual, context):
+    return any(test(path, expected, actual, context) for test, _ in DIFFERENCES)
 
 
 def records():
@@ -177,24 +182,29 @@ def differences(expected, actual, exact, path="$", context=None):
             where = f"{path}.{key}"
             out += differences(expected[key], actual[key], exact, where, context)
             mismatch = key in values and not isinstance(expected[key], (dict, list)) and expected[key] != actual[key]
-            if mismatch and not allowed(where, actual[key], context):
+            if mismatch and not allowed(where, expected[key], actual[key], context):
                 out.append(f"{where}: {actual[key]!r}, GitHub {expected[key]!r}")
         return out
     if isinstance(expected, list) and isinstance(actual, list):
         if len(expected) != len(actual):
             return [f"{path}: {len(actual)} items, GitHub {len(expected)}"]
-        theirs = {identity(item): item for item in expected}
+        # Checks pair one to one by identity; anything else by position.
+        theirs = {}
+        for item in expected:
+            if identity(item):
+                theirs.setdefault(identity(item), []).append(item)
         out = []
         for index, item in enumerate(actual):
             key = identity(item)
-            if key and key in theirs:
-                out += differences(theirs[key], item, exact, f"{path}[{key[1]}]", context)
+            if key and theirs.get(key):
+                out += differences(theirs[key].pop(0), item, exact, f"{path}[{key[1]}]", context)
             elif key:
                 out.append(f"{path}: {key[0]} {key[1]!r}, which GitHub's answer lacks")
             else:
                 out += differences(expected[index], item, exact, f"{path}[{index}]", context)
+        out += [f"{path}: GitHub's {key[0]} {key[1]!r} has no match" for key, left in theirs.items() for _ in left]
         return out
-    if shape(expected) != shape(actual) and not allowed(path, actual, context):
+    if shape(expected) != shape(actual) and not allowed(path, expected, actual, context):
         return [f"{path}: {json.dumps(shape(actual))}, GitHub {json.dumps(shape(expected))}"]
     return []
 
