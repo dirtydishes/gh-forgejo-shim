@@ -87,6 +87,8 @@ RECORDS = [
            "abc1234 2026-10-30 15:16:57 -0400 first\nlast seen Fri, 30 Oct 2026 19:24:15 GMT\n"),
     record("2026-10-30T15:24:20-0400", ["api", "rate_limit"],
            '{"resources":{"core":{"reset":1793395470}},"t":"2026-10-30T19:24:15"}' "\n"),
+    record("2026-10-30T15:24:22-0400", ["api", "graphql", "-f", "query=query{a:node(id:\"PR_kwDOAbc\"){id} b:node(id:\"PR_kwDOXyz\"){id}}"],
+           '{"data":{"a":{"id":"PR_kwDOAbc"},"b":{"id":"PR_kwDOXyz"},"c":{"node_id":"PR_kwDOAbc"}}}'),
     record("2026-10-30T15:24:25-0400", ["api", "repos/o/r/contents/%2FUsers%2Focto%2Fnotes"], "logged in as octo\n",
            chain=["login -pfl octo"]),
     record("2026-10-30T15:24:30-0400", ["api", "-i", "user"],
@@ -149,7 +151,7 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(user["login"], "<user>")
         self.assertEqual((user["id"], user["followers"]), (0, 0))
         self.assertEqual((user["name"], user["bio"], user["location"], user["blog"]), ("<redacted>",) * 4)
-        self.assertEqual((user["node_id"], user["avatar_url"]), ("<node-id>", "<avatar-url>"))
+        self.assertEqual((user["node_id"], user["avatar_url"]), ("<node-id-1>", "<avatar-url>"))
         self.assertEqual(user["html_url"], "https://github.com/<user>")
 
     def test_other_users_and_commit_authors_keep_only_their_logins(self):
@@ -174,14 +176,21 @@ class RedactTest(unittest.TestCase):
         self.assertEqual([page[0]["login"] for page in pages], ["<user>", "<user>"])
         self.assertEqual((pages[0][0]["full_name"], pages[1][0]["bio"]), ("<redacted>", "<redacted>"))
         self.assertTrue(rows[9]["stdout"].endswith("]\n"))
-        head, blank, body = redact.http_parts(rows[13]["stdout"])
+        head, blank, body = redact.http_parts(rows[14]["stdout"])
         self.assertEqual(head, "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: <redacted>\r\n"
                                "X-Ratelimit-Reset: <redacted>")
         self.assertEqual((blank, json.loads(body)["location"]), ("\r\n\r\n", "<redacted>"))
 
-    def test_the_local_user_name_goes_wherever_it_appears(self):
+    def test_node_ids_are_numbered(self):
         self.capture.redact()
         row = self.capture.records()[12]
+        data = json.loads(row["stdout"])["data"]
+        self.assertEqual((data["a"]["id"], data["b"]["id"], data["c"]["node_id"]), ("<node-id-2>", "<node-id-3>", "<node-id-2>"))
+        self.assertEqual(row["argv"][-1], 'query=query{a:node(id:"<node-id-2>"){id} b:node(id:"<node-id-3>"){id}}')
+
+    def test_the_local_user_name_goes_wherever_it_appears(self):
+        self.capture.redact()
+        row = self.capture.records()[13]
         self.assertEqual((row["argv"][1], row["stdout"], row["chain"]),
                          ("repos/o/r/contents/<home>%2Fnotes", "logged in as <local-user>\n", ["login -pfl <local-user>"]))
         self.assertEqual(self.capture.records()[0]["chain"], ["<home>/Library/Application Support/Client/client"])
@@ -201,8 +210,8 @@ class RedactTest(unittest.TestCase):
     def test_times_become_offsets_and_marks_labels(self):
         self.capture.redact()
         rows = self.capture.records()
-        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 438, 443, 448, 453])
-        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 10)
+        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 438, 443, 445, 448, 453])
+        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 11)
         self.assertFalse(any("ts" in row for row in rows))
         log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
         self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])

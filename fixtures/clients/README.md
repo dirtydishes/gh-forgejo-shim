@@ -56,7 +56,8 @@ argv.
 | `<repo>` | That repository: the GitHub twin whose PR states `contract/scenarios.json` records |
 | `forge.test` | The Forgejo host. `github.com` stays as sent |
 | `<home>` | The home directory |
-| `<ip>`, `<email>`, `<avatar-url>`, `<node-id>` | An IP address, an email, an avatar URL, a GraphQL or REST node ID |
+| `<ip>`, `<email>`, `<avatar-url>` | An IP address, an email, an avatar URL |
+| `<node-id-1>` | A GraphQL or REST node ID, numbered in order of first appearance |
 | `<token>`, `<redacted>` | A token or credential, and any other hidden value: a profile field, a value under a sensitive key |
 | `0000000000000000000000000000000000000001` | A commit ID, numbered in order of first appearance |
 | `/actions/runs/1/job/1` | Actions run and job IDs, numbered the same way |
