@@ -59,10 +59,13 @@ ENV_KEYS = ("GH_HOST", "GH_REPO", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER",
 SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 MAX_STREAM = 256 * 1024
 # How long, once gh has exited, to wait for pipes that have gone quiet: something gh left running
-# (a credential cache, a browser) may hold them open for as long as it runs.
+# (a credential cache, a browser) may hold them open for as long as it runs. After that the wrapper
+# exits, and what that process writes later is lost where gh alone would have passed it on.
 QUIET = 0.5
 # What a caller sends to stop a call; each goes on to gh. Any other signal reaches gh only as the
-# caller's process group gets it.
+# caller's process group gets it. A signal sent to the whole group (a terminal's Ctrl-C) reaches gh
+# twice, which gh, exiting on the first, doesn't notice; a handler can't tell who sent a signal, and
+# not forwarding would lose one sent to the wrapper alone.
 FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 # gh flags with a sensitive word in their name that take no value.
 VALUELESS_FLAGS = {"--with-token", "--show-token"}
