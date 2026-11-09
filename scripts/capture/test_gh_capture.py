@@ -28,6 +28,11 @@ if mode == "echo":
     sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 if mode == "print":
     sys.stdout.write(os.environ["FAKE_OUT"])
+if mode == "fd":
+    with open("/dev/fd/" + os.environ["FAKE_FD"]) as handle:
+        sys.stdout.write(handle.read())
+if mode == "stdin":
+    sys.stdout.write(sys.stdin.read())
 if mode == "long":
     sys.stdout.write("x" * int(os.environ["FAKE_SIZE"]))
 if mode == "stream":
@@ -101,6 +106,29 @@ class PassThroughTest(unittest.TestCase):
         with mock.patch.object(module.os.path, "exists", return_value=False), \
                 mock.patch.object(module.subprocess, "run", side_effect=FileNotFoundError("/bin/ps")):
             self.assertEqual(module.process_chain(), [])
+
+
+class InputTest(unittest.TestCase):
+    """What the caller hands gh reaches it: stdin, and files opened for it (`--body-file <(...)`)."""
+
+    def test_a_file_the_caller_opened_for_gh(self):
+        wrapper = Wrapper(self)
+        read_end, write_end = os.pipe()
+        os.write(write_end, b"the body\n")
+        os.close(write_end)
+        self.addCleanup(os.close, read_end)
+        result = subprocess.run([sys.executable, str(WRAPPER), "pr", "create", "--body-file", f"/dev/fd/{read_end}"],
+                                env=wrapper.env | {"FAKE_GH": "fd", "FAKE_FD": str(read_end)}, cwd=wrapper.root,
+                                pass_fds=(read_end,), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, b"the body\n"), result.stderr)
+
+    def test_stdin(self):
+        wrapper = Wrapper(self)
+        result = subprocess.run([sys.executable, str(WRAPPER), "secret", "set", "NAME"], env=wrapper.env | {"FAKE_GH": "stdin"},
+                                cwd=wrapper.root, input=b"value\n", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=30)
+        self.assertEqual(result.stdout, b"value\n")
 
 
 class ArgvTest(unittest.TestCase):

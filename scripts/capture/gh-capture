@@ -282,7 +282,8 @@ def main():
         if signal.getsignal(number) is not signal.SIG_IGN:
             signal.signal(number, forward)
     start = time.time()
-    proc = subprocess.Popen([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # close_fds=False: gh keeps the files its caller opened for it, such as `--body-file <(...)`.
+    proc = subprocess.Popen([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=False)
     child.append(proc)
     for number in waiting:
         proc.send_signal(number)
