@@ -1,0 +1,121 @@
+#!/usr/bin/python3
+"""Transparent `gh` wrapper that records how clients call gh.
+
+Install it as `gh` in a directory that comes before the real gh on the client's PATH. It runs the real
+gh (GH_CAPTURE_REAL, default /opt/homebrew/bin/gh) and appends one JSON line per call to
+GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl).
+
+A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env, exit
+code, duration, and stdout and stderr. Output that can carry a token (`auth token`, `--show-token`)
+is never stored, only its length.
+
+When stdout is a terminal, it records the argv and execs gh, so interactive output doesn't change.
+Otherwise it buffers stdout and stderr and replays them after gh exits, which keeps gh's non-TTY
+behavior. Python 3.9 compatible (macOS /usr/bin/python3).
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+REAL = os.environ.get("GH_CAPTURE_REAL", "/opt/homebrew/bin/gh")
+LOG = os.path.expanduser(os.environ.get("GH_CAPTURE_LOG", "~/.gh-capture/calls.jsonl"))
+ENV_KEYS = ("GH_HOST", "GH_REPO", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER", "GH_PAGER",
+            "NO_COLOR", "CLICOLOR", "GIT_TERMINAL_PROMPT", "TERM")
+SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
+MAX_STREAM = 256 * 1024
+
+
+def process_chain(limit=6):
+    chain, pid = [], os.getppid()
+    for _ in range(limit):
+        if pid <= 1:
+            break
+        out = subprocess.run(["/bin/ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                             capture_output=True, text=True).stdout.strip()
+        if not out:
+            break
+        ppid, _, comm = out.partition(" ")
+        chain.append(comm.strip())
+        pid = int(ppid)
+    return chain
+
+
+def secret_output(argv):
+    words = [a for a in argv if not a.startswith("-")]
+    return words[:2] == ["auth", "token"] or "--show-token" in argv or "-t" in argv and "auth" in words
+
+
+def fake_token(argv):
+    words = [a for a in argv if not a.startswith("-")]
+    if words[:2] != ["auth", "token"] or "--hostname" not in argv:
+        return None
+    i = argv.index("--hostname")
+    host = argv[i + 1] if i + 1 < len(argv) else ""
+    path = os.path.expanduser("~/.gh-capture/fake-token-hosts")
+    if not os.path.exists(path):
+        return None
+    hosts = [line.strip() for line in open(path) if line.strip() and not line.startswith("#")]
+    return "gfjprobe_" + host.replace(".", "_") if host in hosts else None
+
+
+def text(data):
+    if len(data) > MAX_STREAM:
+        return {"truncated": True, "bytes": len(data), "head": data[:MAX_STREAM].decode("utf-8", "replace")}
+    return data.decode("utf-8", "replace")
+
+
+def write(record):
+    os.makedirs(os.path.dirname(LOG), mode=0o700, exist_ok=True)
+    with open(LOG, "a") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def main():
+    argv = sys.argv[1:]
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "chain": process_chain(),
+        "cwd": os.getcwd(),
+        "argv": argv,
+        "env": {k: os.environ[k] for k in ENV_KEYS if k in os.environ},
+        "env_secrets_present": [k for k in SECRET_ENV if os.environ.get(k)],
+        "stdin_tty": sys.stdin.isatty(),
+        "stdout_tty": sys.stdout.isatty(),
+    }
+    fake = fake_token(argv)
+    if fake:
+        # Probe mode: answer `auth token --hostname H` for hosts listed in ~/.gh-capture/fake-token-hosts
+        # so we can see what a client does next with a non-GitHub host.
+        record.update({"faked": True, "exit": 0, "stdout": {"redacted": True, "bytes": len(fake) + 1}})
+        write(record)
+        print(fake)
+        sys.exit(0)
+
+    if sys.stdout.isatty():
+        write(record)
+        os.execv(REAL, [REAL] + argv)
+
+    start = time.time()
+    proc = subprocess.run([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    record["duration_ms"] = round((time.time() - start) * 1000)
+    record["exit"] = proc.returncode
+    if secret_output(argv):
+        record["stdout"] = {"redacted": True, "bytes": len(proc.stdout)}
+        record["stderr"] = {"redacted": True, "bytes": len(proc.stderr)}
+    else:
+        record["stdout"] = text(proc.stdout)
+        record["stderr"] = text(proc.stderr)
+    try:
+        write(record)
+    finally:
+        sys.stdout.buffer.write(proc.stdout)
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(proc.stderr)
+        sys.stderr.buffer.flush()
+    sys.exit(proc.returncode)
+
+
+if __name__ == "__main__":
+    main()
