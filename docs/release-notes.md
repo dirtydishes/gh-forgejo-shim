@@ -1,7 +1,9 @@
 # gh-forgejo-shim v0.4.0
 
-- **gh-forgejo-shim now sends one anonymous usage report a day, and you can turn it off.** It's on
-  by default. `gfj telemetry off` stops it for good (or set `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`;
+- **gh-forgejo-shim now sends one anonymous usage report a day, so I can find what breaks in agents
+  I can't test.** The shim has one maintainer. The report says which agent ran `gh`, which forge
+  answered, and which GitHub features the gateway lacked when an agent asked for them. It's on by
+  default. `gfj telemetry off` stops it for good (or set `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`;
   `FGA_TELEMETRY=0` for fga-server), and `gfj telemetry show` prints exactly what would be sent.
   Machines with `CI` set never report. A report holds only these fields:
 
@@ -15,8 +17,8 @@
   a host, repository, command, token, address, user name or install ID. The wrapper sends it in
   the background, so a `gh` call is never slowed or changed. The counts stay private to the
   maintainer; [telemetry.dirtydishes.dev/v1/stats](https://telemetry.dirtydishes.dev/v1/stats)
-  publishes only finished weeks' figures, one field at a time, rounded to the nearest 10. The reports show
-  which agents and forges to support next. [docs/telemetry.md](telemetry.md) has the details.
+  publishes only finished weeks' figures, one field at a time, rounded to the nearest 10.
+  [docs/telemetry.md](telemetry.md) has the details.
 
 - **Branch names with a slash work in server mode.** Comparing `main...feature/topic`, and GraphQL
   `object(expression: "feature/topic")`, returned a 404 or null; most branches are named that way.

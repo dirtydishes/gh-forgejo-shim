@@ -38,8 +38,9 @@ class GhForgejoShim < Formula
       Forgejo checkout to set up or refresh the managed gh wrapper:
         gfj bootstrap
 
-      It sends one anonymous usage report a day: the version, OS, agent and forge
-      software, never hosts, repositories or commands. `gfj telemetry show` prints
+      It sends one anonymous usage report a day, so the maintainer can see which
+      agents and GitHub features fail: the version, OS, agent and forge software,
+      never hosts, repositories or commands. `gfj telemetry show` prints
       it, and `gfj telemetry off` stops it. See docs/telemetry.md in the repository.
     EOS
   end

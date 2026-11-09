@@ -1,11 +1,14 @@
 # Usage reports
 
-gh-forgejo-shim and its gateway, fga-server, send one anonymous report a day. The reports count
-installs, show how many keep running week after week, and show which agents and forges people use
-the shim with. They hold as little as that needs. Rounded weekly totals are public; the detailed
-counts stay private.
+gh-forgejo-shim has one maintainer, and I can't test it with every agent and forge people use.
+When an agent asks the gateway for a GitHub feature it doesn't have yet, the call fails, and I only
+hear about it if someone files an issue. So the shim and its gateway, fga-server, send one
+anonymous report a day: which agent and forge it ran with, and which missing features were asked
+for. That tells me what to fix first, and in which apps. The reports also count installs and how
+many keep running, so I can tell whether the work reaches people.
 
-Turn them off with `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`. See
+A report holds nothing more. Rounded weekly totals are public; the detailed counts
+stay private. Turn reports off with `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1`. See
 [Turning reports off](#turning-reports-off).
 
 ## When a report goes
