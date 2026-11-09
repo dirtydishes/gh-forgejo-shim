@@ -64,11 +64,33 @@ describe("figures", () => {
   });
 
   it("never lets a week minus its shown days give away a small day", () => {
-    // codex: 5 on Monday, 2 on Tuesday. The week's 7 less Monday's 5 would show Tuesday's 2.
+    // codex: 5 on Monday, 2 on Tuesday. The week's 7 less Monday's 5 would show Tuesday's 2, and
+    // with Monday hidden, the week's installs of 5 would still show Monday's.
     const result = figures([row("2026-11-02", 5), row("2026-11-03", 2)], [], []);
     const shown = (cells: Figure[]) => cells.map((cell) => cell.day ?? cell.week);
-    expect(shown(result.totals.weeks)).toEqual(["2026-W45"]);
+    expect(shown(result.totals.weeks)).toEqual([]);
     expect(shown(result.totals.days)).toEqual([]);
+  });
+
+  it("never lets a week's busiest day give away a hidden day", () => {
+    // codex: 1 on Monday, 10 on Tuesday, 4 each later day; cursor's only report is Tuesday's 1.
+    // A week showing installs 10 beside shown days of 4 would put 10 on a hidden day; the week's
+    // reports less the shown days would then leave Monday's 1, and Tuesday's total less 10, cursor's.
+    const days = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"];
+    const other = { client: "cursor", os: "linux" };
+    const rows = [
+      row(days[0], 1),
+      row(days[1], 10),
+      row(days[1], 1, other),
+      ...days.slice(2).map((day) => row(day, 4)),
+      ...[0, 2, 3, 4, 5, 6].map((i) => row(days[i], 3, { ...other, arch: "x86_64" })),
+    ];
+    const result = figures(rows, [], []);
+    const codex = (cell: Figure) => cell.client === "codex" && cell.os === "macos";
+    for (const week of result.combinations.weeks.filter(codex)) {
+      const shown = result.combinations.days.filter(codex).map((cell) => cell.installs);
+      expect(shown).toContain(week.installs);
+    }
   });
 
   it("never publishes a figure equal to its only part when that part is hidden", () => {
@@ -158,6 +180,18 @@ describe("figures", () => {
         ...Object.values(result.by_field).flatMap((table) => [...table.days, ...table.weeks]),
       ];
       for (const figure of all) expect(figure.installs).toBeGreaterThanOrEqual(MINIMUM);
+
+      // Each published week has a published day as busy as it, so its installs shows no hidden day.
+      const tables = [result.totals, result.combinations, ...Object.values(result.by_field)];
+      for (const table of tables) {
+        for (const { week, installs, reports: _, ...labels } of table.weeks as Figure[]) {
+          const same = (table.days as Figure[]).filter(
+            ({ day, installs: __, reports: ___, ...rest }) =>
+              JSON.stringify(rest) === JSON.stringify(labels) && week === isoWeek(String(day)),
+          );
+          expect(same.map((cell) => cell.installs), `${week} ${JSON.stringify(labels)}`).toContain(installs);
+        }
+      }
 
       // Each day: the total over each field's values.
       const truth = (day: string, field: string) => {
