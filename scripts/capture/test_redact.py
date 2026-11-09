@@ -200,6 +200,17 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(redactor.text("PRIVATE-TOKEN: abc123\nX-Api-Key: k1"), "PRIVATE-TOKEN: <token>\nX-Api-Key: <token>")
         self.assertEqual(redactor.text("task-runner desk-lamp gho_****"), "task-runner desk-lamp gho_****")
 
+    def test_integer_times_under_any_time_key(self):
+        redactor = redact.Redactor([])
+        answer = {"timestamp": 1793000000, "expires": 1793000000, "lastModified": 1793000000123, "exp": 1793000000,
+                  "iat": 1793000000, "created": 1793000000, "number": 1793000000, "timeout": 30}
+        redacted = redactor.value(answer)
+        self.assertEqual(redacted, {"timestamp": 946684800, "expires": 946684800, "lastModified": 946684800000,
+                                    "exp": 946684800, "iat": 946684800, "created": 946684800, "number": 1793000000,
+                                    "timeout": 30})
+        self.assertIn("date", leaks.value_findings({"expires": 1793000000}))
+        self.assertEqual(leaks.value_findings({key: value for key, value in redacted.items() if key != "number"}), set())
+
     def test_times_in_go_git_and_date_forms(self):
         redactor = redact.Redactor([])
         cases = {
