@@ -478,6 +478,37 @@ fn counts_reach_the_next_report_under_the_agent_that_ran_gh() {
     );
 }
 
+/// A day with more counts than a report can hold sends a report cut to fit, not one the collector
+/// refuses.
+#[test]
+fn a_report_with_too_many_counts_is_cut_to_fit() {
+    let fixture = Fixture::new(collector);
+    fixture.run(&["gh", "--version"], &[]);
+    fixture.reports(1, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(500));
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../contract/telemetry.json")).expect("contract");
+    let lines: Vec<String> = contract["names"]
+        .as_array()
+        .expect("names")
+        .iter()
+        .map(|name| format!("unsupported codex {} 1", name.as_str().expect("name")))
+        .collect();
+    assert!(lines.len() > 120);
+    fs::write(fixture.state().join("counts"), lines.join("\n")).expect("counts");
+    let ticket = fixture.ticket();
+    fixture.run(
+        &["telemetry", "send", "--caller", "1", "--ticket", &ticket],
+        &[],
+    );
+    let reports = fixture.reports(2, Duration::from_secs(5));
+    let kept = reports[1]["unsupported"]["codex"]
+        .as_object()
+        .expect("codex's counts");
+    assert_eq!(kept.len(), 120);
+    assert!(reports[1].to_string().len() <= 15 * 1024);
+}
+
 /// Whatever the state directory holds, a report carries only known kinds, agents and vocabulary
 /// names, each count capped. 0.4.0's counts, which don't say which agent asked, are dropped.
 #[test]

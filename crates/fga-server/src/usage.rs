@@ -103,7 +103,8 @@ impl Report {
             return self;
         }
         let mut counts = Vec::new();
-        // Failures first: a newly broken feature matters more than one never built.
+        // At each rank, failures before missing features: a newly broken feature matters more than
+        // one never built.
         for (tally, counts_of) in [(0, &self.failed), (1, &self.unsupported)] {
             let mut groups: BTreeMap<Option<&'static str>, Vec<(u64, String)>> = BTreeMap::new();
             for (count, client, name) in counts_of.counts() {
@@ -807,10 +808,12 @@ mod tests {
     fn the_busiest_report_fits_the_collector_s_limit() {
         let mut longest: Vec<String> = contract().names.iter().cloned().collect();
         longest.sort_by_key(|name| (std::cmp::Reverse(name.len()), name.clone()));
+        // The longest names carry the largest counts, so they are the ones a cut keeps.
         let full = || {
             longest
                 .iter()
-                .map(|name| (name.clone(), MAX_COUNT))
+                .enumerate()
+                .map(|(rank, name)| (name.clone(), MAX_COUNT - rank as u64))
                 .collect()
         };
         let by_client =
