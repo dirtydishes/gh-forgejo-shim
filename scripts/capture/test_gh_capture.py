@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,16 @@ if mode == "echo":
     sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 if mode == "print":
     sys.stdout.write(os.environ["FAKE_OUT"])
+if mode == "stream":
+    # One line, then wait until the caller has read it, as `gh pr checks --watch` does between polls.
+    print("first", flush=True)
+    sys.stderr.write("progress\n")
+    sys.stderr.flush()
+    for _ in range(300):
+        if os.path.exists(os.environ["FAKE_GO"]):
+            break
+        time.sleep(0.05)
+    print("second")
 '''
 
 
@@ -130,6 +141,36 @@ class TokenOutputTest(unittest.TestCase):
         self.assertEqual(json.loads(first["stdout"]), {"login": "octo", "token": "<redacted>",
                                                        "nested": {"client_secret": "<redacted>"}})
         self.assertEqual(second["stdout"], "see <token>\n")
+
+
+class StreamTest(unittest.TestCase):
+    """#197 defect 4: output reaches the caller as gh writes it, not when gh exits."""
+
+    def test_a_line_arrives_while_gh_runs(self):
+        wrapper = Wrapper(self)
+        go = wrapper.root / "go"
+        process = subprocess.Popen([sys.executable, str(WRAPPER), "pr", "checks", "1", "--watch"],
+                                   env=wrapper.env | {"FAKE_GH": "stream", "FAKE_GO": str(go)}, cwd=wrapper.root,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(process.kill)
+        ready, _, _ = select.select([process.stdout], [], [], 10)
+        self.assertTrue(ready, "no output while gh ran")
+        self.assertEqual(process.stdout.readline(), b"first\n")
+        self.assertIsNone(process.poll())
+        go.touch()
+        rest, errors = process.communicate(timeout=30)
+        self.assertEqual((process.returncode, rest, errors), (0, b"second\n", b"progress\n"))
+        [record] = wrapper.records()
+        self.assertEqual((record["stdout"], record["stderr"]), ("first\nsecond\n", "progress\n"))
+
+    def test_long_output_is_cut_short_in_the_log_only(self):
+        wrapper = Wrapper(self)
+        output = "x" * 300000
+        result = wrapper.run("api", "repos/o/r/contents", FAKE_GH="print", FAKE_OUT=output)
+        self.assertEqual(result.stdout, output.encode())
+        [record] = wrapper.records()
+        self.assertEqual((record["stdout"]["truncated"], record["stdout"]["bytes"], len(record["stdout"]["head"])),
+                         (True, 300000, 256 * 1024))
 
 
 class LogFailureTest(unittest.TestCase):
