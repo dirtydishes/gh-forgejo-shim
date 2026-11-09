@@ -403,8 +403,10 @@ pub fn spawn_server_reporter(forgejo_url: url::Url) {
     let state = server_state_dir(get);
     start_counting();
     log(
-        "fga-server sends one anonymous usage report a day (version, OS, forge; no hosts, \
-         repositories or IDs). FGA_TELEMETRY=0 turns it off. See docs/telemetry.md.",
+        "fga-server sends one anonymous usage report a day, so its one maintainer can find what \
+         breaks in agents they can't test: version, OS, forge, and GitHub features missing or \
+         failed. No hosts, repositories or IDs. FGA_TELEMETRY=0 turns it off; see \
+         docs/telemetry.md.",
     );
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
