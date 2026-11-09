@@ -62,6 +62,14 @@ USER_KEYS = {"login", "username", "type", "__typename", "site_admin", "user_view
 # Who wrote a commit, as git records it: a name beside an email, a date or a user.
 IDENTITY_KEYS = {"name", "email"}
 NODE_KEYS = {"node_id", "nodeId", "id"}
+HTTP_STATUS = re.compile(r"HTTP/[\d.]+ \d{3}")
+# Response headers whose values stay (redacted like any text); every other value is hidden, which
+# covers dates, request IDs, rate-limit reset times and cookies.
+HEADERS = {"content-type", "content-length", "content-encoding", "transfer-encoding", "link", "vary",
+           "cache-control", "x-github-media-type", "x-github-api-version-selected", "x-oauth-scopes",
+           "x-accepted-oauth-scopes", "x-accepted-github-permissions", "x-ratelimit-limit",
+           "x-ratelimit-remaining", "x-ratelimit-used", "x-ratelimit-resource", "x-total-count",
+           "x-hasmore"}
 
 
 class Redactor:
@@ -107,8 +115,7 @@ class Redactor:
                     logins.append(login)
             for match in TIMESTAMP.finditer(value):
                 instants.add(parse_time(match.group(0)))
-            parsed = embedded_json(value)
-            if parsed is not None:
+            for parsed in embedded(value):
                 self._collect(parsed, logins, instants)
 
     def text(self, value):
@@ -162,11 +169,32 @@ class Redactor:
         if isinstance(value, list):
             return [self.value(item) for item in value]
         if isinstance(value, str):
-            parsed = embedded_json(value)
-            if parsed is not None:
-                return dump_like(self.value(parsed), value)
-            return self.text(value)
+            return self.structured(value)
         return value
+
+    def structured(self, text):
+        """A string that may hold JSON answers, or HTTP headers and a body, redacted as such."""
+        parts = http_parts(text)
+        if parts:
+            head, blank, body = parts
+            lines = head.split("\n")
+            for index, line in enumerate(lines[1:], 1):
+                name, colon, rest = line.partition(":")
+                if colon:
+                    end = "\r" if rest.endswith("\r") else ""
+                    kept = name.strip().lower() in HEADERS
+                    lines[index] = name + ":" + (self.text(rest) if kept else " <redacted>" + end)
+            lines[0] = self.text(lines[0])
+            return "\n".join(lines) + blank + self.structured(body)
+        spans = json_spans(text)
+        if spans is None:
+            return self.text(text)
+        out = []
+        last = 0
+        for start, end, item in spans:
+            out += [text[last:start], dump_like(self.value(item), text[start:end])]
+            last = end
+        return "".join(out) + text[last:]
 
 
 def hidden(value):
@@ -200,25 +228,51 @@ def is_ip(text):
     return True
 
 
-def embedded_json(text):
-    """A string that holds one JSON object or array, such as a captured stdout."""
-    if not text.lstrip().startswith(("{", "[")):
+def json_spans(text):
+    """The JSON values a string holds back to back, as (start, end, value): one for most answers,
+    one per page for `gh api --paginate`. None unless the string is nothing but JSON values and
+    whitespace, at least one of them an object or array."""
+    decoder = json.JSONDecoder()
+    spans = []
+    index = 0
+    while True:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index == len(text):
+            break
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except ValueError:
+            return None
+        spans.append((index, end, value))
+        index = end
+    return spans if any(isinstance(value, (dict, list)) for _, _, value in spans) else None
+
+
+def http_parts(text):
+    """`gh api -i` output: (status and header lines, the blank line, the body), or None."""
+    if not HTTP_STATUS.match(text):
         return None
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        return None
-    return parsed if isinstance(parsed, (dict, list)) else None
+    blank = re.search(r"\r?\n\r?\n", text)
+    if not blank:
+        return text, "", ""
+    return text[:blank.start()], blank.group(0), text[blank.end():]
+
+
+def embedded(text):
+    """The JSON values inside a string: an answer, its pages, or the body after HTTP headers."""
+    parts = http_parts(text)
+    spans = json_spans(parts[2] if parts else text)
+    return [value for _, _, value in spans or []]
 
 
 def dump_like(value, original):
     """Re-encode in the original's style: gh writes compact JSON, a stub may not."""
-    body = original.rstrip("\n")
-    parsed = json.loads(body)
+    parsed = json.loads(original)
     separators = (",", ":")
-    if json.dumps(parsed, ensure_ascii=False) == body:
+    if json.dumps(parsed, ensure_ascii=False) == original:
         separators = (", ", ": ")
-    return json.dumps(value, ensure_ascii=False, separators=separators) + original[len(body):]
+    return json.dumps(value, ensure_ascii=False, separators=separators)
 
 
 def read_marks(path):

@@ -14,6 +14,8 @@ import re
 import sys
 from pathlib import Path
 
+from redact import embedded
+
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
 PLACEHOLDER_VALUES = {"", "<redacted>", "<token>"}
@@ -95,11 +97,8 @@ def value_findings(value):
             kinds |= value_findings(item)
     elif isinstance(value, str):
         kinds |= text_findings(value)
-        if value.lstrip().startswith(("{", "[")):
-            try:
-                kinds |= value_findings(json.loads(value))
-            except ValueError:
-                pass
+        for item in embedded(value):
+            kinds |= value_findings(item)
     return kinds
 
 
