@@ -71,6 +71,21 @@ describe("figures", () => {
     expect(shown(result.totals.days)).toEqual([]);
   });
 
+  it("never publishes a figure equal to its only part when that part is hidden", () => {
+    // codex reports only on Tuesday, 10 of them; cursor's 1 hides Tuesday's codex. A week of 10
+    // from one day would give that day away, and Tuesday's total less it, cursor's 1.
+    const other = { client: "cursor", os: "linux" };
+    const rows = [
+      row("2026-11-03", 10),
+      row("2026-11-03", 1, other),
+      ...["2026-11-02", "2026-11-04", "2026-11-05"].map((day) => row(day, 3, { ...other, arch: "x86_64" })),
+    ];
+    const result = figures(rows, [], []);
+    const codex = (cell: Figure) => cell.client === "codex" && cell.os === "macos";
+    expect(result.combinations.days.filter(codex)).toEqual([]);
+    expect(result.combinations.weeks.filter(codex)).toEqual([]);
+  });
+
   it("names an absent value none", () => {
     const rows = [row("2026-11-02", 3, { mode: "server", client: "", gh: "", forge_major: -1 })];
     expect(figures(rows, [], []).by_field.client.days).toEqual([

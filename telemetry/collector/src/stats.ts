@@ -70,13 +70,16 @@ export function suppress(cells: Cell[], groups: Group[]): void {
     changed = false;
     for (const { parent, parts } of groups) {
       const shown = parts.filter((part) => !part.hidden);
-      if (shown.length === 0) continue;
       const hidden = parts.filter((part) => part.hidden);
       const sum = hidden.reduce((total, part) => total + part.reports, 0);
       const exposed = parent.hidden
         ? hidden.length === 0
         : hidden.length > 0 && (hidden.length < 2 || sum < MINIMUM);
-      if (exposed) {
+      if (exposed && shown.length === 0) {
+        // Every part is hidden, so the published figure is what gives them away.
+        parent.hidden = true;
+        changed = true;
+      } else if (exposed) {
         shown.reduce((smallest, part) => (part.reports < smallest.reports ? part : smallest)).hidden = true;
         changed = true;
       }
@@ -126,9 +129,10 @@ export function figures(rows: Row[], cohortRows: CohortRow[], unsupported: Unsup
     }
   }
   // Retention: each first week's reports are a part of the day's total too. Its daily cells are
-  // never published, but they're counted, so a week's retention can't be subtracted from its total.
+  // never published, but they're counted as if they were, since a week's figure is its busiest
+  // day's, so a week's retention can't be subtracted from its total.
   for (const row of cohortRows) {
-    const day = cell("retention", row.day, { first_week: row.first_week }, true);
+    const day = cell("retention", row.day, { first_week: row.first_week }, false);
     day.reports += row.count;
     day.installs += row.count;
   }
