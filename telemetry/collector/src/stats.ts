@@ -30,7 +30,7 @@ export function rounded(count: number): Rounded {
  * report moves at most seven noisy counts by one each: installs, one value of each fixed field,
  * its version's, and `other` when that version isn't named. So it moves the odds of what they show
  * together by at most e^(7 / NOISE_SCALE), about 3.2 times. The exception is a version only that
- * report carried, which see [`NAMED_AT`].
+ * report carried: see [`NAMED_AT`].
  */
 export const NOISE_SCALE = 6;
 
