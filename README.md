@@ -229,9 +229,9 @@ the commands, what redaction hides, and the smoke probes.
 
 ## Usage reports
 
-gh-forgejo-shim and fga-server send one anonymous report a day: the version, OS, mode, which agent
-ran gh, the forge's software, and the week of the first report. No hosts, repositories, commands or
-IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
+gh-forgejo-shim and fga-server send one anonymous report a day: the version, OS and arch, mode,
+which agent ran gh, the forge's software and major version, gh's version, the week of the first
+report, and the GitHub names the gateway lacked. No hosts, repositories, commands or IDs. The report goes in the background and never slows or changes a `gh` call. Turn it off with
 `gfj telemetry off`, `GFJ_TELEMETRY=0` or `DO_NOT_TRACK=1` (`FGA_TELEMETRY=0` for fga-server), and
 see the report with `gfj telemetry show`. [docs/telemetry.md](docs/telemetry.md) lists every
 field, what the collector keeps, and where the totals are published.
