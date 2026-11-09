@@ -1,19 +1,45 @@
-//! The gateway counts what it can't serve by GitHub's own name for it, from the fixed vocabulary
-//! (docs/telemetry.md). A count never holds an owner, repository, path or anything a client typed.
-use axum::{Json, Router, routing::get};
+//! The gateway counts what it lacks and what it fails by GitHub's own name for it, from the fixed
+//! vocabulary (docs/telemetry.md). A count never holds an owner, repository, path, error or
+//! anything a client typed.
+use axum::{Json, Router, http::StatusCode, routing::get};
 use fga_core::{forgejo::Forgejo, map::WipPrefixes};
 use fga_server::{AppState, Host, app, usage};
 use serde_json::json;
 use std::collections::BTreeMap;
 
+fn user() -> serde_json::Value {
+    json!({"id":1,"login":"e2e","full_name":"","avatar_url":"https://forge.test/a"})
+}
+
 #[tokio::test]
-async fn unsupported_requests_are_counted_by_github_s_names_only() {
-    let upstream = Router::new().route(
-        "/api/v1/user",
-        get(|| async {
-            Json(json!({"id":1,"login":"e2e","full_name":"","avatar_url":"https://forge.test/a"}))
-        }),
-    );
+async fn requests_are_counted_by_github_s_names_only() {
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/repos/acme/secret-repo",
+            get(|| async {
+                Json(
+                    json!({"id":1,"name":"secret-repo","full_name":"acme/secret-repo",
+                    "owner":{"id":2,"login":"acme","full_name":"","avatar_url":""},
+                    "private":false,"html_url":"","default_branch":"main","fork":false,
+                    "archived":false}),
+                )
+            }),
+        )
+        // Forgejo fails, then sends what isn't JSON: both are the gateway's failures.
+        .route(
+            "/api/v1/repos/acme/secret-repo/pulls/1",
+            get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+        )
+        .route(
+            "/api/v1/repos/acme/secret-repo/pulls/4",
+            get(|| async { "<html>acme-secret-error</html>" }),
+        )
+        // Ordinary answers: no access, and (by the fallback) no such PR.
+        .route(
+            "/api/v1/repos/acme/secret-repo/pulls/3",
+            get(|| async { StatusCode::FORBIDDEN }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
@@ -48,8 +74,8 @@ async fn unsupported_requests_are_counted_by_github_s_names_only() {
         .await,
         404
     );
-    assert!(usage::take_unsupported().is_empty());
-    usage::count_unsupported();
+    assert!(usage::take_counts().is_empty());
+    usage::start_counting();
     // No route: a GitHub resource, and a path that names nothing GitHub has.
     assert_eq!(
         send(
@@ -91,9 +117,43 @@ async fn unsupported_requests_are_counted_by_github_s_names_only() {
             200
         );
     }
-    let counts = usage::take_unsupported();
+    // Failed on the gateway's side: Forgejo's 500, and an answer it can't read.
+    for number in [1, 4] {
+        let path = format!("/api/v3/repos/acme/secret-repo/pulls/{number}");
+        assert_eq!(send(reqwest::Method::GET, &path, None).await, 502);
+    }
+    // Ordinary answers, which aren't failures: no access, no such PR, and a bad query.
+    for (path, status) in [
+        ("/api/v3/repos/acme/secret-repo/pulls/3", 403),
+        ("/api/v3/repos/acme/secret-repo/pulls/2", 404),
+        ("/api/v3/repos/acme/secret-repo/pulls?state=acme", 422),
+    ] {
+        assert_eq!(
+            send(reqwest::Method::GET, path, None).await,
+            status,
+            "{path}"
+        );
+    }
+    // A field that failed, under an alias, and one whose PR doesn't exist.
     assert_eq!(
-        counts,
+        send(
+            reqwest::Method::POST,
+            "/api/graphql",
+            Some(json!({"query": "{ acmeRepo: repository(owner: \"acme\", name: \"secret-repo\") { acmeBroken: pullRequest(number: 1) { title } acmeMissing: pullRequest(number: 2) { title } } }"})),
+        )
+        .await,
+        200
+    );
+    let counts = usage::take_counts();
+    assert_eq!(
+        counts.failed,
+        BTreeMap::from([
+            ("graphql:Repository.pullRequest".to_string(), 1),
+            ("rest:repos.pulls".to_string(), 2),
+        ]),
+    );
+    assert_eq!(
+        counts.unsupported,
         BTreeMap::from([
             ("graphql:Repository.other".to_string(), 1),
             ("graphql:Repository.projectsV2".to_string(), 1),
@@ -104,10 +164,7 @@ async fn unsupported_requests_are_counted_by_github_s_names_only() {
     );
     let text = format!("{counts:?}");
     assert!(!text.contains("acme") && !text.contains("secret"), "{text}");
-    assert!(
-        usage::take_unsupported().is_empty(),
-        "taking empties the count"
-    );
+    assert!(usage::take_counts().is_empty(), "taking empties the counts");
 }
 
 /// Turned off, fga-server deletes the dates it kept for reports, and sends nothing.
