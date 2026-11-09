@@ -290,8 +290,11 @@ def secretless(value):
 def die_like(number):
     """Exit the way gh did when a signal killed it, so the caller sees the same death, not 128+N
     folded into an exit code (#197 defect 5)."""
-    signal.signal(number, signal.SIG_DFL)
-    signal.pthread_sigmask(signal.SIG_UNBLOCK, [number])
+    try:
+        signal.signal(number, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, [number])
+    except (OSError, ValueError):  # SIGKILL and SIGSTOP take no handler and no mask
+        pass
     os.kill(os.getpid(), number)
     # Still here: the signal can't kill us. Exit as a shell reports it.
     sys.exit(128 + number)
