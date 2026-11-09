@@ -67,9 +67,17 @@ def text(data):
 
 
 def write(record):
-    os.makedirs(os.path.dirname(LOG), mode=0o700, exist_ok=True)
-    with open(LOG, "a") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
+    """Append one record, owner-only. A log that can't be written never stops the gh call; on a
+    terminal it says so."""
+    try:
+        directory = os.path.dirname(LOG)
+        if directory:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+        with os.fdopen(os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception as error:  # nothing about the log may break the call
+        if sys.stderr.isatty():
+            print(f"gh-capture: call not recorded: {error}", file=sys.stderr)
 
 
 def main():
@@ -107,13 +115,11 @@ def main():
     else:
         record["stdout"] = text(proc.stdout)
         record["stderr"] = text(proc.stderr)
-    try:
-        write(record)
-    finally:
-        sys.stdout.buffer.write(proc.stdout)
-        sys.stdout.buffer.flush()
-        sys.stderr.buffer.write(proc.stderr)
-        sys.stderr.buffer.flush()
+    write(record)
+    sys.stdout.buffer.write(proc.stdout)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.write(proc.stderr)
+    sys.stderr.buffer.flush()
     sys.exit(proc.returncode)
 
 
