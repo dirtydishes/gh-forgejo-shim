@@ -1,0 +1,44 @@
+[
+  {
+    "contains": [
+      "graphql",
+      "forge.test"
+    ],
+    "exit": 1,
+    "stderr": "gh-capture stub: graphql is not served for this host\n"
+  },
+  {
+    "contains": [
+      "list",
+      "--head",
+      "forge.test/<user>/<repo>"
+    ],
+    "stdout": [
+      {
+        "number": 1,
+        "url": "https://forge.test/<user>/<repo>/pull/1",
+        "state": "OPEN",
+        "headRefName": "s/fail"
+      }
+    ]
+  },
+  {
+    "contains": [
+      "auth",
+      "status",
+      "forge.test"
+    ],
+    "stdout": "forge.test\n  ✓ Logged in to forge.test account <user> (keyring)\n"
+  },
+  {
+    "contains": [
+      "api",
+      "user",
+      "forge.test"
+    ],
+    "stdout": {
+      "login": "<user>",
+      "avatar_url": null
+    }
+  }
+]
