@@ -44,6 +44,11 @@ try:
     import redact
     if not all(hasattr(redact, rule) for rule in RULES):
         raise ImportError("redact.py lacks rules gh-capture uses")
+    # Keys whose values are credentials, and a JSON field anywhere in text: a quoted key, a colon and
+    # a non-empty quoted value, matched in one pass however long the value (its key is then judged
+    # by SECRET_KEY). That covers answers after `-i` headers or cut short.
+    SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
+    JSON_FIELD = re.compile(r'"((?:[^"\\\n]|\\.)*)"(\s*:\s*)"(?:[^"\\\n]|\\.)+"')
 except Exception:  # a broken redact.py may raise anything; it must not stop gh
     redact = None
 
@@ -73,11 +78,6 @@ VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--fi
                "-a", "--app"}
 # `gh api` paths that answer with a credential, and a `--jq` or `--template` that picks one out.
 SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|password")
-if redact:
-    # A sensitive key's value in JSON text that isn't one clean answer: after `-i` headers, or cut short.
-    SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
-    SECRET_FIELD = re.compile(r'("[^"\n]*(?:' + SECRET_KEY.pattern.replace("(?i)", "") + r')[^"\n]*"\s*:\s*)'
-                              r'"(?:[^"\\\n]|\\.)*"', re.IGNORECASE)
 
 
 def process_chain(limit=6):
@@ -118,7 +118,8 @@ def scrub(text):
     text = redact.AUTHORIZATION.sub(r"\1<token>", text)
     text = redact.TOKEN_HEADER.sub(r"\1<token>", text)
     text = redact.COOKIE.sub(r"\1<redacted>", text)
-    text = SECRET_FIELD.sub(r'\1"<redacted>"', text)
+    text = JSON_FIELD.sub(lambda m: f'"{m.group(1)}"{m.group(2)}"<redacted>"' if SECRET_KEY.search(m.group(1))
+                          else m.group(0), text)
     return redact.SECRET_ASSIGNMENT.sub(r"\1<redacted>", text)
 
 
@@ -209,7 +210,7 @@ def fake_token(argv):
     try:
         with open(os.path.expanduser("~/.gh-capture/fake-token-hosts")) as handle:
             hosts = [line.strip() for line in handle if line.strip() and not line.startswith("#")]
-    except OSError:
+    except (OSError, ValueError):  # unreadable, or not text
         return None
     return "gfjprobe_" + host.replace(".", "_") if host in hosts else None
 
