@@ -47,11 +47,11 @@ NAMED_HOST = re.compile(r"Logged in to (\S+) account|(?<![\w/])[\w.-]+@([A-Za-z0
                         r"(?:--hostname|--host|GH_HOST)[= ]\s*([^\s\"',]+)")
 # Dates other than the placeholders' 2000-01-01, and those redact.py keeps as versions.
 KEPT = re.compile(KEPT_DATES)
-DATE = re.compile(r"(?<!\d)\d{4}([-/])\d\d\1\d\d(?!\d)|\b\d\d[/ ](?:" + MONTHS + r")[/ ]\d{4}\b|"
+DATE = re.compile(r"(?<!\d)\d{4}([-/])\d\d\1\d\d(?!\d)|\b\d{1,2}[/ ](?:" + MONTHS + r")[/ ]\d{4}\b|"
                   r"\b(?:" + MONTHS + r") +\d{1,2} \d\d:\d\d:\d\d(?: (?:[A-Z][A-Za-z]*|[+-]\d{2,4}))? \d{4}\b")
-PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|01[/ ]Jan[/ ]2000|Jan +1 \d\d:\d\d:\d\d(?: UTC)? 2000")
+PLACEHOLDER_DATES = re.compile(r"2000[-/]01[-/]01|0?1[/ ]Jan[/ ]2000|Jan +1 \d\d:\d\d:\d\d(?: UTC)? 2000")
 # A zone after a placeholder time other than its own UTC: a name or Go's `-03` that redact.py left.
-ZONE_AFTER = re.compile(r"(?:\+0000|\+00:00) (?!UTC\b)(?:[A-Z][A-Za-z]{1,4}|[+-]\d\d(?:\d\d)?)(?![\w:])")
+ZONE_AFTER = re.compile(r"(?:\+0000|\+00:00) \(?(?!UTC\b)(?:[A-Z]{2,5}|ChST|[+-]\d\d(?:\d\d)?)(?![\w:])")
 HOST_FLAGS = {"--hostname", "--host", "-h"}
 REPO_FLAGS = {"--repo", "-R"}
 HOST_VARIABLES = {"GH_HOST", "GH_ENTERPRISE_HOST", "GITHUB_SERVER_URL"}
