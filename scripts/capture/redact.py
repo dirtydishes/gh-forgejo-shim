@@ -41,6 +41,10 @@ TOKEN_HEADER = re.compile(r"(?i)\b((?:private-token|x-api-key|api-key|x-auth-tok
                           r"[^\s\"',\\]+")
 AUTHORIZATION = re.compile(r"(?i)(authorization:\s*(?:(?:token|bearer|basic)\s+)?)[^\s\"',]+")
 USERINFO = re.compile(r"(://)[^/\s\"'<>@]+@")
+# A raw git header's identity line, as in a signed commit's `verification.payload`, and an armored
+# signature or key block, which names its signer.
+GIT_IDENT = re.compile(r"(?m)^((?:author|committer|tagger) ).*<[^>\n]*> \d+ [+-]\d{4}$")
+ARMOR = re.compile(r"-----BEGIN ([A-Z ]+)-----.*?-----END \1-----", re.DOTALL)
 COOKIE = re.compile(r"(?i)((?:set-)?cookie:\s*)[^\n\"]+")
 SECRET_ASSIGNMENT = re.compile(r"(?i)\b([\w.-]*(?:token|secret|passw(?:or)?d|credential|api[_-]?key)[\w.-]*=)[^&\s\"']+")
 # A home directory, URL-encoded too; its last part is the local user's name.
@@ -197,6 +201,8 @@ class Redactor:
                     add(found["logins"], login)
 
     def text(self, value):
+        value = ARMOR.sub(r"-----BEGIN \1-----<redacted>-----END \1-----", value)
+        value = GIT_IDENT.sub(r"\1<redacted> <email> %d +0000" % EPOCH_SECONDS, value)
         value = USERINFO.sub(r"\1<redacted>@", value)
         value = HOME.sub("<home>", value)
         value = EMAIL.sub(lambda m: "<email>" if is_email(m.group(0)) else m.group(0), value)
