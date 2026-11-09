@@ -287,6 +287,14 @@ class LeaksTest(unittest.TestCase):
         ]
         self.assertEqual(self.kinds("\n".join(ordinary) + "\n"), set())
 
+    def test_file_and_folder_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "homebox.local"
+            folder.mkdir()
+            (folder / "capture-octo@private.dev.jsonl").write_text("")
+            findings = leaks.check([directory])
+        self.assertEqual(sorted(f.rsplit(": ", 1)[1] for f in findings), ["email in the file name", "host in the file name"])
+
     def test_hosts_in_a_records_argv_and_env(self):
         for argv in (["auth", "status", "-h", "homebox"], ["api", "user", "--hostname=homebox"],
                      ["pr", "list", "-R", "homebox/o/r"], ["pr", "list", "-Rhomebox/o/r"]):

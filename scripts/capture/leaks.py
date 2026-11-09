@@ -165,11 +165,15 @@ def file_findings(path):
 
 
 def check(paths):
-    """Every finding under the paths, as `file:line: kind` lines."""
-    files = []
-    for path in map(Path, paths):
-        files.extend(sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path])
-    return [f"{path}:{line}: {kind}" for path in files for line, kind in file_findings(path)]
+    """Every finding under the paths, as `file:line: kind` lines; line 0 is the file's name."""
+    findings = []
+    for root in map(Path, paths):
+        files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else [root]
+        for path in files:
+            name = path.relative_to(root) if root.is_dir() else Path(path.name)
+            findings += [f"{path}:0: {kind} in the file name" for kind in sorted(text_findings(str(name)))]
+            findings += [f"{path}:{line}: {kind}" for line, kind in file_findings(path)]
+    return findings
 
 
 def main(argv=None):
