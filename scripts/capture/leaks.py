@@ -8,13 +8,12 @@ JSON answers captured logs carry. It prints the file, line and kind of each find
 text, so a leak doesn't reach a CI log. Values redact.py writes as placeholders pass.
 """
 
-import ipaddress
 import json
 import re
 import sys
 from pathlib import Path
 
-from redact import embedded
+from redact import EMAIL, IPV4, IPV6, embedded, is_email, is_ip
 
 ALLOWED_HOSTS = {"github.com", "api.github.com", "example.com", "example.net", "example.org"}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid", ".localhost")
@@ -27,11 +26,7 @@ AUTHORIZATION = re.compile(r"(?i)authorization:\s*(?:(?:token|bearer|basic)\s+)?
 COOKIE = re.compile(r"(?i)(?:set-)?cookie:\s*([^\n\"\\]*)")
 SECRET_ASSIGNMENT = re.compile(r"(?i)\b[\w.-]*(?:token|secret|passw(?:or)?d|credential|api[_-]?key)[\w.-]*=([^&\s\"'\\]+)")
 SENSITIVE_KEY = re.compile(r"(?i)token|secret|passw(?:or)?d|passphrase|credential|api[_-]?key|private[_-]?key|cookie")
-EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
-                   r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+)")
 HOME = re.compile(r"(?:/|%2[Ff])(?:Users|home)(?:/|%2[Ff])|[A-Za-z]:\\+Users\\")
-IPV4 = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
-IPV6 = re.compile(r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])")
 URL_HOST = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^/\s\"'<>@]*@)?([^/\s\"'<>@?#\\]+)")
 USERINFO = re.compile(r"://([^/\s\"'<>@]+)@")
 AVATAR = re.compile(r"avatars\.githubusercontent\.com|gravatar\.com|://[^/\s\"'<>]+/avatars?/", re.IGNORECASE)
@@ -63,14 +58,6 @@ def allowed_host(host):
         suffix[1:] for suffix in RESERVED_SUFFIXES}
 
 
-def is_ip(text):
-    try:
-        ipaddress.ip_address(text)
-    except ValueError:
-        return False
-    return True
-
-
 def text_findings(text):
     """The kinds of identifying data in one string."""
     kinds = set()
@@ -82,7 +69,7 @@ def text_findings(text):
         if any(match.group(1).strip() not in PLACEHOLDER_VALUES for match in pattern.finditer(text)):
             kinds.add("credential")
     for match in EMAIL.finditer(text):
-        if not allowed_host(match.group(1)):
+        if is_email(match.group(0)) and not allowed_host(match.group(0).rsplit("@", 1)[1]):
             kinds.add("email")
     if any(match.group(0).replace("/", "-") != "2000-01-01" and match.group(0) != "01 Jan 2000"
            for match in DATE.finditer(GH_VERSION.sub("", text))):

@@ -192,6 +192,11 @@ class RedactTest(unittest.TestCase):
         redactor.learn(['{"data":{"x":{"login":"someone-else"},"viewer":{"login":"octo-person"}}}'])
         self.assertEqual(redactor.names["octo-person"], "<user>")
 
+    def test_versions_and_workflow_commands_are_left_alone(self):
+        redactor = redact.Redactor([])
+        text = "npx ripgrep@14.1.0 && echo ::add-mask::$X from fe80::1:2"
+        self.assertEqual(redactor.text(text), "npx ripgrep@14.1.0 && echo ::add-mask::$X from <ip>")
+
     def test_node_ids_are_numbered(self):
         self.capture.redact()
         row = self.capture.records()[12]
@@ -303,7 +308,7 @@ class LeaksTest(unittest.TestCase):
             "closed:>2000-01-01 2000/01/01 00:00:01 Sat, 01 Jan 2000 00:00:00 GMT gh version 2.103.3 (2026-10-26)",
             "gh version 2.103.3 Versions/156.0.8078.48/Helpers /Applications/ChatGPT.app/Contents 19:02:38",
             "Codex (Service).app <home>/.claude/settings.local.json git@github.com:o/r.git",
-            "ci / check (pull_request) e2e@example.invalid notes/nopr.txt",
+            "ci / check (pull_request) e2e@example.invalid notes/nopr.txt npx ripgrep@14.1.0 ::add-mask::x",
         ]
         self.assertEqual(self.kinds("\n".join(ordinary) + "\n"), set())
 

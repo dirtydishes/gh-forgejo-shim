@@ -46,7 +46,7 @@ EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]
 AVATAR = re.compile(r"https?://(?:avatars\.githubusercontent\.com|(?:secure|www)\.gravatar\.com|"
                     r"[^/\s\"'<>]+/avatars?)/[^\s\"'<>]*")
 IPV4 = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
-IPV6 = re.compile(r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])")
+IPV6 = re.compile(r"(?<![\w:.-])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:-])")
 SHA = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9a-f]{64}|[0-9a-f]{40})(?![0-9A-Fa-f])")
 # Placeholders this script writes: leaks.py accepts these and nothing else of their shape.
 PLACEHOLDER_SHA = re.compile(r"0{24}[0-9a-f]{16}")
@@ -155,7 +155,7 @@ class Redactor:
     def text(self, value):
         value = USERINFO.sub(r"\1<redacted>@", value)
         value = HOME.sub("<home>", value)
-        value = EMAIL.sub("<email>", value)
+        value = EMAIL.sub(lambda m: "<email>" if is_email(m.group(0)) else m.group(0), value)
         value = TOKEN.sub("<token>", value)
         value = AUTHORIZATION.sub(r"\1<token>", value)
         value = COOKIE.sub(r"\1<redacted>", value)
@@ -283,11 +283,17 @@ def format_time(instant, match):
 
 
 def is_ip(text):
+    """An IP address; an IPv6 one needs two groups of digits, so `::add-mask::` isn't one."""
     try:
-        ipaddress.ip_address(text)
+        address = ipaddress.ip_address(text)
     except ValueError:
         return False
-    return True
+    return address.version == 4 or sum(1 for group in text.split(":") if group) >= 2
+
+
+def is_email(text):
+    """An email: its domain ends in a name, not a version (`ripgrep@14.1.0`)."""
+    return bool(re.search(r"\.[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*$", text.rsplit("@", 1)[-1]))
 
 
 def json_spans(text):
