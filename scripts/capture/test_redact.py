@@ -24,7 +24,7 @@ PRIVATE = [
     "octo@private.dev", GHO, FORGEJO_TOKEN, "Real Name", "Somewhere Town", "my own bio", "octo_tw",
     "1234567", "MDQ6VXNlcjEyMzQ1Njc", "avatars.githubusercontent.com", SHA, "41111899791",
     "124255789264", "2026-10-30", "-0400", "AABBCCDDEEFF00112233", "sess-value", "someone-else",
-    "my status", "they/them", "en-US",
+    "my status", "they/them", "en-US", "Fri, 30 Oct", "1793395470",
 ]
 USER = {
     "login": "octo-person", "id": 1234567, "node_id": "MDQ6VXNlcjEyMzQ1Njc",
@@ -78,6 +78,12 @@ RECORDS = [
                                         "https://octo:pw@forge.private.dev/octo-person/secret-repo"]),
     record("2026-10-30T15:23:00-0400", ["api", "user", "--hostname", "forge.private.dev"], json.dumps(FORGEJO_USER)),
     record("2026-10-30T15:23:30-0400", ["api", "graphql", "-f", "query=query{viewer{login}}"], json.dumps(GRAPHQL_USER)),
+    # Two pages back to back, and headers before the body.
+    record("2026-10-30T15:24:00-0400", ["api", "--paginate", "users/octo-person/followers"],
+           json.dumps([FORGEJO_USER]) + json.dumps([USER]) + "\n"),
+    record("2026-10-30T15:24:30-0400", ["api", "-i", "user"],
+           "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: Fri, 30 Oct 2026 19:24:30 GMT\r\n"
+           "X-Ratelimit-Reset: 1793395470\r\n\r\n" + json.dumps(USER)),
 ]
 MARKS = "MARK first 15:17:00\nMARK second 15:21:00\n"
 LOG = ('203.0.113.9 - - [30/Oct/2026:20:06:03 +0000] "GET /api/v3/repos/octo-person/secret-repo HTTP/1.1" 401 139 "-" "client/1"\n'
@@ -153,11 +159,23 @@ class RedactTest(unittest.TestCase):
         author = data["commit"]["author"]
         self.assertEqual((author["name"], author["email"], author["user"]), ("<redacted>", "<redacted>", {"login": "<user>"}))
 
+    def test_pages_and_headers_are_read_as_json(self):
+        self.capture.redact()
+        rows = self.capture.records()
+        pages = [value for _, _, value in redact.json_spans(rows[9]["stdout"])]
+        self.assertEqual([page[0]["login"] for page in pages], ["<user>", "<user>"])
+        self.assertEqual((pages[0][0]["full_name"], pages[1][0]["bio"]), ("<redacted>", "<redacted>"))
+        self.assertTrue(rows[9]["stdout"].endswith("]\n"))
+        head, blank, body = redact.http_parts(rows[10]["stdout"])
+        self.assertEqual(head, "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nDate: <redacted>\r\n"
+                               "X-Ratelimit-Reset: <redacted>")
+        self.assertEqual((blank, json.loads(body)["location"]), ("\r\n\r\n", "<redacted>"))
+
     def test_times_become_offsets_and_marks_labels(self):
         self.capture.redact()
         rows = self.capture.records()
-        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393])
-        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 5)
+        self.assertEqual([row["t"] for row in rows], [0, 3, 6, 183, 243, 244, 303, 363, 393, 423, 453])
+        self.assertEqual([row.get("mark") for row in rows], [None] + ["first"] * 3 + ["second"] * 7)
         self.assertFalse(any("ts" in row for row in rows))
         log = (self.capture.out / "client-1-requests.log").read_text().splitlines()
         self.assertEqual([line.split(" ", 4)[3] for line in log], ["[+0s]", "[+9s]"])
