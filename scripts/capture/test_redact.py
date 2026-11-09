@@ -233,6 +233,9 @@ class RedactTest(unittest.TestCase):
             "Thu, 5 Nov 2026 15:16:57 -0400 (UTC-04:00)": "Sat, 1 Jan 2000 00:00:00 +0000 (UTC)",
             "Thu, 5 Nov 2026 15:16:57 -0400 (Eastern Daylight Time)": "Sat, 1 Jan 2000 00:00:00 +0000 (UTC)",
             "Thu, 5 Nov 2026 15:16:57 -0400 (HEAD -> main)": "Sat, 1 Jan 2000 00:00:00 +0000 (HEAD -> main)",
+            "Thu, 5 Nov 2026 15:16:57 -0400 (EDT, -0400) x": "Sat, 1 Jan 2000 00:00:00 +0000 (UTC) x",
+            "Thu, 5 Nov 2026 15:16:57 -0400 (EDT": "Sat, 1 Jan 2000 00:00:00 +0000 (UTC)",
+            "Thu, 5 Nov 2026 15:16:57 -0400 (UTC-4)": "Sat, 1 Jan 2000 00:00:00 +0000 (UTC)",
         }
         for text, expected in cases.items():
             self.assertEqual(redactor.text(text), expected)
@@ -246,6 +249,10 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(leaks.text_findings("Sat, 01 Jan 2000 00:00:00 +0000 (EDT)"), {"time zone"})
         self.assertEqual(leaks.text_findings("Sat, 01 Jan 2000 00:00:00 +0000 (UTC-04:00)"), {"time zone"})
         self.assertEqual(leaks.text_findings("2000-01-01 00:00:00 +0000 (HEAD -> main)"), set())
+        for left in ("(EDT, -0400)", "(EDT", "(Eastern Daylight Time)"):
+            self.assertEqual(leaks.text_findings("Sat, 1 Jan 2000 00:00:00 +0000 " + left), {"time zone"}, left)
+        for fine in ("(UTC)", "(UTC) x", "(Fix Login Flow)"):
+            self.assertEqual(leaks.text_findings("Sat, 1 Jan 2000 00:00:00 +0000 " + fine), set(), fine)
         self.assertEqual(leaks.text_findings("Fri Oct 30 15:16:57 -03 2026"), {"date"})
 
     def test_answers_keep_their_json_style(self):
