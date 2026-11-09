@@ -31,19 +31,19 @@ outside [`contract/telemetry.json`](../contract/telemetry.json).
 From the gh wrapper:
 
 ```json
-{"schema":1,"version":"0.3.0","os":"macos","arch":"aarch64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"gh":"2.103","first_week":"2026-W45","unsupported":{"graphql:Repository.projectsV2":2}}
+{"schema":1,"version":"0.3.1","os":"macos","arch":"aarch64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"gh":"2.103","first_week":"2026-W45","unsupported":{"graphql:Repository.projectsV2":2}}
 ```
 
 From fga-server:
 
 ```json
-{"schema":1,"version":"0.3.0","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{}}
+{"schema":1,"version":"0.3.1","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{}}
 ```
 
 | Field | Values | Where it comes from |
 |---|---|---|
 | `schema` | `1` | The report's format. |
-| `version` | `0.3.0` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
+| `version` | `0.3.1` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
 | `os` | `macos`, `linux`, `other` | The build. |
 | `arch` | `x86_64`, `aarch64`, `other` | The build. |
 | `mode` | `client`, `server` | The gh wrapper, or fga-server. |
