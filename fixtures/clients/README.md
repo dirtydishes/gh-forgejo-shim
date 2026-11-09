@@ -55,7 +55,8 @@ argv.
 | `<user>` | The account that made the captures, which owns the checkout's repository |
 | `<repo>` | That repository: the GitHub twin whose PR states `contract/scenarios.json` records |
 | `forge.test` | The Forgejo host. `github.com` stays as sent |
-| `<home>` | The home directory |
+| `<user-2>` | Any other account, numbered in order of first appearance. Bots keep their names |
+| `<home>`, `<local-user>` | The home directory, and the local user's name wherever else it appears |
 | `<ip>`, `<email>`, `<avatar-url>` | An IP address, an email, an avatar URL |
 | `<node-id-1>` | A GraphQL or REST node ID, numbered in order of first appearance |
 | `<token>`, `<redacted>` | A token or credential, and any other hidden value: a profile field, a value under a sensitive key |

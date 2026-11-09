@@ -38,6 +38,9 @@ SECRET_ASSIGNMENT = re.compile(r"(?i)\b([\w.-]*(?:token|secret|passw(?:or)?d|cre
 # A home directory, URL-encoded too; its last part is the local user's name.
 HOME = re.compile(r"(?:/|%2[Ff])(?:Users|home)(?:/|%2[Ff])([^/%\s\"'<>]+)|[A-Za-z]:\\+Users\\+([^\\\s\"'<>]+)")
 SHARED_HOMES = {"shared", "guest"}
+# Logins of bots and apps, which GraphQL gives without `[bot]`: kept, as they name no one.
+BOTS = {"github-actions", "dependabot", "copilot", "renovate", "ghost", "web-flow", "forgejo-actions",
+        "gitea-actions"}
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
 AVATAR = re.compile(r"https?://(?:avatars\.githubusercontent\.com|(?:secure|www)\.gravatar\.com|"
@@ -98,51 +101,56 @@ class Redactor:
         self.times = {}
 
     def learn(self, values):
-        """Pass one: logins, local user names and timestamps from every file, so placeholders are fixed before
-        anything is written, and timestamps keep their order."""
-        logins = []
-        instants = set()
-        locals_ = []
+        """Pass one: logins, local user names and timestamps from every file, so placeholders are
+        fixed before anything is written, and timestamps keep their order. The capturing account
+        (gh's viewer) is `<user>` whichever login appears first."""
+        found = {"viewers": [], "logins": [], "locals": [], "instants": set()}
         for value in values:
-            self._collect(value, logins, instants, locals_)
+            self._collect(value, found)
         known = {name.lower() for name in self.names}
         users = sum(1 for placeholder in self.names.values() if re.fullmatch(r"<user(?:-\d+)?>", placeholder))
-        for login in logins:
-            if login.lower() in known or login.endswith("[bot]") or login.startswith("<"):
+        for login in found["viewers"] + found["logins"]:
+            if login.lower() in known or login.lower() in BOTS or login.endswith("[bot]") or login.startswith("<"):
                 continue
             users += 1
             self.names[login] = USER if users == 1 else f"<user-{users}>"
             known.add(login.lower())
-        for name in locals_:
+        for name in found["locals"]:
             if name.lower() not in known and name.lower() not in SHARED_HOMES:
                 self.names[name] = "<local-user>"
                 known.add(name.lower())
-        for index, instant in enumerate(sorted(instants)):
+        for index, instant in enumerate(sorted(found["instants"])):
             self.times[instant] = EPOCH + timedelta(seconds=index)
 
-    def _collect(self, value, logins, instants, locals_):
+    def _collect(self, value, found):
         if isinstance(value, dict):
+            if isinstance(value.get("argv"), list) and value["argv"][:1] == ["api"] and isinstance(value.get("stdout"), str):
+                # `gh api user`, or `/user`: the answer is the viewer's own user object.
+                if any(arg.strip("/") == "user" for arg in value["argv"][1:]):
+                    for answer in embedded(value["stdout"]):
+                        if isinstance(answer, dict) and isinstance(answer.get("login"), str):
+                            add(found["viewers"], answer["login"])
+            viewer = value.get("viewer")
+            if isinstance(viewer, dict) and isinstance(viewer.get("login"), str):
+                add(found["viewers"], viewer["login"])
             for key, item in value.items():
-                if key == "login" and isinstance(item, str) and item not in logins:
-                    logins.append(item)
-                self._collect(item, logins, instants, locals_)
+                if key == "login" and isinstance(item, str):
+                    add(found["logins"], item)
+                self._collect(item, found)
         elif isinstance(value, list):
             for item in value:
-                self._collect(item, logins, instants, locals_)
+                self._collect(item, found)
         elif isinstance(value, str):
             for match in HOME.finditer(value):
-                name = match.group(1) or match.group(2)
-                if name not in locals_:
-                    locals_.append(name)
+                add(found["locals"], match.group(1) or match.group(2))
             for login in ACCOUNT.findall(value):
-                if login not in logins:
-                    logins.append(login)
+                add(found["viewers"], login)
             for match in TIMESTAMP.finditer(value):
-                instants.add(parse_time(match))
+                found["instants"].add(parse_time(match))
             for match in HTTP_DATE.finditer(value):
-                instants.add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
+                found["instants"].add(datetime.strptime(match.group(0), HTTP_FORMAT).replace(tzinfo=timezone.utc))
             for parsed in embedded(value):
-                self._collect(parsed, logins, instants, locals_)
+                self._collect(parsed, found)
 
     def text(self, value):
         value = USERINFO.sub(r"\1<redacted>@", value)
@@ -233,6 +241,11 @@ class Redactor:
             out += [text[last:start], dump_like(self.value(item), text[start:end])]
             last = end
         return "".join(out) + text[last:]
+
+
+def add(items, item):
+    if item not in items:
+        items.append(item)
 
 
 def hidden(value):
