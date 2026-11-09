@@ -149,7 +149,7 @@ async fn every_captured_document_is_within_the_limits() {
         let document = async_graphql::parser::parse_query(&query).expect("parses");
         let steps =
             cost::check(&document, &async_graphql::Variables::default()).expect("within cost");
-        let depth = cost::nesting(&query);
+        let depth = cost::nesting(&query).expect("block strings closed");
         assert!(
             depth * 4 <= cost::MAX_NESTING,
             "{source}: nests {depth}: raise MAX_NESTING"
@@ -477,15 +477,22 @@ async fn a_differing_argument_is_named_as_the_rule_names_it() {
 
 #[test]
 fn nesting_skips_strings_and_comments() {
-    assert_eq!(cost::nesting("{a(b:[1,{c:2}])}"), 4);
-    assert_eq!(cost::nesting(r#"{a(b:"[[[[\"[[")}"#), 2);
-    assert_eq!(cost::nesting("{a(b:\"\"\"[[[\\\"\"\"[[[\"\"\")}"), 2);
-    assert_eq!(cost::nesting("{a # [[[[\n}"), 1);
-    assert_eq!(cost::nesting("{a(b:\"x\ny\")}"), 2);
-    // An unclosed block string reads as `""` and then an ordinary string, as the parser reads it.
-    assert_eq!(cost::nesting(r#"{a(b:["""x"[[[[1]]]]])}"#), 7);
-    assert_eq!(cost::nesting(r#"{a(b:["""x"{c:{c:1}}])}"#), 5);
-    assert_eq!(cost::nesting("{a(b:\"\"\"x\"\"\"[[1]])}"), 4);
+    assert_eq!(cost::nesting("{a(b:[1,{c:2}])}"), Some(4));
+    assert_eq!(cost::nesting(r#"{a(b:"[[[[\"[[")}"#), Some(2));
+    assert_eq!(cost::nesting("{a(b:\"\"\"[[[\\\"\"\"[[[\"\"\")}"), Some(2));
+    assert_eq!(cost::nesting("{a # [[[[\n}"), Some(1));
+    assert_eq!(cost::nesting("{a(b:\"x\ny\")}"), Some(2));
+    assert_eq!(cost::nesting("{a(b:\"\"\"x\"\"\"[[1]])}"), Some(4));
+    // The parser would read an unclosed block string as `""` and then an ordinary string.
+    assert_eq!(cost::nesting(r#"{a(b:["""x"[[[[1]]]]])}"#), None);
+    assert_eq!(cost::nesting(r#"{a(b:"x""""")}"#), None);
+}
+
+/// Reading on past an unclosed block string takes quadratic time in the scan and the parser.
+#[tokio::test]
+async fn an_unclosed_block_string_is_refused_before_parsing() {
+    let query = format!("{{viewer(a:{}){{login}}}}", "\"\"\"\"\"\\\\".repeat(10_000));
+    assert_eq!(refused(&query).await, "Query has an unclosed block string.");
 }
 
 /// The parser recurses once per level of a value with no limit of its own, so deep nesting is
