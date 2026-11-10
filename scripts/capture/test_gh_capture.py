@@ -248,6 +248,30 @@ class ArgvTest(unittest.TestCase):
         for secret in ("S13", "S14", "S15"):
             self.assertNotIn(secret, log)
 
+    def test_a_field_with_a_sensitive_name_in_any_part(self):
+        wrapper = Wrapper(self)
+        calls = [
+            ["api", "repos/o/r/hooks", "-f", "config[secret]=S16"], ["api", "repos/o/r/hooks", "-fconfig[secret]=S17"],
+            ["api", "repos/o/r/hooks", "--raw-field=config[secret]=S18"], ["api", "x", "-F", "a[b][api_key]=S19"],
+            ["api", "x", "--field", "config[password][]=S20"], ["api", "x", "-f=config[Token]=S21"],
+            ["workflow", "run", "w", "-f", "inputs[secret]=has space S22"], ["api", "x", "-F", "secret[]=S23"],
+        ]
+        for argv in calls:
+            wrapper.run(*argv, FAKE_GH="print", FAKE_OUT="ok\n")
+        log = wrapper.log.read_text()
+        for secret in ("S16", "S17", "S18", "S19", "S20", "S21", "S22", "S23"):
+            self.assertNotIn(secret, log)
+        argvs = [record["argv"] for record in wrapper.records()]
+        self.assertEqual([argvs[0][-1], argvs[1][-1], argvs[2][-1], argvs[5][-1]],
+                         ["config[secret]=<redacted>", "-fconfig[secret]=<redacted>",
+                          "--raw-field=config[secret]=<redacted>", "-f=config[Token]=<redacted>"])
+
+    def test_ordinary_fields_stay(self):
+        wrapper = Wrapper(self)
+        argv = ["api", "repos/o/r/hooks", "-f", "config[url]=https://hook.test/x", "-F", "events[]=push", "-f", "name=web"]
+        wrapper.run(*argv)
+        self.assertEqual(wrapper.records()[0]["argv"], argv)
+
     def test_ordinary_argv_stays(self):
         wrapper = Wrapper(self)
         argv = ["pr", "list", "--head", "s/pass", "--json", "number,url", "--repo", "forge.test/o/r", "--body", "b"]

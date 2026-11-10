@@ -11,9 +11,9 @@ log can break a call: one that can't be written is skipped, saying so only on a 
 
 A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env, exit
 code (and the signal, if one killed gh), duration, and stdout and stderr. No credential is stored:
-argv loses tokens, sensitive flag values and `gh secret` bodies; output that can carry a token
-(`auth token`, `--show-token`, `auth git-credential`, `config get`, `api` on token paths) is stored
-only as its length; other output loses its tokens and credentials. The rules come from redact.py
+argv loses tokens, sensitive flag values and fields (`-f config[secret]=…`), and `gh secret` bodies;
+output that can carry a token (`auth token`, `--show-token`, `auth git-credential`, `config get`,
+`api` on token paths) is stored only as its length; other output loses its tokens and credentials. The rules come from redact.py
 beside the script, which is why it's linked rather than copied; without them nothing is recorded.
 The rest of a person's details stay until redact.py runs on the log, before anything is committed.
 
@@ -84,6 +84,9 @@ VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--fi
                "-a", "--app"}
 # `gh api` paths that answer with a credential, and a `--jq` or `--template` that picks one out.
 SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|password")
+# A field gh sends, `NAME=VALUE` as its own argument or joined to `-f`, `-F`, `--field` or
+# `--raw-field`, whose name may nest (`config[secret]`, `events[]`).
+FIELD = re.compile(r"(--(?:raw-)?field=|-[fF]=?)?([^\s=\[\]]+(?:\[[^\]]*\])*)=(.*)", re.DOTALL)
 
 
 def real_gh():
@@ -163,9 +166,19 @@ def redact_argv(argv):
             hide_next = not equal
         elif secret_command and arg.startswith("-b") and not arg.startswith("--") and len(arg) > 2:
             out.append("-b<redacted>")
+        elif secret_field(arg):
+            prefix, name, _ = FIELD.fullmatch(arg).groups()
+            out.append(f"{prefix or ''}{name}=<redacted>")
         else:
             out.append(scrub(arg))
     return out
+
+
+def secret_field(arg):
+    """Whether an argument is a field whose name, in any of its parts, is sensitive: the whole
+    value goes, spaces and all (`-f 'config[secret]=a b'`)."""
+    field = FIELD.fullmatch(arg)
+    return bool(field) and any(SECRET_KEY.search(part) for part in re.findall(r"[^\[\]]+", field.group(2)))
 
 
 def words(argv):
