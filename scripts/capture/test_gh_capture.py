@@ -34,6 +34,9 @@ if mode == "fd":
         sys.stdout.write(handle.read())
 if mode == "stdin":
     sys.stdout.write(sys.stdin.read())
+if mode == "count":
+    # Read all of stdin, saying only how much came.
+    sys.stderr.write(f"{len(sys.stdin.buffer.read())}\n")
 if mode == "late":
     # Something gh starts and leaves running, holding gh's output (an extension's or a shell alias's
     # background job, a browser), that writes after gh has exited.
@@ -234,6 +237,44 @@ class InputTest(unittest.TestCase):
                                 cwd=wrapper.root, input=b"value\n", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 timeout=30)
         self.assertEqual(result.stdout, b"value\n")
+
+
+    def run_with_input(self, wrapper, argv, data, mode="stdin"):
+        return subprocess.run([sys.executable, str(WRAPPER), *argv], env=wrapper.env | {"FAKE_GH": mode}, cwd=wrapper.root,
+                              input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+
+    def test_stdin_gh_was_told_to_read_is_recorded_without_credentials(self):
+        wrapper = Wrapper(self)
+        body = b'{"title":"t","token":"S30","note":"see ghp_' + b"S31" * 12 + b'"}'
+        for argv, data in ((["pr", "create", "--body-file", "-"], b"the body\n"), (["api", "repos/o/r/issues", "--input", "-"], body),
+                           (["api", "graphql", "-F", "query=@-"], b"{ viewer { login } }")):
+            self.assertEqual(self.run_with_input(wrapper, argv, data).stdout, data, argv)
+        first, second, third = wrapper.records()
+        self.assertEqual((first["stdin"], third["stdin"]), ("the body\n", "{ viewer { login } }"))
+        self.assertEqual(json.loads(second["stdin"]), {"title": "t", "token": "<redacted>", "note": "see <token>"})
+
+    def test_credential_input_is_never_recorded(self):
+        wrapper = Wrapper(self)
+        for argv, data in ((["auth", "login", "--with-token", "-"], TOKEN), (["secret", "set", "-f", "-"], "NAME=S32\n"),
+                           (["auth", "git-credential", "get"], "protocol=https\nhost=forge.test\npassword=S33\n"),
+                           (["api", "x", "-F", "token=@-"], "S34\n"), (["tok", "-"], "S35\n")):
+            result = self.run_with_input(wrapper, argv, data.encode(), mode="count")
+            self.assertEqual(result.stderr, f"{len(data)}\n".encode(), argv)
+        log = wrapper.log.read_text()
+        for secret in (TOKEN.strip(), "S32", "S33", "S34", "S35"):
+            self.assertNotIn(secret, log)
+        self.assertEqual([record.get("stdin") for record in wrapper.records()],
+                         [{"redacted": True}, {"redacted": True}, None, {"redacted": True}, {"redacted": True}])
+
+    def test_stdin_gh_wasnt_told_to_read_stays_unread(self):
+        wrapper = Wrapper(self)
+        lines = wrapper.root / "lines"
+        lines.write_text("one\ntwo\n")
+        with open(lines, "rb") as stdin:
+            result = subprocess.run(["/bin/sh", "-c", '"$@" pr view >/dev/null 2>&1; cat', "sh", sys.executable, str(WRAPPER)],
+                                    env=wrapper.env, cwd=wrapper.root, stdin=stdin, stdout=subprocess.PIPE, timeout=30)
+        self.assertEqual(result.stdout, b"one\ntwo\n")
+        self.assertNotIn("stdin", wrapper.records()[0])
 
 
 class ArgvTest(unittest.TestCase):

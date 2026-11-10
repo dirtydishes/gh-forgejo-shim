@@ -10,7 +10,8 @@ call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, created owner-only). 
 log can break a call: one that can't be written is skipped, saying so only on a terminal.
 
 A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env, exit
-code (and the signal, if one killed gh), duration, and stdout and stderr. No credential is stored:
+code (and the signal, if one killed gh), duration, stdout and stderr, and stdin when gh was told to
+read it (`--body-file -`); other input stays unread by the wrapper. No credential is stored:
 argv loses tokens, sensitive flag values and fields (`-f config[secret]=…`), and `gh secret` bodies;
 output that can carry a token (`auth token`, `--show-token`, `auth git-credential`, `config get`,
 `api` on token paths) is stored only as its length; other output loses its tokens and credentials. The rules come from redact.py
@@ -87,6 +88,9 @@ VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--fi
                "-a", "--app"}
 # `gh api` paths that answer with a credential, and a `--jq` or `--template` that picks one out.
 SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|password")
+# An argument that tells gh to read stdin: `-`, a flag's value `-` (`--body-file=-`, `-F-`), or a
+# field read from it (`-F body=@-`).
+NAMES_STDIN = re.compile(r"(?:\A|=|\A-[A-Za-z])@?-\Z")
 # A field gh sends, `NAME=VALUE` as its own argument or joined to `-f`, `-F`, `--field` or
 # `--raw-field`, whose name may nest (`config[secret]`, `events[]`).
 FIELD = re.compile(r"(--(?:raw-)?field=|-[fF]=?)?([^\s=\[\]]+(?:\[[^\]]*\])*)=(.*)", re.DOTALL)
@@ -184,6 +188,24 @@ def secret_field(arg):
     return bool(field) and any(SECRET_KEY.search(part) for part in re.findall(r"[^\[\]]+", field.group(2)))
 
 
+def input_kind(argv):
+    """How to treat the caller's stdin. "record" passes it to gh through the wrapper, keeping a
+    copy: only when it's no terminal and gh was told to read it (`--body-file -`, `--input -`), so
+    input gh never asks for stays unread for whatever reads it next. "credential" leaves gh to read
+    input that may be a credential (`auth login --with-token`, `auth git-credential`, `secret set`,
+    a sensitive field, a token path, an alias or extension), recording only that there was some.
+    None leaves stdin to gh, unrecorded."""
+    named = [arg for arg in argv if NAMES_STDIN.search(arg)]
+    try:
+        if not named or os.isatty(0):
+            return None
+    except OSError:  # stdin closed
+        return None
+    if words(argv)[:1] in (["auth"], ["secret"]) or secret_output(argv) or any(secret_field(arg) for arg in named):
+        return "credential"
+    return "record"
+
+
 def words(argv):
     """argv's words, not its flags or their values: the command, its subcommands and arguments."""
     out, skip = [], False
@@ -256,8 +278,9 @@ def fake_token(argv):
 class Pump:
     """Copies one of gh's pipes to ours as it arrives, keeping the first MAX_STREAM bytes."""
 
-    def __init__(self, name, source, target):
+    def __init__(self, name, source, target, closes=None):
         self.name, self.source, self.target = name, source, target
+        self.closes = closes  # the file behind target, to close at the end: gh's stdin
         self.kept = bytearray()
         self.total = 0
         self.writing = True  # passing output on: false once that has failed
@@ -276,7 +299,10 @@ class Pump:
                 if stop.is_set():
                     return
                 continue
-            chunk = os.read(self.source.fileno(), 65536)
+            try:
+                chunk = os.read(self.source.fileno(), 65536)
+            except BlockingIOError:  # a caller's non-blocking stdin, read by another meanwhile
+                continue
             if not chunk:
                 break
             self.total += len(chunk)
@@ -300,6 +326,8 @@ class Pump:
                     self.failed = error.strerror or str(error)
         self.done = True
         self.source.close()
+        if self.closes:  # gh's stdin: the end of its input
+            self.closes.close()
 
 
 def hand_on(pumps, then):
@@ -451,9 +479,9 @@ def cwd():
         return None
 
 
-def finish(record, argv, code, duration, pumps, stderr):
+def finish(record, argv, code, duration, pumps, stderr, stdin):
     """The record once gh is done, written; any failure only loses the record. `stderr` stands in
-    for a stream no pump copied."""
+    for a stream no pump copied; `stdin` is the pump that passed the caller's input on, or what stands in for it."""
     if record is None:
         return
     try:
@@ -466,6 +494,8 @@ def finish(record, argv, code, duration, pumps, stderr):
             record["forward_failed"] = failed
         for pump in pumps:
             record[pump.name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
+        if stdin is not None:
+            record["stdin"] = text(stdin) if isinstance(stdin, Pump) else stdin
         if stderr:
             record["stderr"] = stderr
     except Exception:
@@ -550,7 +580,8 @@ def main():
     # in gh's own order.
     terminal = os.isatty(2)
     merged = not terminal and same_place(1, 2)
-    proc = subprocess.Popen([real] + argv, stdout=subprocess.PIPE,
+    kind = input_kind(argv)
+    proc = subprocess.Popen([real] + argv, stdin=subprocess.PIPE if kind == "record" else None, stdout=subprocess.PIPE,
                             stderr=None if terminal else subprocess.STDOUT if merged else subprocess.PIPE, close_fds=False)
     child.append(proc)
     for number in waiting:
@@ -559,18 +590,24 @@ def main():
     # Pass gh's output on until gh exits and its pipes have nothing left to read. Something gh left
     # running (an extension's background job, a browser) may hold them open longer: a forked child
     # then passes on the rest, and writes the record when they close.
+    # gh's stdin closes when the caller's input ends, or when gh stops reading.
+    feed = [Pump("stdin", os.fdopen(0, "rb", closefd=False), proc.stdin.fileno(), closes=proc.stdin)] if proc.stdin else []
     stop = threading.Event()
-    for pump in pumps:
+    for pump in pumps + feed:
         pump.start(stop)
     code = proc.wait()
     duration = time.time() - start
     stop.set()
-    for pump in pumps:
+    for pump in pumps + feed:
         pump.thread.join()
+    for pump in feed:
+        if not pump.done:
+            pump.closes.close()
+    stdin = feed[0] if feed else {"redacted": True} if kind == "credential" else None
     stderr = {"terminal": True} if terminal else {"merged_into_stdout": True} if merged else None
     left = [pump for pump in pumps if not pump.done]
-    if not (left and hand_on(left, lambda: finish(record, argv, code, duration, pumps, stderr))):
-        finish(record, argv, code, duration, pumps, stderr)
+    if not (left and hand_on(left, lambda: finish(record, argv, code, duration, pumps, stderr, stdin))):
+        finish(record, argv, code, duration, pumps, stderr, stdin)
     if code < 0:
         die_like(-code)
     for pump in pumps:
