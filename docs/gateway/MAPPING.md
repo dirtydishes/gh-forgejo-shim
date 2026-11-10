@@ -368,18 +368,19 @@ fetched commit must be the PR's head as Forgejo reports it: `head.sha` for a bra
 and for `refs/pull/N/head` that ref's commit (`GET repos/{o}/{r}/git/refs/pull/{n}/head`, or
 `head.sha` if it can't be read), since `head.sha` follows a branch that may have moved on after the
 PR closed. Otherwise the checkout fails before any branch moves, naming where git fetched from and
-both commits. That catches a mirror, however git reaches it, that serves an older copy. Only then
-does a branch fetched by name from a remote move its remote-tracking branch, as gh's fetch does, so
-`git status` doesn't count its commits as unpushed after a fast-forward. The checkout and
-fast-forward then use the commit the check verified, not `FETCH_HEAD`, which another fetch could
-rewrite meanwhile. Without `--branch` it names the local branch after the head branch, with the head
-owner in front when that name is the base's default branch, so a fork's `main` lands on `fork/main`.
-An existing local branch then moves only by `git merge --ff-only`, as gh's does. When the branch has
-commits of its own, the checkout fails before switching to it, so the user stays on their branch, as
-gh's refused fetch leaves them; `--force` resets it. A head named like a ref, or `@`, checks out
-detached. Unlike gh, it compares the default branch's name without case, and where git records that
-the filesystem ignores case (`core.ignorecase`), it refuses a local branch whose name matches an
-existing one's only without case.
+both commits, and saying so when it couldn't read the PR's own ref. That catches a mirror, however
+git reaches it, that serves an older copy. Only then does a branch fetched by name from a remote
+move its remote-tracking branch, as gh's fetch does, so `git status` doesn't count its commits as
+unpushed after a fast-forward. The checkout and fast-forward then use the commit the check verified,
+not `FETCH_HEAD`, which another fetch could rewrite meanwhile. Without `--branch` it names the local
+branch after the head branch, with the head owner in front when that name is the base's default
+branch, so a fork's `main` lands on `fork/main`. An existing local branch then moves only by `git
+merge --ff-only`, as gh's does. When the branch has commits of its own, the checkout fails before
+switching to it, so the user stays on their branch, as gh's refused fetch leaves them; `--force`
+resets it. A head named like a ref, or `@`, checks out detached. Unlike gh, it compares the default
+branch's name without case, and where git records that the filesystem ignores case
+(`core.ignorecase`), it refuses a local branch whose name matches an existing one's only without
+case.
 
 **Residues:**
 

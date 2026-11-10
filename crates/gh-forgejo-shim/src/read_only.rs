@@ -924,13 +924,13 @@ fn run_checkout(
     // `head.sha`, and the PR's own ref is read from the forge, since `head.sha` follows a branch
     // that may have moved on after the PR closed. gh doesn't check this.
     let head_sha = pull_head_sha(&pull);
-    let expected = match number.filter(|_| fetched.starts_with("refs/pull/")) {
-        Some(number) => client
-            .get_pull_head_ref(&target_repo, number)
-            .ok()
-            .flatten()
-            .or(head_sha),
-        None => head_sha,
+    // `unread` when the PR's own ref was fetched but couldn't be read, and `head.sha` stands in.
+    let (expected, unread) = match number.filter(|_| fetched.starts_with("refs/pull/")) {
+        Some(number) => match client.get_pull_head_ref(&target_repo, number) {
+            Ok(Some(sha)) => (Some(sha), false),
+            _ => (head_sha, true),
+        },
+        None => (head_sha, false),
     };
     let got = git_output(&["rev-parse", "--verify", "--quiet", "FETCH_HEAD"], cwd);
     let Some(commit) = got.as_deref().filter(|got| {
@@ -940,14 +940,22 @@ fn run_checkout(
     }) else {
         let source = git_output(&["ls-remote", "--get-url", remote.as_str()], cwd)
             .unwrap_or_else(|| remote.clone());
-        writeln!(
-            stderr,
-            "git fetched {fetched} from {} at {}, but the pull request's head is {}; a mirror or \
-             an insteadOf rule may serve an older copy",
-            redact_text_with(&source, "[REDACTED]"),
-            got.as_deref().unwrap_or("no commit"),
-            expected.as_deref().unwrap_or("unknown"),
-        )?;
+        let source = redact_text_with(&source, "[REDACTED]");
+        let got = got.as_deref().unwrap_or("no commit");
+        let expected = expected.as_deref().unwrap_or("unknown");
+        if unread {
+            writeln!(
+                stderr,
+                "git fetched {fetched} from {source} at {got}, but couldn't read {fetched} from \
+                 the forge to check it, and the pull request's head branch is at {expected}"
+            )?;
+        } else {
+            writeln!(
+                stderr,
+                "git fetched {fetched} from {source} at {got}, but the pull request's head is \
+                 {expected}; a mirror or an insteadOf rule may serve an older copy"
+            )?;
+        }
         return Ok(1);
     };
 
@@ -2842,6 +2850,8 @@ mod tests {
         pulls: Vec<Value>,
         /// The commit of each PR's own ref, `refs/pull/N/head`, by number.
         pull_heads: HashMap<u64, String>,
+        /// Whether reading a PR's own ref fails, as when the API can't be reached.
+        pull_head_fails: bool,
         issues: Vec<Value>,
         labels: Vec<Value>,
         statuses: Vec<Value>,
@@ -2874,6 +2884,7 @@ mod tests {
             Self {
                 pulls: Vec::new(),
                 pull_heads: HashMap::new(),
+                pull_head_fails: false,
                 issues: Vec::new(),
                 labels: Vec::new(),
                 statuses: Vec::new(),
@@ -2975,6 +2986,9 @@ mod tests {
             number: u64,
         ) -> ForgejoResult<Option<String>> {
             self.read(repo);
+            if self.pull_head_fails {
+                return Err(ForgejoError::new("HTTP 500"));
+            }
             Ok(self.pull_heads.get(&number).cloned())
         }
 
@@ -4598,6 +4612,46 @@ mod tests {
         assert_eq!(code, 0, "{stderr}");
         assert_eq!(stdout, "checked out feature-pr\n");
         assert_eq!(git_repo.rev("HEAD"), pull_head);
+    }
+
+    #[test]
+    fn pr_checkout_refuses_a_closed_pull_request_whose_ref_it_cannot_read() {
+        // The branch moved on after the PR closed, so `head.sha` isn't the PR's own ref, and
+        // without that ref the fetch can't be checked.
+        let git_repo = CheckoutGitFixture::new();
+        let pull_head = git_repo.rev("origin/feature-pr");
+        let moved = git_repo.push_commit(
+            "owner/repo",
+            "feature-pr",
+            "refs/heads/feature-pr",
+            "later\n",
+        );
+        let mut pull = pull_from(12, "owner", "feature-pr");
+        pull["state"] = json!("closed");
+        let client = FakeApi {
+            pull_head_fails: true,
+            ..git_repo.api(vec![pull])
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 1, "{stderr}");
+        assert_eq!(stdout, "");
+        assert!(
+            stderr.contains("couldn't read refs/pull/12/head"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("mirror"), "{stderr}");
+        for sha in [&pull_head, &moved] {
+            assert!(stderr.contains(sha.as_str()), "{sha}: {stderr}");
+        }
+        assert_eq!(git_repo.branch().as_deref(), Some("main"));
+        assert_eq!(git_repo.rev("refs/heads/feature-pr"), "");
     }
 
     #[test]
