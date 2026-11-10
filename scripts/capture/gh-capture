@@ -99,9 +99,13 @@ SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|p
 SECRET_BODY_PATH = re.compile(SECRET_PATH.pattern + r"|variables")
 # The flags whose value is a field.
 FIELD_FLAGS = {"-f", "-F", "--field", "--raw-field"}
-# An argument that tells gh to read stdin: `-`, a flag's value `-` (`--body-file=-`, `-F-`), or a
-# field read from it (`-F body=@-`).
+# An argument that may tell an alias or an extension to read stdin: `-`, a flag's value `-`
+# (`--body-file=-`, `-F-`), or a field read from it (`-F body=@-`).
 NAMES_STDIN = re.compile(r"(?:\A|=|\A-[A-Za-z])@?-\Z")
+# gh 2.103.3's commands that read stdin for a lone `-` argument: an alias's expansion or file, a
+# gist's file, a key.
+STDIN_POSITIONAL = (["alias", "set"], ["alias", "import"], ["gist", "create"], ["gist", "new"], ["gist", "edit"],
+                    ["ssh-key", "add"], ["gpg-key", "add"], ["repo", "deploy-key", "add"])
 # A field gh sends, `NAME=VALUE` as its own argument or joined to `-f`, `-F`, `--field` or
 # `--raw-field`, whose name may nest (`config[secret]`, `events[]`).
 FIELD = re.compile(r"(--(?:raw-)?field=|-[fF]=?)?([^\s=\[\]]+(?:\[[^\]]*\])*)=(.*)", re.DOTALL)
@@ -215,7 +219,7 @@ def input_kind(argv):
     input that may be a credential (`auth login --with-token`, `auth git-credential`, `secret set`,
     a sensitive field, a token path, an alias or extension), recording only that there was some.
     None leaves stdin to gh, unrecorded."""
-    named = [arg for arg in argv if NAMES_STDIN.search(arg)]
+    named = stdin_args(argv)
     try:
         if not named or os.isatty(0):
             return None
@@ -225,6 +229,41 @@ def input_kind(argv):
             or any(secret_field(arg) for arg in named)):
         return "credential"
     return "record"
+
+
+def stdin_args(argv):
+    """The arguments that make gh 2.103.3 read stdin: a field read from it (`-F body=@-`, in `api`
+    and `workflow run`), `--input -`, a file flag's `-` (`--body-file -`, `--notes-file=-`, `-F -`
+    where `-F` is one, `-f -` for `secret set`'s and `variable set`'s `--env-file`), `--with-token`,
+    and a lone `-` for the commands that read one. An alias or an extension may read any of them.
+    A `-` gh uses as it is (`-f title=-`, `--body -`, `-t -`) reads nothing."""
+    command = words(argv)
+    if command and command[0] not in COMMANDS:
+        return [arg for arg in argv if NAMES_STDIN.search(arg)]
+    fields = command[:1] == ["api"] or command[:2] == ["workflow", "run"]
+    file_flags = {"--input"} | ({"-f"} if command[:2] in (["secret", "set"], ["variable", "set"]) else set()) | (
+        set() if fields else {"-F"})
+    found = []
+    for index, arg in enumerate(argv):
+        previous = argv[index - 1] if index else ""
+        flag, equal, value = arg.partition("=")
+        field = FIELD.fullmatch(arg)
+        if arg == "--with-token":
+            found.append(arg)
+        elif fields and field and field.group(3) == "@-" and (field.group(1) in ("-F", "-F=", "--field=") or
+                                                             not field.group(1) and previous in ("-F", "--field")):
+            found.append(arg)
+        elif flag.startswith("--") and flag.endswith("-file") or flag in file_flags:
+            if equal and value == "-":
+                found.append(arg)
+        elif arg in {short + "-" for short in file_flags if len(short) == 2}:
+            found.append(arg)
+        elif arg == "-":
+            reads = command[:2] in STDIN_POSITIONAL or command[:3] in STDIN_POSITIONAL
+            if (previous.startswith("--") and previous.endswith("-file") or previous in file_flags or
+                    reads and not previous.startswith("-")):
+                found.append(arg)
+    return found
 
 
 def words(argv):

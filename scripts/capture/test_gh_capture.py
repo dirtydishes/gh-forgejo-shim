@@ -260,7 +260,7 @@ class InputTest(unittest.TestCase):
 
     def test_credential_input_is_never_recorded(self):
         wrapper = Wrapper(self)
-        for argv, data in ((["auth", "login", "--with-token", "-"], TOKEN), (["secret", "set", "-f", "-"], "NAME=S32\n"),
+        for argv, data in ((["auth", "login", "--with-token"], TOKEN), (["secret", "set", "-f", "-"], "NAME=S32\n"),
                            (["auth", "git-credential", "get"], "protocol=https\nhost=forge.test\npassword=S33\n"),
                            (["api", "x", "-F", "token=@-"], "S34\n"), (["tok", "-"], "S35\n")):
             result = self.run_with_input(wrapper, argv, data.encode(), mode="count")
@@ -275,11 +275,26 @@ class InputTest(unittest.TestCase):
         wrapper = Wrapper(self)
         lines = wrapper.root / "lines"
         lines.write_text("one\ntwo\n")
-        with open(lines, "rb") as stdin:
-            result = subprocess.run(["/bin/sh", "-c", '"$@" pr view >/dev/null 2>&1; cat', "sh", sys.executable, str(WRAPPER)],
-                                    env=wrapper.env, cwd=wrapper.root, stdin=stdin, stdout=subprocess.PIPE, timeout=30)
-        self.assertEqual(result.stdout, b"one\ntwo\n")
-        self.assertNotIn("stdin", wrapper.records()[0])
+        # A `-` that's a value gh uses as it is: a raw field, a body, a title; and `-F -` where `-F` is a field.
+        for argv in (["pr", "view"], ["api", "x", "-f", "title=-"], ["api", "x", "--raw-field=title=-"], ["pr", "create", "--body", "-"],
+                     ["pr", "create", "-t", "-"], ["issue", "create", "-b-"], ["api", "x", "-F", "-"],
+                     ["workflow", "run", "w", "-f", "x=@-"], ["pr", "checkout", "-"]):
+            with open(lines, "rb") as stdin:
+                result = subprocess.run(["/bin/sh", "-c", '"$@" >/dev/null 2>&1; cat', "sh", sys.executable, str(WRAPPER), *argv],
+                                        env=wrapper.env, cwd=wrapper.root, stdin=stdin, stdout=subprocess.PIPE, timeout=30)
+            self.assertEqual(result.stdout, b"one\ntwo\n", argv)
+        self.assertFalse(any("stdin" in record for record in wrapper.records()))
+
+    def test_every_way_gh_reads_stdin(self):
+        wrapper = Wrapper(self)
+        calls = (["issue", "create", "-F", "-"], ["issue", "comment", "1", "-F-"], ["release", "create", "v1", "--notes-file=-"],
+                 ["pr", "merge", "--body-file", "-"], ["agent-task", "create", "-F", "-"], ["workflow", "run", "w", "-F", "x=@-"],
+                 ["api", "x", "--field=x=@-"], ["api", "x", "-Fx=@-"], ["api", "x", "--input=-"], ["gist", "create", "-"],
+                 ["gist", "new", "--desc", "d", "-"], ["alias", "set", "co2", "-"], ["alias", "import", "-"],
+                 ["gist", "edit", "1", "-"], ["ssh-key", "add", "-"], ["repo", "deploy-key", "add", "-"])
+        for argv in calls:
+            self.assertEqual(self.run_with_input(wrapper, list(argv), b"in\n").stdout, b"in\n", argv)
+        self.assertEqual([record.get("stdin") for record in wrapper.records()], ["in\n"] * len(calls))
 
 
 class ArgvTest(unittest.TestCase):
