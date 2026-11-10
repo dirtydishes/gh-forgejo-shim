@@ -617,6 +617,30 @@ class StreamTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(wrapper.records()[0]["stderr"], "late-err\n")
 
+    def test_what_passes_on_the_rest_stops_on_sigterm_and_records(self):
+        wrapper = Wrapper(self)
+        marker = wrapper.root.name
+        process = subprocess.Popen([sys.executable, str(WRAPPER), "pr", "view", marker], env=wrapper.env | {"FAKE_GH": "late"},
+                                   cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(process.stdout.close)
+        self.addCleanup(process.stderr.close)
+        self.assertEqual(process.wait(timeout=30), 0)
+        [child] = [pid for pid, command in processes() if "gh-capture" in command and marker in command]
+        os.kill(child, signal.SIGTERM)
+        for _ in range(20):
+            if wrapper.log.exists():
+                break
+            time.sleep(0.05)
+        # Stopped before what gh left running wrote again, with what came so far recorded.
+        self.assertEqual(wrapper.records()[0]["stdout"], "early\n")
+        for _ in range(20):  # gone, or a zombie, whose command line is empty, in a container without init
+            if not any(pid == child and marker in command for pid, command in processes()):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("still running")
+
     def test_long_output_is_cut_short_in_the_log_only(self):
         wrapper = Wrapper(self)
         # Made by the fake: Linux takes no environment value over 128 KiB.
@@ -625,6 +649,20 @@ class StreamTest(unittest.TestCase):
         [record] = wrapper.records()
         self.assertEqual((record["stdout"]["truncated"], record["stdout"]["bytes"], len(record["stdout"]["head"])),
                          (True, 300000, 256 * 1024))
+
+
+def processes():
+    """(pid, command line) for each process: from /proc on Linux, whose slim images lack ps."""
+    if os.path.isdir("/proc/self"):
+        found = []
+        for name in os.listdir("/proc"):
+            try:
+                found.append((int(name), Path(f"/proc/{name}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")))
+            except (ValueError, OSError):
+                pass
+        return found
+    out = subprocess.run(["/bin/ps", "-A", "-o", "pid=,command="], capture_output=True, text=True).stdout
+    return [(int(pid), command) for pid, _, command in (line.strip().partition(" ") for line in out.splitlines())]
 
 
 def no_core():

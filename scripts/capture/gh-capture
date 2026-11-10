@@ -417,11 +417,19 @@ def hand_on(pumps, then):
                     os.close(int(name))
                 except OSError:  # the listing's own descriptor, closed already
                     pass
+        # SIGTERM, which has no gh left to go on to, stops the child, with what came so far recorded.
+        def stopped(number, frame):
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            then()
+            os._exit(0)
+
+        signal.signal(signal.SIGTERM, stopped)
         never = threading.Event()
         for pump in pumps:
             pump.start(never)
         for pump in pumps:
             pump.thread.join()
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)  # the record is on its way
         then()
     finally:
         os._exit(0)
