@@ -32,6 +32,7 @@ Each `.jsonl` line is one `gh` call:
 | `stdin_tty`, `stdout_tty`, `stderr_tty` | Whether those were terminals |
 | `exit`, `duration_ms` | gh's exit code and run time |
 | `stdout`, `stderr` | gh's output. `{"bytes": N, "redacted": true}` for output that can hold a token, never stored; `{"same_as": I}` for output equal to the record at 0-based line I; `{"merged_into_stdout": true}` for stderr when the caller sent both to one place; `{"terminal": true}` for a stderr left to gh on the caller's terminal, not recorded |
+| `stdin` | What the caller sent gh on stdin, when gh was told to read it (`--body-file -`, `--input -`, `-F body=@-`), redacted like output; `{"redacted": true}` when that input may be a credential (`auth`, `secret`, a sensitive field) and gh read it unrecorded |
 | `signal` | The signal that killed gh, if one did |
 | `forward_failed` | Streams the wrapper couldn't pass on to the caller (a full disk, a closed stdout); the call then failed with exit 1 if gh had succeeded |
 | `t` | Seconds since the file's first call |
