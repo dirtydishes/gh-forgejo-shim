@@ -348,10 +348,11 @@ def hand_on(pumps, then):
         return True
     try:
         # Like a pipe, the child lasts as long as the writers do, through a terminal's Ctrl-C or
-        # hangup, and holds nothing else the caller gave the wrapper.
+        # hangup, and holds nothing else the caller gave the wrapper: not the stream whose pipe has
+        # closed already, which `out=$(gh … 2>/dev/null)` would otherwise wait on.
         for number in (signal.SIGINT, signal.SIGHUP):
             signal.signal(number, signal.SIG_IGN)
-        keep = {1, 2} | {pump.source.fileno() for pump in pumps}
+        keep = {pump.target for pump in pumps} | {pump.source.fileno() for pump in pumps}
         for name in os.listdir("/dev/fd"):
             if int(name) not in keep:
                 try:
