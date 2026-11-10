@@ -6,8 +6,9 @@ Link it in as `gh` in a directory that comes before the real gh on the client's 
     ln -s <checkout>/scripts/capture/gh-capture ~/.local/bin/gh
 
 It runs the real gh (GH_CAPTURE_REAL, an absolute path, default /opt/homebrew/bin/gh) and appends
-one JSON line per call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, owner-only). Nothing
-about the log can break a call: one that can't be written is skipped, saying so only on a terminal.
+one JSON line per call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, owner-only; one that
+others could read is kept aside as `calls.jsonl.exposed-…`, and a new one begun). Nothing about
+the log can break a call: one that can't be written is skipped, saying so only on a terminal.
 
 A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env,
 exit code (and the signal, if one killed gh), duration, stdout and stderr, and stdin when gh was
@@ -25,8 +26,9 @@ caller as gh writes it (`gh pr checks --watch`), with a copy kept for the record
 same way, unless it's a terminal: then gh keeps it, and it isn't recorded. When gh exits leaving
 something running that holds those pipes (an extension's background job), the wrapper exits with
 gh, and a forked child passes on what that writes and records the call once the pipes close.
-SIGINT, SIGTERM and SIGHUP go on to gh, and when a signal kills gh the wrapper dies of the same
-one. Python 3.9 compatible (macOS /usr/bin/python3).
+SIGINT, SIGTERM and SIGHUP go on to gh (a terminal's Ctrl-C, which gh gets too, only once), and
+when a signal kills gh the wrapper dies of the same one. A stream the caller closed (`>&-`) goes
+to /dev/null, as it would for gh. Python 3.9 compatible (macOS /usr/bin/python3).
 """
 import fcntl
 import json
