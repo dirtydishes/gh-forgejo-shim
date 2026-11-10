@@ -503,18 +503,20 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(wrapper.records()[0]["stdout"]["bytes"], 500000)
 
-    def test_a_stdout_that_cant_be_written_fails_the_call(self):
+    def test_a_stdout_that_cant_be_written_fails_only_what_gh_fails(self):
         wrapper = Wrapper(self)
         unwritable = wrapper.root / "read-only"
         unwritable.write_text("")
-        with open(unwritable, "rb") as stdout:
-            result = subprocess.run([sys.executable, str(WRAPPER), "api", "user"], env=wrapper.env | {"FAKE_GH": "long",
-                                    "FAKE_SIZE": "500000"}, cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=stdout,
-                                    stderr=subprocess.PIPE, timeout=30)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b"gh-capture: stdout", result.stderr)
-        [record] = wrapper.records()
-        self.assertEqual((record["exit"], record["stdout"]["bytes"], record["forward_failed"]), (0, 500000, ["stdout"]))
+        # `gh api` checks its writes and fails; most commands, such as `gh pr view`, don't.
+        for argv, code in ((["api", "user"], 1), (["pr", "diff"], 1), (["pr", "view"], 0), (["run", "list"], 0)):
+            with open(unwritable, "rb") as stdout:
+                result = subprocess.run([sys.executable, str(WRAPPER), *argv], env=wrapper.env | {"FAKE_GH": "long",
+                                        "FAKE_SIZE": "500000"}, cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=stdout,
+                                        stderr=subprocess.PIPE, timeout=30)
+            self.assertEqual(result.returncode, code, argv)
+            self.assertEqual(b"gh-capture: stdout" in result.stderr, bool(code), argv)
+        for record in wrapper.records():
+            self.assertEqual((record["exit"], record["stdout"]["bytes"], record["forward_failed"]), (0, 500000, ["stdout"]))
 
     def test_one_place_for_both_streams_keeps_their_order(self):
         wrapper = Wrapper(self)
@@ -684,15 +686,21 @@ class LogFailureTest(unittest.TestCase):
     def test_a_deleted_cwd_and_closed_streams(self):
         wrapper = Wrapper(self)
         shells = {"deleted cwd": 'mkdir gone && cd gone && rmdir ../gone && exec "$0" "$@"',
-                  "closed stdin": 'exec "$0" "$@" <&-', "closed stdout": 'exec "$0" "$@" >&-'}
+                  "closed stdin": 'exec "$0" "$@" <&-', "closed stdout": 'exec "$0" "$@" >&-',
+                  "closed stderr": 'exec "$0" "$@" 2>&-', "closed both": 'exec "$0" "$@" >&- 2>&-'}
+        # As for gh, which writes a closed stream's output to /dev/null: nothing fails.
+        expected = {"closed stdout": (0, b"", b"err\n"), "closed stderr": (0, b"out pr list --json number\n", b""),
+                    "closed both": (0, b"", b"")}
         for name, shell in shells.items():
             result = subprocess.run(["/bin/sh", "-c", shell, sys.executable, str(WRAPPER), "pr", "list", "--json", "number"],
                                     env=wrapper.env, cwd=wrapper.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     timeout=30)
-            # With stdout closed, gh's output can't reach the caller, and the call fails as gh's would.
-            failed = (1, b"err\ngh-capture: stdout: Bad file descriptor\n") if name == "closed stdout" else (0, b"err\n")
-            self.assertEqual((result.returncode, result.stderr), failed, name)
-        self.assertEqual(len(wrapper.records()), 3)
+            self.assertEqual((result.returncode, result.stdout, result.stderr),
+                             expected.get(name, (0, b"out pr list --json number\n", b"err\n")), name)
+        records = wrapper.records()
+        self.assertEqual([record.get("closed") for record in records],
+                         [None, None, ["stdout"], ["stderr"], ["stdout", "stderr"]])
+        self.assertFalse(any("forward_failed" in record for record in records))
 
     def test_an_existing_log_is_narrowed_to_its_owner(self):
         wrapper = Wrapper(self)

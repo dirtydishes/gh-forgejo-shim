@@ -85,6 +85,9 @@ COMMANDS = {"accessibility", "actions", "agent-task", "alias", "api", "at", "att
             "ext", "extension", "extensions", "formatting", "gist", "gpg-key", "help", "issue", "label", "licenses",
             "mintty", "org", "pr", "preview", "project", "reference", "release", "repo", "ruleset", "run", "search",
             "secret", "skill", "skills", "ssh-key", "status", "telemetry", "variable", "version", "workflow"}
+# Commands that check their writes to stdout, copying gh's answer out and failing when that fails
+# (`gh api`, a diff, a run's logs, `release download -O -`). Others ignore a failed write.
+CHECKED_WRITES = (["api"], ["pr", "diff"], ["run", "view"], ["run", "watch"], ["release", "download"])
 # Flags whose value is no command word.
 VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--field", "--raw-field", "-X", "--method",
                "--jq", "-q", "--template", "-t", "--input", "-p", "--preview", "--cache", "-o", "--org", "-e", "--env",
@@ -322,9 +325,9 @@ class Pump:
                     # as it would have without the wrapper.
                     self.writing, self.done = False, True
                 except OSError as error:
-                    # Anything else (a full disk, a closed descriptor) loses the caller's copy, but
-                    # gh's pipe keeps draining, so gh never blocks on it. The call then fails, as
-                    # gh's own failed write would have failed it.
+                    # Anything else (a full disk, a read-only descriptor) loses the caller's copy,
+                    # but gh's pipe keeps draining, so gh never blocks on it. The call fails only
+                    # where gh's own failed write would have failed it (CHECKED_WRITES).
                     self.writing = False
                     self.failed = error.strerror or str(error)
         self.done = True
@@ -416,7 +419,24 @@ def die_like(number):
     sys.exit(128 + number)
 
 
-def begin(argv):
+def reopen_closed():
+    """Point a stream the caller closed (`>&-`, `2>&-`) at /dev/null, as Go does for gh, so gh's
+    output there goes nowhere and nothing fails, and none of the wrapper's own pipes takes its
+    number. The names of those streams."""
+    closed = []
+    for number, name in ((1, "stdout"), (2, "stderr")):
+        try:
+            os.fstat(number)
+        except OSError:
+            null = os.open(os.devnull, os.O_WRONLY)
+            if null != number:
+                os.dup2(null, number)
+                os.close(null)
+            closed.append(name)
+    return closed
+
+
+def begin(argv, closed):
     """The record of a call before gh runs, or None: nothing about recording may stop the call
     (a deleted cwd, a closed stream, a redact.py that fails)."""
     if redact is None:
@@ -432,6 +452,7 @@ def begin(argv):
             "stdin_tty": os.isatty(0),
             "stdout_tty": os.isatty(1),
             "stderr_tty": os.isatty(2),
+            **({"closed": closed} if closed else {}),
         }
     except Exception:
         return None
@@ -533,6 +554,7 @@ def write(record):
 
 def main():
     argv = sys.argv[1:]
+    closed = reopen_closed()
     real = real_gh()
     if real is None:
         # As a shell answers for a command it can't run.
@@ -542,7 +564,7 @@ def main():
         except OSError:
             pass
         sys.exit(127)
-    record = begin(argv)
+    record = begin(argv, closed)
     fake = fake_token(argv)
     if fake:
         # Probe mode: answer `auth token --hostname H` for hosts listed in ~/.gh-capture/fake-token-hosts
@@ -614,13 +636,15 @@ def main():
         finish(record, argv, code, duration, pumps, stderr, stdin)
     if code < 0:
         die_like(-code)
-    for pump in pumps:
-        if pump.failed:
-            try:
-                os.write(2, f"gh-capture: {pump.name}: {pump.failed}\n".encode())
-            except OSError:
-                pass
-    sys.exit(code or (1 if any(pump.failed for pump in pumps) else 0))
+    # A failed write to the caller fails the call only where it would have failed gh's.
+    command = words(argv)
+    failed = pumps[0].failed if any(command[:len(checked)] == checked for checked in CHECKED_WRITES) else None
+    if failed and not code:
+        try:
+            os.write(2, f"gh-capture: stdout: {failed}\n".encode())
+        except OSError:
+            pass
+    sys.exit(code or (1 if failed else 0))
 
 
 if __name__ == "__main__":
