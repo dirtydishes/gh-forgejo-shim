@@ -50,6 +50,8 @@ try:
     # by SECRET_KEY). That covers answers after `-i` headers or cut short.
     SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
     JSON_FIELD = re.compile(r'"((?:[^"\\\n]|\\.)*)"(\s*:\s*)"(?:[^"\\\n]|\\.)+"')
+    # The same, its value cut short where the output stops: no closing quote for JSON_FIELD to find.
+    CUT_FIELD = re.compile(r'"((?:[^"\\\n]|\\.)*)"(\s*:\s*)"(?:[^"\\\n]|\\.)*\\?\Z')
 except Exception:  # a broken redact.py may raise anything; it must not stop gh
     redact = None
 
@@ -302,7 +304,7 @@ def text(pump):
     if redact is None:
         return None
     if pump.total > MAX_STREAM:
-        return {"truncated": True, "bytes": pump.total, "head": scrub(bytes(pump.kept).decode("utf-8", "replace"))}
+        return {"truncated": True, "bytes": pump.total, "head": cut_short(scrub(bytes(pump.kept).decode("utf-8", "replace")))}
     value = bytes(pump.kept).decode("utf-8", "replace")
     spans = redact.json_spans(value)
     if spans:
@@ -311,7 +313,14 @@ def text(pump):
             out += [value[last:start], redact.dump_like(secretless(answer), value[start:end])]
             last = end
         value = "".join(out) + value[last:]
-    return scrub(value)
+    return cut_short(scrub(value))
+
+
+def cut_short(value):
+    """Output whose last JSON string stops unclosed (cut at MAX_STREAM, or gh died writing it): a
+    sensitive key's value is hidden to the end."""
+    return CUT_FIELD.sub(lambda m: f'"{m.group(1)}"{m.group(2)}"<redacted>' if SECRET_KEY.search(m.group(1))
+                         else m.group(0), value)
 
 
 def secretless(value):
