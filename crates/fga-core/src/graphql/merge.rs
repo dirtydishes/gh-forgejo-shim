@@ -10,8 +10,10 @@
 //! unused by that dropped. Repeats that can't be one field are refused, writing nothing: another
 //! field or other arguments under the name, and repeats where `@skip` or `@include` could choose
 //! between them, which async-graphql decides only after validation. A document that repeats no
-//! name at a mutation's root, as every real client's, is left as parsed. Below the root, fields
-//! only read, and async-graphql's merged results are already the spec's.
+//! name at a mutation's root, as every real client's, is left as parsed, and so is one that
+//! repeats a name `Mutation` doesn't have, so validation reports the unknown field as it would.
+//! Below the root, fields only read; conflicting sub-selections under one merged field (`x: id`
+//! and `x: number`) stay unchecked, as async-graphql leaves them in queries.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -40,20 +42,36 @@ impl Extension for MergeMutationFields {
         next: NextParseQuery<'_>,
     ) -> ServerResult<ExecutableDocument> {
         let mut document = next.run(ctx, query, variables).await?;
-        merge(&mut document)?;
+        let registry = &ctx.schema_env.registry;
+        let mutation = registry
+            .mutation_type
+            .as_deref()
+            .and_then(|name| registry.concrete_type_by_name(name));
+        merge(&mut document, &|name| {
+            mutation.is_some_and(|mutation| mutation.field_by_name(name).is_some())
+        })?;
         Ok(document)
     }
 }
 
-/// Merges the root of each mutation in `document` by response name.
-pub(super) fn merge(document: &mut ExecutableDocument) -> ServerResult<()> {
+/// Merges the root of each mutation in `document` by response name. `is_field` says whether
+/// `Mutation` has a field of that name.
+pub(super) fn merge(
+    document: &mut ExecutableDocument,
+    is_field: &dyn Fn(&str) -> bool,
+) -> ServerResult<()> {
     let mut spread = HashSet::new();
     let mut merged = Vec::new();
     for (name, operation) in document.operations.iter() {
         if operation.node.ty != OperationType::Mutation {
             continue;
         }
-        if let Some(set) = merged_root(document, &operation.node.selection_set, &mut spread)? {
+        if let Some(set) = merged_root(
+            document,
+            &operation.node.selection_set,
+            is_field,
+            &mut spread,
+        )? {
             merged.push((name.cloned(), set));
         }
     }
@@ -86,10 +104,12 @@ struct Collected<'a> {
 }
 
 /// The mutation root `set` with each response name selected once, or `None` when no name repeats
-/// or the set holds what validation will refuse anyway. Records the fragments it spreads.
+/// or the set holds what validation will refuse anyway, such as a repeated field `Mutation`
+/// doesn't have (`is_field`). Records the fragments it spreads.
 fn merged_root(
     document: &ExecutableDocument,
     set: &Positioned<SelectionSet>,
+    is_field: &dyn Fn(&str) -> bool,
     spread: &mut HashSet<String>,
 ) -> ServerResult<Option<Positioned<SelectionSet>>> {
     let mut fields = Vec::new();
@@ -111,6 +131,14 @@ fn merged_root(
         }
     }
     if groups.len() == fields.len() {
+        return Ok(None);
+    }
+    let unknown = groups
+        .iter()
+        .filter(|group| group.len() > 1)
+        .flatten()
+        .any(|collected| !is_field(collected.field.node.name.node.as_str()));
+    if unknown {
         return Ok(None);
     }
     // Inlining fragments drops their directives; a field selected twice keeps only the first's.
