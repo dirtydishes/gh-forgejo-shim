@@ -112,6 +112,21 @@ class PassThroughTest(unittest.TestCase):
         self.assertEqual(wrapper.log.stat().st_mode & 0o777, 0o600)
         self.assertTrue(record["chain"] and all(isinstance(command, str) and command for command in record["chain"]))
 
+    def test_the_real_gh_is_never_the_wrapper_or_a_bare_name(self):
+        wrapper = Wrapper(self)
+        link = wrapper.root / "bin" / "gh"
+        link.parent.mkdir()
+        link.symlink_to(WRAPPER)
+        hard = wrapper.root / "hard-gh"
+        os.link(WRAPPER, hard)
+        for real in (str(link), str(hard), "gh", "bin/gh", str(wrapper.root / "missing")):
+            started = time.monotonic()
+            result = wrapper.run("pr", "list", GH_CAPTURE_REAL=real, PATH=f"{link.parent}:{os.environ['PATH']}")
+            self.assertLess(time.monotonic() - started, 10, real)
+            self.assertEqual((result.returncode, result.stdout), (127, b""), real)
+            self.assertIn(b"GH_CAPTURE_REAL", result.stderr, real)
+        self.assertFalse(wrapper.log.exists())
+
     def test_no_ps_and_no_proc_only_cut_the_chain_short(self):
         spec = importlib.util.spec_from_loader("gh_capture", importlib.machinery.SourceFileLoader("gh_capture", str(WRAPPER)))
         module = importlib.util.module_from_spec(spec)
