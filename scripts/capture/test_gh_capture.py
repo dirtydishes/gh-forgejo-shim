@@ -335,6 +335,31 @@ class ArgvTest(unittest.TestCase):
                          ["config[secret]=<redacted>", "-fconfig[secret]=<redacted>",
                           "--raw-field=config[secret]=<redacted>", "-f=config[Token]=<redacted>"])
 
+    def test_every_field_sent_to_a_secret_or_variable_path(self):
+        wrapper = Wrapper(self)
+        calls = [
+            ["api", "-X", "PUT", "repos/o/r/actions/secrets/X", "-f", "data=S40"],
+            ["api", "-X", "POST", "repos/o/r/actions/variables", "-f", "name=V", "-f", "value=S41"],
+            ["api", "-X", "PATCH", "repos/o/r/actions/variables/V", "-fvalue=S42", "--raw-field=value=S43", "--field", "value=S44"],
+            ["api", "-X", "PUT", "orgs/o/actions/secrets/X", "-F", "data=S45"],
+        ]
+        for argv in calls:
+            wrapper.run(*argv, FAKE_GH="print", FAKE_OUT="ok\n")
+        log = wrapper.log.read_text()
+        for secret in ("S40", "S41", "S42", "S43", "S44", "S45"):
+            self.assertNotIn(secret, log)
+        argvs = [record["argv"] for record in wrapper.records()]
+        self.assertEqual(argvs[1], ["api", "-X", "POST", "repos/o/r/actions/variables", "-f", "name=<redacted>", "-f",
+                                    "value=<redacted>"])
+        self.assertEqual(argvs[2][-4:], ["-fvalue=<redacted>", "--raw-field=value=<redacted>", "--field", "value=<redacted>"])
+        self.assertEqual(argvs[3], ["api", "-X", "PUT", "orgs/o/actions/secrets/X", "-F", "data=<redacted>"])
+        result = subprocess.run([sys.executable, str(WRAPPER), "api", "repos/o/r/actions/variables", "--input", "-"],
+                                env=wrapper.env | {"FAKE_GH": "count"}, cwd=wrapper.root, input=b'{"value":"S46"}',
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual(result.stderr, b"15\n")
+        self.assertEqual(wrapper.records()[-1]["stdin"], {"redacted": True})
+        self.assertNotIn("S46", wrapper.log.read_text())
+
     def test_ordinary_fields_stay(self):
         wrapper = Wrapper(self)
         argv = ["api", "repos/o/r/hooks", "-f", "config[url]=https://hook.test/x", "-F", "events[]=push", "-f", "name=web"]
