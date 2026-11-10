@@ -1616,6 +1616,30 @@ mod tests {
         Ok(())
     }
 
+    /// A 303 points at an answer, not at where to send the call again, so a write after one goes
+    /// no further and fails.
+    #[test]
+    fn a_write_never_follows_a_see_other() -> TestResult {
+        let (host, seen) = start_answering_server(|_, path| {
+            (
+                "303 See Other",
+                Some(path.replacen("/repos/o/old/", "/repos/o/new/", 1)),
+                "",
+            )
+        })?;
+        let client = subpath_client(&host)?;
+        let old = RepoRef::new("git.example.com", "o", "old");
+
+        assert!(client.create_issue_comment(&old, 1, "hi").is_err());
+        let seen = seen.lock().expect("request log");
+        let lines: Vec<&str> = seen.iter().map(|r| r.request_line.as_str()).collect();
+        assert_eq!(
+            lines,
+            ["POST /forgejo/api/v1/repos/o/old/issues/1/comments HTTP/1.1"]
+        );
+        Ok(())
+    }
+
     /// A write that gets back anything but the object it created fails, so it never reports
     /// success for a request that wrote nothing.
     #[test]
