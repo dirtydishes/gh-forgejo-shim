@@ -52,8 +52,14 @@ try:
     import redact
     if not all(hasattr(redact, rule) for rule in RULES):
         raise ImportError("redact.py lacks rules gh-capture uses")
-    # Keys whose values are credentials.
-    SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
+    # Keys whose values are credentials: redact.py's, and short words as a whole part of a name
+    # (`deploy_pw`, `otp`, `config[auth]`, `signingKey`), so `author` and `keyword` stay. A field
+    # gh sends may also be named for a key (`-f key=…`, `-f deploy_key=…`); an answer's `key` is
+    # most often a license's, a cache's or a public key, and stays.
+    PART = r"(?:\A|(?<=[_\-.\s\[])|(?<=[a-z])(?=[A-Z]))(?i:{})(?=\Z|[_\-.\s\]]|[A-Z])"
+    SECRET_KEY = re.compile(rf"(?i:{redact.SENSITIVE_KEY.pattern.replace('(?i)', '', 1)}|jit_?config)|"
+                            + PART.format("pw|otp|auth|authorization"))
+    FIELD_KEY = re.compile(r"(?:\A|(?<=[_\-.\s\[])|(?<=[a-z])(?=[A-Z]))(?i:key)\Z")
     # A JSON string in text: closed, or cut short by a line break (which no JSON string holds) or
     # where the text stops. Every `"` starts one, so finding them all, one after another, takes one
     # pass however many quotes the text holds, and a stray quote throws off no more than its line.
@@ -258,7 +264,8 @@ def secret_field(arg):
     """Whether an argument is a field whose name, in any of its parts, is sensitive: the whole
     value goes, spaces and all (`-f 'config[secret]=a b'`)."""
     field = FIELD.fullmatch(arg)
-    return bool(field) and any(SECRET_KEY.search(part) for part in re.findall(r"[^\[\]]+", field.group(2)))
+    return bool(field) and any(SECRET_KEY.search(part) or FIELD_KEY.search(part)
+                               for part in re.findall(r"[^\[\]]+", field.group(2)))
 
 
 def input_kind(argv):
