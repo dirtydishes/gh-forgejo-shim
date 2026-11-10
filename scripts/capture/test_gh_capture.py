@@ -506,6 +506,35 @@ class TokenOutputTest(unittest.TestCase):
         self.assertEqual(second["stdout"], "see <token>\n")
 
 
+    def test_every_string_under_a_sensitive_key_and_json_inside_a_string(self):
+        wrapper = Wrapper(self)
+        answer = {"tokens": ["S50", {"v": "S51"}], "secrets": {"list": [["S52"]], "n": 1, "empty": ""},
+                  "body": json.dumps({"token": "S53", "title": "t"}), "deep": json.dumps({"x": json.dumps({"password": "S54"})}),
+                  "note": "{not json", "title": "kept"}
+        wrapper.run("api", "repos/o/r/issues/1", FAKE_GH="print", FAKE_OUT=json.dumps(answer))
+        # Cut short at 256 KiB: the text path, which can't parse the answer.
+        head = '{"tokens": ["S55", "S56"], "body": "{\\"token\\": \\"S57\\"}", "patch": "'
+        wrapper.run("api", "repos/o/r/contents", FAKE_GH="long", FAKE_SIZE="300000", FAKE_PREFIX=head)
+        prefix = '{"patch":"'
+        for into in ('","tokens":["ab", "', '","secrets":{"a":["', '","body":"{\\"token\\":\\"'):
+            size = 256 * 1024 - len(prefix) - len(into) - 10  # the cut falls ten bytes into the value
+            wrapper.run("api", "repos/o/r/contents", FAKE_GH="long", FAKE_SIZE=str(size), FAKE_PREFIX=prefix,
+                        FAKE_SUFFIX=into + "Q" * 40 + '"]}')
+        log = wrapper.log.read_text()
+        for secret in ("S50", "S51", "S52", "S53", "S54", "S55", "S56", "S57", "QQQ"):
+            self.assertNotIn(secret, log)
+        first, second, *cut = wrapper.records()
+        stored = json.loads(first["stdout"])
+        self.assertEqual(stored["tokens"], ["<redacted>", {"v": "<redacted>"}])
+        self.assertEqual(stored["secrets"], {"list": [["<redacted>"]], "n": 1, "empty": ""})
+        self.assertEqual(json.loads(stored["body"]), {"token": "<redacted>", "title": "t"})
+        self.assertEqual((stored["note"], stored["title"]), ("{not json", "kept"))
+        self.assertTrue(second["stdout"]["head"].startswith('{"tokens": ["<redacted>", "<redacted>"], "body": "{\\"token\\": '
+                                                            '\\"<redacted>\\"}", "patch": "xxx'), second["stdout"]["head"][:120])
+        for record in cut:
+            self.assertTrue(record["stdout"]["head"].endswith("<redacted>"), record["stdout"]["head"][-60:])
+
+
 class StreamTest(unittest.TestCase):
     """#197 defect 4: output reaches the caller as gh writes it, not when gh exits."""
 

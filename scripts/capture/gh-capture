@@ -60,6 +60,8 @@ try:
     # A key is a closed one followed by a colon.
     LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)("|\\?(?=\n)|\\?\Z)')
     COLON = re.compile(r"\s*:\s*")
+    # What to look for in an array or an object.
+    STRUCTURE = re.compile(r'["\[\]{}]')
 except Exception:  # a broken redact.py may raise anything; it must not stop gh
     redact = None
 
@@ -164,24 +166,55 @@ def scrub(text):
     text = redact.AUTHORIZATION.sub(r"\1<token>", text)
     text = redact.TOKEN_HEADER.sub(r"\1<token>", text)
     text = redact.COOKIE.sub(r"\1<redacted>", text)
-    text = hide_values(text)
+    text = hide_values(LITERAL.sub(unescaped, text))
     return redact.SECRET_ASSIGNMENT.sub(r"\1<redacted>", text)
 
 
 def hide_values(text):
-    """Text whose sensitive JSON keys' string values are hidden, wherever they sit (after `-i`
-    headers, in a field's value): `"token":"S"`, and one cut short where the output stops (cut at
-    MAX_STREAM, or gh died writing it), hidden to the end. Empty values stay."""
+    """Text whose sensitive JSON keys' values are hidden, wherever they sit (after `-i` headers, in
+    a field's value): a string (`"token":"S"`), and every string value in an array or an object
+    (`"tokens":["S"]`). One cut short where the output stops (cut at MAX_STREAM, or gh died writing
+    it) is hidden to the end. Keys and empty values stay."""
     out, at = [], 0
     for key in LITERAL.finditer(text):
         colon = key.start() >= at and key.group(2) == '"' and COLON.match(text, key.end())
-        if not colon or text[colon.end():colon.end() + 1] != '"' or not SECRET_KEY.search(key.group(1)):
+        if not colon or text[colon.end():colon.end() + 1] not in ('"', "[", "{") or not SECRET_KEY.search(key.group(1)):
             continue
-        value = LITERAL.match(text, colon.end())
-        if value.group(0) != '""':
-            out += [text[at:value.start()], '"<redacted>"' if value.group(2) == '"' else '"<redacted>']
-            at = value.end()
+        out.append(text[at:colon.end()])
+        at, depth = colon.end(), 0
+        while True:
+            mark = STRUCTURE.search(text, at)
+            if mark is None:
+                break
+            out.append(text[at:mark.start()])
+            at = mark.end()
+            if mark.group() != '"':
+                depth += 1 if mark.group() in "[{" else -1
+                out.append(mark.group())
+            else:
+                value = LITERAL.match(text, mark.start())
+                kept = value.group(0) == '""' or depth and COLON.match(text, value.end())
+                out.append(value.group(0) if kept else '"<redacted>"' if value.group(2) == '"' else '"<redacted>')
+                at = value.end()
+            if depth <= 0:
+                break
     return "".join(out) + text[at:]
+
+
+def unescaped(match):
+    """A string in text holding escaped JSON (`"body":"{\\"token\\":\\"S\\"}"`), scrubbed as the text
+    it holds and encoded again. Any other string stays."""
+    body, closed = match.group(1), match.group(2) == '"'
+    if '\\"' not in body:
+        return match.group(0)
+    try:
+        inner = json.loads(f'"{body}"')
+    except ValueError:
+        return match.group(0)
+    clean = scrub(inner)
+    if clean == inner:
+        return match.group(0)
+    return json.dumps(clean, ensure_ascii=False)[:None if closed else -1]
 
 
 def redact_argv(argv):
@@ -469,12 +502,23 @@ def text(pump):
     return scrub(value)
 
 
-def secretless(value):
+def secretless(value, hidden=False):
+    """A JSON value without its credentials: every string under a sensitive key, at any depth, is
+    hidden, and a string holding JSON (`"body":"{\\"token\\":…}"`) is judged as that JSON."""
     if isinstance(value, dict):
-        return {key: "<redacted>" if SECRET_KEY.search(key) and isinstance(item, str) and item
-                else secretless(item) for key, item in value.items()}
+        return {key: secretless(item, hidden or bool(SECRET_KEY.search(key))) for key, item in value.items()}
     if isinstance(value, list):
-        return [secretless(item) for item in value]
+        return [secretless(item, hidden) for item in value]
+    if isinstance(value, str) and value:
+        if hidden:
+            return "<redacted>"
+        if value.lstrip()[:1] in ("{", "["):
+            try:
+                inner = json.loads(value)
+            except ValueError:
+                return value
+            clean = secretless(inner)
+            return redact.dump_like(clean, value) if clean != inner else value
     return value
 
 
