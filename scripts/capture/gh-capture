@@ -221,9 +221,10 @@ def input_kind(argv):
     None leaves stdin to gh, unrecorded."""
     named = stdin_args(argv)
     try:
-        if not named or os.isatty(0):
-            return None
-    except OSError:  # stdin closed
+        os.fstat(0)
+    except OSError:  # stdin closed: os.isatty says only False
+        return None
+    if not named or os.isatty(0):
         return None
     if (words(argv)[:1] in (["auth"], ["secret"]) or secret_output(argv) or secret_api(argv)
             or any(secret_field(arg) for arg in named)):
