@@ -354,13 +354,19 @@ If the local branch already holds commits on top of the PR's head, gh keeps them
 fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
 against GitHub, on either fetch path, so the gateway doesn't change it.
 
-**The wrapper's built-in `gh pr checkout`**, which a PR URL, `--recurse-submodules` and a captured
-run (`gh-forgejo-shim gh …`) still take, makes gh's choices from Forgejo's PR. It fetches the head
-branch by name only for an open PR whose head is that branch in the base repository, and otherwise
+**The wrapper's built-in `gh pr checkout`**, which a PR URL, `--recurse-submodules`, a captured run
+(`gh-forgejo-shim gh …`) and every checkout on a non-Unix build still take, makes gh's choices from
+Forgejo's PR. A PR URL's repository wins over `-R`, as in gh's finder. It fetches from the remote
+whose URL names the base repository (gh's `FindByRepo`), so in a fork's clone that is `upstream`,
+not `origin`, and from the base's clone URL when no remote names it. It fetches the head branch by
+name only for an open PR whose head is that branch in the base repository, and otherwise
 `refs/pull/N/head`: a fork's branch name, fetched from the base, would be the base's branch of that
 name. Without `--branch` it names the local branch after the head branch, with the head owner in
-front when that name is the base's default branch, so a fork's `main` lands on `fork/main`. Unlike
-gh, it compares that name without case. A head named like a ref, or `@`, checks out detached.
+front when that name is the base's default branch, so a fork's `main` lands on `fork/main`. An
+existing local branch then moves only by `git merge --ff-only`, as gh's does, and the checkout fails
+with git's message when the branch has commits of its own; `--force` resets it. A head named like a
+ref, or `@`, checks out detached. Unlike gh, it compares the default branch's name without case, and
+it refuses a local branch whose name matches an existing one's only without case.
 
 **Residues:**
 
@@ -375,12 +381,15 @@ gh, it compares that name without case. A head named like a ref, or `@`, checks 
   the branch instead, leaving it as it was.
 - **A fork's branch named as one of the user's own.** gh adds the owner only to a head named as the
   base's default branch (`checkout.go`'s `cmdsForMissingRemote`). A fork's PR from `develop`
-  checks out to the user's `develop`, and `--force` resets it to the PR, unpushed commits and all,
-  whatever remote it tracks. gh does the same against GitHub, and the built-in path follows it.
+  checks out to the user's `develop`. Without `--force`, that fails when `develop` has commits of
+  its own, and otherwise fast-forwards it onto the fork's commits. `--force` resets it to the PR,
+  unpushed commits and all, whatever remote it tracks. gh does the same against GitHub, and the
+  built-in path follows it.
 - **Branch names that differ only in case, on macOS.** For a PR with no head repository (closed, or
   its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
   ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's
-  `main`, and `--force` replaces it. The gateway can't see local branch names to avoid it.
+  `main`, and `--force` replaces it. The gateway can't see local branch names to avoid it. The
+  built-in path refuses such a branch name, whatever the filesystem.
 
 ## 11. Files, review comments, comparisons and contents
 
