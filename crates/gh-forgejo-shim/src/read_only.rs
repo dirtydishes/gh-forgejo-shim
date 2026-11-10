@@ -801,7 +801,8 @@ fn run_checkout(
     .ok_or_else(|| ShimError::new("could not find pull request to check out"))?;
     let number = pull_number(&pull);
     let head = PullHead::of(&pull);
-    // `None` checks out detached.
+    // `None` checks out detached: for `--detach`, and for a head no local branch may be named
+    // after.
     let branch = if parsed.detach {
         None
     } else if let Some(branch) = parsed.local_branch.clone() {
@@ -2208,7 +2209,9 @@ impl PullHead {
 /// fetches from the PR's own ref and named as the base's default branch gets the head owner's name
 /// in front, so a fork's `main` lands on `fork/main`, never the user's `main`. This compares
 /// without case, unlike gh, so that a fork's `Main` can't write the user's `main` on a
-/// filesystem that ignores case.
+/// filesystem that ignores case. A head named like a ref (`refs/heads/main`, `heads/main`), or
+/// `@`, names no branch: git would read it as another ref, as in #302, and an AGit PR's
+/// `refs/pull/N/head` lands detached as it does through gh.
 fn local_branch_for(
     head: &PullHead,
     number: Option<u64>,
@@ -2222,6 +2225,9 @@ fn local_branch_for(
     let Some(name) = head.name.as_deref() else {
         return pull_branch().map(Some);
     };
+    if named_like_a_ref(name) || name == "@" {
+        return Ok(None);
+    }
     if head.is_base_branch {
         return Ok(Some(name.to_owned()));
     }
@@ -3850,6 +3856,40 @@ mod tests {
         assert_eq!(code, 0, "{stderr}");
         assert_eq!(stdout, "checked out pull-7\n");
         assert_eq!(git_repo.rev("HEAD"), fork_head);
+    }
+
+    #[test]
+    fn pr_checkout_of_a_head_named_like_a_ref_lands_detached() {
+        // An AGit PR, branches git would read as other refs, and `@`, from the base repository.
+        for (label, ref_name) in [
+            ("", "refs/pull/7/head"),
+            ("refs/heads/main", "refs/heads/main"),
+            ("heads/main", "heads/main"),
+            ("@", "@"),
+        ] {
+            let git_repo = CheckoutGitFixture::new();
+            let pull_head = git_repo.fork_pull_head(7, "pr\n");
+            let unpushed = git_repo.unpushed_commit_on_main();
+            let mut pull = pull_from(7, "owner", ref_name);
+            pull["head"]["label"] = json!(label);
+            let client = FakeApi {
+                pulls: vec![pull],
+                ..FakeApi::default()
+            };
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", "7", "--force"],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_eq!(git_repo.rev("main"), unpushed, "{ref_name}: {stderr}");
+            assert_eq!(code, 0, "{ref_name}: {stderr}");
+            assert_eq!(stdout, "checked out FETCH_HEAD\n", "{ref_name}");
+            assert_eq!(git_repo.branch(), None, "{ref_name}");
+            assert_eq!(git_repo.rev("HEAD"), pull_head, "{ref_name}");
+        }
     }
 
     #[test]
