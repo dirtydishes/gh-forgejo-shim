@@ -267,6 +267,8 @@ struct CommentArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CheckoutArgs {
     repo: Option<String>,
+    /// Whether the selector is a pull request URL, which names the repository.
+    url: bool,
     number: Option<u64>,
     branch: Option<String>,
     local_branch: Option<String>,
@@ -787,7 +789,8 @@ fn run_checkout(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checkout_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    // A URL's repository, which routing has already chosen, wins over `-R`, as in gh's finder.
+    let target_repo = target_repo(parsed.repo.as_deref().filter(|_| !parsed.url), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1619,6 +1622,7 @@ fn parse_checkout_args(argv: &[String]) -> Result<CheckoutArgs> {
             let (number, branch) = parse_number_or_branch(arg, "pull");
             parsed.number = number;
             parsed.branch = branch;
+            parsed.url = number_from_url(arg, "pull").is_some();
             index += 1;
         }
     }
@@ -3992,6 +3996,33 @@ mod tests {
             assert_eq!(stdout, "checked out topic\n");
             assert_eq!(git_repo.rev("HEAD"), pull_head, "{remote}");
         }
+    }
+
+    #[test]
+    fn pr_checkout_of_a_url_ignores_repo() {
+        let git_repo = CheckoutGitFixture::new();
+        let client = FakeApi {
+            pulls: vec![pull_from(12, "owner", "feature-pr")],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &[
+                "pr",
+                "checkout",
+                "https://git.example.com/owner/repo/pulls/12",
+                "-R",
+                "other/repo",
+            ],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(*client.pull_repos.borrow(), ["owner/repo"]);
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out feature-pr\n");
+        assert_eq!(git_repo.rev("HEAD"), git_repo.rev("origin/feature-pr"));
     }
 
     #[test]
