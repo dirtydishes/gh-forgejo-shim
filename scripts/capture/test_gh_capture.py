@@ -43,6 +43,11 @@ if mode == "late":
     print("early", flush=True)
     import subprocess
     subprocess.Popen(["/bin/sh", "-c", "sleep 2; echo late; echo late-err >&2"])
+if mode == "late-stderr":
+    # The same, holding only stderr.
+    print("early", flush=True)
+    import subprocess
+    subprocess.Popen(["/bin/sh", "-c", "sleep 2; echo late-err >&2"], stdout=subprocess.DEVNULL)
 if mode == "interleave":
     for line in range(1, 41):
         (sys.stdout if line % 2 else sys.stderr).write(f"{line}\n")
@@ -554,6 +559,21 @@ class StreamTest(unittest.TestCase):
             time.sleep(0.05)
         [record] = wrapper.records()
         self.assertEqual((record["exit"], record["stdout"], record["stderr"]), (0, "early\nlate\n", "late-err\n"))
+
+    def test_what_gh_leaves_holding_one_stream_holds_only_that_one(self):
+        wrapper = Wrapper(self)
+        started = time.monotonic()
+        # `$(…)` waits for its pipe to close: with the job holding only stderr, that's when gh exits.
+        result = subprocess.run(["/bin/sh", "-c", 'out=$("$@" pr view 2>/dev/null); echo "[$out]"', "sh", sys.executable,
+                                 str(WRAPPER)], env=wrapper.env | {"FAKE_GH": "late-stderr"}, cwd=wrapper.root,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, timeout=30)
+        self.assertEqual(result.stdout, b"[early]\n")
+        self.assertLess(time.monotonic() - started, 1.8)
+        for _ in range(100):
+            if wrapper.log.exists():
+                break
+            time.sleep(0.05)
+        self.assertEqual(wrapper.records()[0]["stderr"], "late-err\n")
 
     def test_long_output_is_cut_short_in_the_log_only(self):
         wrapper = Wrapper(self)
