@@ -19,7 +19,7 @@ use crate::normalize::{
     normalize_repo, render_json_or_jq, render_json_or_jq_list, status_for_current_branch,
     with_status_check_rollup_for_repo,
 };
-use crate::repo::{parse_repo_spec, RepoRef as DetectedRepoRef};
+use crate::repo::{parse_repo_spec, Checkout, RepoRef as DetectedRepoRef};
 use crate::routing::RouteDecision;
 use crate::{auth, checks, create};
 use crate::{Result, ShimError};
@@ -827,11 +827,16 @@ fn run_checkout(
     if let Some(number) = number {
         fetch_refs.push(format!("refs/pull/{number}/head"));
     }
+    // As gh: from the base repository's remote, or its clone URL when no remote holds it. In a
+    // fork's clone, `origin` is the fork.
+    let remote = Checkout::new(cwd)
+        .remote_for(&target_repo.host, &target_repo.owner, &target_repo.repo)
+        .unwrap_or_else(|| clone_url(&pull, &target_repo));
 
     let mut fetch_error = String::new();
     let mut fetched = false;
     for fetch_ref in fetch_refs {
-        let output = git_run(&["fetch", "origin", fetch_ref.as_str()], cwd);
+        let output = git_run(&["fetch", "--", remote.as_str(), fetch_ref.as_str()], cwd);
         if output.code == 0 {
             fetched = true;
             break;
@@ -2246,6 +2251,14 @@ fn local_branch_for(
     }
 }
 
+/// The base repository's clone URL: from the PR, as Forgejo sends it, or else its HTTPS URL.
+fn clone_url(pull: &Value, repo: &ForgejoRepoRef) -> String {
+    pull.pointer("/base/repo/clone_url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .map_or_else(|| format!("{}.git", repo.web_base_url()), ToOwned::to_owned)
+}
+
 /// The base repository's default branch: from the PR, as Forgejo sends it, or else the repository.
 fn default_branch(
     pull: &Value,
@@ -2713,6 +2726,8 @@ mod tests {
         comments: RefCell<Vec<(ForgejoRepoRef, u64, String)>>,
         /// The `owner/repo` each pull request, issue, diff and check read went to.
         read_repos: RefCell<Vec<String>>,
+        /// The `owner/repo` of each pull request read by number.
+        pull_repos: RefCell<Vec<String>>,
     }
 
     impl FakeApi {
@@ -2766,6 +2781,7 @@ mod tests {
                 created_issues: RefCell::new(Vec::new()),
                 comments: RefCell::new(Vec::new()),
                 read_repos: RefCell::new(Vec::new()),
+                pull_repos: RefCell::new(Vec::new()),
             }
         }
     }
@@ -2823,6 +2839,9 @@ mod tests {
 
         fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
             self.read(repo);
+            self.pull_repos
+                .borrow_mut()
+                .push(format!("{}/{}", repo.owner, repo.repo));
             self.pulls
                 .iter()
                 .find(|pull| pull_number(pull) == Some(number))
@@ -2978,20 +2997,42 @@ mod tests {
         )
     }
 
+    /// Throwaway repositories for `pr checkout`. The forge's repositories are bare ones under
+    /// `forge/`, which the work clone reaches as `ssh://git@git.example.com/<owner>/<repo>.git`
+    /// through a stand-in for ssh, so its remotes name the repositories they hold.
     struct CheckoutGitFixture {
         root: PathBuf,
         work: PathBuf,
     }
 
     impl CheckoutGitFixture {
+        /// A clone of `owner/repo`, with `origin` for it.
         fn new() -> Self {
+            let fixture = Self::forge();
+            fixture.clone_from("owner/repo");
+            fixture
+        }
+
+        /// A clone of the user's fork `alice/repo` as `origin`, with `upstream` for `owner/repo`.
+        fn fork_clone() -> Self {
+            let fixture = Self::forge();
+            fixture.forge_repo("alice/repo");
+            fixture.clone_from("alice/repo");
+            let url = fixture.url("owner/repo");
+            git(&fixture.work, ["remote", "add", "upstream", url.as_str()]);
+            git(&fixture.work, ["fetch", "-q", "upstream"]);
+            fixture
+        }
+
+        /// The forge with `owner/repo`: `main`, and `feature-pr` one commit ahead as PR 12's
+        /// head.
+        fn forge() -> Self {
             let id = NEXT_GIT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
             let root = std::env::temp_dir().join(format!(
                 "gh-forgejo-shim-checkout-{}-{id}",
                 std::process::id()
             ));
             let seed = root.join("seed");
-            let origin = root.join("origin.git");
             let work = root.join("work");
             fs::create_dir_all(&seed).expect("create seed repo directory");
 
@@ -3006,31 +3047,72 @@ mod tests {
             git(&seed, ["commit", "-am", "feature"]);
             git(&seed, ["checkout", "main"]);
 
+            // git runs it as `ssh git@git.example.com "git-upload-pack '/owner/repo.git'"`.
+            let forge = root.join("forge");
+            fs::create_dir_all(&forge).expect("create forge directory");
+            fs::write(
+                root.join("ssh"),
+                format!(
+                    "for command; do :; done\n\
+                     program=${{command%% *}}\n\
+                     path=${{command#*\\'}}\n\
+                     path=${{path%\\'}}\n\
+                     exec git \"${{program#git-}}\" '{}'/\"${{path#/}}\"\n",
+                    forge.display()
+                ),
+            )
+            .expect("write ssh stand-in");
+
+            let fixture = Self { root, work };
+            let base = fixture.forge_repo("owner/repo");
             git(
-                &root,
+                &base,
+                ["update-ref", "refs/pull/12/head", "refs/heads/feature-pr"],
+            );
+            fixture
+        }
+
+        /// A bare `full_name` on the forge, cloned from the seed.
+        fn forge_repo(&self, full_name: &str) -> PathBuf {
+            let path = self.bare(full_name);
+            git(
+                &self.root,
                 [
                     OsStr::new("clone"),
+                    OsStr::new("-q"),
                     OsStr::new("--bare"),
-                    seed.as_os_str(),
-                    origin.as_os_str(),
+                    self.root.join("seed").as_os_str(),
+                    path.as_os_str(),
                 ],
             );
-            git(
-                &origin,
-                [
-                    OsStr::new("update-ref"),
-                    OsStr::new("refs/pull/12/head"),
-                    OsStr::new("refs/heads/feature-pr"),
-                ],
-            );
-            git(
-                &root,
-                [OsStr::new("clone"), origin.as_os_str(), work.as_os_str()],
-            );
-            git(&work, ["config", "user.email", "test@example.com"]);
-            git(&work, ["config", "user.name", "Test User"]);
+            path
+        }
 
-            Self { root, work }
+        fn bare(&self, full_name: &str) -> PathBuf {
+            self.root.join("forge").join(format!("{full_name}.git"))
+        }
+
+        fn url(&self, full_name: &str) -> String {
+            format!("ssh://git@git.example.com/{full_name}.git")
+        }
+
+        fn clone_from(&self, full_name: &str) {
+            let ssh = format!("core.sshCommand=sh '{}'", self.root.join("ssh").display());
+            git(
+                &self.root,
+                [
+                    OsStr::new("clone"),
+                    OsStr::new("-q"),
+                    OsStr::new("--config"),
+                    OsStr::new(&ssh),
+                    OsStr::new("--config"),
+                    OsStr::new("ssh.variant=simple"),
+                    OsStr::new(&self.url(full_name)),
+                    self.work.as_os_str(),
+                ],
+            );
+            git(&self.work, ["config", "user.email", "test@example.com"]);
+            git(&self.work, ["config", "user.name", "Test User"]);
         }
 
         fn work(&self) -> &Path {
@@ -3053,16 +3135,36 @@ mod tests {
             .unwrap_or_default()
         }
 
-        /// Puts a commit with `content` on top of `main` at `refs/pull/{number}/head` in origin,
-        /// as a fork's PR has it, and returns the commit.
+        /// Puts a commit with `content` on top of `main` at `refs/pull/{number}/head` in
+        /// `owner/repo`, as a fork's PR has it, and returns the commit.
         fn fork_pull_head(&self, number: u64, content: &str) -> String {
-            git(&self.work, ["checkout", "-q", "--detach", "origin/main"]);
-            fs::write(self.work.join("README.md"), content).expect("write fork file");
-            git(&self.work, ["commit", "-qam", "fork"]);
-            let refspec = format!("HEAD:refs/pull/{number}/head");
-            git(&self.work, ["push", "-q", "origin", refspec.as_str()]);
-            let head = self.rev("HEAD");
-            git(&self.work, ["checkout", "-q", "main"]);
+            self.push_commit(
+                "owner/repo",
+                "main",
+                &format!("refs/pull/{number}/head"),
+                content,
+            )
+        }
+
+        /// Commits `content` on top of `parent` in the seed and pushes it to `dest` in
+        /// `full_name`, returning the commit.
+        fn push_commit(&self, full_name: &str, parent: &str, dest: &str, content: &str) -> String {
+            let seed = self.root.join("seed");
+            git(&seed, ["checkout", "-q", "--detach", parent]);
+            fs::write(seed.join("README.md"), content).expect("write seed file");
+            git(&seed, ["commit", "-qam", content.trim()]);
+            let refspec = format!("HEAD:{dest}");
+            git(
+                &seed,
+                [
+                    OsStr::new("push"),
+                    OsStr::new("-q"),
+                    self.bare(full_name).as_os_str(),
+                    OsStr::new(&refspec),
+                ],
+            );
+            let head = git_output(&["rev-parse", "HEAD"], Some(&seed)).unwrap_or_default();
+            git(&seed, ["checkout", "-q", "main"]);
             head
         }
 
@@ -3082,6 +3184,7 @@ mod tests {
                 "id": id,
                 "full_name": format!("{owner}/repo"),
                 "default_branch": "main",
+                "clone_url": format!("ssh://git@git.example.com/{owner}/repo.git"),
                 "owner": {"login": owner},
             })
         };
@@ -3802,6 +3905,86 @@ mod tests {
                 git_repo.rev(&format!("origin/{tip}")),
                 "{args:?}"
             );
+        }
+    }
+
+    #[test]
+    fn pr_checkout_in_a_fork_clone_fetches_from_the_base_remote() {
+        let git_repo = CheckoutGitFixture::fork_clone();
+        // The base's `feature-pr` moved on after the fork was made, so the fork's is older.
+        let pull_head = git_repo.push_commit(
+            "owner/repo",
+            "feature-pr",
+            "refs/heads/feature-pr",
+            "moved\n",
+        );
+        git(
+            &git_repo.bare("owner/repo"),
+            ["update-ref", "refs/pull/12/head", "refs/heads/feature-pr"],
+        );
+        let fork_head = git_repo.fork_pull_head(7, "fork\n");
+        assert_ne!(git_repo.rev("origin/feature-pr"), pull_head);
+
+        for (number, head_owner, branch, head) in [
+            (12, "owner", "feature-pr", pull_head),
+            (7, "fork", "topic", fork_head),
+        ] {
+            let client = FakeApi {
+                pulls: vec![pull_from(number, head_owner, branch)],
+                ..FakeApi::default()
+            };
+            let number = number.to_string();
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", number.as_str()],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_eq!(code, 0, "{branch}: {stderr}");
+            assert_eq!(stdout, format!("checked out {branch}\n"));
+            assert_eq!(git_repo.rev("HEAD"), head, "{branch}");
+            git(git_repo.work(), ["checkout", "-q", "main"]);
+        }
+    }
+
+    #[test]
+    fn pr_checkout_with_repo_fetches_that_repository_s_pull_request() {
+        // Without a remote for `other/repo`, and with one under a name of the user's.
+        for remote in [false, true] {
+            let git_repo = CheckoutGitFixture::new();
+            git_repo.forge_repo("other/repo");
+            let pull_head =
+                git_repo.push_commit("other/repo", "main", "refs/pull/12/head", "other\n");
+            if remote {
+                let url = git_repo.url("other/repo");
+                git(git_repo.work(), ["remote", "add", "theirs", url.as_str()]);
+            }
+            let mut pull = pull_from(12, "someone", "topic");
+            pull["base"]["repo"] = json!({
+                "id": 101,
+                "full_name": "other/repo",
+                "default_branch": "main",
+                "clone_url": git_repo.url("other/repo"),
+                "owner": {"login": "other"},
+            });
+            let client = FakeApi {
+                pulls: vec![pull],
+                ..FakeApi::default()
+            };
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", "12", "-R", "other/repo"],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_eq!(*client.pull_repos.borrow(), ["other/repo"]);
+            assert_eq!(code, 0, "{remote}: {stderr}");
+            assert_eq!(stdout, "checked out topic\n");
+            assert_eq!(git_repo.rev("HEAD"), pull_head, "{remote}");
         }
     }
 
