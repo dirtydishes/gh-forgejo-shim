@@ -801,6 +801,10 @@ fn run_checkout(
     .ok_or_else(|| ShimError::new("could not find pull request to check out"))?;
     let number = pull_number(&pull);
     let head = PullHead::of(&pull);
+    if let Some(name) = head.name.as_deref().filter(|name| name.starts_with('-')) {
+        writeln!(stderr, "invalid branch name: {name:?}")?;
+        return Ok(1);
+    }
     // `None` checks out detached: for `--detach`, and for a head no local branch may be named
     // after.
     let branch = if parsed.detach {
@@ -3890,6 +3894,27 @@ mod tests {
             assert_eq!(git_repo.branch(), None, "{ref_name}");
             assert_eq!(git_repo.rev("HEAD"), pull_head, "{ref_name}");
         }
+    }
+
+    #[test]
+    fn pr_checkout_refuses_a_head_named_like_an_option() {
+        let git_repo = CheckoutGitFixture::new();
+        let client = FakeApi {
+            pulls: vec![pull_from(12, "fork", "-f")],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(stdout, "");
+        assert_eq!(stderr, "invalid branch name: \"-f\"\n");
+        assert_eq!(git_repo.branch().as_deref(), Some("main"));
     }
 
     #[test]
