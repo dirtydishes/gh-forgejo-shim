@@ -377,16 +377,17 @@ impl ForgejoClient {
     }
 
     pub fn create_pull(&self, repo: &RepoRef, request: &CreatePullRequest) -> ForgejoResult<Value> {
-        self.request_json(
-            Method::POST,
+        self.create(
             format!("{}/pulls", self.repo_api_base_url(repo)?),
-            Some(json!({
+            json!({
                 "title": request.title,
                 "body": request.body,
                 "base": request.base,
                 "head": request.head,
                 "draft": request.draft,
-            })),
+            }),
+            "pull request",
+            "number",
         )
     }
 
@@ -592,10 +593,11 @@ impl ForgejoClient {
             payload.insert("milestone".to_string(), json!(milestone));
         }
 
-        self.request_json(
-            Method::POST,
+        self.create(
             format!("{}/issues", self.repo_api_base_url(repo)?),
-            Some(Value::Object(payload)),
+            Value::Object(payload),
+            "issue",
+            "number",
         )
     }
 
@@ -605,10 +607,11 @@ impl ForgejoClient {
         number: u64,
         body: &str,
     ) -> ForgejoResult<Value> {
-        self.request_json(
-            Method::POST,
+        self.create(
             format!("{}/issues/{number}/comments", self.repo_api_base_url(repo)?),
-            Some(json!({ "body": body })),
+            json!({ "body": body }),
+            "comment",
+            "id",
         )
     }
 
@@ -667,6 +670,23 @@ impl ForgejoClient {
             .map_err(|_| ForgejoError::new("Forgejo API returned invalid JSON"))
     }
 
+    /// A POST that creates a `what`, answered with it: HTTP 201 (or 200) and an object whose `key`
+    /// is a number. Any other answer may mean nothing was written, so it is an error, never the
+    /// command's success.
+    fn create(&self, url: String, payload: Value, what: &str, key: &str) -> ForgejoResult<Value> {
+        let (status, data) = self.send(Method::POST, url, Some(payload), "application/json")?;
+        let created = serde_json::from_slice::<Value>(&data)
+            .ok()
+            .filter(|value| value.get(key).is_some_and(Value::is_u64));
+        match created {
+            Some(value) if matches!(status.as_u16(), 200 | 201) => Ok(value),
+            _ => Err(ForgejoError::new(format!(
+                "Forgejo may not have created the {what}: the API answered HTTP {} without it",
+                status.as_u16()
+            ))),
+        }
+    }
+
     fn request_text(
         &self,
         method: Method,
@@ -685,6 +705,18 @@ impl ForgejoClient {
         payload: Option<Value>,
         accept: &str,
     ) -> ForgejoResult<Vec<u8>> {
+        self.send(method, url, payload, accept)
+            .map(|(_, data)| data)
+    }
+
+    /// The status and body of a successful answer to `method` at `url`.
+    fn send(
+        &self,
+        method: Method,
+        url: String,
+        payload: Option<Value>,
+        accept: &str,
+    ) -> ForgejoResult<(reqwest::StatusCode, Vec<u8>)> {
         let body = payload
             .map(|payload| serde_json::to_vec(&payload))
             .transpose()
@@ -748,7 +780,7 @@ impl ForgejoClient {
             )));
         }
 
-        Ok(response_data)
+        Ok((status, response_data))
     }
 
     /// Where `response` sends a renamed repository's API call: Forgejo answers one with a
@@ -1581,6 +1613,42 @@ mod tests {
         }
         let assigned: Value = serde_json::from_str(&seen[5].body)?;
         assert_eq!(assigned["assignees"], json!(["bob"]));
+        Ok(())
+    }
+
+    /// A write that gets back anything but the object it created fails, so it never reports
+    /// success for a request that wrote nothing.
+    #[test]
+    fn a_write_answered_without_the_created_object_fails() -> TestResult {
+        for (status, body) in [
+            ("200 OK", "[]"),
+            ("200 OK", "{}"),
+            ("201 Created", r#"{"message":"queued"}"#),
+            ("204 No Content", ""),
+            ("202 Accepted", r#"{"id":5,"number":7}"#),
+        ] {
+            let (host, _seen) = start_answering_server(move |_, _| (status, None, body))?;
+            let client = subpath_client(&host)?;
+            let repo = RepoRef::new("git.example.com", "o", "r");
+
+            let results = [
+                client.create_issue_comment(&repo, 1, "hi").err(),
+                client
+                    .create_pull(&repo, &CreatePullRequest::new("t", "b", "main", "f"))
+                    .err(),
+                client
+                    .create_issue(&repo, &CreateIssueRequest::new("t"))
+                    .err(),
+            ];
+
+            for error in results {
+                let error = error.ok_or_else(|| format!("{status} {body} read as a write"))?;
+                assert!(
+                    error.message().contains("may not have created"),
+                    "{status} {body}: {error}"
+                );
+            }
+        }
         Ok(())
     }
 
