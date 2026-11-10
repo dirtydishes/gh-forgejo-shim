@@ -981,6 +981,13 @@ fn is_possible_protocol(value: &str) -> bool {
             .any(|prefix| value.starts_with(prefix))
 }
 
+/// Unit tests resolve hosts without any ssh config, so the developer's own `~/.ssh/config` can't
+/// change what they see. `-F` skips the system-wide file too.
+#[cfg(test)]
+const SSH_CONFIG: &[&str] = &["-F", "/dev/null"];
+#[cfg(not(test))]
+const SSH_CONFIG: &[&str] = &[];
+
 /// SSH host aliases resolved with `ssh -G`, as go-gh's `ssh.Translator` does. A failure leaves
 /// the host as it was.
 #[derive(Default)]
@@ -996,6 +1003,7 @@ impl SshHosts {
             return resolved.clone();
         }
         let resolved = Command::new("ssh")
+            .args(SSH_CONFIG)
             .args(["-G", "--", host])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -1349,6 +1357,133 @@ mod tests {
     fn two_known_hosts_default_to_github() {
         assert_eq!(hosts(&["a.example", "b.example"]).default, GITHUB);
         assert_eq!(hosts(&["a.example"]).default, "a.example");
+    }
+
+    /// A throwaway repository with `remotes`, as `(name, URL)`, which [`Checkout`] reads.
+    struct RemotesFixture(PathBuf);
+
+    impl RemotesFixture {
+        fn new(remotes: &[(&str, &str)]) -> Self {
+            static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "gh-forgejo-shim-remotes-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).expect("create repo directory");
+            let git = |args: &[&str]| {
+                let status = Command::new("git")
+                    .args(args)
+                    .current_dir(&root)
+                    .stdout(Stdio::null())
+                    .status()
+                    .expect("run git");
+                assert!(status.success(), "git {args:?}");
+            };
+            git(&["init", "-q"]);
+            for (name, url) in remotes {
+                git(&["remote", "add", name, url]);
+            }
+            Self(root)
+        }
+
+        fn remote_for(&self, host: &str, owner: &str, name: &str) -> Option<String> {
+            Checkout::new(Some(&self.0)).remote_for(host, owner, name)
+        }
+    }
+
+    impl Drop for RemotesFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn remote_for_takes_gh_s_remote_order() {
+        const URL: &str = "ssh://git@git.example.com/owner/repo.git";
+        let names = ["mine", "origin", "github", "upstream"];
+        for (i, expected) in names.iter().enumerate().rev() {
+            let remotes = names[..=i]
+                .iter()
+                .map(|name| (*name, URL))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                RemotesFixture::new(&remotes)
+                    .remote_for("git.example.com", "owner", "repo")
+                    .as_deref(),
+                Some(*expected),
+                "{remotes:?}"
+            );
+        }
+        // The rank ignores case, and a remote that names another repository doesn't count.
+        let fixture = RemotesFixture::new(&[
+            ("Upstream", "ssh://git@git.example.com/other/repo.git"),
+            ("Origin", URL),
+            ("mine", URL),
+        ]);
+        assert_eq!(
+            fixture
+                .remote_for("git.example.com", "owner", "repo")
+                .as_deref(),
+            Some("Origin")
+        );
+    }
+
+    #[test]
+    fn remote_for_reads_every_url_form() {
+        for url in [
+            "ssh://git@git.example.com/owner/repo.git",
+            "ssh://git@git.example.com/owner/repo",
+            "ssh://git@git.example.com:2222/owner/repo.git",
+            "git@git.example.com:owner/repo.git",
+            "git.example.com:owner/repo",
+            "https://git.example.com/owner/repo.git",
+            "https://git.example.com/owner/repo",
+        ] {
+            assert_eq!(
+                RemotesFixture::new(&[("origin", url)])
+                    .remote_for("git.example.com", "owner", "repo")
+                    .as_deref(),
+                Some("origin"),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_for_matches_without_case_but_only_on_the_host() {
+        let fixture = RemotesFixture::new(&[
+            ("elsewhere", "https://other.example.com/owner/repo.git"),
+            ("origin", "git@GIT.example.com:Owner/Repo.git"),
+        ]);
+        for (host, owner, name) in [
+            ("git.example.com", "owner", "repo"),
+            ("Git.Example.com", "OWNER", "REPO"),
+            ("git.example.com:3000", "owner", "repo"),
+        ] {
+            assert_eq!(
+                fixture.remote_for(host, owner, name).as_deref(),
+                Some("origin"),
+                "{host} {owner}/{name}"
+            );
+        }
+        assert_eq!(
+            fixture
+                .remote_for("other.example.com", "owner", "repo")
+                .as_deref(),
+            Some("elsewhere")
+        );
+        for (host, owner, name) in [
+            ("third.example.com", "owner", "repo"),
+            ("git.example.com", "owner", "other"),
+            ("git.example.com", "someone", "repo"),
+        ] {
+            assert_eq!(
+                fixture.remote_for(host, owner, name),
+                None,
+                "{host} {owner}/{name}"
+            );
+        }
     }
 
     #[test]

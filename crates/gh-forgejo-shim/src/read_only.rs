@@ -3042,7 +3042,8 @@ mod tests {
 
     /// Throwaway repositories for `pr checkout`. The forge's repositories are bare ones under
     /// `forge/`, which the work clone reaches as `ssh://git@git.example.com/<owner>/<repo>.git`
-    /// through a stand-in for ssh, so its remotes name the repositories they hold.
+    /// through a stand-in for ssh, so its remotes name the repositories they hold. The stand-in
+    /// refuses any other host, such as the one in [`pull_from`]'s clone URLs.
     struct CheckoutGitFixture {
         root: PathBuf,
         work: PathBuf,
@@ -3096,7 +3097,8 @@ mod tests {
             fs::write(
                 root.join("ssh"),
                 format!(
-                    "for command; do :; done\n\
+                    "[ \"$1\" = git@git.example.com ] || {{ echo \"no such host: $1\" >&2; exit 255; }}\n\
+                     for command; do :; done\n\
                      program=${{command%% *}}\n\
                      path=${{command#*\\'}}\n\
                      path=${{path%\\'}}\n\
@@ -3220,14 +3222,15 @@ mod tests {
         }
     }
 
-    /// A Forgejo PR into `owner/repo`'s `main` from `head_owner/repo`'s `branch`.
+    /// A Forgejo PR into `owner/repo`'s `main` from `head_owner/repo`'s `branch`. Its clone URLs
+    /// name a host the stand-in for ssh refuses, so the fetch succeeds only from a remote.
     fn pull_from(number: u64, head_owner: &str, branch: &str) -> Value {
         let repo = |id: u64, owner: &str| {
             json!({
                 "id": id,
                 "full_name": format!("{owner}/repo"),
                 "default_branch": "main",
-                "clone_url": format!("ssh://git@git.example.com/{owner}/repo.git"),
+                "clone_url": format!("ssh://git@clone-url.example.com/{owner}/repo.git"),
                 "owner": {"login": owner},
             })
         };
@@ -3994,7 +3997,8 @@ mod tests {
 
     #[test]
     fn pr_checkout_with_repo_fetches_that_repository_s_pull_request() {
-        // Without a remote for `other/repo`, and with one under a name of the user's.
+        // Without a remote for `other/repo`, so from its clone URL, and with one under a name of
+        // the user's, so from that remote.
         for remote in [false, true] {
             let git_repo = CheckoutGitFixture::new();
             git_repo.forge_repo("other/repo");
@@ -4009,7 +4013,11 @@ mod tests {
                 "id": 101,
                 "full_name": "other/repo",
                 "default_branch": "main",
-                "clone_url": git_repo.url("other/repo"),
+                "clone_url": if remote {
+                    "ssh://git@clone-url.example.com/other/repo.git".to_string()
+                } else {
+                    git_repo.url("other/repo")
+                },
                 "owner": {"login": "other"},
             });
             let client = FakeApi {
