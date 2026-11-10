@@ -21,6 +21,7 @@ use crate::normalize::{
 };
 use crate::repo::{parse_repo_spec, Checkout, RepoRef as DetectedRepoRef};
 use crate::routing::RouteDecision;
+use crate::trace::redact_text_with;
 use crate::{auth, checks, create};
 use crate::{Result, ShimError};
 
@@ -39,6 +40,11 @@ trait ForgejoApi {
         head: Option<&str>,
     ) -> ForgejoResult<Vec<Value>>;
     fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value>;
+    fn get_pull_head_ref(
+        &self,
+        repo: &ForgejoRepoRef,
+        number: u64,
+    ) -> ForgejoResult<Option<String>>;
     fn list_commit_statuses(&self, repo: &ForgejoRepoRef, sha: &str) -> ForgejoResult<Vec<Value>>;
     fn list_check_statuses(
         &self,
@@ -112,6 +118,14 @@ impl ForgejoApi for ForgejoClient {
 
     fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
         ForgejoClient::get_pull(self, repo, number)
+    }
+
+    fn get_pull_head_ref(
+        &self,
+        repo: &ForgejoRepoRef,
+        number: u64,
+    ) -> ForgejoResult<Option<String>> {
+        ForgejoClient::get_pull_head_ref(self, repo, number)
     }
 
     fn list_commit_statuses(&self, repo: &ForgejoRepoRef, sha: &str) -> ForgejoResult<Vec<Value>> {
@@ -871,7 +885,7 @@ fn run_checkout(
     // `+refs/heads/*:refs/heads/*`) would reset that branch before the fast-forward check, unpushed
     // commits and all. gh's fetch has no `--refmap`, so this goes further than gh.
     let mut fetch_error = String::new();
-    let mut fetched = false;
+    let mut fetched = None;
     for fetch_ref in fetch_refs {
         let output = git_run(
             &[
@@ -884,12 +898,12 @@ fn run_checkout(
             cwd,
         );
         if output.code == 0 {
-            fetched = true;
+            fetched = Some(fetch_ref);
             break;
         }
         fetch_error = output.message;
     }
-    if !fetched {
+    let Some(fetched) = fetched else {
         writeln!(
             stderr,
             "{}",
@@ -898,6 +912,36 @@ fn run_checkout(
             } else {
                 fetch_error.as_str()
             }
+        )?;
+        return Ok(1);
+    };
+
+    // A mirror, or an `insteadOf` rule that leads to one, can serve an older copy of the
+    // repository, and the fetch then succeeds at a commit the PR has left. So what git fetched
+    // must be the PR's head as the forge reports it, before any branch moves: a branch's tip is
+    // `head.sha`, and the PR's own ref is read from the forge, since `head.sha` follows a branch
+    // that may have moved on after the PR closed. gh doesn't check this.
+    let head_sha = pull_head_sha(&pull);
+    let expected = match number.filter(|_| fetched.starts_with("refs/pull/")) {
+        Some(number) => client
+            .get_pull_head_ref(&target_repo, number)
+            .ok()
+            .flatten()
+            .or(head_sha),
+        None => head_sha,
+    };
+    let got = git_output(&["rev-parse", "--verify", "--quiet", "FETCH_HEAD"], cwd);
+    if !matches!((&got, &expected), (Some(got), Some(expected)) if got.eq_ignore_ascii_case(expected))
+    {
+        let source = git_output(&["ls-remote", "--get-url", remote.as_str()], cwd)
+            .unwrap_or_else(|| remote.clone());
+        writeln!(
+            stderr,
+            "git fetched {fetched} from {} at {}, but the pull request's head is {}; a mirror or \
+             an insteadOf rule may serve an older copy",
+            redact_text_with(&source, "[REDACTED]"),
+            got.as_deref().unwrap_or("no commit"),
+            expected.as_deref().unwrap_or("unknown"),
         )?;
         return Ok(1);
     }
@@ -2774,6 +2818,8 @@ mod tests {
     #[derive(Clone)]
     struct FakeApi {
         pulls: Vec<Value>,
+        /// The commit of each PR's own ref, `refs/pull/N/head`, by number.
+        pull_heads: HashMap<u64, String>,
         issues: Vec<Value>,
         labels: Vec<Value>,
         statuses: Vec<Value>,
@@ -2805,6 +2851,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 pulls: Vec::new(),
+                pull_heads: HashMap::new(),
                 issues: Vec::new(),
                 labels: Vec::new(),
                 statuses: Vec::new(),
@@ -2898,6 +2945,15 @@ mod tests {
                 })
                 .cloned()
                 .collect())
+        }
+
+        fn get_pull_head_ref(
+            &self,
+            repo: &ForgejoRepoRef,
+            number: u64,
+        ) -> ForgejoResult<Option<String>> {
+            self.read(repo);
+            Ok(self.pull_heads.get(&number).cloned())
         }
 
         fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
@@ -3231,6 +3287,46 @@ mod tests {
             let head = git_output(&["rev-parse", "HEAD"], Some(&seed)).unwrap_or_default();
             git(&seed, ["checkout", "-q", "main"]);
             head
+        }
+
+        /// A fake API serving `pulls` with the forge's commits: the PR's own ref is readable, and
+        /// `head.sha` is the head branch's tip while it's a branch of the base repository, and
+        /// otherwise the PR's own ref, as Forgejo reports them. Call it once the forge is set.
+        fn api(&self, mut pulls: Vec<Value>) -> FakeApi {
+            let mut pull_heads = HashMap::new();
+            for pull in &mut pulls {
+                let base = pull
+                    .pointer("/base/repo/full_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("owner/repo")
+                    .to_string();
+                let bare = self.bare(&base);
+                let rev = |name: &str| {
+                    git_output(&["rev-parse", "--verify", "--quiet", name], Some(&bare))
+                };
+                let number = pull["number"].as_u64().expect("pull request number");
+                let own = rev(&format!("refs/pull/{number}/head"));
+                let in_base = pull
+                    .pointer("/head/repo/full_name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|head| head == base);
+                let branch = pull
+                    .pointer("/head/ref")
+                    .and_then(Value::as_str)
+                    .filter(|_| in_base)
+                    .and_then(|name| rev(&format!("refs/heads/{name}")));
+                if let Some(sha) = branch.or_else(|| own.clone()) {
+                    pull["head"]["sha"] = json!(sha);
+                }
+                if let Some(own) = own {
+                    pull_heads.insert(number, own);
+                }
+            }
+            FakeApi {
+                pulls,
+                pull_heads,
+                ..FakeApi::default()
+            }
         }
 
         /// Makes branch names that differ only in case two refs, as they are on a filesystem that
@@ -3873,13 +3969,10 @@ mod tests {
     #[test]
     fn pr_checkout_fetches_head_ref_and_creates_local_branch() {
         let git_repo = CheckoutGitFixture::new();
-        let client = FakeApi {
-            pulls: vec![json!({
-                "number": 12,
-                "head": {"ref": "feature-pr", "sha": "abc123"},
-            })],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![json!({
+            "number": 12,
+            "head": {"ref": "feature-pr", "sha": "abc123"},
+        })]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "12"],
@@ -3898,13 +3991,10 @@ mod tests {
     #[test]
     fn pr_co_falls_back_to_pull_ref_when_head_ref_is_absent() {
         let git_repo = CheckoutGitFixture::new();
-        let client = FakeApi {
-            pulls: vec![json!({
-                "number": 12,
-                "head": {"sha": "abc123"},
-            })],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![json!({
+            "number": 12,
+            "head": {"sha": "abc123"},
+        })]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "co", "12"],
@@ -3939,10 +4029,7 @@ mod tests {
             let git_repo = CheckoutGitFixture::new();
             let fork_head = git_repo.fork_pull_head(7, "fork\n");
             let unpushed = git_repo.unpushed_commit_on_main();
-            let client = FakeApi {
-                pulls: vec![pull_from(7, "fork", "main")],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(7, "fork", "main")]);
 
             let (code, stdout, stderr) =
                 run_fake(args, &client, Some("token"), Some(git_repo.work()));
@@ -3968,10 +4055,7 @@ mod tests {
             if stale {
                 git(git_repo.work(), ["branch", "feature-pr", "main"]);
             }
-            let client = FakeApi {
-                pulls: vec![pull_from(12, "owner", "feature-pr")],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(12, "owner", "feature-pr")]);
             let mut args = vec!["pr", "checkout", "12"];
             if force {
                 args.push("--force");
@@ -4012,10 +4096,7 @@ mod tests {
             (12, "owner", "feature-pr", pull_head),
             (7, "fork", "topic", fork_head),
         ] {
-            let client = FakeApi {
-                pulls: vec![pull_from(number, head_owner, branch)],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(number, head_owner, branch)]);
             let number = number.to_string();
 
             let (code, stdout, stderr) = run_fake(
@@ -4072,10 +4153,7 @@ mod tests {
             git(git_repo.work(), ["config", "--add", key, forge.as_str()]);
             let mut pull = pull_from(12, "owner", "feature-pr");
             pull["base"]["repo"]["clone_url"] = json!(forge);
-            let client = FakeApi {
-                pulls: vec![pull],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull]);
 
             let (code, stdout, stderr) = run_fake(
                 &["pr", "checkout", "12"],
@@ -4088,6 +4166,62 @@ mod tests {
             assert_eq!(stdout, "checked out feature-pr\n", "{key}");
             assert_eq!(git_repo.rev("HEAD"), pull_head, "{key}");
         }
+    }
+
+    #[test]
+    fn pr_checkout_refuses_a_fetch_that_is_not_the_pull_request_s_head() {
+        // An `insteadOf` rule sends every fetch from the forge to a local mirror taken before the
+        // PR's branch moved, and `pushInsteadOf` keeps pushes on the forge. No remote fetches from
+        // the forge, so the fetch goes to the PR's clone URL, which the same rule rewrites.
+        let git_repo = CheckoutGitFixture::new();
+        let mirror = git_repo.root.join("mirror.git");
+        git(
+            &git_repo.root,
+            [
+                OsStr::new("clone"),
+                OsStr::new("-q"),
+                OsStr::new("--mirror"),
+                git_repo.bare("owner/repo").as_os_str(),
+                mirror.as_os_str(),
+            ],
+        );
+        let stale = git_repo.rev("origin/feature-pr");
+        let pull_head = git_repo.push_commit(
+            "owner/repo",
+            "feature-pr",
+            "refs/heads/feature-pr",
+            "moved\n",
+        );
+        git(
+            &git_repo.bare("owner/repo"),
+            ["update-ref", "refs/pull/12/head", "refs/heads/feature-pr"],
+        );
+        let forge = git_repo.url("owner/repo");
+        let mirror_url = mirror.to_str().expect("mirror path is UTF-8");
+        for (key, value) in [
+            (format!("url.{mirror_url}.insteadOf"), forge.as_str()),
+            (format!("url.{forge}.pushInsteadOf"), forge.as_str()),
+        ] {
+            git(git_repo.work(), ["config", key.as_str(), value]);
+        }
+        let mut pull = pull_from(12, "owner", "feature-pr");
+        pull["base"]["repo"]["clone_url"] = json!(forge);
+        let client = git_repo.api(vec![pull]);
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 1, "{stderr}");
+        assert_eq!(stdout, "");
+        for word in [mirror_url, stale.as_str(), pull_head.as_str()] {
+            assert!(stderr.contains(word), "{word}: {stderr}");
+        }
+        assert_eq!(git_repo.branch().as_deref(), Some("main"));
+        assert_eq!(git_repo.rev("refs/heads/feature-pr"), "");
     }
 
     #[test]
@@ -4115,10 +4249,7 @@ mod tests {
                 },
                 "owner": {"login": "other"},
             });
-            let client = FakeApi {
-                pulls: vec![pull],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull]);
 
             let (code, stdout, stderr) = run_fake(
                 &["pr", "checkout", "12", "-R", "other/repo"],
@@ -4137,10 +4268,7 @@ mod tests {
     #[test]
     fn pr_checkout_of_a_url_ignores_repo() {
         let git_repo = CheckoutGitFixture::new();
-        let client = FakeApi {
-            pulls: vec![pull_from(12, "owner", "feature-pr")],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![pull_from(12, "owner", "feature-pr")]);
 
         let (code, stdout, stderr) = run_fake(
             &[
@@ -4165,14 +4293,11 @@ mod tests {
     fn pr_checkout_fast_forwards_a_branch_checked_out_before() {
         let git_repo = CheckoutGitFixture::new();
         let first = git_repo.fork_pull_head(7, "fork\n");
-        let client = FakeApi {
-            pulls: vec![pull_from(7, "fork", "main")],
-            ..FakeApi::default()
-        };
+        // The API reports the PR as the forge has it at each checkout.
         let checkout = || {
             run_fake(
                 &["pr", "checkout", "7"],
-                &client,
+                &git_repo.api(vec![pull_from(7, "fork", "main")]),
                 Some("token"),
                 Some(git_repo.work()),
             )
@@ -4206,10 +4331,7 @@ mod tests {
             // The user works on `topic`, with a file git doesn't track.
             git(git_repo.work(), ["checkout", "-q", "-b", "topic", "main"]);
             fs::write(git_repo.work().join("SCRATCH.md"), "draft\n").expect("write untracked file");
-            let client = FakeApi {
-                pulls: vec![pull_from(number, head_owner, branch)],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(number, head_owner, branch)]);
             let number = number.to_string();
 
             let (code, stdout, stderr) = run_fake(
@@ -4252,10 +4374,7 @@ mod tests {
                 git_repo.work(),
                 ["config", "--add", "remote.origin.fetch", mapping],
             );
-            let client = FakeApi {
-                pulls: vec![pull_from(12, "owner", "feature-pr")],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(12, "owner", "feature-pr")]);
 
             let (code, stdout, stderr) = run_fake(
                 &["pr", "checkout", "12"],
@@ -4286,10 +4405,7 @@ mod tests {
             git_repo.fork_pull_head(7, "fork\n");
             git(git_repo.work(), ["branch", "develop", "main"]);
             let develop = git_repo.rev("develop");
-            let client = FakeApi {
-                pulls: vec![pull_from(7, "fork", branch)],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(7, "fork", branch)]);
             let mut args = vec!["pr", "checkout", "7"];
             args.extend(extra);
 
@@ -4327,10 +4443,7 @@ mod tests {
             let fork_head = git_repo.fork_pull_head(7, "fork\n");
             git(git_repo.work(), ["branch", "develop", "main"]);
             let develop = git_repo.rev("develop");
-            let client = FakeApi {
-                pulls: vec![pull_from(7, "fork", branch)],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull_from(7, "fork", branch)]);
             let mut args = vec!["pr", "checkout", "7"];
             args.extend(extra);
 
@@ -4357,10 +4470,7 @@ mod tests {
         git(git_repo.work(), ["branch", "feature", "main"]);
         git(git_repo.work(), ["branch", "Feature", "main"]);
         let sibling = git_repo.rev("Feature");
-        let client = FakeApi {
-            pulls: vec![pull_from(7, "fork", "feature")],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![pull_from(7, "fork", "feature")]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "7"],
@@ -4390,10 +4500,7 @@ mod tests {
         git(git_repo.work(), ["checkout", "-q", "main"]);
         let mut pull = pull_from(12, "owner", "feature-pr");
         pull["state"] = json!("closed");
-        let client = FakeApi {
-            pulls: vec![pull],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![pull]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "12"],
@@ -4412,10 +4519,7 @@ mod tests {
         let git_repo = CheckoutGitFixture::new();
         let fork_head = git_repo.fork_pull_head(7, "fork\n");
         let unpushed = git_repo.unpushed_commit_on_main();
-        let client = FakeApi {
-            pulls: vec![pull_from(7, "fork", "Main")],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![pull_from(7, "fork", "Main")]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "7", "--force"],
@@ -4438,10 +4542,7 @@ mod tests {
         let mut pull = pull_from(7, "fork", "main");
         pull["head"]["ref"] = json!("refs/pull/7/head");
         pull["head"]["repo"] = Value::Null;
-        let client = FakeApi {
-            pulls: vec![pull],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![pull]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "7", "--force"],
@@ -4470,10 +4571,7 @@ mod tests {
             let unpushed = git_repo.unpushed_commit_on_main();
             let mut pull = pull_from(7, "owner", ref_name);
             pull["head"]["label"] = json!(label);
-            let client = FakeApi {
-                pulls: vec![pull],
-                ..FakeApi::default()
-            };
+            let client = git_repo.api(vec![pull]);
 
             let (code, stdout, stderr) = run_fake(
                 &["pr", "checkout", "7", "--force"],
@@ -4493,10 +4591,7 @@ mod tests {
     #[test]
     fn pr_checkout_refuses_a_head_named_like_an_option() {
         let git_repo = CheckoutGitFixture::new();
-        let client = FakeApi {
-            pulls: vec![pull_from(12, "fork", "-f")],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![pull_from(12, "fork", "-f")]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "12"],
@@ -4515,13 +4610,10 @@ mod tests {
     fn pr_checkout_preserves_git_dirty_worktree_error() {
         let git_repo = CheckoutGitFixture::new();
         fs::write(git_repo.work().join("README.md"), "dirty\n").expect("dirty worktree file");
-        let client = FakeApi {
-            pulls: vec![json!({
-                "number": 12,
-                "head": {"ref": "feature-pr", "sha": "abc123"},
-            })],
-            ..FakeApi::default()
-        };
+        let client = git_repo.api(vec![json!({
+            "number": 12,
+            "head": {"ref": "feature-pr", "sha": "abc123"},
+        })]);
 
         let (code, stdout, stderr) = run_fake(
             &["pr", "checkout", "12"],

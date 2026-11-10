@@ -187,8 +187,10 @@ impl<'a> Checkout<'a> {
     /// The remote to fetch a repository from, as gh's `FindByRepo` picks it (`gh/context/remote.go`):
     /// the first in gh's remote order whose owner and name match without case. gh has already kept
     /// only remotes on known hosts; this matches the host too. Unlike gh, it reads only the URL
-    /// git fetches from, never a push URL: a local mirror that pushes to the forge would fetch the
-    /// mirror's commits.
+    /// git fetches from, never a push URL, so a remote that fetches from a local mirror and pushes
+    /// to the forge isn't chosen. That alone doesn't keep a fetch off a mirror: an `insteadOf`
+    /// rule can send any URL there, so `pr checkout` also compares what it fetched with the PR's
+    /// head.
     pub fn remote_for(&self, host: &str, owner: &str, name: &str) -> Option<String> {
         let mut remotes = self.remotes().iter().collect::<Vec<_>>();
         go_sort::sort(&mut remotes, |a, b| {
