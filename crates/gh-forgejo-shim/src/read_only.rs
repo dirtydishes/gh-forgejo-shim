@@ -864,21 +864,31 @@ fn run_checkout(
         }
     }
 
-    // As gh: a head branch by name only while it is the PR's head in the base repository, and
-    // otherwise the PR's own ref there. A fork's branch name, fetched from the base, would be the
-    // base's branch of that name.
-    let mut fetch_refs = Vec::new();
-    if let Some(name) = head.name.as_deref().filter(|_| head.is_base_branch) {
-        fetch_refs.push(format!("refs/heads/{name}"));
-    }
-    if let Some(number) = number {
-        fetch_refs.push(format!("refs/pull/{number}/head"));
-    }
     // As gh: from the base repository's remote, or its clone URL when no remote holds it. In a
     // fork's clone, `origin` is the fork.
-    let remote = Checkout::new(cwd)
-        .remote_for(&target_repo.host, &target_repo.owner, &target_repo.repo)
+    let remote_name =
+        Checkout::new(cwd).remote_for(&target_repo.host, &target_repo.owner, &target_repo.repo);
+    let remote = remote_name
+        .clone()
         .unwrap_or_else(|| clone_url(&pull, &target_repo));
+    // As gh: a head branch by name only while it is the PR's head in the base repository, and
+    // otherwise the PR's own ref there. A fork's branch name, fetched from the base, would be the
+    // base's branch of that name. Each is `(ref, refspec)`. As gh, a branch fetched from a remote
+    // updates its remote-tracking branch, so `git status` doesn't count the fetched commits as
+    // unpushed.
+    let mut fetch_refs = Vec::new();
+    if let Some(name) = head.name.as_deref().filter(|_| head.is_base_branch) {
+        let fetch_ref = format!("refs/heads/{name}");
+        let refspec = match remote_name.as_deref() {
+            Some(remote) => format!("+{fetch_ref}:refs/remotes/{remote}/{name}"),
+            None => fetch_ref.clone(),
+        };
+        fetch_refs.push((fetch_ref, refspec));
+    }
+    if let Some(number) = number {
+        let fetch_ref = format!("refs/pull/{number}/head");
+        fetch_refs.push((fetch_ref.clone(), fetch_ref));
+    }
 
     // An empty `--refmap` keeps git from also applying the remote's configured mapping to what it
     // fetches. One into a local branch (`+refs/heads/x:refs/heads/x`, or a mirror's
@@ -886,14 +896,14 @@ fn run_checkout(
     // commits and all. gh's fetch has no `--refmap`, so this goes further than gh.
     let mut fetch_error = String::new();
     let mut fetched = None;
-    for fetch_ref in fetch_refs {
+    for (fetch_ref, refspec) in fetch_refs {
         let output = git_run(
             &[
                 "fetch",
                 "--refmap=",
                 "--",
                 remote.as_str(),
-                fetch_ref.as_str(),
+                refspec.as_str(),
             ],
             cwd,
         );
@@ -4349,6 +4359,44 @@ mod tests {
             }
             assert_eq!(git_repo.rev(branch), mine, "{branch}");
             assert_eq!(git_repo.branch().as_deref(), Some("topic"), "{branch}");
+        }
+    }
+
+    #[test]
+    fn pr_checkout_of_a_branch_by_name_updates_its_remote_tracking_branch() {
+        // In a clone of the base, and in a fork's clone, where the base is `upstream`.
+        for (fork, remote) in [(false, "origin"), (true, "upstream")] {
+            let git_repo = if fork {
+                CheckoutGitFixture::fork_clone()
+            } else {
+                CheckoutGitFixture::new()
+            };
+            let tracking = format!("{remote}/feature-pr");
+            git(git_repo.work(), ["branch", "feature-pr", tracking.as_str()]);
+            let pull_head = git_repo.push_commit(
+                "owner/repo",
+                "feature-pr",
+                "refs/heads/feature-pr",
+                "moved\n",
+            );
+            git(
+                &git_repo.bare("owner/repo"),
+                ["update-ref", "refs/pull/12/head", "refs/heads/feature-pr"],
+            );
+            let client = git_repo.api(vec![pull_from(12, "owner", "feature-pr")]);
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", "12"],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_eq!(code, 0, "{remote}: {stderr}");
+            assert_eq!(stdout, "checked out feature-pr\n", "{remote}");
+            assert_eq!(git_repo.rev("feature-pr"), pull_head, "{remote}");
+            // So `git status` doesn't count the fast-forwarded commit as unpushed.
+            assert_eq!(git_repo.rev(&tracking), pull_head, "{remote}");
         }
     }
 
