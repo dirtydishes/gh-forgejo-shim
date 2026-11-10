@@ -52,14 +52,14 @@ try:
     import redact
     if not all(hasattr(redact, rule) for rule in RULES):
         raise ImportError("redact.py lacks rules gh-capture uses")
-    # Keys whose values are credentials, and a JSON field anywhere in text: a quoted key, a colon and
-    # a non-empty quoted value, matched in one pass however long the value (its key is then judged
-    # by SECRET_KEY). That covers answers after `-i` headers or cut short.
+    # Keys whose values are credentials.
     SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
-    JSON_FIELD = re.compile(r'"((?:[^"\\\n]|\\.)*)"(\s*:\s*)"(?:[^"\\\n]|\\.)+"')
-    # A JSON string, closed or cut short where the text stops. Every `"` starts one, so finding them
-    # all, one after another, takes one pass however many quotes the text holds.
-    LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)("|\\?\Z)')
+    # A JSON string in text: closed, or cut short by a line break (which no JSON string holds) or
+    # where the text stops. Every `"` starts one, so finding them all, one after another, takes one
+    # pass however many quotes the text holds, and a stray quote throws off no more than its line.
+    # A key is a closed one followed by a colon.
+    LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)("|\\?(?=\n)|\\?\Z)')
+    COLON = re.compile(r"\s*:\s*")
 except Exception:  # a broken redact.py may raise anything; it must not stop gh
     redact = None
 
@@ -164,9 +164,24 @@ def scrub(text):
     text = redact.AUTHORIZATION.sub(r"\1<token>", text)
     text = redact.TOKEN_HEADER.sub(r"\1<token>", text)
     text = redact.COOKIE.sub(r"\1<redacted>", text)
-    text = JSON_FIELD.sub(lambda m: f'"{m.group(1)}"{m.group(2)}"<redacted>"' if SECRET_KEY.search(m.group(1))
-                          else m.group(0), text)
+    text = hide_values(text)
     return redact.SECRET_ASSIGNMENT.sub(r"\1<redacted>", text)
+
+
+def hide_values(text):
+    """Text whose sensitive JSON keys' string values are hidden, wherever they sit (after `-i`
+    headers, in a field's value): `"token":"S"`, and one cut short where the output stops (cut at
+    MAX_STREAM, or gh died writing it), hidden to the end. Empty values stay."""
+    out, at = [], 0
+    for key in LITERAL.finditer(text):
+        colon = key.start() >= at and key.group(2) == '"' and COLON.match(text, key.end())
+        if not colon or text[colon.end():colon.end() + 1] != '"' or not SECRET_KEY.search(key.group(1)):
+            continue
+        value = LITERAL.match(text, colon.end())
+        if value.group(0) != '""':
+            out += [text[at:value.start()], '"<redacted>"' if value.group(2) == '"' else '"<redacted>']
+            at = value.end()
+    return "".join(out) + text[at:]
 
 
 def redact_argv(argv):
@@ -442,7 +457,7 @@ def text(pump):
     if redact is None:
         return None
     if pump.total > MAX_STREAM:
-        return {"truncated": True, "bytes": pump.total, "head": cut_short(scrub(bytes(pump.kept).decode("utf-8", "replace")))}
+        return {"truncated": True, "bytes": pump.total, "head": scrub(bytes(pump.kept).decode("utf-8", "replace"))}
     value = bytes(pump.kept).decode("utf-8", "replace")
     spans = redact.json_spans(value)
     if spans:
@@ -451,21 +466,7 @@ def text(pump):
             out += [value[last:start], redact.dump_like(secretless(answer), value[start:end])]
             last = end
         value = "".join(out) + value[last:]
-    return cut_short(scrub(value))
-
-
-def cut_short(value):
-    """Output whose last JSON string stops unclosed (cut at MAX_STREAM, or gh died writing it): a
-    sensitive key's value is hidden to the end. Only the last line is read: no JSON string holds a
-    line break, so a line starts outside one, whatever came before (`-i` headers)."""
-    key = last = None
-    for literal in LITERAL.finditer(value, value.rfind("\n") + 1):
-        key, last = last, literal
-    if last is None or last.group(2) == '"' or key is None or key.group(2) != '"':
-        return value
-    if not re.fullmatch(r"\s*:\s*", value[key.end():last.start()]) or not SECRET_KEY.search(key.group(1)):
-        return value
-    return value[:last.start()] + '"<redacted>'
+    return scrub(value)
 
 
 def secretless(value):
