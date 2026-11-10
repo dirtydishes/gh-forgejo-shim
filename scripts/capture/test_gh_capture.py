@@ -19,7 +19,7 @@ from unittest import mock
 WRAPPER = Path(__file__).resolve().parent / "gh-capture"
 # The fake gh: what it does is set by FAKE_GH, so each test asks for the behaviour it needs.
 FAKE_GH = r'''#!/usr/bin/env python3
-import os, signal, sys, time
+import json, os, signal, sys, time
 # Like Go's gh: a write to a closed pipe kills it with SIGPIPE.
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 mode = os.environ.get("FAKE_GH", "echo")
@@ -49,6 +49,8 @@ if mode == "ordered":
     sys.stdout.flush()
     time.sleep(0.2)
     sys.stderr.write("b\n")
+if mode == "tty":
+    print(json.dumps([os.isatty(0), os.isatty(1), os.isatty(2)]))
 if mode == "long":
     sys.stdout.write(os.environ.get("FAKE_PREFIX", "") + "x" * int(os.environ["FAKE_SIZE"]) + os.environ.get("FAKE_SUFFIX", ""))
 if mode == "stream":
@@ -168,6 +170,20 @@ class TerminalTest(unittest.TestCase):
         [record] = wrapper.records()
         self.assertTrue(record["stdout_tty"])
         self.assertNotIn("exit", record)
+
+
+    def test_a_terminal_stderr_stays_the_terminal(self):
+        wrapper = Wrapper(self)
+        controller, terminal = pty.openpty()
+        self.addCleanup(os.close, controller)
+        try:
+            result = subprocess.run([sys.executable, str(WRAPPER), "pr", "checks"], env=wrapper.env | {"FAKE_GH": "tty"},
+                                    cwd=wrapper.root, stdin=terminal, stdout=subprocess.PIPE, stderr=terminal, timeout=30)
+        finally:
+            os.close(terminal)
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, [True, False, True]))
+        [record] = wrapper.records()
+        self.assertEqual((record["stderr"], record["stderr_tty"]), ({"terminal": True}, True))
 
 
 class ProbeTest(unittest.TestCase):

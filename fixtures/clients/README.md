@@ -29,9 +29,9 @@ Each `.jsonl` line is one `gh` call:
 | `chain` | The parent processes, nearest first, which tell the clients apart |
 | `cwd`, `env` | The working directory and the gh-related environment (`GH_*`, `NO_COLOR`, `TERM` and the like) |
 | `env_secrets_present` | Token variables that were set, by name only |
-| `stdin_tty`, `stdout_tty` | Whether those were terminals |
+| `stdin_tty`, `stdout_tty`, `stderr_tty` | Whether those were terminals |
 | `exit`, `duration_ms` | gh's exit code and run time |
-| `stdout`, `stderr` | gh's output. `{"bytes": N, "redacted": true}` for output that can hold a token, never stored; `{"same_as": I}` for output equal to the record at 0-based line I; `{"merged_into_stdout": true}` for stderr when the caller sent both to one place |
+| `stdout`, `stderr` | gh's output. `{"bytes": N, "redacted": true}` for output that can hold a token, never stored; `{"same_as": I}` for output equal to the record at 0-based line I; `{"merged_into_stdout": true}` for stderr when the caller sent both to one place; `{"terminal": true}` for a stderr left to gh on the caller's terminal, not recorded |
 | `signal` | The signal that killed gh, if one did |
 | `forward_failed` | Streams the wrapper couldn't pass on to the caller (a full disk, a closed stdout); the call then failed with exit 1 if gh had succeeded |
 | `t` | Seconds since the file's first call |
