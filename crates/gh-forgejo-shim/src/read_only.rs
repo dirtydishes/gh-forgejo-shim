@@ -192,6 +192,8 @@ struct OutputArgs {
 struct ViewStatusArgs {
     output: OutputArgs,
     repo: Option<String>,
+    /// A pull request or issue URL given as the selector, which names the repository.
+    url: Option<String>,
     web: bool,
     number: Option<u64>,
     branch: Option<String>,
@@ -231,6 +233,8 @@ struct RepoViewArgs {
 struct ChecksArgs {
     output: OutputArgs,
     repo: Option<String>,
+    /// A pull request or issue URL given as the selector, which names the repository.
+    url: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     required: bool,
@@ -239,6 +243,8 @@ struct ChecksArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DiffArgs {
     repo: Option<String>,
+    /// A pull request or issue URL given as the selector, which names the repository.
+    url: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     web: bool,
@@ -250,6 +256,8 @@ struct DiffArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CommentArgs {
     repo: Option<String>,
+    /// A pull request or issue URL given as the selector, which names the repository.
+    url: Option<String>,
     number: Option<u64>,
     branch: Option<String>,
     body: Option<String>,
@@ -304,6 +312,8 @@ impl Default for IssueListArgs {
 struct IssueViewArgs {
     output: OutputArgs,
     repo: Option<String>,
+    /// A pull request or issue URL given as the selector, which names the repository.
+    url: Option<String>,
     number: Option<u64>,
     web: bool,
     comments: bool,
@@ -889,7 +899,7 @@ fn run_checks(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_checks_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = selected_repo(parsed.url.as_deref(), parsed.repo.as_deref(), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -957,7 +967,7 @@ fn run_comment(
     stdin: &mut dyn Read,
 ) -> Result<i32> {
     let parsed = parse_comment_args(argv, stdin)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = selected_repo(parsed.url.as_deref(), parsed.repo.as_deref(), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -997,7 +1007,7 @@ fn run_diff(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_diff_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = selected_repo(parsed.url.as_deref(), parsed.repo.as_deref(), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1050,7 +1060,7 @@ fn run_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = selected_repo(parsed.url.as_deref(), parsed.repo.as_deref(), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1111,7 +1121,7 @@ fn run_status(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_view_status_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = selected_repo(parsed.url.as_deref(), parsed.repo.as_deref(), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1365,7 +1375,7 @@ fn run_issue_view(
     stderr: &mut dyn Write,
 ) -> Result<i32> {
     let parsed = parse_issue_view_args(argv)?;
-    let target_repo = target_repo(parsed.repo.as_deref(), repo)?;
+    let target_repo = selected_repo(parsed.url.as_deref(), parsed.repo.as_deref(), repo)?;
     if let Some(code) = missing_token_exit(token_present, &target_repo, stderr)? {
         return Ok(code);
     }
@@ -1640,6 +1650,7 @@ fn parse_checks_args(argv: &[String]) -> Result<ChecksArgs> {
             )));
         } else {
             (parsed.number, parsed.branch) = parse_number_or_branch(arg, "pull");
+            parsed.url = selector_url(arg, "pull");
             index += 1;
         }
     }
@@ -1686,6 +1697,7 @@ fn parse_diff_args(argv: &[String]) -> Result<DiffArgs> {
             let (number, branch) = parse_number_or_branch(arg, "pull");
             parsed.number = number;
             parsed.branch = branch;
+            parsed.url = selector_url(arg, "pull");
             index += 1;
         }
     }
@@ -1726,6 +1738,7 @@ fn parse_comment_args(argv: &[String], stdin: &mut dyn Read) -> Result<CommentAr
             let (number, branch) = parse_number_or_branch(arg, "pull");
             parsed.number = number;
             parsed.branch = branch;
+            parsed.url = selector_url(arg, "pull");
             index += 1;
         }
     }
@@ -1757,6 +1770,7 @@ fn parse_view_status_args(argv: &[String]) -> Result<ViewStatusArgs> {
             let (number, branch) = parse_number_or_branch(arg, "pull");
             parsed.number = number;
             parsed.branch = branch;
+            parsed.url = selector_url(arg, "pull");
             index += 1;
         }
     }
@@ -1905,6 +1919,7 @@ fn parse_issue_view_args(argv: &[String]) -> Result<IssueViewArgs> {
         } else {
             let (number, _) = parse_number_or_branch(arg, "issue");
             parsed.number = number;
+            parsed.url = selector_url(arg, "issue");
             index += 1;
         }
     }
@@ -2118,6 +2133,16 @@ fn target_repo(value: Option<&str>, fallback: &ForgejoRepoRef) -> Result<Forgejo
             .ok_or_else(|| ShimError::new("could not parse --repo value")),
         None => Ok(fallback.clone()),
     }
+}
+
+/// The repository a command selects: a pull request or issue URL's own, which gh's finder takes
+/// whatever `-R` says, then `-R`, then the routed repository.
+fn selected_repo(
+    url: Option<&str>,
+    value: Option<&str>,
+    fallback: &ForgejoRepoRef,
+) -> Result<ForgejoRepoRef> {
+    target_repo(url.or(value), fallback)
 }
 
 fn body_from_file(path_value: &str, stdin: &mut dyn Read) -> Result<String> {
@@ -2435,6 +2460,12 @@ fn parse_number_or_branch(value: &str, kind: &str) -> (Option<u64>, Option<Strin
     (None, Some(value.to_string()))
 }
 
+/// `value` when it's a URL naming a pull request or issue of `kind`, which then selects its
+/// repository too.
+fn selector_url(value: &str, kind: &str) -> Option<String> {
+    number_from_url(value, kind).map(|_| value.to_string())
+}
+
 fn number_from_url(value: &str, kind: &str) -> Option<u64> {
     let scheme_end = value.find("://")?;
     let scheme = &value[..scheme_end];
@@ -2591,6 +2622,16 @@ mod tests {
         created_pulls: RefCell<Vec<(ForgejoRepoRef, CreatePullRequest)>>,
         created_issues: RefCell<Vec<(ForgejoRepoRef, CreateIssueRequest)>>,
         comments: RefCell<Vec<(ForgejoRepoRef, u64, String)>>,
+        /// The `owner/repo` each pull request, issue, diff and check read went to.
+        read_repos: RefCell<Vec<String>>,
+    }
+
+    impl FakeApi {
+        fn read(&self, repo: &ForgejoRepoRef) {
+            self.read_repos
+                .borrow_mut()
+                .push(format!("{}/{}", repo.owner, repo.repo));
+        }
     }
 
     impl Default for FakeApi {
@@ -2635,6 +2676,7 @@ mod tests {
                 created_pulls: RefCell::new(Vec::new()),
                 created_issues: RefCell::new(Vec::new()),
                 comments: RefCell::new(Vec::new()),
+                read_repos: RefCell::new(Vec::new()),
             }
         }
     }
@@ -2690,7 +2732,8 @@ mod tests {
                 .collect())
         }
 
-        fn get_pull(&self, _repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
+        fn get_pull(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
+            self.read(repo);
             self.pulls
                 .iter()
                 .find(|pull| pull_number(pull) == Some(number))
@@ -2708,9 +2751,10 @@ mod tests {
 
         fn list_check_statuses(
             &self,
-            _repo: &ForgejoRepoRef,
+            repo: &ForgejoRepoRef,
             sha: &str,
         ) -> ForgejoResult<Vec<CommitStatus>> {
+            self.read(repo);
             assert_eq!(sha, "abc123");
             Ok(self.check_statuses.clone())
         }
@@ -2728,10 +2772,11 @@ mod tests {
 
         fn get_pull_diff(
             &self,
-            _repo: &ForgejoRepoRef,
+            repo: &ForgejoRepoRef,
             _number: u64,
             _patch: bool,
         ) -> ForgejoResult<String> {
+            self.read(repo);
             Ok(self.diff.clone())
         }
 
@@ -2751,7 +2796,8 @@ mod tests {
             Ok(self.issues.clone())
         }
 
-        fn get_issue(&self, _repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
+        fn get_issue(&self, repo: &ForgejoRepoRef, number: u64) -> ForgejoResult<Value> {
+            self.read(repo);
             self.issues
                 .iter()
                 .find(|issue| pull_number(issue) == Some(number))
@@ -3826,5 +3872,73 @@ mod tests {
             "web url should be opened"
         );
         assert!(client.created_issues.borrow().is_empty());
+    }
+
+    /// gh takes a pull request or issue URL's repository and doesn't read `-R` then
+    /// (`pkg/cmd/pr/shared/finder.go`, `pkg/cmd/issue/shared/lookup.go` in gh 2.103.3), so a
+    /// comment on a URL's pull request never goes to `-R`'s pull request of the same number.
+    #[test]
+    fn a_url_selector_names_the_repository_even_with_a_repo_flag() {
+        let client = FakeApi {
+            pulls: vec![json!({
+                "number": 1,
+                "html_url": "https://git.example.com/target/project/pulls/1",
+                "head": {"ref": "feature", "sha": "abc123"},
+                "base": {"ref": "main"},
+            })],
+            issues: vec![json!({
+                "number": 1,
+                "title": "Bug",
+                "html_url": "https://git.example.com/target/project/issues/1",
+            })],
+            check_statuses: vec![serde_json::from_value(json!({
+                "id": 1,
+                "context": "ci/test",
+                "description": "tests passed",
+                "status": "success",
+                "target_url": "https://git.example.com/target/project/actions/runs/1",
+                "created_at": "2026-06-01T00:00:00Z",
+                "updated_at": "2026-06-01T00:00:02Z",
+            }))
+            .expect("valid status")],
+            ..FakeApi::default()
+        };
+        let pull = "https://git.example.com/target/project/pulls/1";
+        let issue = "https://git.example.com/target/project/issues/1";
+        let other = "git.example.com/other/project";
+
+        for args in [
+            &["pr", "comment", pull, "-R", other, "--body", "hi"][..],
+            &["pr", "comment", "--repo", other, pull, "--body", "hi"],
+            &[
+                "pr",
+                "view",
+                pull,
+                &format!("--repo={other}"),
+                "--json",
+                "number",
+            ],
+            &["pr", "diff", pull, "-R", other],
+            &["pr", "checks", pull, "-R", other, "--json", "name"],
+            &["issue", "view", issue, "-R", other, "--json", "number"],
+        ] {
+            let (code, _, stderr) = run_fake(args, &client, Some("token"), None);
+            assert_eq!(code, 0, "{args:?}: {stderr}");
+        }
+
+        let comments = client.comments.borrow();
+        assert_eq!(comments.len(), 2);
+        for (repo, number, _) in comments.iter() {
+            assert_eq!(
+                (repo.owner.as_str(), repo.repo.as_str(), *number),
+                ("target", "project", 1)
+            );
+        }
+        let reads = client.read_repos.borrow();
+        assert!(!reads.is_empty());
+        assert!(
+            reads.iter().all(|repo| repo == "target/project"),
+            "{reads:?}"
+        );
     }
 }
