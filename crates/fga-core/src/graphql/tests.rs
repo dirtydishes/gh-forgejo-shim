@@ -150,6 +150,13 @@ async fn every_captured_document_is_within_the_limits() {
         let steps =
             cost::check(&document, &async_graphql::Variables::default()).expect("within cost");
         let shape = cost::shape(&query).expect("block strings closed");
+        let mut merged = document.clone();
+        merge::merge(&mut merged).expect("merges");
+        assert_eq!(
+            shown(&merged),
+            shown(&document),
+            "{source}: repeats a name at a mutation's root"
+        );
         assert!(
             shape.depth * 4 <= cost::MAX_NESTING,
             "{source}: nests {}: raise MAX_NESTING",
@@ -556,4 +563,173 @@ async fn deep_nesting_is_refused_before_parsing() {
         "]".repeat(cost::MAX_NESTING + 1)
     );
     assert_eq!(refused(&types).await, "Query is nested too deep.");
+}
+
+/// Every operation and fragment of `document`, in an order that doesn't depend on its maps'.
+fn shown(document: &async_graphql::parser::types::ExecutableDocument) -> Vec<String> {
+    let mut shown: Vec<String> = document
+        .operations
+        .iter()
+        .map(|operation| format!("{operation:?}"))
+        .chain(
+            document
+                .fragments
+                .iter()
+                .map(|fragment| format!("{fragment:?}")),
+        )
+        .collect();
+    shown.sort();
+    shown
+}
+
+/// `document` with its mutations' roots merged, as validation receives it.
+fn merged(
+    document: &str,
+) -> async_graphql::ServerResult<async_graphql::parser::types::ExecutableDocument> {
+    let mut document = async_graphql::parser::parse_query(document).expect("parses");
+    merge::merge(&mut document)?;
+    Ok(document)
+}
+
+/// The response names `document`'s one operation selects at its root.
+fn root_names(document: &async_graphql::parser::types::ExecutableDocument) -> Vec<String> {
+    use async_graphql::parser::types::Selection;
+    let (_, operation) = document.operations.iter().next().expect("an operation");
+    operation
+        .node
+        .selection_set
+        .node
+        .items
+        .iter()
+        .map(|selection| match &selection.node {
+            Selection::Field(field) => field.node.response_key().node.to_string(),
+            other => panic!("{other:?} left at the root"),
+        })
+        .collect()
+}
+
+/// Every mutation the schema serves, selected twice through fragments and once more directly,
+/// is selected once, with the repeats' sub-selections under it in order.
+#[test]
+fn every_mutation_selected_more_than_once_is_selected_once() {
+    use async_graphql::parser::types::{Selection, TypeKind, TypeSystemDefinition};
+    let sdl = async_graphql::parser::parse_schema(builder().finish().sdl()).expect("SDL");
+    let mutations: Vec<String> = sdl
+        .definitions
+        .into_iter()
+        .find_map(|definition| match definition {
+            TypeSystemDefinition::Type(ty) if ty.node.name.node == "Mutation" => match ty.node.kind
+            {
+                TypeKind::Object(object) => Some(
+                    object
+                        .fields
+                        .into_iter()
+                        .map(|field| field.node.name.node.to_string())
+                        .collect(),
+                ),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("a Mutation type");
+    assert!(mutations.len() > 10, "{mutations:?}");
+    for mutation in mutations {
+        let document = merged(&format!(
+            "mutation{{...A ... on Mutation{{...B}} {mutation}(input:$i){{c}} __typename}}
+            fragment A on Mutation{{{mutation}(input:$i){{a}}}}
+            fragment B on Mutation{{{mutation}(input:$i){{b}}}}"
+        ))
+        .expect("merges");
+        assert_eq!(root_names(&document), [mutation.as_str(), "__typename"]);
+        let (_, operation) = document.operations.iter().next().expect("an operation");
+        let Selection::Field(field) = &operation.node.selection_set.node.items[0].node else {
+            unreachable!()
+        };
+        let selected: Vec<String> = field
+            .node
+            .selection_set
+            .node
+            .items
+            .iter()
+            .map(|selection| match &selection.node {
+                Selection::Field(field) => field.node.name.node.to_string(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(selected, ["a", "b", "c"], "{mutation}");
+        // Both fragments were spread only at the root, so they go with it.
+        assert!(document.fragments.is_empty(), "{mutation}");
+    }
+}
+
+/// Only a mutation's root is merged: a query, and a mutation that repeats no name, stay as parsed.
+#[test]
+fn documents_that_repeat_no_mutation_name_stay_as_parsed() {
+    for query in [
+        "{viewer{login} viewer{name}}",
+        "mutation{a:closePullRequest(input:$i){b} c:closePullRequest(input:$i){d}}",
+        "mutation{...A} fragment A on Mutation{closePullRequest(input:$i){b}} fragment U on Mutation{x}",
+    ] {
+        let parsed = async_graphql::parser::parse_query(query).expect("parses");
+        assert_eq!(
+            shown(&merged(query).expect("merges")),
+            shown(&parsed),
+            "{query}"
+        );
+    }
+}
+
+/// A fragment the merge inlines stays where another operation, or a field's selection, spreads
+/// it; a fragment nothing spread stays for validation to refuse.
+#[test]
+fn fragments_still_spread_elsewhere_stay() {
+    let document = merged(
+        "mutation M{...A ...A} query Q{...R}
+        fragment A on Mutation{closePullRequest(input:$i){...P}}
+        fragment P on ClosePullRequestPayload{clientMutationId}
+        fragment R on Query{viewer{login}}
+        fragment U on Query{viewer{name}}",
+    )
+    .expect("merges");
+    let mut names: Vec<&str> = document
+        .fragments
+        .keys()
+        .map(|name| name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["P", "R", "U"]);
+}
+
+/// The merge chooses between repeats only where `@skip` and `@include` can't, as async-graphql
+/// applies them after validation.
+#[tokio::test]
+async fn a_repeated_mutation_under_a_directive_is_refused() {
+    for query in [
+        "mutation($x:Boolean!){...A @include(if:$x) closePullRequest(input:{pullRequestId:\"P\"}){clientMutationId}}
+        fragment A on Mutation{closePullRequest(input:{pullRequestId:\"P\"}){clientMutationId}}",
+        "mutation($x:Boolean!){closePullRequest(input:{pullRequestId:\"P\"}) @skip(if:$x){clientMutationId}
+        closePullRequest(input:{pullRequestId:\"P\"}){clientMutationId}}",
+    ] {
+        let message = refused(query).await;
+        assert!(message.contains("can't use directives"), "{message}");
+    }
+}
+
+/// The same name for another field or with other arguments can't merge, wherever the repeats
+/// sit, and is refused with the overlapping-fields rule's wording.
+#[test]
+fn a_repeated_name_that_cannot_merge_is_refused() {
+    for (query, wording) in [
+        (
+            "mutation{x:closePullRequest(input:$i){a} ...A} fragment A on Mutation{x:reopenPullRequest(input:$i){a}}",
+            "Fields \"x\" conflict because \"closePullRequest\" and \"reopenPullRequest\" are different fields.",
+        ),
+        (
+            "mutation{closePullRequest(input:$i){a} ... {closePullRequest(input:$j){a}}}",
+            "Fields \"input\" conflict because they have differing arguments.",
+        ),
+    ] {
+        let message = merged(query).expect_err("refused").message;
+        assert!(message.starts_with(wording), "{message}");
+    }
 }
