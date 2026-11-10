@@ -44,7 +44,7 @@ if mode == "interleave":
         (sys.stdout if line % 2 else sys.stderr).write(f"{line}\n")
         (sys.stdout if line % 2 else sys.stderr).flush()
 if mode == "long":
-    sys.stdout.write(os.environ.get("FAKE_PREFIX", "") + "x" * int(os.environ["FAKE_SIZE"]))
+    sys.stdout.write(os.environ.get("FAKE_PREFIX", "") + "x" * int(os.environ["FAKE_SIZE"]) + os.environ.get("FAKE_SUFFIX", ""))
 if mode == "stream":
     # One line, then wait until the caller has read it, as `gh pr checks --watch` does between polls.
     print("first", flush=True)
@@ -333,6 +333,17 @@ class TokenOutputTest(unittest.TestCase):
         self.assertIn('"client_secret":"<redacted>"', first["stdout"])
         self.assertNotIn("gto_", first["stdout"])
         self.assertTrue(second["stdout"]["head"].startswith('{"token": "<redacted>", '))
+
+    def test_a_sensitive_value_cut_short_goes_to_the_cut(self):
+        wrapper = Wrapper(self)
+        prefix = '{"patch":"'
+        for into in ('","client_secret":"', '","client_secret": "ab\\"', '","token":"'):
+            size = 256 * 1024 - len(prefix) - len(into) - 10  # the cut falls ten bytes into the value
+            wrapper.run("api", "repos/o/r/contents", FAKE_GH="long", FAKE_SIZE=str(size), FAKE_PREFIX=prefix,
+                        FAKE_SUFFIX=into + "Q" * 40 + '"}')
+        for record, into in zip(wrapper.records(), ('","client_secret":"', '","client_secret": "', '","token":"')):
+            head = record["stdout"]["head"]
+            self.assertTrue("QQQ" not in head and head.endswith(into + "<redacted>"), head[-60:])
 
     def test_scrubbing_is_quick_and_keeps_empty_values(self):
         wrapper = Wrapper(self)
