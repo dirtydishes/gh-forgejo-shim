@@ -4033,6 +4033,64 @@ mod tests {
     }
 
     #[test]
+    fn pr_checkout_never_fetches_from_a_mirror_that_pushes_to_the_forge() {
+        // `origin` fetches from a local mirror taken before the PR's branch moved, and pushes to
+        // the forge by push URL or by a second `url`. git fetches from the first `url` alone.
+        for key in ["remote.origin.pushurl", "remote.origin.url"] {
+            let git_repo = CheckoutGitFixture::new();
+            let mirror = git_repo.root.join("mirror.git");
+            git(
+                &git_repo.root,
+                [
+                    OsStr::new("clone"),
+                    OsStr::new("-q"),
+                    OsStr::new("--mirror"),
+                    git_repo.bare("owner/repo").as_os_str(),
+                    mirror.as_os_str(),
+                ],
+            );
+            let pull_head = git_repo.push_commit(
+                "owner/repo",
+                "feature-pr",
+                "refs/heads/feature-pr",
+                "moved\n",
+            );
+            git(
+                &git_repo.bare("owner/repo"),
+                ["update-ref", "refs/pull/12/head", "refs/heads/feature-pr"],
+            );
+            let forge = git_repo.url("owner/repo");
+            git(
+                git_repo.work(),
+                [
+                    OsStr::new("remote"),
+                    OsStr::new("set-url"),
+                    OsStr::new("origin"),
+                    mirror.as_os_str(),
+                ],
+            );
+            git(git_repo.work(), ["config", "--add", key, forge.as_str()]);
+            let mut pull = pull_from(12, "owner", "feature-pr");
+            pull["base"]["repo"]["clone_url"] = json!(forge);
+            let client = FakeApi {
+                pulls: vec![pull],
+                ..FakeApi::default()
+            };
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", "12"],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_eq!(code, 0, "{key}: {stderr}");
+            assert_eq!(stdout, "checked out feature-pr\n", "{key}");
+            assert_eq!(git_repo.rev("HEAD"), pull_head, "{key}");
+        }
+    }
+
+    #[test]
     fn pr_checkout_with_repo_fetches_that_repository_s_pull_request() {
         // Without a remote for `other/repo`, so from its clone URL, and with one under a name of
         // the user's, so from that remote.

@@ -184,9 +184,11 @@ impl<'a> Checkout<'a> {
             .map(|remote| remote.repo.host.as_str())
     }
 
-    /// The remote for a repository, as gh's `FindByRepo` picks it (`gh/context/remote.go`): the
-    /// first in gh's remote order whose owner and name match without case. gh has already kept
-    /// only remotes on known hosts; this matches the host too.
+    /// The remote to fetch a repository from, as gh's `FindByRepo` picks it (`gh/context/remote.go`):
+    /// the first in gh's remote order whose owner and name match without case. gh has already kept
+    /// only remotes on known hosts; this matches the host too. Unlike gh, it reads only the URL
+    /// git fetches from, never a push URL: a local mirror that pushes to the forge would fetch the
+    /// mirror's commits.
     pub fn remote_for(&self, host: &str, owner: &str, name: &str) -> Option<String> {
         let mut remotes = self.remotes().iter().collect::<Vec<_>>();
         go_sort::sort(&mut remotes, |a, b| {
@@ -196,9 +198,11 @@ impl<'a> Checkout<'a> {
         remotes
             .into_iter()
             .find(|remote| {
-                remote.repo.host.eq_ignore_ascii_case(&host)
-                    && remote.repo.owner.eq_ignore_ascii_case(owner)
-                    && remote.repo.name.eq_ignore_ascii_case(name)
+                remote.fetch_repo.as_ref().is_some_and(|repo| {
+                    repo.host.eq_ignore_ascii_case(&host)
+                        && repo.owner.eq_ignore_ascii_case(owner)
+                        && repo.name.eq_ignore_ascii_case(name)
+                })
             })
             .map(|remote| remote.name.clone())
     }
@@ -581,11 +585,15 @@ fn base_repo_from_remotes(
 struct Remote {
     name: String,
     repo: RepoRef,
+    /// The repository the URL git fetches from names, if any.
+    fetch_repo: Option<RepoRef>,
     resolved: Option<String>,
 }
 
 /// `git remote -v` in git's order, each remote's repository taken from its fetch URL, or its
-/// push URL when the fetch URL names none (`gh/context/remote.go` `TranslateRemotes`).
+/// push URL when the fetch URL names none (`gh/context/remote.go` `TranslateRemotes`). The fetch
+/// line is the first `remote.<name>.url`, after `insteadOf`, the one URL `git fetch` uses; later
+/// `url` values are listed as push URLs.
 fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
     let Some(listing) = git_output(&["remote", "-v"], cwd) else {
         return Vec::new();
@@ -633,14 +641,15 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
     let mut ssh = SshHosts::default();
     urls.into_iter()
         .filter_map(|(name, fetch, push)| {
-            let repo = [fetch, push]
-                .into_iter()
-                .flatten()
-                .find_map(|url| remote_repo(&url, &mut ssh))?;
+            let fetch_repo = fetch.and_then(|url| remote_repo(&url, &mut ssh));
+            let repo = fetch_repo
+                .clone()
+                .or_else(|| push.and_then(|url| remote_repo(&url, &mut ssh)))?;
             let resolved = saved.get(name.as_str()).map(|value| (*value).to_string());
             Some(Remote {
                 name,
                 repo,
+                fetch_repo,
                 resolved,
             })
         })
@@ -1364,6 +1373,11 @@ mod tests {
 
     impl RemotesFixture {
         fn new(remotes: &[(&str, &str)]) -> Self {
+            Self::with_config(remotes, &[])
+        }
+
+        /// As [`RemotesFixture::new`], then `git config --add` each `(key, value)` in `config`.
+        fn with_config(remotes: &[(&str, &str)], config: &[(&str, &str)]) -> Self {
             static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let root = std::env::temp_dir().join(format!(
@@ -1383,6 +1397,9 @@ mod tests {
             git(&["init", "-q"]);
             for (name, url) in remotes {
                 git(&["remote", "add", name, url]);
+            }
+            for (key, value) in config {
+                git(&["config", "--add", key, value]);
             }
             Self(root)
         }
@@ -1484,6 +1501,39 @@ mod tests {
                 "{host} {owner}/{name}"
             );
         }
+    }
+
+    #[test]
+    fn remote_for_takes_only_the_url_git_fetches_from() {
+        const FORGE: &str = "ssh://git@git.example.com/owner/repo.git";
+        // A local mirror that pushes to the forge, by push URL or a second `url`: git fetches
+        // from the first `url` alone, which names no repository on the forge.
+        for key in ["remote.origin.pushurl", "remote.origin.url"] {
+            let fixture = RemotesFixture::with_config(
+                &[("origin", "/srv/mirrors/owner/repo.git")],
+                &[(key, FORGE)],
+            );
+            assert_eq!(
+                fixture.remote_for("git.example.com", "owner", "repo"),
+                None,
+                "{key}"
+            );
+        }
+        // A remote fetched from the forge counts, wherever it pushes, and so does one whose URL
+        // an `insteadOf` rule rewrites to the forge.
+        let fixture = RemotesFixture::with_config(
+            &[("origin", FORGE), ("upstream", "forge:owner/repo.git")],
+            &[
+                ("remote.origin.pushurl", "/srv/mirrors/owner/repo.git"),
+                ("url.ssh://git@git.example.com/.insteadOf", "forge:"),
+            ],
+        );
+        assert_eq!(
+            fixture
+                .remote_for("git.example.com", "owner", "repo")
+                .as_deref(),
+            Some("upstream")
+        );
     }
 
     #[test]

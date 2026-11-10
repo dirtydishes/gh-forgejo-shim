@@ -358,7 +358,9 @@ against GitHub, on either fetch path, so the gateway doesn't change it.
 (`gh-forgejo-shim gh …`) and every checkout on a non-Unix build still take, makes gh's choices from
 Forgejo's PR. A PR URL's repository wins over `-R`, as in gh's finder. It fetches from the remote
 whose URL names the base repository (gh's `FindByRepo`), so in a fork's clone that is `upstream`,
-not `origin`, and from the base's clone URL when no remote names it. It fetches the head branch by
+not `origin`, and from the base's clone URL when no remote names it. Unlike gh, only the URL git
+fetches from counts: the first `remote.<name>.url`, after `insteadOf`, never a push URL or a later
+`url` (see the residues). It fetches the head branch by
 name only for an open PR whose head is that branch in the base repository, and otherwise
 `refs/pull/N/head`: a fork's branch name, fetched from the base, would be the base's branch of that
 name. Unlike gh, it fetches with an empty `--refmap`, so the remote's configured fetch mapping
@@ -395,6 +397,13 @@ branch whose name matches an existing one's only without case.
   `+refs/heads/*:refs/heads/*`, gh resets the user's `feature` to the forge's, unpushed commits and
   all, and its `--ff-only` merge then passes (pinned by `agit_checkout.rs`). gh does the same against
   GitHub. The built-in path passes `--refmap=` and keeps the branch.
+- **A remote that fetches from one place and pushes to the forge.** gh takes a remote's
+  repository from its fetch URL, or from its push URL when the fetch URL names none, such as a
+  local path. It then fetches from that remote by name. So when `origin` fetches from a local
+  mirror or cache and pushes to the forge (`remote.origin.pushurl`, or a second
+  `remote.origin.url`), gh checks out the mirror's tip of the PR's branch, which may be older, and
+  exits 0 (pinned by `agit_checkout.rs`). gh does the same against GitHub. The built-in path skips
+  such a remote and fetches from the base's clone URL.
 - **Branch names that differ only in case, on macOS.** For a PR with no head repository (closed, or
   its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
   ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's
