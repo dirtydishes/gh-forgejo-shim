@@ -43,6 +43,12 @@ if mode == "interleave":
     for line in range(1, 41):
         (sys.stdout if line % 2 else sys.stderr).write(f"{line}\n")
         (sys.stdout if line % 2 else sys.stderr).flush()
+if mode == "ordered":
+    # stdout, then stderr, each written and flushed in turn.
+    sys.stdout.write("AAAA\n")
+    sys.stdout.flush()
+    time.sleep(0.2)
+    sys.stderr.write("b\n")
 if mode == "long":
     sys.stdout.write(os.environ.get("FAKE_PREFIX", "") + "x" * int(os.environ["FAKE_SIZE"]) + os.environ.get("FAKE_SUFFIX", ""))
 if mode == "stream":
@@ -443,6 +449,18 @@ class StreamTest(unittest.TestCase):
             self.assertEqual(result.stdout, "".join(f"{line}\n" for line in range(1, 41)).encode())
         record = wrapper.records()[0]
         self.assertEqual((record["stderr"], record["stdout"].count("\n")), ({"merged_into_stdout": True}, 40))
+
+    def test_a_file_opened_twice_or_shared_gets_what_gh_alone_writes(self):
+        wrapper = Wrapper(self)
+        for redirect, mode in ((">f 2>f", "ordered"), (">f 2>&1", "ordered"), (">f 2>&1", "interleave"),
+                               (">>f 2>>f", "interleave")):
+            got = {}
+            for name, command in (("direct", [str(wrapper.gh)]), ("wrapped", [sys.executable, str(WRAPPER)])):
+                (wrapper.root / "f").write_text("")
+                subprocess.run(["/bin/sh", "-c", f'"$@" pr checks {redirect}', "sh", *command], env=wrapper.env | {"FAKE_GH": mode},
+                               cwd=wrapper.root, stdin=subprocess.DEVNULL, timeout=30, check=True)
+                got[name] = (wrapper.root / "f").read_text()
+            self.assertEqual(got["wrapped"], got["direct"], redirect)
 
     def test_something_gh_leaves_running_doesnt_hold_the_caller(self):
         wrapper = Wrapper(self)

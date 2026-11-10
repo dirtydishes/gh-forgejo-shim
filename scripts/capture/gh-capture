@@ -23,6 +23,7 @@ gh writes it (`gh pr checks --watch`), with a copy kept for the record. SIGINT, 
 go on to gh, and when a signal kills gh the wrapper dies of the same one. Python 3.9 compatible
 (macOS /usr/bin/python3).
 """
+import fcntl
 import json
 import os
 import re
@@ -374,12 +375,34 @@ def signal_name(number):
 
 
 def same_place(first, second):
-    """Whether two descriptors lead to the same file or pipe."""
+    """Whether gh's writes to two descriptors land in one stream, so one pipe for both keeps gh's
+    order: the same pipe, socket or device, or a regular file both append to (`>>f 2>>f`) or opened
+    once for both (`>f 2>&1`). A file opened twice (`>f 2>f`) has an offset for each, so its two
+    streams overwrite each other, and stay apart as they would for gh."""
     try:
         one, other = os.fstat(first), os.fstat(second)
+        if (one.st_dev, one.st_ino) != (other.st_dev, other.st_ino):
+            return False
+        if not stat.S_ISREG(one.st_mode):
+            return True
+        if all(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND for fd in (first, second)):
+            return True
+        return shared_offset(first, second)
     except OSError:
         return False
-    return (one.st_dev, one.st_ino) == (other.st_dev, other.st_ino)
+
+
+def shared_offset(first, second):
+    """Whether two descriptors share one open file: moving the first's offset moves the second's.
+    The offset is put back at once, before gh starts."""
+    where = os.lseek(first, 0, os.SEEK_CUR)
+    if os.lseek(second, 0, os.SEEK_CUR) != where:
+        return False
+    os.lseek(first, where + 1, os.SEEK_SET)
+    try:
+        return os.lseek(second, 0, os.SEEK_CUR) == where + 1
+    finally:
+        os.lseek(first, where, os.SEEK_SET)
 
 
 def cwd():
