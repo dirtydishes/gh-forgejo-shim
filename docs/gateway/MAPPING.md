@@ -360,18 +360,23 @@ Forgejo's PR. A PR URL's repository wins over `-R`, as in gh's finder. It fetche
 whose URL names the base repository (gh's `FindByRepo`), so in a fork's clone that is `upstream`,
 not `origin`, and from the base's clone URL when no remote names it. Unlike gh, only the URL git
 fetches from counts: the first `remote.<name>.url`, after `insteadOf`, never a push URL or a later
-`url` (see the residues). It fetches the head branch by
-name only for an open PR whose head is that branch in the base repository, and otherwise
-`refs/pull/N/head`: a fork's branch name, fetched from the base, would be the base's branch of that
-name. Unlike gh, it fetches with an empty `--refmap`, so the remote's configured fetch mapping
-doesn't also apply (see the residues). Without `--branch` it names the local branch after the head
-branch, with the head owner in front when that name is the base's default branch, so a fork's
-`main` lands on `fork/main`. An existing local branch then moves only by `git merge --ff-only`, as
-gh's does. When the branch has commits of its own, the checkout fails before switching to it, so the
-user stays on their branch, as gh's refused fetch leaves them; `--force` resets it. A head named
-like a ref, or `@`, checks out detached. Unlike gh, it compares the default branch's name without
-case, and where git records that the filesystem ignores case (`core.ignorecase`), it refuses a local
-branch whose name matches an existing one's only without case.
+`url` (see the residues). It fetches the head branch by name only for an open PR whose head is that
+branch in the base repository, and otherwise `refs/pull/N/head`: a fork's branch name, fetched from
+the base, would be the base's branch of that name. Unlike gh, it fetches with an empty `--refmap`,
+so the remote's configured fetch mapping doesn't also apply (see the residues). Also unlike gh, the
+fetched commit must be the PR's head as Forgejo reports it: `head.sha` for a branch fetched by name,
+and for `refs/pull/N/head` that ref's commit (`GET repos/{o}/{r}/git/refs/pull/{n}/head`, or
+`head.sha` if it can't be read), since `head.sha` follows a branch that may have moved on after the
+PR closed. Otherwise the checkout fails before any branch moves, naming where git fetched from and
+both commits. That catches a mirror, however git reaches it, that serves an older copy. Without
+`--branch` it names the local branch after the head branch, with the head owner in front when that
+name is the base's default branch, so a fork's `main` lands on `fork/main`. An existing local branch
+then moves only by `git merge --ff-only`, as gh's does. When the branch has commits of its own, the
+checkout fails before switching to it, so the user stays on their branch, as gh's refused fetch
+leaves them; `--force` resets it. A head named like a ref, or `@`, checks out detached. Unlike gh,
+it compares the default branch's name without case, and where git records that the filesystem
+ignores case (`core.ignorecase`), it refuses a local branch whose name matches an existing one's
+only without case.
 
 **Residues:**
 
@@ -403,7 +408,10 @@ branch whose name matches an existing one's only without case.
   mirror or cache and pushes to the forge (`remote.origin.pushurl`, or a second
   `remote.origin.url`), gh checks out the mirror's tip of the PR's branch, which may be older, and
   exits 0 (pinned by `agit_checkout.rs`). gh does the same against GitHub. The built-in path skips
-  such a remote and fetches from the base's clone URL.
+  such a remote and fetches from the base's clone URL. An `insteadOf` rule can still send that
+  fetch to the mirror; the built-in path then refuses the checkout when the mirror's commit isn't
+  the PR's head. It also refuses when a push lands between Forgejo's answer and the fetch; running
+  it again succeeds.
 - **Branch names that differ only in case, on macOS.** For a PR with no head repository (closed, or
   its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
   ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's

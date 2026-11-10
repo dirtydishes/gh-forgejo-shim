@@ -399,6 +399,29 @@ impl ForgejoClient {
         )
     }
 
+    /// The commit of a PR's own ref `refs/pull/N/head` in the base repository, or `None` when the
+    /// answer names none. Forgejo answers an exact match as one object and a prefix as a list
+    /// (`routers/api/v1/repo/git_ref.go`).
+    pub fn get_pull_head_ref(&self, repo: &RepoRef, number: u64) -> ForgejoResult<Option<String>> {
+        let value = self.request_json(
+            Method::GET,
+            format!(
+                "{}/git/refs/pull/{number}/head",
+                self.repo_api_base_url(repo)?
+            ),
+            None,
+        )?;
+        let wanted = format!("refs/pull/{number}/head");
+        let reference = match &value {
+            Value::Array(refs) => refs.iter().find(|r| r["ref"] == wanted.as_str()),
+            single if single["ref"] == wanted.as_str() => Some(single),
+            _ => None,
+        };
+        Ok(reference
+            .and_then(|r| r["object"]["sha"].as_str())
+            .map(str::to_owned))
+    }
+
     pub fn get_pull_diff(&self, repo: &RepoRef, number: u64, patch: bool) -> ForgejoResult<String> {
         let diff_type = if patch { "patch" } else { "diff" };
         self.request_text(
@@ -1340,6 +1363,35 @@ mod tests {
         assert_eq!(
             requests[0].request_line,
             "GET /api/v1/repos/owner/repo/pulls?state=open HTTP/1.1"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pull_head_ref_reads_one_object_or_the_exact_match_in_a_list() -> TestResult {
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(r#"{"ref":"refs/pull/7/head","object":{"sha":"aaa"}}"#),
+            FakeResponse::json(
+                r#"[{"ref":"refs/pull/70/head","object":{"sha":"bbb"}},
+                    {"ref":"refs/pull/7/head","object":{"sha":"ccc"}}]"#,
+            ),
+            FakeResponse::json(r#"[{"ref":"refs/pull/70/head","object":{"sha":"bbb"}}]"#),
+        ])?;
+        let client = ForgejoClient::new(None).with_scheme("http");
+        let repo = RepoRef::new(host, "owner", "repo");
+
+        let heads = (0..3)
+            .map(|_| client.get_pull_head_ref(&repo, 7))
+            .collect::<ForgejoResult<Vec<_>>>()?;
+        let requests = finish_fake_server(handle)?;
+
+        assert_eq!(
+            heads,
+            [Some("aaa".to_string()), Some("ccc".to_string()), None]
+        );
+        assert_eq!(
+            requests[0].request_line,
+            "GET /api/v1/repos/owner/repo/git/refs/pull/7/head HTTP/1.1"
         );
         Ok(())
     }
