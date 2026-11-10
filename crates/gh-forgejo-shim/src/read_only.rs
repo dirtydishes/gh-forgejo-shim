@@ -941,8 +941,11 @@ fn run_checkout(
         None => head_sha,
     };
     let got = git_output(&["rev-parse", "--verify", "--quiet", "FETCH_HEAD"], cwd);
-    if !matches!((&got, &expected), (Some(got), Some(expected)) if got.eq_ignore_ascii_case(expected))
-    {
+    let Some(commit) = got.as_deref().filter(|got| {
+        expected
+            .as_deref()
+            .is_some_and(|e| got.eq_ignore_ascii_case(e))
+    }) else {
         let source = git_output(&["ls-remote", "--get-url", remote.as_str()], cwd)
             .unwrap_or_else(|| remote.clone());
         writeln!(
@@ -954,18 +957,19 @@ fn run_checkout(
             expected.as_deref().unwrap_or("unknown"),
         )?;
         return Ok(1);
-    }
+    };
 
+    // The commit just checked, not `FETCH_HEAD`, which another fetch could rewrite meanwhile.
     let output = match branch.as_deref() {
-        None => git_run(&["checkout", "--detach", "FETCH_HEAD"], cwd),
-        Some(branch) if parsed.force => git_run(&["checkout", "-B", branch, "FETCH_HEAD"], cwd),
+        None => git_run(&["checkout", "--detach", commit], cwd),
+        Some(branch) if parsed.force => git_run(&["checkout", "-B", branch, commit], cwd),
         Some(branch) => {
             if local_branches.contains(&branch) {
                 // As gh: an existing branch moves only by fast-forward, so its own commits stay.
                 // One that can't is refused before the switch, so the user stays where they were,
                 // as gh's fetch into the branch is refused.
                 let local = format!("refs/heads/{branch}");
-                let ancestor = git_run(&["merge-base", "--is-ancestor", &local, "FETCH_HEAD"], cwd);
+                let ancestor = git_run(&["merge-base", "--is-ancestor", &local, commit], cwd);
                 if ancestor.code == 1 {
                     writeln!(
                         stderr,
@@ -976,12 +980,12 @@ fn run_checkout(
                 }
                 let output = git_run(&["checkout", branch], cwd);
                 if output.code == 0 {
-                    git_run(&["merge", "--ff-only", "FETCH_HEAD"], cwd)
+                    git_run(&["merge", "--ff-only", commit], cwd)
                 } else {
                     output
                 }
             } else {
-                git_run(&["checkout", "-b", branch, "FETCH_HEAD"], cwd)
+                git_run(&["checkout", "-b", branch, commit], cwd)
             }
         }
     };
