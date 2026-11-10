@@ -354,6 +354,14 @@ If the local branch already holds commits on top of the PR's head, gh keeps them
 fetched head with `--ff-only`, which leaves a branch that is ahead where it is. gh does the same
 against GitHub, on either fetch path, so the gateway doesn't change it.
 
+**The wrapper's built-in `gh pr checkout`**, which a PR URL, `--recurse-submodules` and a captured
+run (`gh-forgejo-shim gh …`) still take, makes gh's choices from Forgejo's PR. It fetches the head
+branch by name only for an open PR whose head is that branch in the base repository, and otherwise
+`refs/pull/N/head`: a fork's branch name, fetched from the base, would be the base's branch of that
+name. Without `--branch` it names the local branch after the head branch, with the head owner in
+front when that name is the base's default branch, so a fork's `main` lands on `fork/main`. Unlike
+gh, it compares that name without case. A head named like a ref, or `@`, checks out detached.
+
 **Residues:**
 
 - **A force-push just before checkout.** For an open PR, Forgejo updates `refs/pull/N/head` after a
@@ -365,6 +373,10 @@ against GitHub, on either fetch path, so the gateway doesn't change it.
   `refs/pull/N/head`, then checks out that name. If the user's repository also has a branch with that
   literal name (`refs/heads/refs/pull/N/head`), git warns that the name is ambiguous and checks out
   the branch instead, leaving it as it was.
+- **A fork's branch named as one of the user's own.** gh adds the owner only to a head named as the
+  base's default branch (`checkout.go`'s `cmdsForMissingRemote`). A fork's PR from `develop`
+  checks out to the user's `develop`, and `--force` resets it to the PR, unpushed commits and all,
+  whatever remote it tracks. gh does the same against GitHub, and the built-in path follows it.
 - **Branch names that differ only in case, on macOS.** For a PR with no head repository (closed, or
   its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
   ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's
