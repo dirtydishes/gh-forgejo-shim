@@ -866,10 +866,23 @@ fn run_checkout(
         .remote_for(&target_repo.host, &target_repo.owner, &target_repo.repo)
         .unwrap_or_else(|| clone_url(&pull, &target_repo));
 
+    // An empty `--refmap` keeps git from also applying the remote's configured mapping to what it
+    // fetches. One into a local branch (`+refs/heads/x:refs/heads/x`, or a mirror's
+    // `+refs/heads/*:refs/heads/*`) would reset that branch before the fast-forward check, unpushed
+    // commits and all. gh's fetch has no `--refmap`, so this goes further than gh.
     let mut fetch_error = String::new();
     let mut fetched = false;
     for fetch_ref in fetch_refs {
-        let output = git_run(&["fetch", "--", remote.as_str(), fetch_ref.as_str()], cwd);
+        let output = git_run(
+            &[
+                "fetch",
+                "--refmap=",
+                "--",
+                remote.as_str(),
+                fetch_ref.as_str(),
+            ],
+            cwd,
+        );
         if output.code == 0 {
             fetched = true;
             break;
@@ -4156,6 +4169,48 @@ mod tests {
             }
             assert_eq!(git_repo.rev(branch), mine, "{branch}");
             assert_eq!(git_repo.branch().as_deref(), Some("topic"), "{branch}");
+        }
+    }
+
+    #[test]
+    fn pr_checkout_keeps_a_branch_a_fetch_mapping_names() {
+        // git applies the configured mapping to a fetch of the branch as well as the command
+        // line's, which would reset the branch before the fast-forward check.
+        for mapping in [
+            "+refs/heads/feature-pr:refs/heads/feature-pr",
+            "+refs/heads/*:refs/heads/*",
+        ] {
+            let git_repo = CheckoutGitFixture::new();
+            git(
+                git_repo.work(),
+                ["checkout", "-q", "-b", "feature-pr", "main"],
+            );
+            fs::write(git_repo.work().join("NOTES.md"), "mine\n").expect("write local file");
+            git(git_repo.work(), ["add", "NOTES.md"]);
+            git(git_repo.work(), ["commit", "-qm", "mine"]);
+            let mine = git_repo.rev("feature-pr");
+            git(git_repo.work(), ["checkout", "-q", "main"]);
+            git(
+                git_repo.work(),
+                ["config", "--add", "remote.origin.fetch", mapping],
+            );
+            let client = FakeApi {
+                pulls: vec![pull_from(12, "owner", "feature-pr")],
+                ..FakeApi::default()
+            };
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", "12"],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_eq!(code, 1, "{mapping}: {stderr}");
+            assert_eq!(stdout, "", "{mapping}");
+            assert!(stderr.contains("fast-forward"), "{mapping}: {stderr}");
+            assert_eq!(git_repo.rev("feature-pr"), mine, "{mapping}");
+            assert_eq!(git_repo.branch().as_deref(), Some("main"), "{mapping}");
         }
     }
 

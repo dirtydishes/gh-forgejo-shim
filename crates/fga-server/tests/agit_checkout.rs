@@ -304,8 +304,126 @@ async fn keeps_local_main(gh: &Path, case: usize, branch: &str, state: &str) {
     }
 }
 
+/// A fetch mapping into a local branch (`remote.origin.fetch=+refs/heads/feature:refs/heads/feature`)
+/// applies to any fetch of that branch: git updates the configured destination opportunistically,
+/// as well as the one on the command line. gh fetches a same-repository PR's branch from its
+/// remote, so with that mapping the user's `feature` is reset to the forge's, unpushed commits and
+/// all, and gh's `--ff-only` merge then passes. This pins gh's behaviour; the wrapper's built-in
+/// checkout passes `--refmap=` and keeps the branch.
+#[tokio::test]
+#[ignore = "needs real gh 2.103.3 and git"]
+async fn a_fetch_mapping_into_a_local_branch_resets_it_under_gh() {
+    let Some(gh) = real_gh() else {
+        eprintln!("skipped: no gh 2.103.3 (set GFJS_REAL_GH)");
+        return;
+    };
+    let root = std::env::temp_dir().join(format!("fga-refmap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // The forge: main at A, and PR 1 from `feature` at F.
+    let upstream = root.join("up.git");
+    let seed = root.join("seed");
+    git(
+        &root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            upstream.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(&seed).unwrap();
+    git(&seed, &["init", "-q", "-b", "main"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "A"]);
+    let a = text(&git(&seed, &["rev-parse", "HEAD"]));
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "F"]);
+    let f = text(&git(&seed, &["rev-parse", "HEAD"]));
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            upstream.to_str().unwrap(),
+            &format!("{a}:refs/heads/main"),
+            &format!("{f}:refs/heads/feature"),
+            &format!("{f}:refs/pull/1/head"),
+        ],
+    );
+    // The user's clone: `feature` with an unpushed commit U, `main` checked out, and the mapping.
+    let work = root.join("work");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            upstream.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    git(&work, &["switch", "-q", "-c", "feature", "origin/feature"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "U"]);
+    let unpushed = text(&git(&work, &["rev-parse", "HEAD"]));
+    git(&work, &["switch", "-q", "main"]);
+    git(
+        &work,
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/heads/feature:refs/heads/feature",
+        ],
+    );
+    git(
+        &work,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://git@forge.test/o/r.git",
+        ],
+    );
+    let ssh = root.join("ssh");
+    std::fs::write(
+        &ssh,
+        format!("#!/bin/sh\nexec git-upload-pack '{}'\n", upstream.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+
+    let user = json!({"id":1,"login":"o","full_name":"","avatar_url":""});
+    let pull = json!({"number":1,"title":"feature","state":"open","merged":false,"draft":false,
+        "html_url":"https://forge.test/o/r/pulls/1","user":user,"merged_at":null,
+        "allow_maintainer_edit":false,
+        "head":{"label":"feature","ref":"feature","sha":f,"repo":{"name":"r","owner":user}},
+        "base":{"label":"main","ref":"main","sha":a,"repo":{"name":"r","owner":user}}});
+    let checkout = gh_through_gateway(
+        &gh,
+        &root,
+        &work,
+        &ssh,
+        pull,
+        &["pr", "checkout", "1", "-R", "forge.test/o/r"],
+    )
+    .await;
+    let head = text(&git(&work, &["rev-parse", "HEAD"]));
+    let feature = text(&git(&work, &["rev-parse", "refs/heads/feature"]));
+    eprintln!(
+        "REFMAP exit={:?}\nstdout={}\nstderr={}\nHEAD={head} (F={f})\nfeature={feature} (U={unpushed})",
+        checkout.status.code(),
+        String::from_utf8_lossy(&checkout.stdout),
+        String::from_utf8_lossy(&checkout.stderr),
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(checkout.status.success(), "gh pr checkout failed");
+    assert_eq!(head, f, "HEAD is not the PR's head");
+    assert_eq!(feature, f, "gh kept the unpushed commit");
+}
+
 /// Runs real gh's `args` in `work` against the gateway, in front of a fake Forgejo that serves
-/// `pull` as PR `number` of `o/r`. `ssh` serves the forge's git repository.
+/// `pull` as PR `number` of `o/r`, with its own ref at the PR's head commit. `ssh` serves the
+/// forge's git repository.
 async fn gh_through_gateway(
     gh: &Path,
     root: &Path,
@@ -315,6 +433,8 @@ async fn gh_through_gateway(
     args: &[&str],
 ) -> Output {
     let number = pull["number"].as_u64().unwrap();
+    let pull_ref = json!({"ref": format!("refs/pull/{number}/head"),
+        "object": {"type": "commit", "sha": pull["head"]["sha"].clone()}});
     let user = pull["user"].clone();
     let repository = json!({"id":1,"name":"r","full_name":"o/r","private":false,"owner":user,
         "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,"archived":false,
@@ -328,6 +448,10 @@ async fn gh_through_gateway(
         .route(
             &format!("/api/v1/repos/o/r/pulls/{number}"),
             get(move || async move { Json(pull) }),
+        )
+        .route(
+            &format!("/api/v1/repos/o/r/git/refs/pull/{number}/head"),
+            get(move || async move { Json(pull_ref) }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let forgejo = format!("http://{}", listener.local_addr().unwrap());

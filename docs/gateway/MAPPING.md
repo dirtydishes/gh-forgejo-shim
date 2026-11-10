@@ -361,14 +361,15 @@ whose URL names the base repository (gh's `FindByRepo`), so in a fork's clone th
 not `origin`, and from the base's clone URL when no remote names it. It fetches the head branch by
 name only for an open PR whose head is that branch in the base repository, and otherwise
 `refs/pull/N/head`: a fork's branch name, fetched from the base, would be the base's branch of that
-name. Without `--branch` it names the local branch after the head branch, with the head owner in
-front when that name is the base's default branch, so a fork's `main` lands on `fork/main`. An
-existing local branch then moves only by `git merge --ff-only`, as gh's does. When the branch has
-commits of its own, the checkout fails before switching to it, so the user stays on their branch, as
-gh's refused fetch leaves them; `--force` resets it. A head named like a ref, or `@`, checks out
-detached. Unlike gh, it compares the default branch's name without case, and where git records that
-the filesystem ignores case (`core.ignorecase`), it refuses a local branch whose name matches an
-existing one's only without case.
+name. Unlike gh, it fetches with an empty `--refmap`, so the remote's configured fetch mapping
+doesn't also apply (see the residues). Without `--branch` it names the local branch after the head
+branch, with the head owner in front when that name is the base's default branch, so a fork's
+`main` lands on `fork/main`. An existing local branch then moves only by `git merge --ff-only`, as
+gh's does. When the branch has commits of its own, the checkout fails before switching to it, so the
+user stays on their branch, as gh's refused fetch leaves them; `--force` resets it. A head named
+like a ref, or `@`, checks out detached. Unlike gh, it compares the default branch's name without
+case, and where git records that the filesystem ignores case (`core.ignorecase`), it refuses a local
+branch whose name matches an existing one's only without case.
 
 **Residues:**
 
@@ -387,6 +388,13 @@ existing one's only without case.
   its own, and otherwise fast-forwards it onto the fork's commits. `--force` resets it to the PR,
   unpushed commits and all, whatever remote it tracks. gh does the same against GitHub, and the
   built-in path follows it.
+- **A fetch mapping into a local branch.** When git fetches a branch named on the command line,
+  it also updates whatever the remote's configured mapping names for it. gh fetches a
+  same-repository PR's branch as `+refs/heads/<name>:refs/remotes/<remote>/<name>`, with no
+  `--refmap`. So with `remote.origin.fetch=+refs/heads/feature:refs/heads/feature`, or a mirror's
+  `+refs/heads/*:refs/heads/*`, gh resets the user's `feature` to the forge's, unpushed commits and
+  all, and its `--ff-only` merge then passes (pinned by `agit_checkout.rs`). gh does the same against
+  GitHub. The built-in path passes `--refmap=` and keeps the branch.
 - **Branch names that differ only in case, on macOS.** For a PR with no head repository (closed, or
   its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
   ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's
