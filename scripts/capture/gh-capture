@@ -5,7 +5,7 @@ Link it in as `gh` in a directory that comes before the real gh on the client's 
 
     ln -s <checkout>/scripts/capture/gh-capture ~/.local/bin/gh
 
-It runs the real gh (GH_CAPTURE_REAL, default /opt/homebrew/bin/gh) and appends one JSON line per
+It runs the real gh (GH_CAPTURE_REAL, an absolute path, default /opt/homebrew/bin/gh) and appends one JSON line per
 call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, created owner-only). Nothing about the
 log can break a call: one that can't be written is skipped, saying so only on a terminal.
 
@@ -83,6 +83,20 @@ VALUE_FLAGS = {"-R", "--repo", "--hostname", "-H", "--header", "-f", "-F", "--fi
                "-a", "--app"}
 # `gh api` paths that answer with a credential, and a `--jq` or `--template` that picks one out.
 SECRET_PATH = re.compile(r"(?i)token|authorization|jitconfig|credential|secret|password")
+
+
+def real_gh():
+    """GH_CAPTURE_REAL resolved to the file it names, or None. An absolute path only, so PATH (which
+    finds this wrapper first) never decides, and never this wrapper itself under another name (a
+    symlink or a hard link), which would run itself until something stopped it."""
+    if not os.path.isabs(REAL):
+        return None
+    try:
+        path = os.path.realpath(REAL)
+        found, own = os.stat(path), os.stat(os.path.realpath(__file__))
+    except OSError:
+        return None
+    return None if (found.st_dev, found.st_ino) == (own.st_dev, own.st_ino) else path
 
 
 def process_chain(limit=6):
@@ -388,6 +402,15 @@ def write(record):
 
 def main():
     argv = sys.argv[1:]
+    real = real_gh()
+    if real is None:
+        # As a shell answers for a command it can't run.
+        try:
+            os.write(2, f"gh-capture: GH_CAPTURE_REAL must be an absolute path to the real gh, not this wrapper: {REAL}\n"
+                     .encode())
+        except OSError:
+            pass
+        sys.exit(127)
     record = begin(argv)
     fake = fake_token(argv)
     if fake:
@@ -404,7 +427,7 @@ def main():
 
     if os.isatty(1):
         write(record)
-        os.execv(REAL, [REAL] + argv)
+        os.execv(real, [real] + argv)
 
     # A caller's signal goes on to gh, which decides what to do with it; one that arrives before gh
     # starts waits for it. Signals the caller left ignored stay ignored.
@@ -428,7 +451,7 @@ def main():
     # A caller that sends both streams to one place (`2>&1`) gets them through one pipe, in gh's
     # own order.
     merged = same_place(1, 2)
-    proc = subprocess.Popen([REAL] + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merged else subprocess.PIPE,
+    proc = subprocess.Popen([real] + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merged else subprocess.PIPE,
                             close_fds=False)
     child.append(proc)
     for number in waiting:
