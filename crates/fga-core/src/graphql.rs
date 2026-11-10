@@ -7,6 +7,7 @@ mod cost;
 mod failures;
 mod git;
 mod issues;
+mod merge;
 mod mutation_inputs;
 mod mutations;
 mod pulls;
@@ -58,6 +59,7 @@ fn builder() -> async_graphql::SchemaBuilder<Query, Mutation, EmptySubscription>
         .limit_complexity(MAX_COMPLEXITY)
         .limit_depth(MAX_DEPTH)
         .extension(cost::DocumentCost)
+        .extension(merge::MergeMutationFields)
 }
 
 #[cfg(test)]

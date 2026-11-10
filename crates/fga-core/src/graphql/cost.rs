@@ -307,7 +307,11 @@ fn overlapping_fields(
 
 /// The first error async-graphql's rule reports for `field` under `name`, after `previous`. For
 /// one differing argument it names the argument, not the field, as the rule does.
-fn conflict(name: &str, previous: &Positioned<Field>, field: &Positioned<Field>) -> Option<String> {
+pub(super) fn conflict(
+    name: &str,
+    previous: &Positioned<Field>,
+    field: &Positioned<Field>,
+) -> Option<String> {
     let differing = |name: &str| {
         format!(
             "Fields \"{name}\" conflict because they have differing arguments. Use different aliases on the fields to fetch both if this was intentional."
