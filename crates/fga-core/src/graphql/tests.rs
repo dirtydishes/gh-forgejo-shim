@@ -151,7 +151,7 @@ async fn every_captured_document_is_within_the_limits() {
             cost::check(&document, &async_graphql::Variables::default()).expect("within cost");
         let shape = cost::shape(&query).expect("block strings closed");
         let mut merged = document.clone();
-        merge::merge(&mut merged).expect("merges");
+        merge::merge(&mut merged, &|_| true).expect("merges");
         assert_eq!(
             shown(&merged),
             shown(&document),
@@ -587,7 +587,7 @@ fn merged(
     document: &str,
 ) -> async_graphql::ServerResult<async_graphql::parser::types::ExecutableDocument> {
     let mut document = async_graphql::parser::parse_query(document).expect("parses");
-    merge::merge(&mut document)?;
+    merge::merge(&mut document, &|_| true)?;
     Ok(document)
 }
 
@@ -713,6 +713,26 @@ async fn a_repeated_mutation_under_a_directive_is_refused() {
         let message = refused(query).await;
         assert!(message.contains("can't use directives"), "{message}");
     }
+}
+
+/// A repeated field `Mutation` doesn't have is left to validation, which names it, so the gateway
+/// counts it as unsupported as it would without the repeat.
+#[tokio::test]
+async fn a_repeated_unknown_mutation_is_left_to_validation() {
+    let response = builder()
+        .finish()
+        .execute(
+            "mutation{notAField(input:{a:1}){x} ...B} fragment B on Mutation{notAField(input:{a:2}){x}}",
+        )
+        .await;
+    assert!(
+        response
+            .errors
+            .iter()
+            .any(|error| error.message.starts_with("Unknown field \"notAField\"")),
+        "{:?}",
+        response.errors
+    );
 }
 
 /// The same name for another field or with other arguments can't merge, wherever the repeats
