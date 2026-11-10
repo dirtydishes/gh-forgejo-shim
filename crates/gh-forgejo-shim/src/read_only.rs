@@ -863,7 +863,13 @@ fn run_checkout(
             let ref_name = format!("refs/heads/{branch}");
             let exists = git_run(&["show-ref", "--verify", "--quiet", ref_name.as_str()], cwd);
             if exists.code == 0 {
-                git_run(&["checkout", branch], cwd)
+                // As gh: an existing branch moves only by fast-forward, so its own commits stay.
+                let output = git_run(&["checkout", branch], cwd);
+                if output.code == 0 {
+                    git_run(&["merge", "--ff-only", "FETCH_HEAD"], cwd)
+                } else {
+                    output
+                }
             } else {
                 git_run(&["checkout", "-b", branch, "FETCH_HEAD"], cwd)
             }
@@ -3875,11 +3881,11 @@ mod tests {
     #[test]
     fn pr_checkout_of_a_same_repository_branch_keeps_its_name() {
         // No local branch, a stale one under `--force`, and a stale one without it, which is
-        // checked out as it is.
+        // fast-forwarded.
         for (stale, force, tip) in [
             (false, false, "feature-pr"),
             (true, true, "feature-pr"),
-            (true, false, "main"),
+            (true, false, "feature-pr"),
         ] {
             let git_repo = CheckoutGitFixture::new();
             if stale {
@@ -3985,6 +3991,69 @@ mod tests {
             assert_eq!(code, 0, "{remote}: {stderr}");
             assert_eq!(stdout, "checked out topic\n");
             assert_eq!(git_repo.rev("HEAD"), pull_head, "{remote}");
+        }
+    }
+
+    #[test]
+    fn pr_checkout_fast_forwards_a_branch_checked_out_before() {
+        let git_repo = CheckoutGitFixture::new();
+        let first = git_repo.fork_pull_head(7, "fork\n");
+        let client = FakeApi {
+            pulls: vec![pull_from(7, "fork", "main")],
+            ..FakeApi::default()
+        };
+        let checkout = || {
+            run_fake(
+                &["pr", "checkout", "7"],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            )
+        };
+        let (code, _, stderr) = checkout();
+        assert_eq!(code, 0, "{stderr}");
+        git(git_repo.work(), ["checkout", "-q", "main"]);
+        // The fork pushes again.
+        let second = git_repo.push_commit("owner/repo", &first, "refs/pull/7/head", "again\n");
+
+        let (code, stdout, stderr) = checkout();
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out fork/main\n");
+        assert_eq!(git_repo.branch().as_deref(), Some("fork/main"));
+        assert_eq!(git_repo.rev("fork/main"), second);
+    }
+
+    #[test]
+    fn pr_checkout_refuses_a_branch_it_cannot_fast_forward() {
+        // A fork's `develop` against the user's own, and a same-repository branch with a local
+        // commit.
+        for (number, head_owner, branch) in [(7, "fork", "develop"), (12, "owner", "feature-pr")] {
+            let git_repo = CheckoutGitFixture::new();
+            git_repo.fork_pull_head(7, "fork\n");
+            git(git_repo.work(), ["checkout", "-q", "-b", branch, "main"]);
+            fs::write(git_repo.work().join("NOTES.md"), "mine\n").expect("write local file");
+            git(git_repo.work(), ["add", "NOTES.md"]);
+            git(git_repo.work(), ["commit", "-qm", "mine"]);
+            let mine = git_repo.rev(branch);
+            git(git_repo.work(), ["checkout", "-q", "main"]);
+            let client = FakeApi {
+                pulls: vec![pull_from(number, head_owner, branch)],
+                ..FakeApi::default()
+            };
+            let number = number.to_string();
+
+            let (code, stdout, stderr) = run_fake(
+                &["pr", "checkout", number.as_str()],
+                &client,
+                Some("token"),
+                Some(git_repo.work()),
+            );
+
+            assert_ne!(code, 0, "{branch}");
+            assert_eq!(stdout, "", "{branch}");
+            assert!(stderr.contains("fast-forward"), "{branch}: {stderr}");
+            assert_eq!(git_repo.rev(branch), mine, "{branch}");
         }
     }
 
