@@ -3837,6 +3837,29 @@ mod tests {
     }
 
     #[test]
+    fn pr_checkout_of_a_fork_main_in_another_case_gets_the_owner_in_front() {
+        let git_repo = CheckoutGitFixture::new();
+        let fork_head = git_repo.fork_pull_head(7, "fork\n");
+        let unpushed = git_repo.unpushed_commit_on_main();
+        let client = FakeApi {
+            pulls: vec![pull_from(7, "fork", "Main")],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "7", "--force"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(git_repo.rev("main"), unpushed, "{stderr}");
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out fork/Main\n");
+        assert_eq!(git_repo.rev("HEAD"), fork_head);
+    }
+
+    #[test]
     fn pr_checkout_of_a_deleted_fork_main_never_replaces_the_local_main() {
         let git_repo = CheckoutGitFixture::new();
         let fork_head = git_repo.fork_pull_head(7, "fork\n");
