@@ -653,26 +653,55 @@ def finish(record, argv, code, duration, pumps, stderr, stdin):
 
 def write(record):
     """Append one record, owner-only. A log that can't be written never stops the gh call; on a
-    terminal it says so. Only a plain file of ours is written, never through a symlink, and one
-    others could read is narrowed to its owner first."""
+    terminal it says so. Only a plain file of ours is written, never through a symlink. One others
+    could read may already be open to them, which narrowing it wouldn't undo: it's narrowed, kept
+    under another name, and a fresh log started, whose first record names the old one."""
     if record is None:
         return
     try:
         directory = os.path.dirname(LOG)
         if directory:
             os.makedirs(directory, mode=0o700, exist_ok=True)
-        # O_NONBLOCK: a FIFO without a reader fails here instead of holding the call.
-        descriptor = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        descriptor = open_log()
+        if os.fstat(descriptor).st_mode & 0o077:
+            aside = move_aside(descriptor)
+            descriptor = open_log(fresh=True)
+            record["log_moved_aside"] = os.path.basename(aside)
+            if os.isatty(2):
+                os.write(2, f"gh-capture: others could read {LOG}; kept as {aside}, and a new log begun\n".encode())
         with os.fdopen(descriptor, "a") as handle:
-            found = os.fstat(descriptor)
-            if not stat.S_ISREG(found.st_mode) or found.st_uid != os.geteuid():
-                raise OSError(f"{LOG} is not a plain file of ours")
-            if found.st_mode & 0o077:
-                os.fchmod(descriptor, 0o600)
             handle.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception as error:  # nothing about the log may break the call
         if os.isatty(2):
             os.write(2, f"gh-capture: call not recorded: {error}\n".encode())
+
+
+def open_log(fresh=False):
+    """The log, open to append: a plain file of ours, never through a symlink, and with `fresh`, a
+    file this call created (O_EXCL), so it's owner-only."""
+    # O_NONBLOCK: a FIFO without a reader fails here instead of holding the call.
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_EXCL if fresh else 0)
+    descriptor = os.open(LOG, flags, 0o600)
+    found = os.fstat(descriptor)
+    if not stat.S_ISREG(found.st_mode) or found.st_uid != os.geteuid():
+        os.close(descriptor)
+        raise OSError(f"{LOG} is not a plain file of ours")
+    return descriptor
+
+
+def move_aside(descriptor):
+    """Narrow the open log to its owner, rename it aside, and close it: the new name. Only if the
+    log's path still names that file, so a log another call began meanwhile stays."""
+    try:
+        os.fchmod(descriptor, 0o600)
+        found, current = os.fstat(descriptor), os.stat(LOG, follow_symlinks=False)
+        aside = f"{LOG}.exposed-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+        if (found.st_dev, found.st_ino) != (current.st_dev, current.st_ino):
+            raise OSError(f"{LOG} changed while it was being moved aside")
+        os.rename(LOG, aside)
+        return aside
+    finally:
+        os.close(descriptor)
 
 
 def main():
