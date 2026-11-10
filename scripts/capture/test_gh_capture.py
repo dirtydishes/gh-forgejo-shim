@@ -375,6 +375,26 @@ class ArgvTest(unittest.TestCase):
         self.assertEqual(wrapper.records()[-1]["stdin"], {"redacted": True})
         self.assertNotIn("S46", wrapper.log.read_text())
 
+    def test_short_sensitive_names_as_a_whole_part(self):
+        wrapper = Wrapper(self)
+        hidden = ["deploy_pw=S60", "otp=S61", "auth=S62", "key=S63", "signingKey=S64", "config[auth]=S65", "user_PW=S66",
+                  "AUTHORIZATION=S67", "ssh-key=S68"]
+        kept = ["title=t", "body=b", "ref=main", "author=me", "key_id=7", "keyword=k", "monkey=m", "oauth_app=o",
+                "authored=a", "keys=k", "otpauth_url=u", "pwd_dir=d"]
+        argv = ["api", "x"]
+        for field in hidden + kept:
+            argv += ["-f", field]
+        answer = {"otp": "S70", "deploy_pw": "S71", "auth": {"x": "S72"}, "authorization": "S73", "key": "mit",
+                  "author": "octo", "title": "t", "ref": "main"}
+        wrapper.run(*argv, FAKE_GH="print", FAKE_OUT=json.dumps(answer))
+        log = wrapper.log.read_text()
+        for secret in [field.split("=")[1] for field in hidden] + ["S70", "S71", "S72", "S73"]:
+            self.assertNotIn(secret, log)
+        [record] = wrapper.records()
+        self.assertEqual(record["argv"][-2 * len(kept):][1::2], kept)
+        self.assertEqual({key: value for key, value in json.loads(record["stdout"]).items() if value != "<redacted>"},
+                         {"key": "mit", "author": "octo", "title": "t", "ref": "main", "auth": {"x": "<redacted>"}})
+
     def test_ordinary_fields_stay(self):
         wrapper = Wrapper(self)
         argv = ["api", "repos/o/r/hooks", "-f", "config[url]=https://hook.test/x", "-F", "events[]=push", "-f", "name=web"]
