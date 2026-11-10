@@ -34,11 +34,12 @@ if mode == "fd":
         sys.stdout.write(handle.read())
 if mode == "stdin":
     sys.stdout.write(sys.stdin.read())
-if mode == "grandchild":
-    # Something gh starts and leaves running, holding gh's output (a credential cache, a browser).
-    print("bye", flush=True)
+if mode == "late":
+    # Something gh starts and leaves running, holding gh's output (an extension's or a shell alias's
+    # background job, a browser), that writes after gh has exited.
+    print("early", flush=True)
     import subprocess
-    subprocess.Popen(["sleep", "8"])
+    subprocess.Popen(["/bin/sh", "-c", "sleep 2; echo late; echo late-err >&2"])
 if mode == "interleave":
     for line in range(1, 41):
         (sys.stdout if line % 2 else sys.stderr).write(f"{line}\n")
@@ -491,13 +492,27 @@ class StreamTest(unittest.TestCase):
                 got[name] = (wrapper.root / "f").read_text()
             self.assertEqual(got["wrapped"], got["direct"], redirect)
 
-    def test_something_gh_leaves_running_doesnt_hold_the_caller(self):
+    def test_what_gh_leaves_running_reaches_the_caller_after_gh_exits(self):
         wrapper = Wrapper(self)
         started = time.monotonic()
-        result = wrapper.run("pr", "view", "--web", FAKE_GH="grandchild")
-        self.assertLess(time.monotonic() - started, 4)
-        self.assertEqual((result.returncode, result.stdout), (0, b"bye\n"))
-        self.assertEqual(wrapper.records()[0]["stdout"], "bye\n")
+        process = subprocess.Popen([sys.executable, str(WRAPPER), "pr", "view", "--web"], env=wrapper.env | {"FAKE_GH": "late"},
+                                   cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        # The caller sees gh's exit when gh exits, not when what it left running does.
+        self.assertEqual(process.wait(timeout=30), 0)
+        self.assertLess(time.monotonic() - started, 1.8)
+        # And everything written to the streams gh handed on, as it would without the wrapper.
+        out, errors = process.stdout.read(), process.stderr.read()
+        process.stdout.close()
+        process.stderr.close()
+        self.assertEqual((out, errors), (b"early\nlate\n", b"late-err\n"))
+        # The record waits for the end of that output.
+        for _ in range(100):
+            if wrapper.log.exists():
+                break
+            time.sleep(0.05)
+        [record] = wrapper.records()
+        self.assertEqual((record["exit"], record["stdout"], record["stderr"]), (0, "early\nlate\n", "late-err\n"))
 
     def test_long_output_is_cut_short_in_the_log_only(self):
         wrapper = Wrapper(self)
