@@ -365,9 +365,10 @@ name. Without `--branch` it names the local branch after the head branch, with t
 front when that name is the base's default branch, so a fork's `main` lands on `fork/main`. An
 existing local branch then moves only by `git merge --ff-only`, as gh's does. When the branch has
 commits of its own, the checkout fails before switching to it, so the user stays on their branch, as
-gh's refused fetch leaves them; `--force` resets it. A head named like a
-ref, or `@`, checks out detached. Unlike gh, it compares the default branch's name without case, and
-it refuses a local branch whose name matches an existing one's only without case.
+gh's refused fetch leaves them; `--force` resets it. A head named like a ref, or `@`, checks out
+detached. Unlike gh, it compares the default branch's name without case, and where git records that
+the filesystem ignores case (`core.ignorecase`), it refuses a local branch whose name matches an
+existing one's only without case.
 
 **Residues:**
 
@@ -390,7 +391,8 @@ it refuses a local branch whose name matches an existing one's only without case
   its branch gone), gh fetches into the local branch of the head branch's name. On a filesystem that
   ignores case, as macOS's does by default, a PR from `Main` then writes the same file as the user's
   `main`, and `--force` replaces it. The gateway can't see local branch names to avoid it. The
-  built-in path refuses such a branch name, whatever the filesystem.
+  built-in path refuses such a branch name when `core.ignorecase` is true, which git sets at clone
+  or init on such a filesystem, unless a branch of that exact name exists.
 
 ## 11. Files, review comments, comparisons and contents
 
