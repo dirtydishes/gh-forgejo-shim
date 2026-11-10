@@ -33,6 +33,7 @@ Each `.jsonl` line is one `gh` call:
 | `exit`, `duration_ms` | gh's exit code and run time |
 | `stdout`, `stderr` | gh's output. `{"bytes": N, "redacted": true}` for output that can hold a token, never stored; `{"same_as": I}` for output equal to the record at 0-based line I; `{"merged_into_stdout": true}` for stderr when the caller sent both to one place |
 | `signal` | The signal that killed gh, if one did |
+| `forward_failed` | Streams the wrapper couldn't pass on to the caller (a full disk, a closed stdout); the call then failed with exit 1 if gh had succeeded |
 | `t` | Seconds since the file's first call |
 | `mark` | The step of the capture the call belongs to, when the capture marked its steps |
 | `faked`, `stubbed` | The wrapper answered instead of gh: a fake token, or the stub at that index |
