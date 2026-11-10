@@ -171,6 +171,9 @@ pub struct ForgejoClient {
     timeout: Duration,
     scheme: String,
     base_url: Option<String>,
+    /// The path segments of `<base>/api/v1/repos` when the client follows a renamed repository's
+    /// redirect ([`renames_repository`]), or `None` when it follows no redirect.
+    renames: Option<Vec<String>>,
     http: Client,
 }
 
@@ -181,6 +184,7 @@ impl ForgejoClient {
             timeout: Duration::from_secs(30),
             scheme: "https".to_string(),
             base_url: None,
+            renames: None,
             http: Client::builder()
                 .redirect(Policy::none())
                 .build()
@@ -236,27 +240,34 @@ impl ForgejoClient {
         let base_url = settings
             .and_then(|settings| settings.api_url.clone())
             .unwrap_or_else(|| format!("https://{}", host_for_url(&host)));
-        // `repo_api_base_url` builds repository calls the same way.
-        let policy = match Url::parse(&format!("{base_url}/api/v1/repos")) {
-            Ok(repos) if redirects => renamed_repository_redirects(&repos),
-            _ => Policy::none(),
-        };
-        let mut client = Self::with_ca_files(token, &paths, policy)?;
+        // `repo_api_base_url` builds repository calls the same way, and a URL parses a base path
+        // as its requests are, so empty segments are kept.
+        let renames = Url::parse(&format!("{base_url}/api/v1/repos"))
+            .ok()
+            .filter(|_| redirects)
+            .map(|repos| {
+                repos
+                    .path_segments()
+                    .into_iter()
+                    .flatten()
+                    .map(str::to_owned)
+                    .collect()
+            });
+        let mut client = Self::with_ca_files(token, &paths)?;
         client.base_url = Some(base_url);
+        client.renames = renames;
         Ok(client)
     }
 
     /// A client trusting `path`'s roots too, following no redirect.
     pub fn with_ca_file(token: Option<String>, path: &std::path::Path) -> ForgejoResult<Self> {
-        Self::with_ca_files(token, &[path], Policy::none())
+        Self::with_ca_files(token, &[path])
     }
 
-    fn with_ca_files(
-        token: Option<String>,
-        paths: &[&std::path::Path],
-        redirects: Policy,
-    ) -> ForgejoResult<Self> {
-        let mut builder = Client::builder().redirect(redirects);
+    /// reqwest follows no redirect itself: it would turn a POST into a GET on a 301 and drop
+    /// its body, so [`ForgejoClient::request`] follows a rename by sending the same request again.
+    fn with_ca_files(token: Option<String>, paths: &[&std::path::Path]) -> ForgejoResult<Self> {
+        let mut builder = Client::builder().redirect(Policy::none());
         for path in paths {
             let pem = std::fs::read(path).map_err(|error| {
                 ForgejoError::new(format!(
@@ -288,6 +299,7 @@ impl ForgejoClient {
             timeout: Duration::from_secs(30),
             scheme: "https".to_string(),
             base_url: None,
+            renames: None,
             http,
         })
     }
@@ -673,27 +685,41 @@ impl ForgejoClient {
         payload: Option<Value>,
         accept: &str,
     ) -> ForgejoResult<Vec<u8>> {
-        let mut request = self
-            .http
-            .request(method, &url)
-            .timeout(self.timeout)
-            .header(ACCEPT, accept)
-            .header(USER_AGENT, USER_AGENT_VALUE);
+        let body = payload
+            .map(|payload| serde_json::to_vec(&payload))
+            .transpose()
+            .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
+        let mut url = url;
+        let mut followed = 0;
+        let response = loop {
+            let mut request = self
+                .http
+                .request(method.clone(), &url)
+                .timeout(self.timeout)
+                .header(ACCEPT, accept)
+                .header(USER_AGENT, USER_AGENT_VALUE);
 
-        if let Some(token) = &self.token {
-            request = request.header(AUTHORIZATION, format!("token {token}"));
-        }
+            if let Some(token) = &self.token {
+                request = request.header(AUTHORIZATION, format!("token {token}"));
+            }
 
-        if let Some(payload) = payload {
-            let body = serde_json::to_vec(&payload).map_err(|error| {
+            if let Some(body) = &body {
+                request = request
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.clone());
+            }
+
+            let response = request.send().map_err(|error| {
                 ForgejoError::new(format!("Forgejo API request failed: {error}"))
             })?;
-            request = request.header(CONTENT_TYPE, "application/json").body(body);
-        }
-
-        let response = request
-            .send()
-            .map_err(|error| ForgejoError::new(format!("Forgejo API request failed: {error}")))?;
+            match self.renamed_location(&response) {
+                Some(target) if followed < 10 => {
+                    followed += 1;
+                    url = target.into();
+                }
+                _ => break response,
+            }
+        };
         let status = response.status();
         if status.is_redirection() {
             // Only the origin it pointed to: its path, query and userinfo may each hold a secret.
@@ -724,6 +750,23 @@ impl ForgejoClient {
 
         Ok(response_data)
     }
+
+    /// Where `response` sends a renamed repository's API call: Forgejo answers one with a
+    /// redirect to the same path and query under the new owner and name, 301 for a renamed
+    /// repository and 307 for a renamed owner, and writes nothing. The client sends the same
+    /// method and body there, up to 10 times. It returns any other redirect as the answer, so the
+    /// token never goes to another path or service on the same origin, and a write never turns
+    /// into a read.
+    fn renamed_location(&self, response: &reqwest::blocking::Response) -> Option<Url> {
+        let repos = self.renames.as_ref()?;
+        // A 303 says the answer is at another URL, not that the call should go there again.
+        if !matches!(response.status().as_u16(), 301 | 302 | 307 | 308) {
+            return None;
+        }
+        let location = response.headers().get(LOCATION)?.to_str().ok()?;
+        let target = response.url().join(location).ok()?;
+        renames_repository(repos, response.url(), &target).then_some(target)
+    }
 }
 
 fn list_of_objects(value: Value) -> Vec<Value> {
@@ -740,34 +783,6 @@ fn host_for_url(host: &str) -> String {
         return rest[..end].to_string();
     }
     trimmed.to_string()
-}
-
-/// The redirects a client follows, given `repos`, the URL its repository calls start with:
-/// `<base>/api/v1/repos`, parsed as its requests are, so a base path keeps every segment, empty
-/// ones included. Forgejo answers an API call for a renamed or moved repository with a redirect
-/// to the same path and query under the new owner and name: 301 for a renamed repository, 307
-/// for a renamed owner. The client follows that, up to 10 times. It returns any other redirect as
-/// the answer, so the token never goes to another path or service on the same origin.
-fn renamed_repository_redirects(repos: &Url) -> Policy {
-    let repos: Vec<String> = repos
-        .path_segments()
-        .into_iter()
-        .flatten()
-        .map(str::to_owned)
-        .collect();
-    Policy::custom(move |attempt| {
-        // `previous` starts with the first request, so this allows 10 redirects.
-        let follow = attempt.previous().len() <= 10
-            && attempt
-                .previous()
-                .last()
-                .is_some_and(|from| renames_repository(&repos, from, attempt.url()));
-        if follow {
-            attempt.follow()
-        } else {
-            attempt.stop()
-        }
-    })
 }
 
 /// Whether `to` is `from`, an API call below `repos` (the path segments of `<base>/api/v1/repos`),
@@ -1494,6 +1509,81 @@ mod tests {
         Ok(())
     }
 
+    /// Forgejo answers a write to a renamed repository (301) or owner (307) with a redirect and
+    /// writes nothing; each write goes again to the new name with its method and body.
+    #[test]
+    fn a_write_follows_a_rename_with_its_method_and_body() -> TestResult {
+        let (host, seen) = start_answering_server(|method, path| {
+            let new = path.replacen("/repos/o/old/", "/repos/o/new/", 1);
+            match (method, path) {
+                (_, path) if path.starts_with("/forgejo/api/v1/repos/o/old/") => {
+                    ("301 Moved Permanently", Some(new), "")
+                }
+                (_, path) if path.starts_with("/forgejo/api/v1/repos/old-owner/r/") => (
+                    "307 Temporary Redirect",
+                    Some(path.replacen("/repos/old-owner/", "/repos/o/", 1)),
+                    "",
+                ),
+                ("POST", "/forgejo/api/v1/repos/o/new/issues/1/comments") => {
+                    ("201 Created", None, r#"{"id":5,"body":"hi"}"#)
+                }
+                ("POST", "/forgejo/api/v1/repos/o/new/pulls") => {
+                    ("201 Created", None, r#"{"number":7,"title":"Ship it"}"#)
+                }
+                (
+                    "POST",
+                    "/forgejo/api/v1/repos/o/new/issues" | "/forgejo/api/v1/repos/o/r/issues",
+                ) => ("201 Created", None, r#"{"number":13,"title":"Bug"}"#),
+                // What a 301 followed as a GET reads: the lists at the same paths.
+                _ => ("200 OK", None, "[]"),
+            }
+        })?;
+        let client = subpath_client(&host)?;
+        let old = RepoRef::new("git.example.com", "o", "old");
+
+        let comment = client.create_issue_comment(&old, 1, "hi")?;
+        let pull = client.create_pull(
+            &old,
+            &CreatePullRequest::new("Ship it", "body", "main", "feature"),
+        )?;
+        let issue =
+            client.create_issue(&old, &CreateIssueRequest::new("Bug").assignees(["bob"]))?;
+        let moved = client.create_issue(
+            &RepoRef::new("git.example.com", "old-owner", "r"),
+            &CreateIssueRequest::new("Bug"),
+        )?;
+
+        assert_eq!(comment["id"], 5);
+        assert_eq!(pull["number"], 7);
+        assert_eq!(issue["number"], 13);
+        assert_eq!(moved["number"], 13);
+        let seen = seen.lock().expect("request log");
+        let lines: Vec<&str> = seen.iter().map(|r| r.request_line.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "POST /forgejo/api/v1/repos/o/old/issues/1/comments HTTP/1.1",
+                "POST /forgejo/api/v1/repos/o/new/issues/1/comments HTTP/1.1",
+                "POST /forgejo/api/v1/repos/o/old/pulls HTTP/1.1",
+                "POST /forgejo/api/v1/repos/o/new/pulls HTTP/1.1",
+                "POST /forgejo/api/v1/repos/o/old/issues HTTP/1.1",
+                "POST /forgejo/api/v1/repos/o/new/issues HTTP/1.1",
+                "POST /forgejo/api/v1/repos/old-owner/r/issues HTTP/1.1",
+                "POST /forgejo/api/v1/repos/o/r/issues HTTP/1.1",
+            ]
+        );
+        for pair in seen.chunks(2) {
+            assert_eq!(pair[0].body, pair[1].body, "{}", pair[1].request_line);
+            assert_eq!(
+                pair[1].headers.get("authorization").map(String::as_str),
+                Some("token secret-token")
+            );
+        }
+        let assigned: Value = serde_json::from_str(&seen[5].body)?;
+        assert_eq!(assigned["assignees"], json!(["bob"]));
+        Ok(())
+    }
+
     /// Any other redirect is the answer, so the token makes no second request: not to another
     /// service or API route on the origin, nor out of the base path or to another origin.
     #[test]
@@ -1768,6 +1858,21 @@ mod tests {
     fn start_recording_server(
         respond: impl Fn(&str) -> (&'static str, Option<String>) + Send + 'static,
     ) -> io::Result<(String, Arc<Mutex<Vec<CapturedRequest>>>)> {
+        start_answering_server(move |_, path| {
+            let (status, location) = respond(path);
+            (
+                status,
+                location,
+                r#"{"login":"alice","name":"r","full_name":"o/r"}"#,
+            )
+        })
+    }
+
+    /// [`start_recording_server`] answering each request with `respond(method, path)`: a status
+    /// line, the `Location` to send if any, and a JSON body.
+    fn start_answering_server(
+        respond: impl Fn(&str, &str) -> (&'static str, Option<String>, &'static str) + Send + 'static,
+    ) -> io::Result<(String, Arc<Mutex<Vec<CapturedRequest>>>)> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let host = listener.local_addr()?.to_string();
         let seen = Arc::<Mutex<Vec<CapturedRequest>>>::default();
@@ -1777,13 +1882,14 @@ mod tests {
                 let Ok(request) = read_request(&mut stream) else {
                     continue;
                 };
-                let path = request.request_line.split(' ').nth(1).unwrap_or_default();
-                let (status, location) = respond(path);
+                let mut line = request.request_line.split(' ');
+                let method = line.next().unwrap_or_default();
+                let path = line.next().unwrap_or_default();
+                let (status, location, body) = respond(method, path);
                 log.lock().expect("request log").push(request);
                 let location = location
                     .map(|location| format!("location: {location}\r\n"))
                     .unwrap_or_default();
-                let body = r#"{"login":"alice","name":"r","full_name":"o/r"}"#;
                 let _ = write!(
                     stream,
                     "HTTP/1.1 {status}\r\n{location}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
