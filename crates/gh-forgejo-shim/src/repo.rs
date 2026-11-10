@@ -183,6 +183,25 @@ impl<'a> Checkout<'a> {
             .iter()
             .map(|remote| remote.repo.host.as_str())
     }
+
+    /// The remote for a repository, as gh's `FindByRepo` picks it (`gh/context/remote.go`): the
+    /// first in gh's remote order whose owner and name match without case. gh has already kept
+    /// only remotes on known hosts; this matches the host too.
+    pub fn remote_for(&self, host: &str, owner: &str, name: &str) -> Option<String> {
+        let mut remotes = self.remotes().iter().collect::<Vec<_>>();
+        go_sort::sort(&mut remotes, |a, b| {
+            remote_rank(&a.name) > remote_rank(&b.name)
+        });
+        let host = gh_hostname(host);
+        remotes
+            .into_iter()
+            .find(|remote| {
+                remote.repo.host.eq_ignore_ascii_case(&host)
+                    && remote.repo.owner.eq_ignore_ascii_case(owner)
+                    && remote.repo.name.eq_ignore_ascii_case(name)
+            })
+            .map(|remote| remote.name.clone())
+    }
 }
 
 pub fn detect_repo(
