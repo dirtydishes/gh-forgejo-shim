@@ -5,27 +5,28 @@ Link it in as `gh` in a directory that comes before the real gh on the client's 
 
     ln -s <checkout>/scripts/capture/gh-capture ~/.local/bin/gh
 
-It runs the real gh (GH_CAPTURE_REAL, an absolute path, default /opt/homebrew/bin/gh) and appends one JSON line per
-call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, created owner-only). Nothing about the
-log can break a call: one that can't be written is skipped, saying so only on a terminal.
+It runs the real gh (GH_CAPTURE_REAL, an absolute path, default /opt/homebrew/bin/gh) and appends
+one JSON line per call to GH_CAPTURE_LOG (default ~/.gh-capture/calls.jsonl, owner-only). Nothing
+about the log can break a call: one that can't be written is skipped, saying so only on a terminal.
 
-A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env, exit
-code (and the signal, if one killed gh), duration, stdout and stderr, and stdin when gh was told to
-read it (`--body-file -`); other input stays unread by the wrapper. No credential is stored:
-argv loses tokens, sensitive flag values and fields (`-f config[secret]=…`), and `gh secret` bodies;
-output that can carry a token (`auth token`, `--show-token`, `auth git-credential`, `config get`,
-`api` on token paths) is stored only as its length; other output loses its tokens and credentials. The rules come from redact.py
-beside the script, which is why it's linked rather than copied; without them nothing is recorded.
-The rest of a person's details stay until redact.py runs on the log, before anything is committed.
+A record holds: time, the parent process chain (to tell clients apart), cwd, argv, selected env,
+exit code (and the signal, if one killed gh), duration, stdout and stderr, and stdin when gh was
+told to read it (`--body-file -`); other input stays unread by the wrapper. No credential is
+stored: argv loses tokens, sensitive flag values and fields (`-f config[secret]=…`), and `gh
+secret` bodies; output that can carry a token (`auth token`, `--show-token`, `auth
+git-credential`, `config get`, `api` on token paths) is stored only as its length; other output
+loses its tokens and credentials. The rules come from redact.py beside the script, which is why
+it's linked rather than copied; without them nothing is recorded. The rest of a person's details
+stay until redact.py runs on the log, before anything is committed.
 
 When stdout is a terminal, it records the argv and execs gh, so interactive output doesn't change.
 Otherwise gh writes stdout to a pipe, which keeps its non-TTY behaviour, and each chunk reaches the
 caller as gh writes it (`gh pr checks --watch`), with a copy kept for the record. stderr goes the
 same way, unless it's a terminal: then gh keeps it, and it isn't recorded. When gh exits leaving
 something running that holds those pipes (an extension's background job), the wrapper exits with
-gh, and a forked child passes on what that writes and records the call once the pipes close. SIGINT, SIGTERM and SIGHUP
-go on to gh, and when a signal kills gh the wrapper dies of the same one. Python 3.9 compatible
-(macOS /usr/bin/python3).
+gh, and a forked child passes on what that writes and records the call once the pipes close.
+SIGINT, SIGTERM and SIGHUP go on to gh, and when a signal kills gh the wrapper dies of the same
+one. Python 3.9 compatible (macOS /usr/bin/python3).
 """
 import fcntl
 import json
@@ -70,7 +71,9 @@ MAX_STREAM = 256 * 1024
 # What a caller sends to stop a call; each goes on to gh. Any other signal reaches gh only as the
 # caller's process group gets it. A signal sent to the whole group (a terminal's Ctrl-C) reaches gh
 # twice, which gh, exiting on the first, doesn't notice; a handler can't tell who sent a signal, and
-# not forwarding would lose one sent to the wrapper alone.
+# not forwarding would lose one sent to the wrapper alone (an app cancelling its call). Nor does gh
+# get a process group of its own, which would take each signal once: a signal to the caller's group
+# would then miss gh, so a timeout's SIGKILL would leave gh running, and Ctrl-Z stop only the wrapper.
 FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 # gh flags with a sensitive word in their name that take no value.
 VALUELESS_FLAGS = {"--with-token", "--show-token"}
