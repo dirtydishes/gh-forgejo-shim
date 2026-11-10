@@ -18,8 +18,9 @@ beside the script, which is why it's linked rather than copied; without them not
 The rest of a person's details stay until redact.py runs on the log, before anything is committed.
 
 When stdout is a terminal, it records the argv and execs gh, so interactive output doesn't change.
-Otherwise gh writes to pipes, which keeps its non-TTY behaviour, and each chunk reaches the caller as
-gh writes it (`gh pr checks --watch`), with a copy kept for the record. SIGINT, SIGTERM and SIGHUP
+Otherwise gh writes stdout to a pipe, which keeps its non-TTY behaviour, and each chunk reaches the
+caller as gh writes it (`gh pr checks --watch`), with a copy kept for the record. stderr goes the
+same way, unless it's a terminal: then gh keeps it, and it isn't recorded. SIGINT, SIGTERM and SIGHUP
 go on to gh, and when a signal kills gh the wrapper dies of the same one. Python 3.9 compatible
 (macOS /usr/bin/python3).
 """
@@ -364,6 +365,7 @@ def begin(argv):
             "env_secrets_present": [k for k in SECRET_ENV if os.environ.get(k)],
             "stdin_tty": os.isatty(0),
             "stdout_tty": os.isatty(1),
+            "stderr_tty": os.isatty(2),
         }
     except Exception:
         return None
@@ -415,8 +417,9 @@ def cwd():
         return None
 
 
-def finish(record, argv, code, started, pumps):
-    """The record once gh is done, written; any failure only loses the record."""
+def finish(record, argv, code, started, pumps, stderr):
+    """The record once gh is done, written; any failure only loses the record. `stderr` stands in
+    for a stream no pump copied."""
     if record is None:
         return
     try:
@@ -427,10 +430,10 @@ def finish(record, argv, code, started, pumps):
         failed = [pump.name for pump in pumps if pump.failed]
         if failed:
             record["forward_failed"] = failed
-        for name, pump in zip(("stdout", "stderr"), pumps):
-            record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
-        if len(pumps) == 1:
-            record["stderr"] = {"merged_into_stdout": True}
+        for pump in pumps:
+            record[pump.name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
+        if stderr:
+            record["stderr"] = stderr
     except Exception:
         return
     write(record)
@@ -508,15 +511,17 @@ def main():
             signal.signal(number, forward)
     start = time.time()
     # close_fds=False: gh keeps the files its caller opened for it, such as `--body-file <(...)`.
-    # A caller that sends both streams to one place (`2>&1`) gets them through one pipe, in gh's
-    # own order.
-    merged = same_place(1, 2)
-    proc = subprocess.Popen([real] + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merged else subprocess.PIPE,
-                            close_fds=False)
+    # A terminal stderr stays gh's own, so its colour, progress and prompts don't change, and isn't
+    # recorded. A caller that sends both streams to one place (`2>&1`) gets them through one pipe,
+    # in gh's own order.
+    terminal = os.isatty(2)
+    merged = not terminal and same_place(1, 2)
+    proc = subprocess.Popen([real] + argv, stdout=subprocess.PIPE,
+                            stderr=None if terminal else subprocess.STDOUT if merged else subprocess.PIPE, close_fds=False)
     child.append(proc)
     for number in waiting:
         proc.send_signal(number)
-    pumps = [Pump("stdout", proc.stdout, 1)] + ([] if merged else [Pump("stderr", proc.stderr, 2)])
+    pumps = [Pump("stdout", proc.stdout, 1)] + ([] if merged or terminal else [Pump("stderr", proc.stderr, 2)])
     for pump in pumps:
         pump.start()
     # Wait for gh's output, until gh has exited and its pipes have been quiet for QUIET: a pump
@@ -533,7 +538,8 @@ def main():
         if not quiet and exited is not None:
             exited = time.time()
     code = proc.wait()
-    finish(record, argv, code, start, pumps)
+    finish(record, argv, code, start, pumps,
+           {"terminal": True} if terminal else {"merged_into_stdout": True} if merged else None)
     if code < 0:
         die_like(-code)
     for pump in pumps:
