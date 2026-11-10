@@ -78,12 +78,14 @@ ENV_KEYS = ("GH_HOST", "GH_REPO", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER",
 SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 MAX_STREAM = 256 * 1024
 # What a caller sends to stop a call; each goes on to gh. Any other signal reaches gh only as the
-# caller's process group gets it. A signal sent to the whole group (a terminal's Ctrl-C) reaches gh
-# twice, which gh, exiting on the first, doesn't notice; a handler can't tell who sent a signal, and
-# not forwarding would lose one sent to the wrapper alone (an app cancelling its call). Nor does gh
-# get a process group of its own, which would take each signal once: a signal to the caller's group
-# would then miss gh, so a timeout's SIGKILL would leave gh running, and Ctrl-Z stop only the wrapper.
+# caller's process group gets it. A handler can't tell who sent a signal, and not forwarding would
+# lose one sent to the wrapper alone (an app cancelling its call). So a SIGINT that may be a
+# terminal's Ctrl-C, which gh gets too, as the wrapper is in the terminal's foreground group, goes
+# on only after FORWARD_DELAY, and not once gh has exited of the first. Nor does gh get a process
+# group of its own, which would take each signal once: a signal to the caller's group would then
+# miss gh, so a timeout's SIGKILL would leave gh running, and Ctrl-Z stop only the wrapper.
 FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+FORWARD_DELAY = 0.1
 # gh flags with a sensitive word in their name that take no value.
 VALUELESS_FLAGS = {"--with-token", "--show-token"}
 # gh 2.103.3's own commands and their built-in aliases (`gh help`). Any other first word is an alias
@@ -529,6 +531,20 @@ def secretless(value, hidden=False):
     return value
 
 
+def foreground():
+    """Whether the wrapper is in its terminal's foreground process group, which a Ctrl-C reaches."""
+    try:
+        terminal = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
+    except OSError:  # no controlling terminal
+        return False
+    try:
+        return os.tcgetpgrp(terminal) == os.getpgrp()
+    except OSError:
+        return False
+    finally:
+        os.close(terminal)
+
+
 def die_like(number):
     """Exit the way gh did when a signal killed it, so the caller sees the same death, not 128+N
     folded into an exit code (#197 defect 5)."""
@@ -739,13 +755,20 @@ def main():
     child = []
 
     def forward(number, frame):
-        if child:
-            try:
-                child[0].send_signal(number)
-            except ProcessLookupError:
-                pass
-        else:
+        if not child:
             waiting.append(number)
+        elif number == signal.SIGINT and foreground():
+            later = threading.Timer(FORWARD_DELAY, send, (number,))
+            later.daemon = True
+            later.start()
+        else:
+            send(number)
+
+    def send(number):
+        try:
+            child[0].send_signal(number)  # nothing, once gh has exited
+        except ProcessLookupError:
+            pass
 
     waiting = []
     for number in FORWARDED:

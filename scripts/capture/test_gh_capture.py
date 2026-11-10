@@ -1,5 +1,6 @@
 """gh-capture against a fake gh: what it passes through, what it records, and what it never does."""
 
+import fcntl
 import importlib.machinery
 import importlib.util
 import json
@@ -11,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import unittest
 from pathlib import Path
@@ -90,6 +92,17 @@ if mode == "wait":
         signal.signal(number, noted)
     print("ready", flush=True)
     time.sleep(60)
+if mode == "ctrl-c":
+    # Note each SIGINT, and exit of the first soon after, as gh does once it has cleaned up.
+    def noted(number, frame):
+        with open(os.environ["FAKE_NOTE"], "a") as note:
+            note.write(f"{number}\n")
+    signal.signal(signal.SIGINT, noted)
+    print("ready", flush=True)
+    signal.pause()
+    time.sleep(0.02)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGINT)
 if mode == "flood":
     while True:
         print("line", flush=True)
@@ -784,6 +797,35 @@ class SignalTest(unittest.TestCase):
             process.communicate(timeout=30)
             self.assertEqual(process.returncode, -number, number)
             self.assertEqual(note.read_text(), f"{int(number)}\n", number)
+
+    def test_a_terminal_ctrl_c_reaches_gh_once(self):
+        # What Ctrl-C does: SIGINT to the whole foreground group, gh with it; and an app's own, to
+        # the wrapper alone, which still goes on to gh.
+        for to_group in (True, False):
+            wrapper = Wrapper(self)
+            note = wrapper.root / "note"
+            controller, terminal = pty.openpty()
+            self.addCleanup(os.close, controller)
+
+            def own_terminal():
+                # A session of its own, whose controlling terminal is the pty, its group in the foreground.
+                os.setsid()
+                fcntl.ioctl(terminal, termios.TIOCSCTTY, 0)
+                os.tcsetpgrp(terminal, os.getpgrp())
+
+            try:
+                process = subprocess.Popen([sys.executable, str(WRAPPER), "pr", "checks", "--watch"],
+                                           env=wrapper.env | {"FAKE_GH": "ctrl-c", "FAKE_NOTE": str(note)}, cwd=wrapper.root,
+                                           preexec_fn=own_terminal, pass_fds=(terminal,), stdin=terminal,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            finally:
+                os.close(terminal)
+            self.addCleanup(lambda: process.poll() is None and process.kill())
+            ready, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(ready and process.stdout.readline() == b"ready\n", to_group)
+            (os.killpg if to_group else os.kill)(process.pid, signal.SIGINT)
+            process.communicate(timeout=30)
+            self.assertEqual((process.returncode, note.read_text()), (-signal.SIGINT, "2\n"), to_group)
 
     def test_a_caller_that_stops_reading(self):
         wrapper = Wrapper(self)
