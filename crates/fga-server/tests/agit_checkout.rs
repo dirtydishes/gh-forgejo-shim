@@ -421,6 +421,121 @@ async fn a_fetch_mapping_into_a_local_branch_resets_it_under_gh() {
     assert_eq!(feature, f, "gh kept the unpushed commit");
 }
 
+/// gh takes a remote's repository from its fetch URL, or from its push URL when the fetch URL names
+/// none (`TranslateRemotes`), and then fetches from that remote by name. So when `origin` fetches
+/// from a local mirror and pushes to the forge, gh fetches the PR's branch from the mirror and
+/// checks out its older tip. This pins gh's behaviour; the wrapper's built-in checkout matches only
+/// the URL git fetches from.
+#[tokio::test]
+#[ignore = "needs real gh 2.103.3 and git"]
+async fn a_mirror_that_pushes_to_the_forge_is_fetched_from_under_gh() {
+    let Some(gh) = real_gh() else {
+        eprintln!("skipped: no gh 2.103.3 (set GFJS_REAL_GH)");
+        return;
+    };
+    let root = std::env::temp_dir().join(format!("fga-mirror-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // The forge: main at A and `feature` at F, mirrored locally; then `feature` and PR 1 move to G.
+    let upstream = root.join("up.git");
+    let mirror = root.join("mirror.git");
+    let seed = root.join("seed");
+    git(
+        &root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            upstream.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(&seed).unwrap();
+    git(&seed, &["init", "-q", "-b", "main"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "A"]);
+    let a = text(&git(&seed, &["rev-parse", "HEAD"]));
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "F"]);
+    let f = text(&git(&seed, &["rev-parse", "HEAD"]));
+    let up = upstream.to_str().unwrap();
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            up,
+            &format!("{a}:refs/heads/main"),
+            &format!("{f}:refs/heads/feature"),
+        ],
+    );
+    git(
+        &root,
+        &["clone", "-q", "--mirror", up, mirror.to_str().unwrap()],
+    );
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "G"]);
+    let g = text(&git(&seed, &["rev-parse", "HEAD"]));
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            up,
+            &format!("{g}:refs/heads/feature"),
+            &format!("{g}:refs/pull/1/head"),
+        ],
+    );
+    // The user's clone: `origin` fetches from the mirror and pushes to the forge.
+    let work = root.join("work");
+    git(&root, &["clone", "-q", up, work.to_str().unwrap()]);
+    git(
+        &work,
+        &["remote", "set-url", "origin", mirror.to_str().unwrap()],
+    );
+    git(
+        &work,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "ssh://git@forge.test/o/r.git",
+        ],
+    );
+    let ssh = root.join("ssh");
+    std::fs::write(
+        &ssh,
+        format!("#!/bin/sh\nexec git-upload-pack '{}'\n", upstream.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+
+    let user = json!({"id":1,"login":"o","full_name":"","avatar_url":""});
+    let pull = json!({"number":1,"title":"feature","state":"open","merged":false,"draft":false,
+        "html_url":"https://forge.test/o/r/pulls/1","user":user,"merged_at":null,
+        "allow_maintainer_edit":false,
+        "head":{"label":"feature","ref":"feature","sha":g,"repo":{"name":"r","owner":user}},
+        "base":{"label":"main","ref":"main","sha":a,"repo":{"name":"r","owner":user}}});
+    let checkout = gh_through_gateway(
+        &gh,
+        &root,
+        &work,
+        &ssh,
+        pull,
+        &["pr", "checkout", "1", "-R", "forge.test/o/r"],
+    )
+    .await;
+    let head = text(&git(&work, &["rev-parse", "HEAD"]));
+    eprintln!(
+        "MIRROR exit={:?}\nstdout={}\nstderr={}\nHEAD={head} (F={f}, G={g})",
+        checkout.status.code(),
+        String::from_utf8_lossy(&checkout.stdout),
+        String::from_utf8_lossy(&checkout.stderr),
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(checkout.status.success(), "gh pr checkout failed");
+    assert_eq!(head, f, "gh didn't check out the mirror's tip");
+}
+
 /// Runs real gh's `args` in `work` against the gateway, in front of a fake Forgejo that serves
 /// `pull` as PR `number` of `o/r`, with its own ref at the PR's head commit. `ssh` serves the
 /// forge's git repository.
