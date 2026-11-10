@@ -742,6 +742,15 @@ class LogFailureTest(unittest.TestCase):
                          [None, None, ["stdout"], ["stderr"], ["stdout", "stderr"]])
         self.assertFalse(any("forward_failed" in record for record in records))
 
+    def test_a_closed_stdin_gh_was_told_to_read(self):
+        wrapper = Wrapper(self)
+        result = subprocess.run(["/bin/sh", "-c", 'exec "$0" "$@" <&-', sys.executable, str(WRAPPER), "issue", "create",
+                                 "--body-file", "-"], env=wrapper.env, cwd=wrapper.root, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"out issue create --body-file -\n", b"err\n"))
+        [record] = wrapper.records()
+        self.assertNotIn("stdin", record)
+
     def test_an_existing_log_is_narrowed_to_its_owner(self):
         wrapper = Wrapper(self)
         wrapper.log.parent.mkdir()
