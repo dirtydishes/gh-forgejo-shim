@@ -28,6 +28,7 @@ import os
 import re
 import select
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -118,11 +119,11 @@ def parent(pid):
     """(parent pid, command) of a process: from /proc on Linux, else from ps (macOS)."""
     if os.path.exists(f"/proc/{pid}/stat"):
         with open(f"/proc/{pid}/stat") as handle:
-            stat = handle.read()
+            status = handle.read()
         with open(f"/proc/{pid}/cmdline", "rb") as handle:
             command = handle.read().split(b"\0")[0].decode("utf-8", "replace")
         # The name sits in brackets and may hold spaces; the parent pid is the second field after.
-        return int(stat[stat.rindex(")") + 2:].split()[1]), command or stat[stat.index("(") + 1:stat.rindex(")")]
+        return int(status[status.rindex(")") + 2:].split()[1]), command or status[status.index("(") + 1:status.rindex(")")]
     out = subprocess.run(["/bin/ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
     ppid, _, command = out.partition(" ")
     return int(ppid), command.strip()
@@ -386,14 +387,22 @@ def finish(record, argv, code, started, pumps):
 
 def write(record):
     """Append one record, owner-only. A log that can't be written never stops the gh call; on a
-    terminal it says so."""
+    terminal it says so. Only a plain file of ours is written, never through a symlink, and one
+    others could read is narrowed to its owner first."""
     if record is None:
         return
     try:
         directory = os.path.dirname(LOG)
         if directory:
             os.makedirs(directory, mode=0o700, exist_ok=True)
-        with os.fdopen(os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a") as handle:
+        # O_NONBLOCK: a FIFO without a reader fails here instead of holding the call.
+        descriptor = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        with os.fdopen(descriptor, "a") as handle:
+            found = os.fstat(descriptor)
+            if not stat.S_ISREG(found.st_mode) or found.st_uid != os.geteuid():
+                raise OSError(f"{LOG} is not a plain file of ours")
+            if found.st_mode & 0o077:
+                os.fchmod(descriptor, 0o600)
             handle.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception as error:  # nothing about the log may break the call
         if os.isatty(2):

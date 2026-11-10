@@ -534,6 +534,28 @@ class LogFailureTest(unittest.TestCase):
             self.assertEqual((result.returncode, result.stderr), (0, b"err\n"), name)
         self.assertEqual(len(wrapper.records()), 3)
 
+    def test_an_existing_log_is_narrowed_to_its_owner(self):
+        wrapper = Wrapper(self)
+        wrapper.log.parent.mkdir()
+        wrapper.log.write_text("")
+        wrapper.log.chmod(0o644)
+        wrapper.run("pr", "list")
+        self.assertEqual((wrapper.log.stat().st_mode & 0o777, len(wrapper.records())), (0o600, 1))
+
+    def test_a_log_that_isnt_a_plain_file_of_ours_is_never_written(self):
+        wrapper = Wrapper(self)
+        target = wrapper.root / "elsewhere"
+        target.write_text("")
+        target.chmod(0o644)
+        wrapper.log.parent.mkdir()
+        wrapper.log.symlink_to(target)
+        fifo = wrapper.root / "fifo"
+        os.mkfifo(fifo)
+        for log in (wrapper.log, fifo):
+            result = wrapper.run("pr", "list", GH_CAPTURE_LOG=str(log))
+            self.assertEqual((result.returncode, result.stdout), (0, b"out pr list\n"), log)
+        self.assertEqual((target.read_text(), target.stat().st_mode & 0o777), ("", 0o644))
+
     def test_a_log_that_cant_be_written(self):
         wrapper = Wrapper(self)
         blocker = wrapper.root / "file"
