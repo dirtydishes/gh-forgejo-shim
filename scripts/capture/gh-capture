@@ -57,8 +57,9 @@ try:
     # by SECRET_KEY). That covers answers after `-i` headers or cut short.
     SECRET_KEY = re.compile(redact.SENSITIVE_KEY.pattern + r"|jit_?config", re.IGNORECASE)
     JSON_FIELD = re.compile(r'"((?:[^"\\\n]|\\.)*)"(\s*:\s*)"(?:[^"\\\n]|\\.)+"')
-    # The same, its value cut short where the output stops: no closing quote for JSON_FIELD to find.
-    CUT_FIELD = re.compile(r'"((?:[^"\\\n]|\\.)*)"(\s*:\s*)"(?:[^"\\\n]|\\.)*\\?\Z')
+    # A JSON string, closed or cut short where the text stops. Every `"` starts one, so finding them
+    # all, one after another, takes one pass however many quotes the text holds.
+    LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)("|\\?\Z)')
 except Exception:  # a broken redact.py may raise anything; it must not stop gh
     redact = None
 
@@ -455,9 +456,16 @@ def text(pump):
 
 def cut_short(value):
     """Output whose last JSON string stops unclosed (cut at MAX_STREAM, or gh died writing it): a
-    sensitive key's value is hidden to the end."""
-    return CUT_FIELD.sub(lambda m: f'"{m.group(1)}"{m.group(2)}"<redacted>' if SECRET_KEY.search(m.group(1))
-                         else m.group(0), value)
+    sensitive key's value is hidden to the end. Only the last line is read: no JSON string holds a
+    line break, so a line starts outside one, whatever came before (`-i` headers)."""
+    key = last = None
+    for literal in LITERAL.finditer(value, value.rfind("\n") + 1):
+        key, last = last, literal
+    if last is None or last.group(2) == '"' or key is None or key.group(2) != '"':
+        return value
+    if not re.fullmatch(r"\s*:\s*", value[key.end():last.start()]) or not SECRET_KEY.search(key.group(1)):
+        return value
+    return value[:last.start()] + '"<redacted>'
 
 
 def secretless(value):
