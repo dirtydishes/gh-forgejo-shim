@@ -888,6 +888,18 @@ fn run_checkout(
         Some(branch) => {
             if local_branches.contains(&branch) {
                 // As gh: an existing branch moves only by fast-forward, so its own commits stay.
+                // One that can't is refused before the switch, so the user stays where they were,
+                // as gh's fetch into the branch is refused.
+                let local = format!("refs/heads/{branch}");
+                let ancestor = git_run(&["merge-base", "--is-ancestor", &local, "FETCH_HEAD"], cwd);
+                if ancestor.code == 1 {
+                    writeln!(
+                        stderr,
+                        "the local branch {branch:?} has commits the pull request doesn't, so it \
+                         can't fast-forward; reset it with --force, or name another with --branch"
+                    )?;
+                    return Ok(1);
+                }
                 let output = git_run(&["checkout", branch], cwd);
                 if output.code == 0 {
                     git_run(&["merge", "--ff-only", "FETCH_HEAD"], cwd)
@@ -4088,7 +4100,9 @@ mod tests {
             git(git_repo.work(), ["add", "NOTES.md"]);
             git(git_repo.work(), ["commit", "-qm", "mine"]);
             let mine = git_repo.rev(branch);
-            git(git_repo.work(), ["checkout", "-q", "main"]);
+            // The user works on `topic`, with a file git doesn't track.
+            git(git_repo.work(), ["checkout", "-q", "-b", "topic", "main"]);
+            fs::write(git_repo.work().join("SCRATCH.md"), "draft\n").expect("write untracked file");
             let client = FakeApi {
                 pulls: vec![pull_from(number, head_owner, branch)],
                 ..FakeApi::default()
@@ -4105,7 +4119,11 @@ mod tests {
             assert_ne!(code, 0, "{branch}");
             assert_eq!(stdout, "", "{branch}");
             assert!(stderr.contains("fast-forward"), "{branch}: {stderr}");
+            for word in [branch, "--force", "--branch"] {
+                assert!(stderr.contains(word), "{branch}: {stderr}");
+            }
             assert_eq!(git_repo.rev(branch), mine, "{branch}");
+            assert_eq!(git_repo.branch().as_deref(), Some("topic"), "{branch}");
         }
     }
 
