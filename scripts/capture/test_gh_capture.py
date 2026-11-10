@@ -466,6 +466,15 @@ class TokenOutputTest(unittest.TestCase):
         self.assertIn('"token":"<redacted>"', stored)
         self.assertIn(patch, stored)
 
+    def test_an_answer_full_of_quotes_is_scrubbed_quickly(self):
+        wrapper = Wrapper(self)
+        # A diff of JSON files: escaped quotes by the thousand, in one string.
+        answer = '[{"filename":"a.json","patch":"' + '\\"x' * 30000 + '"}]'
+        started = time.monotonic()
+        wrapper.run("api", "repos/o/r/pulls/1/files", FAKE_GH="print", FAKE_OUT=answer)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(wrapper.records()[0]["stdout"], answer)
+
     def test_commands_and_their_aliases_keep_their_output(self):
         wrapper = Wrapper(self)
         for argv in (["discussion", "list"], ["skill", "list"], ["cs", "list"], ["environment", "list"]):
