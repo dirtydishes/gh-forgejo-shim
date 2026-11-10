@@ -821,18 +821,25 @@ fn run_checkout(
     };
 
     // A filesystem that ignores case, as macOS's does, stores `Develop` in the user's `develop`, so
-    // git would read or replace that branch. gh doesn't check this.
+    // git would read or replace that branch. git records such a filesystem at clone or init as
+    // `core.ignorecase`. A branch of the exact name is the one meant. gh doesn't check this.
     let local_branches =
         git_output(&["for-each-ref", "--format=%(refname)", "refs/heads"], cwd).unwrap_or_default();
     let local_branches = local_branches
         .lines()
         .filter_map(|name| name.strip_prefix("refs/heads/"))
         .collect::<Vec<_>>();
-    if let Some(branch) = branch.as_deref() {
+    let ignores_case =
+        || git_output(&["config", "--bool", "core.ignorecase"], cwd).as_deref() == Some("true");
+    if let Some(branch) = branch
+        .as_deref()
+        .filter(|branch| !local_branches.contains(branch))
+    {
         let lower = branch.to_lowercase();
         if let Some(other) = local_branches
             .iter()
-            .find(|name| **name != branch && name.to_lowercase() == lower)
+            .find(|name| name.to_lowercase() == lower)
+            .filter(|_| ignores_case())
         {
             writeln!(
                 stderr,
@@ -3213,6 +3220,23 @@ mod tests {
             head
         }
 
+        /// Makes branch names that differ only in case two refs, as they are on a filesystem that
+        /// keeps case: on one that ignores case, by moving the refs to reftable. `false` when this
+        /// git can't.
+        fn case_sensitive_refs(&self) -> bool {
+            let probe = self.work.join("CASE-PROBE");
+            fs::write(&probe, "").expect("write case probe");
+            let ignores_case = self.work.join("case-probe").exists();
+            fs::remove_file(&probe).expect("remove case probe");
+            !ignores_case
+                || git_run(
+                    &["refs", "migrate", "--ref-format=reftable"],
+                    Some(&self.work),
+                )
+                .code
+                    == 0
+        }
+
         /// Commits on the local `main` without pushing, and returns the commit.
         fn unpushed_commit_on_main(&self) -> String {
             fs::write(self.work.join("NOTES.md"), "unpushed\n").expect("write unpushed file");
@@ -4138,12 +4162,14 @@ mod tests {
     #[test]
     fn pr_checkout_refuses_a_branch_named_as_another_but_for_case() {
         // On a filesystem that ignores case, as macOS's does, `Develop` is the user's `develop`.
+        // git records that at clone as `core.ignorecase`.
         for (branch, extra, local) in [
             ("Develop", &[][..], "Develop"),
             ("Develop", &["--force"][..], "Develop"),
             ("topic", &["--branch", "DEVELOP"][..], "DEVELOP"),
         ] {
             let git_repo = CheckoutGitFixture::new();
+            git(git_repo.work(), ["config", "core.ignorecase", "true"]);
             git_repo.fork_pull_head(7, "fork\n");
             git(git_repo.work(), ["branch", "develop", "main"]);
             let develop = git_repo.rev("develop");
@@ -4170,6 +4196,71 @@ mod tests {
             assert_eq!(git_repo.rev("develop"), develop, "{args:?}");
             assert_eq!(git_repo.branch().as_deref(), Some("main"), "{args:?}");
         }
+    }
+
+    #[test]
+    fn pr_checkout_takes_a_branch_named_as_another_but_for_case_where_git_keeps_case() {
+        for (branch, extra, local) in [
+            ("Develop", &[][..], "Develop"),
+            ("Develop", &["--force"][..], "Develop"),
+            ("topic", &["--branch", "DEVELOP"][..], "DEVELOP"),
+        ] {
+            let git_repo = CheckoutGitFixture::new();
+            if !git_repo.case_sensitive_refs() {
+                eprintln!("skipped: this git can't keep branch names apart by case here");
+                return;
+            }
+            git(git_repo.work(), ["config", "core.ignorecase", "false"]);
+            let fork_head = git_repo.fork_pull_head(7, "fork\n");
+            git(git_repo.work(), ["branch", "develop", "main"]);
+            let develop = git_repo.rev("develop");
+            let client = FakeApi {
+                pulls: vec![pull_from(7, "fork", branch)],
+                ..FakeApi::default()
+            };
+            let mut args = vec!["pr", "checkout", "7"];
+            args.extend(extra);
+
+            let (code, stdout, stderr) =
+                run_fake(&args, &client, Some("token"), Some(git_repo.work()));
+
+            assert_eq!(code, 0, "{args:?}: {stderr}");
+            assert_eq!(stdout, format!("checked out {local}\n"), "{args:?}");
+            assert_eq!(git_repo.branch().as_deref(), Some(local), "{args:?}");
+            assert_eq!(git_repo.rev("HEAD"), fork_head, "{args:?}");
+            assert_eq!(git_repo.rev("develop"), develop, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pr_checkout_of_a_branch_that_exists_ignores_its_case_sibling() {
+        let git_repo = CheckoutGitFixture::new();
+        if !git_repo.case_sensitive_refs() {
+            eprintln!("skipped: this git can't keep branch names apart by case here");
+            return;
+        }
+        git(git_repo.work(), ["config", "core.ignorecase", "true"]);
+        let fork_head = git_repo.fork_pull_head(7, "fork\n");
+        git(git_repo.work(), ["branch", "feature", "main"]);
+        git(git_repo.work(), ["branch", "Feature", "main"]);
+        let sibling = git_repo.rev("Feature");
+        let client = FakeApi {
+            pulls: vec![pull_from(7, "fork", "feature")],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "7"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out feature\n");
+        assert_eq!(git_repo.branch().as_deref(), Some("feature"));
+        assert_eq!(git_repo.rev("feature"), fork_head);
+        assert_eq!(git_repo.rev("Feature"), sibling);
     }
 
     #[test]
