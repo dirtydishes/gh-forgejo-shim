@@ -256,9 +256,10 @@ def fake_token(argv):
 class Pump(threading.Thread):
     """Copies one of gh's output pipes to ours as it arrives, keeping the first MAX_STREAM bytes."""
 
-    def __init__(self, source, target):
+    def __init__(self, name, source, target):
         super().__init__(daemon=True)
-        self.source, self.target = source, target
+        self.name, self.source, self.target = name, source, target
+        self.failed = None  # why passing output on failed, if it did
         self.kept = bytearray()
         self.total = 0
         self.waiting = False  # blocked reading gh's pipe, with nothing left to pass on
@@ -284,10 +285,12 @@ class Pump(threading.Thread):
                     # The caller stopped reading: so does the wrapper, and gh's next write fails
                     # as it would have without the wrapper.
                     writing = reading = False
-                except OSError:
+                except OSError as error:
                     # Anything else (a full disk, a closed descriptor) loses the caller's copy, but
-                    # gh's pipe keeps draining, so gh never blocks on it.
+                    # gh's pipe keeps draining, so gh never blocks on it. The call then fails, as
+                    # gh's own failed write would have failed it.
                     writing = False
+                    self.failed = error.strerror or str(error)
         self.source.close()
 
 
@@ -421,6 +424,9 @@ def finish(record, argv, code, started, pumps):
         record["exit"] = code
         if code < 0:
             record["signal"] = signal_name(-code)
+        failed = [pump.name for pump in pumps if pump.failed]
+        if failed:
+            record["forward_failed"] = failed
         for name, pump in zip(("stdout", "stderr"), pumps):
             record[name] = {"redacted": True, "bytes": pump.total} if secret_output(argv) else text(pump)
         if len(pumps) == 1:
@@ -510,7 +516,7 @@ def main():
     child.append(proc)
     for number in waiting:
         proc.send_signal(number)
-    pumps = [Pump(proc.stdout, 1)] + ([] if merged else [Pump(proc.stderr, 2)])
+    pumps = [Pump("stdout", proc.stdout, 1)] + ([] if merged else [Pump("stderr", proc.stderr, 2)])
     for pump in pumps:
         pump.start()
     # Wait for gh's output, until gh has exited and its pipes have been quiet for QUIET: a pump
@@ -530,7 +536,13 @@ def main():
     finish(record, argv, code, start, pumps)
     if code < 0:
         die_like(-code)
-    sys.exit(code)
+    for pump in pumps:
+        if pump.failed:
+            try:
+                os.write(2, f"gh-capture: {pump.name}: {pump.failed}\n".encode())
+            except OSError:
+                pass
+    sys.exit(code or (1 if any(pump.failed for pump in pumps) else 0))
 
 
 if __name__ == "__main__":

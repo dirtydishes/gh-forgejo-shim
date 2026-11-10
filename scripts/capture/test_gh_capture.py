@@ -437,8 +437,21 @@ class StreamTest(unittest.TestCase):
             result = subprocess.run([sys.executable, str(WRAPPER), "api", "user"], env=wrapper.env | {"FAKE_GH": "long",
                                     "FAKE_SIZE": "500000"}, cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=full,
                                     stderr=subprocess.DEVNULL, timeout=30)
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 1)
         self.assertEqual(wrapper.records()[0]["stdout"]["bytes"], 500000)
+
+    def test_a_stdout_that_cant_be_written_fails_the_call(self):
+        wrapper = Wrapper(self)
+        unwritable = wrapper.root / "read-only"
+        unwritable.write_text("")
+        with open(unwritable, "rb") as stdout:
+            result = subprocess.run([sys.executable, str(WRAPPER), "api", "user"], env=wrapper.env | {"FAKE_GH": "long",
+                                    "FAKE_SIZE": "500000"}, cwd=wrapper.root, stdin=subprocess.DEVNULL, stdout=stdout,
+                                    stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"gh-capture: stdout", result.stderr)
+        [record] = wrapper.records()
+        self.assertEqual((record["exit"], record["stdout"]["bytes"], record["forward_failed"]), (0, 500000, ["stdout"]))
 
     def test_one_place_for_both_streams_keeps_their_order(self):
         wrapper = Wrapper(self)
@@ -584,7 +597,9 @@ class LogFailureTest(unittest.TestCase):
             result = subprocess.run(["/bin/sh", "-c", shell, sys.executable, str(WRAPPER), "pr", "list", "--json", "number"],
                                     env=wrapper.env, cwd=wrapper.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     timeout=30)
-            self.assertEqual((result.returncode, result.stderr), (0, b"err\n"), name)
+            # With stdout closed, gh's output can't reach the caller, and the call fails as gh's would.
+            failed = (1, b"err\ngh-capture: stdout: Bad file descriptor\n") if name == "closed stdout" else (0, b"err\n")
+            self.assertEqual((result.returncode, result.stderr), failed, name)
         self.assertEqual(len(wrapper.records()), 3)
 
     def test_an_existing_log_is_narrowed_to_its_owner(self):
