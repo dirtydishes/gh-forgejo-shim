@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use fga_core::forgejo::{CommitStatus, Protection};
+use fga_core::forgejo::{named_like_a_ref, CommitStatus, Protection};
 use serde_json::{json, Value};
 
 use crate::config::{self, EnvMap};
@@ -800,11 +800,24 @@ fn run_checkout(
     )?
     .ok_or_else(|| ShimError::new("could not find pull request to check out"))?;
     let number = pull_number(&pull);
-    let head_ref = pull_head_ref(&pull);
+    let head = PullHead::of(&pull);
+    // `None` checks out detached.
+    let branch = if parsed.detach {
+        None
+    } else if let Some(branch) = parsed.local_branch.clone() {
+        Some(branch)
+    } else {
+        local_branch_for(&head, number, || {
+            default_branch(&pull, client, &target_repo)
+        })?
+    };
 
+    // As gh: a head branch by name only while it is the PR's head in the base repository, and
+    // otherwise the PR's own ref there. A fork's branch name, fetched from the base, would be the
+    // base's branch of that name.
     let mut fetch_refs = Vec::new();
-    if let Some(head_ref) = head_ref.as_deref() {
-        fetch_refs.push(head_ref.to_string());
+    if let Some(name) = head.name.as_deref().filter(|_| head.is_base_branch) {
+        fetch_refs.push(format!("refs/heads/{name}"));
     }
     if let Some(number) = number {
         fetch_refs.push(format!("refs/pull/{number}/head"));
@@ -812,7 +825,7 @@ fn run_checkout(
 
     let mut fetch_error = String::new();
     let mut fetched = false;
-    for fetch_ref in dedupe_strings(fetch_refs) {
+    for fetch_ref in fetch_refs {
         let output = git_run(&["fetch", "origin", fetch_ref.as_str()], cwd);
         if output.code == 0 {
             fetched = true;
@@ -833,35 +846,17 @@ fn run_checkout(
         return Ok(1);
     }
 
-    if parsed.detach {
-        let output = git_run(&["checkout", "--detach", "FETCH_HEAD"], cwd);
-        if output.code != 0 {
-            writeln!(
-                stderr,
-                "{}",
-                git_error_message(&output, "git checkout failed")
-            )?;
-            return Ok(output.code);
-        }
-        writeln!(stdout, "checked out FETCH_HEAD")?;
-        return Ok(0);
-    }
-
-    let branch = parsed
-        .local_branch
-        .clone()
-        .or(head_ref)
-        .or_else(|| number.map(|number| format!("pull-{number}")))
-        .ok_or_else(|| ShimError::new("could not determine local branch name"))?;
-    let output = if parsed.force {
-        git_run(&["checkout", "-B", branch.as_str(), "FETCH_HEAD"], cwd)
-    } else {
-        let ref_name = format!("refs/heads/{branch}");
-        let exists = git_run(&["show-ref", "--verify", "--quiet", ref_name.as_str()], cwd);
-        if exists.code == 0 {
-            git_run(&["checkout", branch.as_str()], cwd)
-        } else {
-            git_run(&["checkout", "-b", branch.as_str(), "FETCH_HEAD"], cwd)
+    let output = match branch.as_deref() {
+        None => git_run(&["checkout", "--detach", "FETCH_HEAD"], cwd),
+        Some(branch) if parsed.force => git_run(&["checkout", "-B", branch, "FETCH_HEAD"], cwd),
+        Some(branch) => {
+            let ref_name = format!("refs/heads/{branch}");
+            let exists = git_run(&["show-ref", "--verify", "--quiet", ref_name.as_str()], cwd);
+            if exists.code == 0 {
+                git_run(&["checkout", branch], cwd)
+            } else {
+                git_run(&["checkout", "-b", branch, "FETCH_HEAD"], cwd)
+            }
         }
     };
     if output.code != 0 {
@@ -885,7 +880,11 @@ fn run_checkout(
         }
     }
 
-    writeln!(stdout, "checked out {branch}")?;
+    writeln!(
+        stdout,
+        "checked out {}",
+        branch.as_deref().unwrap_or("FETCH_HEAD")
+    )?;
     Ok(0)
 }
 
@@ -2157,13 +2156,103 @@ fn body_from_file(path_value: &str, stdin: &mut dyn Read) -> Result<String> {
         .map_err(|error| ShimError::new(format!("could not read body file {path_value}: {error}")))
 }
 
-fn pull_head_ref(pull: &Value) -> Option<String> {
-    pull.get("head")
-        .and_then(Value::as_object)
-        .and_then(|head| head.get("ref"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+/// A PR's head as `gh pr checkout` reads it.
+struct PullHead {
+    /// The head branch's name, as `fga_core::forgejo::Branch::name` reads it: `label` once Forgejo
+    /// has put `refs/pull/N/head` in `ref` for a deleted branch or fork, and `ref` for an AGit PR,
+    /// whose `label` is empty.
+    name: Option<String>,
+    /// The head repository's owner, which gh puts before a head branch named as the base's
+    /// default branch.
+    owner: Option<String>,
+    /// Whether the head is a branch of the base repository that is still the open PR's head, the
+    /// only head gh fetches by name (`headRepository` in `docs/gateway/MAPPING.md` §10). A fork,
+    /// a deleted fork, an AGit PR, a closed PR and a branch named like a ref are fetched from the
+    /// PR's own ref.
+    is_base_branch: bool,
+}
+
+impl PullHead {
+    fn of(pull: &Value) -> Self {
+        let text = |pointer: &str| {
+            pull.pointer(pointer)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        };
+        let label = text("/head/label");
+        let ref_name = text("/head/ref");
+        let name = match (label, ref_name) {
+            (Some(label), Some(ref_name)) if ref_name.starts_with("refs/pull/") => Some(label),
+            (label, ref_name) => ref_name.or(label),
+        };
+        let repo =
+            |side: &str| text(&format!("/{side}/repo/full_name")).map(str::to_ascii_lowercase);
+        let open = text("/state") == Some("open")
+            && !pull.get("merged").and_then(Value::as_bool).unwrap_or(false);
+        let is_base_branch = open
+            && repo("head").is_some()
+            && repo("head") == repo("base")
+            && label.is_some()
+            && label == ref_name
+            && !ref_name.is_some_and(named_like_a_ref);
+        Self {
+            name: name.map(ToOwned::to_owned),
+            owner: text("/head/repo/owner/login").map(ToOwned::to_owned),
+            is_base_branch,
+        }
+    }
+}
+
+/// The local branch gh 2.103.3 checks a PR out to without `--branch` (`checkout.go`'s
+/// `cmdsForExistingRemote` and `cmdsForMissingRemote`), or `None` to check out detached. A head it
+/// fetches from the PR's own ref and named as the base's default branch gets the head owner's name
+/// in front, so a fork's `main` lands on `fork/main`, never the user's `main`. This compares
+/// without case, unlike gh, so that a fork's `Main` can't write the user's `main` on a
+/// filesystem that ignores case.
+fn local_branch_for(
+    head: &PullHead,
+    number: Option<u64>,
+    default_branch: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    let pull_branch = || {
+        number
+            .map(|number| format!("pull-{number}"))
+            .ok_or_else(|| ShimError::new("could not determine local branch name"))
+    };
+    let Some(name) = head.name.as_deref() else {
+        return pull_branch().map(Some);
+    };
+    if head.is_base_branch {
+        return Ok(Some(name.to_owned()));
+    }
+    let default_branch = default_branch()?
+        .ok_or_else(|| ShimError::new("could not read the base repository's default branch"))?;
+    if !name.eq_ignore_ascii_case(&default_branch) {
+        return Ok(Some(name.to_owned()));
+    }
+    match head.owner.as_deref() {
+        Some(owner) => Ok(Some(format!("{owner}/{name}"))),
+        None => pull_branch().map(Some),
+    }
+}
+
+/// The base repository's default branch: from the PR, as Forgejo sends it, or else the repository.
+fn default_branch(
+    pull: &Value,
+    client: &dyn ForgejoApi,
+    repo: &ForgejoRepoRef,
+) -> Result<Option<String>> {
+    let read = |value: &Value| {
+        value
+            .get("default_branch")
+            .and_then(Value::as_str)
+            .filter(|branch| !branch.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    match pull.pointer("/base/repo").and_then(read) {
+        Some(branch) => Ok(Some(branch)),
+        None => Ok(read(&client.get_repo(repo)?)),
+    }
 }
 
 fn resolve_label_ids(
@@ -2215,16 +2304,6 @@ fn git_error_message<'a>(output: &'a GitRunResult, fallback: &'a str) -> &'a str
     } else {
         output.message.as_str()
     }
-}
-
-fn dedupe_strings(values: Vec<String>) -> Vec<String> {
-    let mut result = Vec::new();
-    for value in values {
-        if !result.contains(&value) {
-            result.push(value);
-        }
-    }
-    result
 }
 
 fn resolve_pull(
@@ -2955,6 +3034,59 @@ mod tests {
         fn branch(&self) -> Option<String> {
             current_branch(Some(&self.work))
         }
+
+        fn rev(&self, name: &str) -> String {
+            git_output(
+                &["rev-parse", "--verify", "--quiet", name],
+                Some(&self.work),
+            )
+            .unwrap_or_default()
+        }
+
+        /// Puts a commit with `content` on top of `main` at `refs/pull/{number}/head` in origin,
+        /// as a fork's PR has it, and returns the commit.
+        fn fork_pull_head(&self, number: u64, content: &str) -> String {
+            git(&self.work, ["checkout", "-q", "--detach", "origin/main"]);
+            fs::write(self.work.join("README.md"), content).expect("write fork file");
+            git(&self.work, ["commit", "-qam", "fork"]);
+            let refspec = format!("HEAD:refs/pull/{number}/head");
+            git(&self.work, ["push", "-q", "origin", refspec.as_str()]);
+            let head = self.rev("HEAD");
+            git(&self.work, ["checkout", "-q", "main"]);
+            head
+        }
+
+        /// Commits on the local `main` without pushing, and returns the commit.
+        fn unpushed_commit_on_main(&self) -> String {
+            fs::write(self.work.join("NOTES.md"), "unpushed\n").expect("write unpushed file");
+            git(&self.work, ["add", "NOTES.md"]);
+            git(&self.work, ["commit", "-qm", "unpushed"]);
+            self.rev("main")
+        }
+    }
+
+    /// A Forgejo PR into `owner/repo`'s `main` from `head_owner/repo`'s `branch`.
+    fn pull_from(number: u64, head_owner: &str, branch: &str) -> Value {
+        let repo = |id: u64, owner: &str| {
+            json!({
+                "id": id,
+                "full_name": format!("{owner}/repo"),
+                "default_branch": "main",
+                "owner": {"login": owner},
+            })
+        };
+        json!({
+            "number": number,
+            "state": "open",
+            "merged": false,
+            "head": {
+                "label": branch,
+                "ref": branch,
+                "sha": "abc123",
+                "repo": repo(if head_owner == "owner" { 99 } else { 100 }, head_owner),
+            },
+            "base": {"label": "main", "ref": "main", "sha": "def456", "repo": repo(99, "owner")},
+        })
     }
 
     impl Drop for CheckoutGitFixture {
@@ -3590,6 +3722,134 @@ mod tests {
         assert_eq!(stderr, "");
         assert_eq!(git_repo.branch().as_deref(), Some("pull-12"));
         assert_eq!(git_repo.readme(), "feature\n");
+    }
+
+    #[test]
+    fn pr_checkout_of_a_fork_main_never_replaces_the_local_main() {
+        for args in [
+            &[
+                "pr",
+                "checkout",
+                "https://git.example.com/owner/repo/pulls/7",
+                "--force",
+            ][..],
+            &[
+                "pr",
+                "checkout",
+                "https://git.example.com/owner/repo/pulls/7",
+            ][..],
+            &["pr", "checkout", "7", "--recurse-submodules", "--force"][..],
+        ] {
+            let git_repo = CheckoutGitFixture::new();
+            let fork_head = git_repo.fork_pull_head(7, "fork\n");
+            let unpushed = git_repo.unpushed_commit_on_main();
+            let client = FakeApi {
+                pulls: vec![pull_from(7, "fork", "main")],
+                ..FakeApi::default()
+            };
+
+            let (code, stdout, stderr) =
+                run_fake(args, &client, Some("token"), Some(git_repo.work()));
+
+            assert_eq!(git_repo.rev("main"), unpushed, "{args:?}: {stderr}");
+            assert_eq!(code, 0, "{args:?}: {stderr}");
+            assert_eq!(stdout, "checked out fork/main\n", "{args:?}");
+            assert_eq!(git_repo.branch().as_deref(), Some("fork/main"), "{args:?}");
+            assert_eq!(git_repo.rev("HEAD"), fork_head, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pr_checkout_of_a_same_repository_branch_keeps_its_name() {
+        // No local branch, a stale one under `--force`, and a stale one without it, which is
+        // checked out as it is.
+        for (stale, force, tip) in [
+            (false, false, "feature-pr"),
+            (true, true, "feature-pr"),
+            (true, false, "main"),
+        ] {
+            let git_repo = CheckoutGitFixture::new();
+            if stale {
+                git(git_repo.work(), ["branch", "feature-pr", "main"]);
+            }
+            let client = FakeApi {
+                pulls: vec![pull_from(12, "owner", "feature-pr")],
+                ..FakeApi::default()
+            };
+            let mut args = vec!["pr", "checkout", "12"];
+            if force {
+                args.push("--force");
+            }
+
+            let (code, stdout, stderr) =
+                run_fake(&args, &client, Some("token"), Some(git_repo.work()));
+
+            assert_eq!(code, 0, "{args:?}: {stderr}");
+            assert_eq!(stdout, "checked out feature-pr\n", "{args:?}");
+            assert_eq!(git_repo.branch().as_deref(), Some("feature-pr"), "{args:?}");
+            assert_eq!(
+                git_repo.rev("HEAD"),
+                git_repo.rev(&format!("origin/{tip}")),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pr_checkout_of_a_closed_pull_request_fetches_its_own_ref() {
+        let git_repo = CheckoutGitFixture::new();
+        let pull_head = git_repo.rev("origin/feature-pr");
+        // The branch moves on after the PR closes.
+        git(git_repo.work(), ["checkout", "-q", "origin/feature-pr"]);
+        git(
+            git_repo.work(),
+            ["commit", "-q", "--allow-empty", "-m", "later"],
+        );
+        git(git_repo.work(), ["push", "-q", "origin", "HEAD:feature-pr"]);
+        git(git_repo.work(), ["checkout", "-q", "main"]);
+        let mut pull = pull_from(12, "owner", "feature-pr");
+        pull["state"] = json!("closed");
+        let client = FakeApi {
+            pulls: vec![pull],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out feature-pr\n");
+        assert_eq!(git_repo.rev("HEAD"), pull_head);
+    }
+
+    #[test]
+    fn pr_checkout_of_a_deleted_fork_main_never_replaces_the_local_main() {
+        let git_repo = CheckoutGitFixture::new();
+        let fork_head = git_repo.fork_pull_head(7, "fork\n");
+        let unpushed = git_repo.unpushed_commit_on_main();
+        let mut pull = pull_from(7, "fork", "main");
+        pull["head"]["ref"] = json!("refs/pull/7/head");
+        pull["head"]["repo"] = Value::Null;
+        let client = FakeApi {
+            pulls: vec![pull],
+            ..FakeApi::default()
+        };
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "7", "--force"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(git_repo.rev("main"), unpushed, "{stderr}");
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, "checked out pull-7\n");
+        assert_eq!(git_repo.rev("HEAD"), fork_head);
     }
 
     #[test]
