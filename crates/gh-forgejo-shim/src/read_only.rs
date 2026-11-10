@@ -820,6 +820,29 @@ fn run_checkout(
         })?
     };
 
+    // A filesystem that ignores case, as macOS's does, stores `Develop` in the user's `develop`, so
+    // git would read or replace that branch. gh doesn't check this.
+    let local_branches =
+        git_output(&["for-each-ref", "--format=%(refname)", "refs/heads"], cwd).unwrap_or_default();
+    let local_branches = local_branches
+        .lines()
+        .filter_map(|name| name.strip_prefix("refs/heads/"))
+        .collect::<Vec<_>>();
+    if let Some(branch) = branch.as_deref() {
+        let lower = branch.to_lowercase();
+        if let Some(other) = local_branches
+            .iter()
+            .find(|name| **name != branch && name.to_lowercase() == lower)
+        {
+            writeln!(
+                stderr,
+                "the local branch {other:?} differs from {branch:?} only in case; name another \
+                 with --branch"
+            )?;
+            return Ok(1);
+        }
+    }
+
     // As gh: a head branch by name only while it is the PR's head in the base repository, and
     // otherwise the PR's own ref there. A fork's branch name, fetched from the base, would be the
     // base's branch of that name.
@@ -863,9 +886,7 @@ fn run_checkout(
         None => git_run(&["checkout", "--detach", "FETCH_HEAD"], cwd),
         Some(branch) if parsed.force => git_run(&["checkout", "-B", branch, "FETCH_HEAD"], cwd),
         Some(branch) => {
-            let ref_name = format!("refs/heads/{branch}");
-            let exists = git_run(&["show-ref", "--verify", "--quiet", ref_name.as_str()], cwd);
-            if exists.code == 0 {
+            if local_branches.contains(&branch) {
                 // As gh: an existing branch moves only by fast-forward, so its own commits stay.
                 let output = git_run(&["checkout", branch], cwd);
                 if output.code == 0 {
@@ -4085,6 +4106,43 @@ mod tests {
             assert_eq!(stdout, "", "{branch}");
             assert!(stderr.contains("fast-forward"), "{branch}: {stderr}");
             assert_eq!(git_repo.rev(branch), mine, "{branch}");
+        }
+    }
+
+    #[test]
+    fn pr_checkout_refuses_a_branch_named_as_another_but_for_case() {
+        // On a filesystem that ignores case, as macOS's does, `Develop` is the user's `develop`.
+        for (branch, extra, local) in [
+            ("Develop", &[][..], "Develop"),
+            ("Develop", &["--force"][..], "Develop"),
+            ("topic", &["--branch", "DEVELOP"][..], "DEVELOP"),
+        ] {
+            let git_repo = CheckoutGitFixture::new();
+            git_repo.fork_pull_head(7, "fork\n");
+            git(git_repo.work(), ["branch", "develop", "main"]);
+            let develop = git_repo.rev("develop");
+            let client = FakeApi {
+                pulls: vec![pull_from(7, "fork", branch)],
+                ..FakeApi::default()
+            };
+            let mut args = vec!["pr", "checkout", "7"];
+            args.extend(extra);
+
+            let (code, stdout, stderr) =
+                run_fake(&args, &client, Some("token"), Some(git_repo.work()));
+
+            assert_eq!(code, 1, "{args:?}");
+            assert_eq!(stdout, "", "{args:?}");
+            assert_eq!(
+                stderr,
+                format!(
+                    "the local branch \"develop\" differs from {local:?} only in case; \
+                     name another with --branch\n"
+                ),
+                "{args:?}"
+            );
+            assert_eq!(git_repo.rev("develop"), develop, "{args:?}");
+            assert_eq!(git_repo.branch().as_deref(), Some("main"), "{args:?}");
         }
     }
 
