@@ -474,6 +474,12 @@ class TokenOutputTest(unittest.TestCase):
         wrapper.run("api", "repos/o/r/pulls/1/files", FAKE_GH="print", FAKE_OUT=answer)
         self.assertLess(time.monotonic() - started, 2)
         self.assertEqual(wrapper.records()[0]["stdout"], answer)
+        # The same, cut short at 256 KiB inside that string.
+        started = time.monotonic()
+        wrapper.run("api", "repos/o/r/pulls/1/files", FAKE_GH="long", FAKE_SIZE="300000",
+                    FAKE_PREFIX='[{"filename":"a.json","patch":"' + '\\"x' * 20000)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(wrapper.records()[1]["stdout"]["head"].startswith('[{"filename":"a.json","patch":"\\"x\\"x'))
 
     def test_commands_and_their_aliases_keep_their_output(self):
         wrapper = Wrapper(self)
