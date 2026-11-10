@@ -116,7 +116,8 @@ const SUMS = [
 
 /**
  * Works out and stores the figures for each of the last [`WEEKS`] finished weeks that has none
- * stored. A report counts on the day it arrives, so a finished week's counters never change; its
+ * stored, from the first report's week on: a week before any report came would publish nothing but
+ * its noise. A report counts on the day it arrives, so a finished week's counters never change; its
  * figures are worked out from them once and never again, so two responses never differ in a figure
  * and can't be subtracted from each other, nor their noise averaged away. `draw` is for tests. It
  * makes at most three database calls, however many weeks are missing, to stay within the Workers
@@ -124,13 +125,17 @@ const SUMS = [
  */
 export async function freeze(env: Env, today: string, draw: () => number = noise): Promise<void> {
   const thisWeek = monday(today);
-  const stored = await env.DB.prepare("SELECT week FROM published WHERE week >= ?")
-    .bind(isoWeek(daysBefore(thisWeek, WEEKS * 7)))
-    .all<{ week: string }>();
+  const [stored, earliest] = await env.DB.batch<{ week?: string; day?: string | null }>([
+    env.DB.prepare("SELECT week FROM published WHERE week >= ?").bind(isoWeek(daysBefore(thisWeek, WEEKS * 7))),
+    env.DB.prepare("SELECT MIN(day) AS day FROM reports"),
+  ]);
+  const first = earliest.results[0]?.day;
+  if (!first) return;
   const done = new Set(stored.results.map((row) => row.week));
   const missing: string[] = [];
   for (let back = WEEKS; back >= 1; back--) {
-    if (!done.has(isoWeek(daysBefore(thisWeek, back * 7)))) missing.push(daysBefore(thisWeek, back * 7));
+    const start = daysBefore(thisWeek, back * 7);
+    if (start >= monday(first) && !done.has(isoWeek(start))) missing.push(start);
   }
   if (missing.length === 0) return;
   const range = [missing[0], daysBefore(missing[missing.length - 1], -6)];

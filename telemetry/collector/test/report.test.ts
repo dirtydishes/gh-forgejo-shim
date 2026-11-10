@@ -360,6 +360,26 @@ describe("GET /v1/stats", () => {
     }
   });
 
+  it("publishes no week from before the first report", async () => {
+    // A Wednesday three weeks ago: its week is the first with anything to count.
+    await env.DB.batch([counted(daysBefore(monday(today), 3 * 7 - 2), 13)]);
+    await freeze(env, today, exact);
+    const weeks = (await stats()).weeks as Array<Record<string, any>>;
+    expect(weeks.map((found) => found.week)).toEqual(
+      [3, 2, 1].map((back) => isoWeek(daysBefore(monday(today), back * 7))),
+    );
+    expect((await rows("published")).length).toBe(3);
+  });
+
+  it("publishes nothing until a week with a report ends", async () => {
+    await freeze(env, today);
+    expect((await stats()).weeks).toEqual([]);
+    await post(example());
+    await freeze(env, today);
+    expect((await stats()).weeks).toEqual([]);
+    expect(await rows("published")).toEqual([]);
+  });
+
   it("publishes the last 26 weeks", async () => {
     const fifteenWeeks = daysBefore(monday(today), 15 * 7);
     await env.DB.batch([

@@ -150,8 +150,8 @@ Nothing serves them over the web.
 ## Published totals
 
 `https://telemetry.dirtydishes.dev/v1/stats` publishes a small summary as JSON, for anyone to read:
-for each of the last 26 finished ISO weeks, the week's installs, and its installs by each of
-`client`, `forge`, `mode`, `os` and `version` on its own.
+for each of the last 26 finished ISO weeks since the first report, the week's installs, and its
+installs by each of `client`, `forge`, `mode`, `os` and `version` on its own.
 
 ```json
 {
