@@ -20,7 +20,9 @@ The rest of a person's details stay until redact.py runs on the log, before anyt
 When stdout is a terminal, it records the argv and execs gh, so interactive output doesn't change.
 Otherwise gh writes stdout to a pipe, which keeps its non-TTY behaviour, and each chunk reaches the
 caller as gh writes it (`gh pr checks --watch`), with a copy kept for the record. stderr goes the
-same way, unless it's a terminal: then gh keeps it, and it isn't recorded. SIGINT, SIGTERM and SIGHUP
+same way, unless it's a terminal: then gh keeps it, and it isn't recorded. When gh exits leaving
+something running that holds those pipes (an extension's background job), the wrapper exits with
+gh, and a forked child passes on what that writes and records the call once the pipes close. SIGINT, SIGTERM and SIGHUP
 go on to gh, and when a signal kills gh the wrapper dies of the same one. Python 3.9 compatible
 (macOS /usr/bin/python3).
 """
@@ -35,6 +37,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 
 # The credential rules come from redact.py beside this script (scripts/capture), so install it as a
 # link to the checkout's copy. Without them, or with a redact.py that's broken or lacks one, nothing
@@ -63,10 +66,6 @@ ENV_KEYS = ("GH_HOST", "GH_REPO", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER",
             "NO_COLOR", "CLICOLOR", "GIT_TERMINAL_PROMPT", "TERM")
 SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 MAX_STREAM = 256 * 1024
-# How long, once gh has exited, to wait for pipes that have gone quiet: something gh left running
-# (a credential cache, a browser) may hold them open for as long as it runs. After that the wrapper
-# exits, and what that process writes later is lost where gh alone would have passed it on.
-QUIET = 0.5
 # What a caller sends to stop a call; each goes on to gh. Any other signal reaches gh only as the
 # caller's process group gets it. A signal sent to the whole group (a terminal's Ctrl-C) reaches gh
 # twice, which gh, exiting on the first, doesn't notice; a handler can't tell who sent a signal, and
@@ -254,29 +253,36 @@ def fake_token(argv):
     return "gfjprobe_" + host.replace(".", "_") if host in hosts else None
 
 
-class Pump(threading.Thread):
-    """Copies one of gh's output pipes to ours as it arrives, keeping the first MAX_STREAM bytes."""
+class Pump:
+    """Copies one of gh's pipes to ours as it arrives, keeping the first MAX_STREAM bytes."""
 
     def __init__(self, name, source, target):
-        super().__init__(daemon=True)
         self.name, self.source, self.target = name, source, target
-        self.failed = None  # why passing output on failed, if it did
         self.kept = bytearray()
         self.total = 0
-        self.waiting = False  # blocked reading gh's pipe, with nothing left to pass on
+        self.writing = True  # passing output on: false once that has failed
+        self.failed = None  # why passing output on failed, if it did
+        self.done = False  # gh's pipe has closed, or the caller stopped reading
+        self.thread = None
 
-    def run(self):
-        writing = reading = True
-        while reading:
-            self.waiting = True
+    def start(self, stop):
+        self.thread = threading.Thread(target=self.run, args=(stop,), daemon=True)
+        self.thread.start()
+
+    def run(self, stop):
+        """Until the pipe closes, or `stop` is set and the pipe has nothing to read."""
+        while not self.done:
+            if not select.select([self.source], [], [], 0.05)[0]:
+                if stop.is_set():
+                    return
+                continue
             chunk = os.read(self.source.fileno(), 65536)
-            self.waiting = False
             if not chunk:
                 break
             self.total += len(chunk)
             if len(self.kept) < MAX_STREAM:
                 self.kept += chunk[:MAX_STREAM - len(self.kept)]
-            while writing and chunk:
+            while self.writing and chunk:
                 try:
                     chunk = chunk[os.write(self.target, chunk):]
                 except BlockingIOError:
@@ -285,22 +291,50 @@ class Pump(threading.Thread):
                 except BrokenPipeError:
                     # The caller stopped reading: so does the wrapper, and gh's next write fails
                     # as it would have without the wrapper.
-                    writing = reading = False
+                    self.writing, self.done = False, True
                 except OSError as error:
                     # Anything else (a full disk, a closed descriptor) loses the caller's copy, but
                     # gh's pipe keeps draining, so gh never blocks on it. The call then fails, as
                     # gh's own failed write would have failed it.
-                    writing = False
+                    self.writing = False
                     self.failed = error.strerror or str(error)
+        self.done = True
         self.source.close()
 
 
-def pending(pumps):
-    """Whether a pump's pipe has output, or its end, waiting to be read."""
+def hand_on(pumps, then):
+    """Fork a process to keep passing on what something gh left running writes to the pipes gh
+    handed it, as the streams gh alone would have handed it, so the caller sees gh's exit when gh
+    exits. The child calls `then` once the pipes close, and exits. True in the parent; False if
+    the fork fails, and what's written later is then lost."""
     try:
-        return bool(select.select([pump.source for pump in pumps if pump.is_alive()], [], [], 0)[0])
-    except (OSError, ValueError):  # a pump closed its pipe meanwhile: it has finished
+        with warnings.catch_warnings():  # no thread is running, but nothing may reach stderr
+            warnings.simplefilter("ignore")
+            pid = os.fork()
+    except OSError:
+        return False
+    if pid:
         return True
+    try:
+        # Like a pipe, the child lasts as long as the writers do, through a terminal's Ctrl-C or
+        # hangup, and holds nothing else the caller gave the wrapper.
+        for number in (signal.SIGINT, signal.SIGHUP):
+            signal.signal(number, signal.SIG_IGN)
+        keep = {1, 2} | {pump.source.fileno() for pump in pumps}
+        for name in os.listdir("/dev/fd"):
+            if int(name) not in keep:
+                try:
+                    os.close(int(name))
+                except OSError:  # the listing's own descriptor, closed already
+                    pass
+        never = threading.Event()
+        for pump in pumps:
+            pump.start(never)
+        for pump in pumps:
+            pump.thread.join()
+        then()
+    finally:
+        os._exit(0)
 
 
 def text(pump):
@@ -417,13 +451,13 @@ def cwd():
         return None
 
 
-def finish(record, argv, code, started, pumps, stderr):
+def finish(record, argv, code, duration, pumps, stderr):
     """The record once gh is done, written; any failure only loses the record. `stderr` stands in
     for a stream no pump copied."""
     if record is None:
         return
     try:
-        record["duration_ms"] = round((time.time() - started) * 1000)
+        record["duration_ms"] = round(duration * 1000)
         record["exit"] = code
         if code < 0:
             record["signal"] = signal_name(-code)
@@ -522,24 +556,21 @@ def main():
     for number in waiting:
         proc.send_signal(number)
     pumps = [Pump("stdout", proc.stdout, 1)] + ([] if merged or terminal else [Pump("stderr", proc.stderr, 2)])
+    # Pass gh's output on until gh exits and its pipes have nothing left to read. Something gh left
+    # running (an extension's background job, a browser) may hold them open longer: a forked child
+    # then passes on the rest, and writes the record when they close.
+    stop = threading.Event()
     for pump in pumps:
-        pump.start()
-    # Wait for gh's output, until gh has exited and its pipes have been quiet for QUIET: a pump
-    # still passing output on is always waited for.
-    exited = None
-    while any(pump.is_alive() for pump in pumps):
-        for pump in pumps:
-            pump.join(0.05)
-        if exited is None and proc.poll() is not None:
-            exited = time.time()
-        quiet = all(pump.waiting for pump in pumps if pump.is_alive()) and not pending(pumps)
-        if exited is not None and quiet and time.time() - exited > QUIET:
-            break
-        if not quiet and exited is not None:
-            exited = time.time()
+        pump.start(stop)
     code = proc.wait()
-    finish(record, argv, code, start, pumps,
-           {"terminal": True} if terminal else {"merged_into_stdout": True} if merged else None)
+    duration = time.time() - start
+    stop.set()
+    for pump in pumps:
+        pump.thread.join()
+    stderr = {"terminal": True} if terminal else {"merged_into_stdout": True} if merged else None
+    left = [pump for pump in pumps if not pump.done]
+    if not (left and hand_on(left, lambda: finish(record, argv, code, duration, pumps, stderr))):
+        finish(record, argv, code, duration, pumps, stderr)
     if code < 0:
         die_like(-code)
     for pump in pumps:
