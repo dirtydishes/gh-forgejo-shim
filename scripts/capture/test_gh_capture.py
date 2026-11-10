@@ -853,13 +853,20 @@ class LogFailureTest(unittest.TestCase):
         [record] = wrapper.records()
         self.assertNotIn("stdin", record)
 
-    def test_an_existing_log_is_narrowed_to_its_owner(self):
+    def test_a_log_others_could_read_is_moved_aside(self):
         wrapper = Wrapper(self)
         wrapper.log.parent.mkdir()
-        wrapper.log.write_text("")
+        wrapper.log.write_text("old\n")
         wrapper.log.chmod(0o644)
-        wrapper.run("pr", "list")
-        self.assertEqual((wrapper.log.stat().st_mode & 0o777, len(wrapper.records())), (0o600, 1))
+        # Someone who opened it while it was readable keeps reading it: no new record reaches them.
+        with open(wrapper.log) as reader:
+            for _ in range(2):
+                self.assertEqual(wrapper.run("pr", "list").returncode, 0)
+            self.assertEqual(reader.read(), "old\n")
+        [aside] = wrapper.log.parent.glob("calls.jsonl.exposed-*")
+        self.assertEqual((aside.read_text(), aside.stat().st_mode & 0o777), ("old\n", 0o600))
+        self.assertEqual(wrapper.log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual([record.get("log_moved_aside") for record in wrapper.records()], [aside.name, None])
 
     def test_a_log_that_isnt_a_plain_file_of_ours_is_never_written(self):
         wrapper = Wrapper(self)
