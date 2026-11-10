@@ -873,21 +873,13 @@ fn run_checkout(
         .unwrap_or_else(|| clone_url(&pull, &target_repo));
     // As gh: a head branch by name only while it is the PR's head in the base repository, and
     // otherwise the PR's own ref there. A fork's branch name, fetched from the base, would be the
-    // base's branch of that name. Each is `(ref, refspec)`. As gh, a branch fetched from a remote
-    // updates its remote-tracking branch, so `git status` doesn't count the fetched commits as
-    // unpushed.
+    // base's branch of that name.
     let mut fetch_refs = Vec::new();
     if let Some(name) = head.name.as_deref().filter(|_| head.is_base_branch) {
-        let fetch_ref = format!("refs/heads/{name}");
-        let refspec = match remote_name.as_deref() {
-            Some(remote) => format!("+{fetch_ref}:refs/remotes/{remote}/{name}"),
-            None => fetch_ref.clone(),
-        };
-        fetch_refs.push((fetch_ref, refspec));
+        fetch_refs.push(format!("refs/heads/{name}"));
     }
     if let Some(number) = number {
-        let fetch_ref = format!("refs/pull/{number}/head");
-        fetch_refs.push((fetch_ref.clone(), fetch_ref));
+        fetch_refs.push(format!("refs/pull/{number}/head"));
     }
 
     // An empty `--refmap` keeps git from also applying the remote's configured mapping to what it
@@ -896,14 +888,14 @@ fn run_checkout(
     // commits and all. gh's fetch has no `--refmap`, so this goes further than gh.
     let mut fetch_error = String::new();
     let mut fetched = None;
-    for (fetch_ref, refspec) in fetch_refs {
+    for fetch_ref in fetch_refs {
         let output = git_run(
             &[
                 "fetch",
                 "--refmap=",
                 "--",
                 remote.as_str(),
-                refspec.as_str(),
+                fetch_ref.as_str(),
             ],
             cwd,
         );
@@ -958,6 +950,22 @@ fn run_checkout(
         )?;
         return Ok(1);
     };
+
+    // As gh, a branch fetched by name from a remote moves its remote-tracking branch, so
+    // `git status` doesn't count the fetched commits as unpushed. Only once the commit is checked,
+    // so a refused fetch leaves it where it was. If git can't write it, the checkout goes on.
+    if let (Some(remote), Some(name)) =
+        (remote_name.as_deref(), fetched.strip_prefix("refs/heads/"))
+    {
+        git_run(
+            &[
+                "update-ref",
+                &format!("refs/remotes/{remote}/{name}"),
+                commit,
+            ],
+            cwd,
+        );
+    }
 
     // The commit just checked, not `FETCH_HEAD`, which another fetch could rewrite meanwhile.
     let output = match branch.as_deref() {
@@ -4402,6 +4410,32 @@ mod tests {
             // So `git status` doesn't count the fast-forwarded commit as unpushed.
             assert_eq!(git_repo.rev(&tracking), pull_head, "{remote}");
         }
+    }
+
+    #[test]
+    fn pr_checkout_refused_leaves_the_remote_tracking_branch() {
+        // Forgejo answers, then a push moves the branch before the fetch.
+        let git_repo = CheckoutGitFixture::new();
+        let client = git_repo.api(vec![pull_from(12, "owner", "feature-pr")]);
+        let tracking = git_repo.rev("origin/feature-pr");
+        git_repo.push_commit(
+            "owner/repo",
+            "feature-pr",
+            "refs/heads/feature-pr",
+            "moved\n",
+        );
+
+        let (code, stdout, stderr) = run_fake(
+            &["pr", "checkout", "12"],
+            &client,
+            Some("token"),
+            Some(git_repo.work()),
+        );
+
+        assert_eq!(code, 1, "{stderr}");
+        assert_eq!(stdout, "");
+        assert_eq!(git_repo.rev("origin/feature-pr"), tracking);
+        assert_eq!(git_repo.branch().as_deref(), Some("main"));
     }
 
     #[test]
