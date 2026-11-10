@@ -363,8 +363,9 @@ name only for an open PR whose head is that branch in the base repository, and o
 `refs/pull/N/head`: a fork's branch name, fetched from the base, would be the base's branch of that
 name. Without `--branch` it names the local branch after the head branch, with the head owner in
 front when that name is the base's default branch, so a fork's `main` lands on `fork/main`. An
-existing local branch then moves only by `git merge --ff-only`, as gh's does, and the checkout fails
-with git's message when the branch has commits of its own; `--force` resets it. A head named like a
+existing local branch then moves only by `git merge --ff-only`, as gh's does. When the branch has
+commits of its own, the checkout fails before switching to it, so the user stays on their branch, as
+gh's refused fetch leaves them; `--force` resets it. A head named like a
 ref, or `@`, checks out detached. Unlike gh, it compares the default branch's name without case, and
 it refuses a local branch whose name matches an existing one's only without case.
 
