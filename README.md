@@ -166,13 +166,9 @@ says what the gateway logs when a missing scope hides data.
    links, which the gateway redirects to Forgejo's `/pulls/{n}`). Pass the client's `Host` header
    through unchanged. [docs/gateway/server-mode.md](docs/gateway/server-mode.md) has the nginx, Caddy
    and Nginx Proxy Manager steps.
-5. Check it. Without a token the API answers `401`; `421` means the proxy changed `Host`. A pull
-   request link redirects to Forgejo's page:
-
-   ```sh
-   curl -s -o /dev/null -w '%{http_code}\n' https://forge.example.com/api/v3/meta
-   curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://forge.example.com/<owner>/<repo>/pull/1
-   ```
+5. Check it from any machine with `gfj`: `gfj server check forge.example.com` asks each route
+   without a token and says which one doesn't reach the gateway, and why. Without `gfj`, the
+   [`curl` checks](docs/gateway/server-mode.md#3-check-it) do the same by hand.
 
 6. Log in. gh's browser login doesn't work with Forgejo, so create a token in Forgejo under
    **Settings → Applications** with the [four scopes](#token-scopes), run
