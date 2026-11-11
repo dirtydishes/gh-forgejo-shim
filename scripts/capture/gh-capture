@@ -406,6 +406,7 @@ class Pump:
         self.total = 0
         self.writing = True  # passing output on: false once that has failed
         self.failed = None  # why passing output on failed, if it did
+        self.broken = False  # the caller stopped reading before gh's output was all passed on
         self.done = False  # gh's pipe has closed, or the caller stopped reading
         self.thread = None
 
@@ -437,8 +438,9 @@ class Pump:
                     select.select([], [self.target], [])
                 except BrokenPipeError:
                     # The caller stopped reading: so does the wrapper, and gh's next write fails
-                    # as it would have without the wrapper.
-                    self.writing, self.done = False, True
+                    # as it would have without the wrapper. If gh had already written it all,
+                    # the wrapper dies as gh's failed write would have killed it.
+                    self.writing, self.done, self.broken = False, True, True
                 except OSError as error:
                     # Anything else (a full disk, a read-only descriptor) loses the caller's copy,
                     # but gh's pipe keeps draining, so gh never blocks on it. The call fails only
@@ -813,6 +815,9 @@ def main():
         finish(record, argv, code, duration, pumps, stderr, stdin)
     if code < 0:
         die_like(-code)
+    # gh exited, but bare gh's write to a caller that stopped reading would have killed it first.
+    if any(pump.broken for pump in pumps):
+        die_like(signal.SIGPIPE)
     # A failed write to the caller fails the call only where it would have failed gh's.
     command = words(argv)
     failed = pumps[0].failed if any(command[:len(checked)] == checked for checked in CHECKED_WRITES) else None
