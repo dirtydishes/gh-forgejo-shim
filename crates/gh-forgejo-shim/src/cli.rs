@@ -1071,7 +1071,11 @@ fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime
                 with_token = true;
                 continue;
             }
-            "--hostname" => args.next().ok_or_else(|| ShimError::new(usage))?,
+            // A flag in the host's place would vanish, and with it `--with-token`.
+            "--hostname" => args
+                .next()
+                .filter(|host| !host.starts_with('-'))
+                .ok_or_else(|| ShimError::new(usage))?,
             flag if flag.starts_with('-') => return Err(ShimError::new(usage)),
             _ => arg,
         };
@@ -1956,6 +1960,30 @@ mod tests {
             );
             fs::remove_dir_all(home).ok();
         }
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_a_flag_as_the_host() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.stdin = Some("stdin-token".to_string());
+        runtime.token_prompts.push("typed-token".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "--hostname", "--with-token"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(runtime.stdin.as_deref(), Some("stdin-token"));
+        assert!(runtime.validated.is_empty());
+        fs::remove_dir_all(home).ok();
         Ok(())
     }
 
