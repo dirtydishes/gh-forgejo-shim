@@ -37,14 +37,14 @@ Homebrew will download exactly one platform tarball, verify the matching
 ## Maintainer update procedure
 
 1. Build and publish the release tarballs from a clean tag, for example
-   `v0.4.0`.
+   `v0.5.0`.
 2. Compute the checksum for each uploaded tarball:
 
    ```sh
-   shasum -a 256 dist/gh-forgejo-shim-0.4.0-aarch64-apple-darwin.tar.gz
-   shasum -a 256 dist/gh-forgejo-shim-0.4.0-x86_64-apple-darwin.tar.gz
-   shasum -a 256 dist/gh-forgejo-shim-0.4.0-aarch64-unknown-linux-gnu.tar.gz
-   shasum -a 256 dist/gh-forgejo-shim-0.4.0-x86_64-unknown-linux-gnu.tar.gz
+   shasum -a 256 dist/gh-forgejo-shim-0.5.0-aarch64-apple-darwin.tar.gz
+   shasum -a 256 dist/gh-forgejo-shim-0.5.0-x86_64-apple-darwin.tar.gz
+   shasum -a 256 dist/gh-forgejo-shim-0.5.0-aarch64-unknown-linux-gnu.tar.gz
+   shasum -a 256 dist/gh-forgejo-shim-0.5.0-x86_64-unknown-linux-gnu.tar.gz
    ```
 
 3. Copy `Formula/gh-forgejo-shim.rb.template` into the tap as

@@ -1,3 +1,53 @@
+# gh-forgejo-shim v0.5.0
+
+Upgrade the wrapper and, in server mode, the gateway image.
+
+- **Usage reports now say which agent hit each missing feature, and count failed requests too.**
+  A 0.4.0 report put every agent's counts together. Reports now use schema 2: each count sits
+  under the agent whose `gh` call caused it, and a new `failed` field counts requests for features
+  the gateway has that failed on its side, so a feature that starts to break shows up as well as
+  one that's missing. fga-server can't tell agents apart, so its counts stay by name alone.
+
+  ```json
+  {"schema":2,"version":"0.5.0","os":"macos","arch":"aarch64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"gh":"2.103","first_week":"2026-W45","unsupported":{"codex":{"graphql:Repository.projectsV2":2}},"failed":{"chatgpt":{"rest:repos.pulls":1}}}
+  ```
+
+  Reports still hold no host, repository, command, token, address, user name, error text or
+  install ID, and names still come only from the fixed list in `contract/telemetry.json`. Counts
+  a 0.4.0 wrapper kept but hadn't sent are deleted on upgrade, unsent, since they don't say which
+  agent asked. The first-run notice and fga-server's startup line now say why reports exist.
+  `gfj telemetry off` and `gfj telemetry show` work as before (#296).
+
+- **`gh pr checkout` no longer replaces a local branch with someone else's commits.** Several
+  setups could reset a branch, dropping unpushed commits, while the checkout exited 0:
+  - In server mode, a PR from a branch named like a ref, such as `refs/heads/main`, replaced the
+    local `main` under `--force`. The gateway now shows such a PR's head as its own ref,
+    `refs/pull/N/head` (#302).
+  - The wrapper's built-in checkout, used for a PR URL, `--recurse-submodules` and non-Unix
+    builds, fetched a fork PR's branch from the base repository, so a fork PR from `main` reset
+    the local `main`. It now makes gh's choices of remote, ref and local branch name (#320).
+  - The same path could reset a branch through a remote's configured fetch mapping, or fetch an
+    old commit from a local mirror. It now fetches only the ref it names, checks the fetched
+    commit against the PR's head before any branch moves, and refuses otherwise (#322).
+
+  Real gh has the last two problems for a numeric `gh pr checkout` too, and the shim can't change
+  the git commands gh runs. [docs/gateway/MAPPING.md](gateway/MAPPING.md) lists these and the
+  remaining macOS case (#305, #321).
+
+- **Writes reach a renamed repository.** For a renamed repository, `gh pr comment`, `pr create` and
+  `issue create` through the built-in client turned the write into a read and reported success.
+  The client now sends the write again, unchanged, to the new name, and fails if Forgejo doesn't
+  return what it created. A PR or issue URL now picks its repository over `-R`, as gh does (#318).
+
+- **A GraphQL mutation selected twice under one name writes once.** A document that selected the
+  same mutation twice, for example through two fragments, created two issues. The gateway now
+  merges the repeats before running them, and refuses repeats that differ (#319).
+
+- **`gh run list` works on Forgejo 17.** A run that hadn't started yet made the list fail with a
+  502 (#297).
+
+The v0.4.0 notes follow.
+
 # gh-forgejo-shim v0.4.0
 
 - **gh-forgejo-shim now sends one anonymous usage report a day, so I can find what breaks in agents
