@@ -835,6 +835,18 @@ class SignalTest(unittest.TestCase):
         process.wait(timeout=30)
         self.assertEqual(process.returncode, -signal.SIGPIPE)
 
+    def test_a_caller_that_stops_reading_after_gh_has_finished(self):
+        # More than the caller's pipe holds, but little enough that gh writes it all and exits 0
+        # into the wrapper's pipes. Bare gh's last writes would have failed and killed it.
+        wrapper = Wrapper(self)
+        process = self.started(wrapper, "print", FAKE_OUT="line\n" + "x" * 100_000)
+        time.sleep(1)
+        # Unbuffered: a buffered readline would read it all, and nothing would be left to fail.
+        self.assertEqual(os.read(process.stdout.fileno(), 5), b"line\n")
+        process.stdout.close()
+        process.wait(timeout=30)
+        self.assertEqual(process.returncode, -signal.SIGPIPE)
+
 
 class LogFailureTest(unittest.TestCase):
     """#197 defect 6: a log that can't be written never breaks the gh call."""
