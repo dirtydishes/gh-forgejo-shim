@@ -126,6 +126,8 @@ where
         run_config(&args[1..], stdout, runtime)
     } else if args.first().is_some_and(|arg| arg == "auth") {
         run_auth(&args[1..], stdout, runtime)
+    } else if args.first().is_some_and(|arg| arg == "server") {
+        run_server(&args[1..], stdout, runtime)
     } else {
         print_pending(binary, stderr)
     };
@@ -267,6 +269,7 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "    {name} config <add-host|remove-host|list>")?;
     writeln!(stdout, "    {name} auth <login|import|status|logout>")?;
     writeln!(stdout, "    {name} telemetry <on|off|status|show>")?;
+    writeln!(stdout, "    {name} server check FORGE")?;
     writeln!(stdout)?;
     writeln!(stdout, "STATUS:")?;
     writeln!(
@@ -1016,6 +1019,18 @@ fn shell_quote_for_display(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn run_server(args: &[String], stdout: &mut dyn Write, runtime: &dyn Runtime) -> Result<i32> {
+    let [command, forge] = args else {
+        return Err(ShimError::new("usage: gfj server check FORGE"));
+    };
+    if command != "check" {
+        return Err(ShimError::new("usage: gfj server check FORGE"));
+    }
+    let config_path = config::config_path(runtime.home());
+    let config = config::load_config_with_env(Some(&config_path), runtime.env())?;
+    crate::server_check::run(forge, &config, runtime.env(), stdout)
 }
 
 fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
