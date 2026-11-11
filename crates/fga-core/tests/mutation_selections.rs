@@ -134,6 +134,26 @@ async fn an_issue_created_through_two_fragments_is_created_once() {
     );
 }
 
+/// `__typename` isn't one of `Mutation`'s fields, but repeating it beside a repeated mutation
+/// still merges, as clients that add it to every selection set send.
+#[tokio::test]
+async fn a_repeated_typename_still_creates_the_issue_once() {
+    let input = create_input();
+    let (response, posts) = run(&format!(
+        "mutation{{...A ...B}}
+        fragment A on Mutation{{__typename createIssue(input:{input}){{issue{{id}}}}}}
+        fragment B on Mutation{{__typename createIssue(input:{input}){{issue{{number}}}}}}"
+    ))
+    .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(posts, ["issue"]);
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"__typename":"Mutation",
+            "createIssue":{"issue":{"id":node_id("Issue", "o/r", 7),"number":7}}})
+    );
+}
+
 #[tokio::test]
 async fn a_comment_added_through_two_fragments_is_added_once() {
     let input = comment_input();
