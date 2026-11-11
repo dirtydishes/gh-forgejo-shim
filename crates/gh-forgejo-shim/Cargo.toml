@@ -44,6 +44,8 @@ serde_yaml = "0.9"
 toml = "1"
 toml_edit = "0.25"
 rpassword = "7.3"
+# reqwest's own TLS library; named here only to tell a refused certificate from other failures.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = { version = "0.4", default-features = false }

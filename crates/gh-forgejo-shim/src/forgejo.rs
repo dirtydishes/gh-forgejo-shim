@@ -362,6 +362,8 @@ impl ForgejoClient {
         let response = request.send().map_err(|error| {
             ForgejoError::new(if error.is_timeout() {
                 "it didn't answer in time".to_string()
+            } else if refused_certificate(&error) {
+                CERTIFICATE_REFUSED.to_string()
             } else if error.is_connect() {
                 "it couldn't be reached".to_string()
             } else {
@@ -860,6 +862,29 @@ fn list_of_objects(value: Value) -> Vec<Value> {
         Value::Array(items) => items.into_iter().filter(Value::is_object).collect(),
         _ => Vec::new(),
     }
+}
+
+/// [`ForgejoClient::answer`]'s error when TLS refused the server's certificate.
+pub const CERTIFICATE_REFUSED: &str = "its TLS certificate couldn't be verified";
+
+/// Whether TLS refused the server's certificate anywhere in `error`'s causes. An `io::Error`'s
+/// `source` skips the error it wraps, so each one's inner error is checked too.
+fn refused_certificate(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(error);
+    while let Some(error) = cause {
+        if matches!(
+            error.downcast_ref::<rustls::Error>(),
+            Some(rustls::Error::InvalidCertificate(_))
+        ) || error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .is_some_and(|inner| refused_certificate(inner))
+        {
+            return true;
+        }
+        cause = error.source();
+    }
+    false
 }
 
 fn host_for_url(host: &str) -> String {

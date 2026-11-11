@@ -9,7 +9,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::config::{self, Config, EnvMap};
-use crate::forgejo::{Answer, ForgejoClient};
+use crate::forgejo::{Answer, ForgejoClient, CERTIFICATE_REFUSED};
 use crate::{Result, ShimError};
 
 /// An owner and repository that can't exist, so Forgejo answers its PR link with `404` whatever
@@ -101,10 +101,16 @@ pub(crate) fn check(client: &ForgejoClient, origin: &str, host: &str) -> Vec<Fin
     let forgejo = "Forgejo";
     let mut findings = vec![match client.answer(host, Method::GET, "/api/v1/version") {
         Err(error) => {
+            let hint = if error.message() == CERTIFICATE_REFUSED {
+                "; if the forge's certificate comes from a private CA, set the host's ca_file in \
+                 the shim's config, or FJ_SHIM_CA_FILE"
+            } else {
+                ""
+            };
             // Nothing else would answer either.
             return vec![Finding::fix(
                 forgejo,
-                format!("{origin}: {}", error.message()),
+                format!("{origin}: {}{hint}", error.message()),
             )];
         }
         Ok(answer) => match answer.body["version"].as_str() {
@@ -454,6 +460,76 @@ mod tests {
         assert_eq!(code, 1, "{output}");
         assert!(output.contains("[fix] Forgejo:"), "{output}");
         assert!(!output.contains("REST API"), "{output}");
+    }
+
+    /// A TLS stand-in whose certificate, for `localhost`, comes from the test CA: Forgejo's
+    /// version route and nothing else.
+    fn tls_stand_in() -> String {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let cert =
+            CertificateDer::from(include_bytes!("../tests/fixtures/test-server.der").to_vec());
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+            include_bytes!("../tests/fixtures/test-server-key.der").to_vec(),
+        ));
+        let config = Arc::new(
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .expect("server config"),
+        );
+        std::thread::spawn(move || {
+            for socket in listener.incoming().flatten() {
+                let connection =
+                    rustls::ServerConnection::new(Arc::clone(&config)).expect("connection");
+                let mut stream = BufReader::new(rustls::StreamOwned::new(connection, socket));
+                let mut request = String::new();
+                if stream.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut line = String::new();
+                while stream.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    line.clear();
+                }
+                let (status, body) = if request.starts_with("GET /api/v1/version ") {
+                    (200, r#"{"version":"15.0.1"}"#)
+                } else {
+                    (404, "")
+                };
+                let mut stream = stream.into_inner();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.flush();
+            }
+        });
+        format!("https://localhost:{port}")
+    }
+
+    #[test]
+    fn a_certificate_from_an_unknown_ca_names_the_ca_settings() {
+        let origin = tls_stand_in();
+
+        let (code, output) = run_against(&origin);
+
+        assert_eq!(code, 1, "{output}");
+        assert!(
+            output.contains("its TLS certificate couldn't be verified"),
+            "{output}"
+        );
+        assert!(output.contains("FJ_SHIM_CA_FILE"), "{output}");
+
+        let ca =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
+        let env = EnvMap::from([("FJ_SHIM_CA_FILE".to_string(), ca.display().to_string())]);
+        let mut stdout = Vec::new();
+        run(&origin, &empty_config(), &env, &mut stdout).expect("run");
+        let output = String::from_utf8(stdout).expect("utf-8");
+        assert!(output.contains("[ok] Forgejo: version 15.0.1"), "{output}");
     }
 
     #[test]
