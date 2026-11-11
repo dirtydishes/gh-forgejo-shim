@@ -176,13 +176,15 @@ macOS GUI PATH so shell and GUI launcher problems are easier to tell apart.
 Native auth commands are:
 
 ```sh
-gh-forgejo-shim auth login [host]
+gh-forgejo-shim auth login [HOST | -h HOST | --hostname HOST] [--with-token]
 gh-forgejo-shim auth import --from fj|tea [--hostname HOST]
 gh-forgejo-shim auth status [host]
 gh-forgejo-shim auth logout [host]
 ```
 
 `auth login` prompts for a Forgejo host when one is not supplied, prompts for an access token without echoing it, validates the token with `GET /api/v1/user`, and saves it in shim-owned auth storage. It also adds the host to the allowlist, so routed `gh pr ...`, `gh issue ...`, and `gh repo view` commands can use the saved token immediately.
+
+With `--with-token`, `auth login` reads the token from stdin instead of prompting, as `gh auth login --with-token` does, so a script, password manager or agent can pass it: `gfj auth login --hostname HOST --with-token < FILE`. The host must then be on the command line. Stdin must hold one token, up to 64 KiB, and nothing else, and it can't be a terminal; anything else is refused without echoing what was read.
 
 `auth import --from fj` reads forgejo-cli's `keys.json`; `--from tea` reads tea's YAML config. It copies the host's token into shim-owned storage and adds the host to the allowlist, without contacting the server. This is useful when Terminal already has auth through another Forgejo CLI, but GUI-launched apps such as Codex.app don't inherit that shell's environment. Omit `--hostname` only when the file has one entry. Missing or ambiguous entries cause an error without a write. The command prints the host and source path, never the token. Imports do not refresh OAuth tokens or read another tool's Keychain entries.
 
