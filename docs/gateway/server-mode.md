@@ -163,7 +163,18 @@ nginx picks a location, or keep the forge behind a network boundary.
 
 ## 3. Check it
 
-Every API route needs a Forgejo token:
+From any machine with the shim installed:
+
+```sh
+gfj server check forge.example.com
+```
+
+It sends no token. It asks Forgejo for its version, then each of the three routes, and says for
+each whether it reaches the gateway. When one doesn't, it says what answered instead: Forgejo
+(`404`, the route is missing), a gateway set up for another address (`421`, `FGA_PUBLIC_URL` or the
+`Host` header), or nothing the proxy could reach (`502` to `504`).
+
+By hand, every API route needs a Forgejo token:
 
 ```sh
 curl -fsS -H "Authorization: token <your Forgejo token>" https://forge.example.com/api/v3/meta
