@@ -52,7 +52,7 @@ From fga-server, which can't tell agents apart, so its counts are by name alone:
 | Field | Values | Where it comes from |
 |---|---|---|
 | `schema` | `2` | The report's format. 0.4.0 sends `1`, which has no `failed` and puts every agent's `unsupported` counts together, by name alone. |
-| `version` | `0.4.0` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
+| `version` | `0.5.0` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
 | `os` | `macos`, `linux`, `other` | The build. |
 | `arch` | `x86_64`, `aarch64`, `other` | The build. |
 | `mode` | `client`, `server` | The gh wrapper, or fga-server. |
