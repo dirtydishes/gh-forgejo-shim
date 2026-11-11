@@ -88,7 +88,7 @@ impl Extension for Spending {
             };
         if self
             .left
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                 left.checked_sub(cost)
             })
             .is_ok()

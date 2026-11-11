@@ -1,6 +1,6 @@
 # fga-server: the GitHub API gateway for one Forgejo instance (server mode).
 # Build from the repository root:  docker build -f packaging/gateway/Dockerfile -t fga-server .
-FROM rust:1.97.1-slim-trixie AS build
+FROM rust:1.99.1-slim-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates

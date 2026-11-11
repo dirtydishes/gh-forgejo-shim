@@ -239,7 +239,7 @@ pub fn body_html_within(body: &str, forge: Option<&url::Url>, budget: &AtomicUsi
 /// Takes `amount` from `budget`, or empties it when less is left; whether it all fit.
 fn draw(budget: &AtomicUsize, amount: usize) -> bool {
     let left = budget
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
             Some(left.saturating_sub(amount))
         })
         .unwrap_or_default();

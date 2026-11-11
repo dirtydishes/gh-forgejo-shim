@@ -9,7 +9,7 @@ The gateway supports `gh auth login`, `gh api user`, `gh pr view` with wide JSON
 REST lookups Claude Code uses. [G2a findings](G2A-FINDINGS.md) records the draft PR differences
 and Forgejo API limits. See [the design](DESIGN.md) for later milestones.
 
-Run with Rust 1.97.1:
+Run with Rust 1.99.1:
 
 ```sh
 FGA_FORGEJO_URL=http://127.0.0.1:3000 \
