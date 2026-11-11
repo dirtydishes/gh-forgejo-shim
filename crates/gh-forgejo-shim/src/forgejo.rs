@@ -165,6 +165,14 @@ impl ListIssuesOptions {
     }
 }
 
+/// What one [`ForgejoClient::answer`] request got back.
+pub struct Answer {
+    pub status: u16,
+    pub location: Option<String>,
+    /// `null` when the body isn't JSON.
+    pub body: Value,
+}
+
 #[derive(Clone)]
 pub struct ForgejoClient {
     token: Option<String>,
@@ -313,6 +321,14 @@ impl ForgejoClient {
         self
     }
 
+    /// Requests go to `origin` (`https://HOST[:PORT]`) instead of the host's configured API
+    /// address, keeping the host's CA settings.
+    pub fn at_origin(mut self, origin: impl Into<String>) -> Self {
+        self.base_url = Some(origin.into());
+        self.renames = None;
+        self
+    }
+
     pub fn with_scheme(mut self, scheme: impl Into<String>) -> Self {
         self.scheme = scheme.into();
         self
@@ -322,6 +338,12 @@ impl ForgejoClient {
     /// (`null` when it isn't JSON) whatever the status. Errors are transport failures only, and
     /// their text names no token.
     pub fn probe(&self, host: &str, method: Method, path: &str) -> ForgejoResult<(u16, Value)> {
+        self.answer(host, method, path)
+            .map(|answer| (answer.status, answer.body))
+    }
+
+    /// [`ForgejoClient::probe`] with the `Location` the answer gave, if any.
+    pub fn answer(&self, host: &str, method: Method, path: &str) -> ForgejoResult<Answer> {
         let mut request = self
             .http
             .request(
@@ -347,12 +369,21 @@ impl ForgejoClient {
             })
         })?;
         let status = response.status().as_u16();
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let body = response
             .bytes()
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or(Value::Null);
-        Ok((status, body))
+        Ok(Answer {
+            status,
+            location,
+            body,
+        })
     }
 
     /// The `version` a version route below the host's base answers, such as

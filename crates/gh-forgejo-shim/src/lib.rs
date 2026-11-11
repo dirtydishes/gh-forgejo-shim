@@ -26,6 +26,7 @@ pub mod read_only;
 pub mod repo;
 pub mod routing;
 mod scope_check;
+mod server_check;
 pub mod setup;
 pub mod shim;
 pub mod telemetry;
