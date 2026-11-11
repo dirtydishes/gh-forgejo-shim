@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::{self, EnvMap};
@@ -146,6 +146,7 @@ trait Runtime {
     fn platform(&self) -> &str;
     fn prompt_host(&mut self, prompt: &str) -> Result<String>;
     fn prompt_token(&mut self, prompt: &str) -> Result<String>;
+    fn read_stdin(&mut self) -> Result<String>;
     fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>>;
     fn apply_gui_path(&mut self, path_value: &str) -> (bool, Option<String>);
     fn current_launchd_path(&self) -> Option<String>;
@@ -210,6 +211,14 @@ impl Runtime for SystemRuntime {
             .map_err(|error| ShimError::new(format!("could not read token: {error}")))
     }
 
+    fn read_stdin(&mut self) -> Result<String> {
+        let mut input = String::new();
+        io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|error| ShimError::new(format!("could not read token from stdin: {error}")))?;
+        Ok(input)
+    }
+
     fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>> {
         auth::validate_token(host, token)
     }
@@ -266,6 +275,10 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "    {name} trace <summarize|smoke|git-recorder>")?;
     writeln!(stdout, "    {name} config <add-host|remove-host|list>")?;
     writeln!(stdout, "    {name} auth <login|import|status|logout>")?;
+    writeln!(
+        stdout,
+        "    {name} auth login [HOST | --hostname HOST] [--with-token]"
+    )?;
     writeln!(stdout, "    {name} telemetry <on|off|status|show>")?;
     writeln!(stdout)?;
     writeln!(stdout, "STATUS:")?;
@@ -1020,8 +1033,7 @@ fn shell_quote_for_display(value: &str) -> String {
 
 fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
     match args {
-        [command] if command == "login" => auth_login(None, stdout, runtime),
-        [command, host] if command == "login" => auth_login(Some(host), stdout, runtime),
+        [command, args @ ..] if command == "login" => auth_login(args, stdout, runtime),
         [command, args @ ..] if command == "import" => auth_import(args, stdout, runtime),
         [command] if command == "status" => auth_status(None, stdout, runtime),
         [command, host] if command == "status" => auth_status(Some(host), stdout, runtime),
@@ -1033,19 +1045,48 @@ fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) 
     }
 }
 
-fn auth_login(
-    host_arg: Option<&String>,
-    stdout: &mut dyn Write,
-    runtime: &mut dyn Runtime,
-) -> Result<i32> {
+fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
+    let usage = "usage: gfj auth login [HOST | --hostname HOST] [--with-token]";
+    let mut host_arg = None;
+    let mut with_token = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let host = match arg.as_str() {
+            "--with-token" => {
+                with_token = true;
+                continue;
+            }
+            "--hostname" => args.next().ok_or_else(|| ShimError::new(usage))?,
+            flag if flag.starts_with('-') => return Err(ShimError::new(usage)),
+            _ => arg,
+        };
+        if host_arg
+            .replace(host)
+            .is_some_and(|previous| previous != host)
+        {
+            return Err(ShimError::new(usage));
+        }
+    }
+    // With --with-token, stdin holds the token, so it can't answer the host prompt as well.
+    if with_token && host_arg.is_none() {
+        return Err(ShimError::new(
+            "--with-token needs a host: gfj auth login --hostname HOST --with-token",
+        ));
+    }
     // Logout shares prompt_host, so it can still remove a token for any host an older version took.
     let host = forgejo_host_arg(&prompt_host(host_arg, runtime)?)?;
-    let token = runtime
-        .prompt_token(&format!("Forgejo access token for {host}: "))?
-        .trim()
-        .to_string();
+    let token = if with_token {
+        runtime.read_stdin()?
+    } else {
+        runtime.prompt_token(&format!("Forgejo access token for {host}: "))?
+    };
+    let token = token.trim().to_string();
     if token.is_empty() {
         return Err(ShimError::new("Forgejo token is required"));
+    }
+    // The error doesn't echo stdin, which may hold a second secret.
+    if with_token && token.chars().any(char::is_whitespace) {
+        return Err(ShimError::new("stdin must hold one token and nothing else"));
     }
 
     let login = runtime.validate_token(&host, &token)?;
@@ -1260,6 +1301,7 @@ mod tests {
         current_exe: PathBuf,
         host_prompts: Vec<String>,
         token_prompts: Vec<String>,
+        stdin: Option<String>,
         login: Option<String>,
         validation_error: Option<String>,
         validated: Vec<(String, String)>,
@@ -1276,6 +1318,7 @@ mod tests {
                 platform: "linux".to_string(),
                 host_prompts: Vec::new(),
                 token_prompts: Vec::new(),
+                stdin: None,
                 login: Some("alice".to_string()),
                 validation_error: None,
                 validated: Vec::new(),
@@ -1314,6 +1357,10 @@ mod tests {
                 return Ok(String::new());
             }
             Ok(self.token_prompts.remove(0))
+        }
+
+        fn read_stdin(&mut self) -> Result<String> {
+            Ok(self.stdin.take().unwrap_or_default())
         }
 
         fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>> {
@@ -1761,6 +1808,165 @@ mod tests {
             runtime.validated,
             vec![("git.example.com".to_string(), "bad-token".to_string())]
         );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_token_reads_stdin_instead_of_prompting() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.stdin = Some("stdin-token\n".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args([
+                "auth",
+                "login",
+                "--hostname",
+                "git.example.com",
+                "--with-token",
+            ]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        let output =
+            String::from_utf8(stdout).map_err(|error| ShimError::new(error.to_string()))?;
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(runtime.stdin, None);
+        assert_eq!(
+            runtime.validated,
+            vec![("git.example.com".to_string(), "stdin-token".to_string())]
+        );
+        assert_eq!(
+            auth::read_stored_token("git.example.com", Some(&home), Some("linux"))
+                .map(|stored| stored.token)
+                .as_deref(),
+            Some("stdin-token")
+        );
+        assert!(
+            output.contains("logged in to git.example.com as alice"),
+            "{output}"
+        );
+        assert!(!output.contains("stdin-token"), "{output}");
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_token_takes_the_host_as_an_argument_too() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.stdin = Some("stdin-token".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "--with-token", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(
+            runtime.validated,
+            vec![("git.example.com".to_string(), "stdin-token".to_string())]
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_token_needs_a_host_because_stdin_holds_the_token() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.stdin = Some("stdin-token".to_string());
+        runtime.host_prompts.push("git.example.com".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "--with-token"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        let error = String::from_utf8(stderr).map_err(|error| ShimError::new(error.to_string()))?;
+        assert!(error.contains("--with-token needs a host"), "{error}");
+        assert_eq!(runtime.stdin.as_deref(), Some("stdin-token"));
+        assert!(runtime.validated.is_empty());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_token_refuses_stdin_that_holds_more_than_a_token() -> Result<()> {
+        for stdin in [
+            "",
+            " \n",
+            "first-token\nsecond-token\n",
+            "token with spaces",
+        ] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            runtime.stdin = Some(stdin.to_string());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["auth", "login", "git.example.com", "--with-token"]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+
+            assert_eq!(code, 1, "{stdin:?}");
+            let error =
+                String::from_utf8(stderr).map_err(|error| ShimError::new(error.to_string()))?;
+            assert!(!error.contains("token with"), "{error}");
+            assert!(!error.contains("first-token"), "{error}");
+            assert!(runtime.validated.is_empty(), "{stdin:?}");
+            assert!(
+                auth::read_stored_token("git.example.com", Some(&home), Some("linux")).is_none()
+            );
+            fs::remove_dir_all(home).ok();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn login_refuses_two_hosts() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args([
+                "auth",
+                "login",
+                "git.example.com",
+                "--hostname",
+                "other.example.com",
+            ]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        assert!(runtime.validated.is_empty());
         fs::remove_dir_all(home).ok();
         Ok(())
     }

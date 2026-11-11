@@ -107,7 +107,7 @@ PyPI is not a supported product runtime.
 1. Install the native package with Homebrew or a GitHub release tarball.
 2. Open a terminal inside your Forgejo repository.
 3. Run `gfj bootstrap`.
-4. Run `gfj auth login HOST` with a token that has the [four scopes](#token-scopes), or use `gfj auth import --from fj|tea --hostname HOST` to copy a token from that tool's config.
+4. Run `gfj auth login HOST` with a token that has the [four scopes](#token-scopes), or use `gfj auth import --from fj|tea --hostname HOST` to copy a token from that tool's config. A script or password manager can pipe the token in instead: `gfj auth login HOST --with-token < FILE`.
 5. Copy and run any repair commands `bootstrap` prints.
 6. On macOS, restart the GUI tool if `bootstrap` reports that it changed the GUI PATH.
 7. Confirm the setup:
