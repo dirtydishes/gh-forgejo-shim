@@ -12,31 +12,39 @@ use crate::config::{self, Config, EnvMap};
 use crate::forgejo::{Answer, ForgejoClient, CERTIFICATE_REFUSED};
 use crate::{Result, ShimError};
 
-/// An owner and repository that can't exist, so Forgejo answers its PR link with `404` whatever
-/// the forge holds, and only the gateway redirects it.
+/// Forgejo serves no `/pull/N` path, so only the gateway redirects this link, whatever
+/// repositories the forge holds.
 const PULL_LINK: &str = "/gfj-check/check/pull/1";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Ok,
+    /// Worth knowing, but no step of the setup is wrong.
+    Warn,
+    Fix,
+}
 
 pub(crate) struct Finding {
     name: &'static str,
-    ok: bool,
+    mark: Mark,
     detail: String,
 }
 
 impl Finding {
-    fn ok(name: &'static str, detail: impl Into<String>) -> Self {
+    fn new(name: &'static str, mark: Mark, detail: impl Into<String>) -> Self {
         Self {
             name,
-            ok: true,
+            mark,
             detail: detail.into(),
         }
     }
 
+    fn ok(name: &'static str, detail: impl Into<String>) -> Self {
+        Self::new(name, Mark::Ok, detail)
+    }
+
     fn fix(name: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            name,
-            ok: false,
-            detail: detail.into(),
-        }
+        Self::new(name, Mark::Fix, detail)
     }
 }
 
@@ -60,6 +68,11 @@ pub(crate) fn origin(target: &str) -> Result<(String, String)> {
         return Err(usage());
     }
     let host = config::normalized_forgejo_host(authority).ok_or_else(usage)?;
+    // The scheme's own port names the same forge as no port, as the shim's host list spells it.
+    let default_port = if scheme == "https" { ":443" } else { ":80" };
+    let host = host
+        .strip_suffix(default_port)
+        .map_or(host.clone(), str::to_string);
     Ok((format!("{scheme}://{host}"), host))
 }
 
@@ -77,15 +90,21 @@ pub(crate) fn run(
     let findings = check(&client, &origin, &host);
     writeln!(stdout, "gh-forgejo-shim server check {origin}")?;
     for finding in &findings {
-        let mark = if finding.ok { "ok" } else { "fix" };
+        let mark = match finding.mark {
+            Mark::Ok => "ok",
+            Mark::Warn => "warn",
+            Mark::Fix => "fix",
+        };
         writeln!(stdout, "[{mark}] {}: {}", finding.name, finding.detail)?;
     }
     writeln!(stdout)?;
-    if findings.iter().all(|finding| finding.ok) {
+    if findings.iter().all(|finding| finding.mark != Mark::Fix) {
         writeln!(
             stdout,
-            "The gateway answers on {host}. Log gh in with a Forgejo token \
-             (gh auth login --hostname {host}), then check it with: gh api --hostname {host} /meta"
+            "The gateway answers on {host}. Next, log gh in with a Forgejo token created under \
+             Settings → Applications with the four scopes in the README's token scopes table, \
+             piped in on stdin: gh auth login --hostname {host} --with-token < FILE. Then check \
+             it with: gh api --hostname {host} /meta"
         )?;
         Ok(0)
     } else {
@@ -117,6 +136,15 @@ pub(crate) fn check(client: &ForgejoClient, origin: &str, host: &str) -> Vec<Fin
             Some(version) if answer.status == 200 => {
                 Finding::ok(forgejo, format!("version {version}"))
             }
+            // A forge that requires sign-in may hide its version from a request without a token.
+            None if matches!(answer.status, 401 | 403) => Finding::new(
+                forgejo,
+                Mark::Warn,
+                format!(
+                    "/api/v1/version answered {} without a token, so the version wasn't read",
+                    answer.status
+                ),
+            ),
             _ => Finding::fix(
                 forgejo,
                 format!(
@@ -181,10 +209,14 @@ fn pull_link(answer: crate::forgejo::ForgejoResult<Answer>, origin: &str) -> Fin
     };
     let expected = "/gfj-check/check/pulls/1";
     match (answer.status, answer.location.as_deref()) {
-        (301, Some(location)) if location == expected => Finding::ok(
-            name,
-            format!("{path} reaches the gateway, which redirects it to Forgejo's /pulls/N"),
-        ),
+        (301, Some(location))
+            if location == expected || location == format!("{origin}{expected}") =>
+        {
+            Finding::ok(
+                name,
+                format!("{path} reaches the gateway, which redirects it to Forgejo's /pulls/N"),
+            )
+        }
         (status @ 300..=399, location) => Finding::fix(
             name,
             format!(
@@ -232,7 +264,7 @@ mod tests {
     type Seen = Arc<Mutex<Vec<(String, bool)>>>;
 
     /// A stand-in forge answering `routes`' `(method path, status, headers, body)`, and 404 to
-    /// anything else, one request per connection.
+    /// anything else, one request per connection. `{origin}` in a header is its own origin.
     fn stand_in(routes: Vec<(&'static str, u16, &'static str, &'static str)>) -> (String, Seen) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let address = listener.local_addr().expect("address");
@@ -269,6 +301,7 @@ mod tests {
                     .map_or((404, "", r#"{"message":"Not Found"}"#), |(_, s, h, b)| {
                         (*s, *h, *b)
                     });
+                let headers = headers.replace("{origin}", &format!("http://{address}"));
                 let mut stream = reader.into_inner();
                 let _ = write!(
                     stream,
@@ -450,6 +483,42 @@ mod tests {
     }
 
     #[test]
+    fn an_absolute_redirect_to_the_same_forge_passes() {
+        let (origin, _) = stand_in({
+            let mut routes = gateway();
+            routes[3] = (
+                "GET /gfj-check/check/pull/1",
+                301,
+                "Location: {origin}/gfj-check/check/pulls/1\r\n",
+                "",
+            );
+            routes
+        });
+
+        let (code, output) = run_against(&origin);
+
+        assert_eq!(code, 0, "{output}");
+    }
+
+    #[test]
+    fn a_forge_that_hides_its_version_still_checks_the_routes() {
+        let (origin, _) = stand_in({
+            let mut routes = gateway();
+            routes[0] = ("GET /api/v1/version", 401, "", r#"{"message":"sign in"}"#);
+            routes
+        });
+
+        let (code, output) = run_against(&origin);
+
+        assert_eq!(code, 0, "{output}");
+        assert!(
+            output.contains("[warn] Forgejo: /api/v1/version answered 401 without a token"),
+            "{output}"
+        );
+        assert!(output.contains("[ok] REST API"), "{output}");
+    }
+
+    #[test]
     fn an_unreachable_forge_stops_at_the_first_check() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let address = listener.local_addr().expect("address");
@@ -537,6 +606,12 @@ mod tests {
         for (target, expected) in [
             ("forge.example.com", "https://forge.example.com"),
             ("Forge.Example.com:8443/", "https://forge.example.com:8443"),
+            ("https://forge.example.com:443", "https://forge.example.com"),
+            ("http://forge.example.com:80", "http://forge.example.com"),
+            (
+                "http://forge.example.com:443",
+                "http://forge.example.com:443",
+            ),
             ("HTTPS://forge.example.com", "https://forge.example.com"),
             ("http://127.0.0.1:3000", "http://127.0.0.1:3000"),
         ] {
