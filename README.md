@@ -84,6 +84,21 @@ You can use both. [Server mode](#server-mode), further down, has the setup.
 
 The `gh` wrapper runs the real GitHub CLI, so it needs `gh` 2.103.3 or newer. `gfj bootstrap` and `gfj install-shim` stop without changing anything when the `gh` they find is missing or older, and `gfj doctor` reports the same check. Many distributions ship an older `gh`; on Ubuntu and Debian, add GitHub's own apt repository as [gh's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) shows, or use Homebrew. A `gh` you built yourself that reports `DEV` needs `FJ_SHIM_ALLOW_UNKNOWN_GH=1`. See [docs/installation.md](docs/installation.md#requirements).
 
+### Install with an agent
+
+Paste this into Claude Code, Codex or another coding agent, opened in your Forgejo repository:
+
+```text
+Install gh-forgejo-shim for me. Follow the steps at
+https://raw.githubusercontent.com/dirtydishes/gh-forgejo-shim/v0.6.0/docs/agent-install.md
+and never ask me to paste a token into the chat.
+```
+
+It asks which apps you use, installs and sets up the wrapper, logs it in and checks server mode.
+If the agent can ask you for a secret, it passes your token to the login command itself; if not,
+it gives you the command to run. It changes nothing on your forge's server.
+[docs/agent-install.md](docs/agent-install.md) has the steps it follows.
+
 ### Install paths
 
 The steps below set up the client-only wrapper. For server mode, see
