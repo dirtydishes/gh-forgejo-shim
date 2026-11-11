@@ -2047,6 +2047,7 @@ mod tests {
     fn login_refuses_two_hosts() -> Result<()> {
         let home = temp_root()?;
         let mut runtime = FakeRuntime::new(home.clone());
+        runtime.token_prompts.push("typed-token".to_string());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -2065,8 +2066,92 @@ mod tests {
         );
 
         assert_eq!(code, 1);
+        let error = String::from_utf8(stderr).map_err(|error| ShimError::new(error.to_string()))?;
+        assert!(error.contains("usage: gfj auth login"), "{error}");
+        assert_eq!(runtime.token_prompts, vec!["typed-token".to_string()]);
         assert!(runtime.validated.is_empty());
         fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_token_stores_nothing_when_validation_fails() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.stdin = Some("bad-token".to_string());
+        runtime.validation_error = Some("Forgejo API returned HTTP 401: unauthorized".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com", "--with-token"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 1);
+        assert!(auth::read_stored_token("git.example.com", Some(&home), Some("linux")).is_none());
+        assert!(config::load_config_with_env(
+            Some(&config::config_path(Some(&home))),
+            &EnvMap::new()
+        )?
+        .hosts
+        .is_empty());
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_without_with_token_leaves_stdin_alone() -> Result<()> {
+        let home = temp_root()?;
+        let mut runtime = FakeRuntime::new(home.clone());
+        runtime.stdin = Some("stdin-token".to_string());
+        runtime.token_prompts.push("typed-token".to_string());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_runtime(
+            BinaryName::Gfj,
+            os_args(["auth", "login", "git.example.com"]),
+            &mut stdout,
+            &mut stderr,
+            &mut runtime,
+        );
+
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(runtime.stdin.as_deref(), Some("stdin-token"));
+        assert_eq!(
+            runtime.validated,
+            vec![("git.example.com".to_string(), "typed-token".to_string())]
+        );
+        fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_with_token_checks_the_host_before_reading_stdin() -> Result<()> {
+        for host in ["github.com", "git.example.com:notaport"] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            runtime.stdin = Some("stdin-token".to_string());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                os_args(["auth", "login", "--hostname", host, "--with-token"]),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+
+            assert_eq!(code, 1, "{host}");
+            assert_eq!(runtime.stdin.as_deref(), Some("stdin-token"), "{host}");
+            assert!(runtime.validated.is_empty(), "{host}");
+            fs::remove_dir_all(home).ok();
+        }
         Ok(())
     }
 
