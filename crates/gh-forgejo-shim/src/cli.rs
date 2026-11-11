@@ -279,7 +279,7 @@ fn print_help(binary: BinaryName, stdout: &mut dyn Write) -> Result<i32> {
     writeln!(stdout, "    {name} auth <login|import|status|logout>")?;
     writeln!(
         stdout,
-        "    {name} auth login [HOST | --hostname HOST] [--with-token]"
+        "    {name} auth login [HOST | -h HOST | --hostname HOST] [--with-token]"
     )?;
     writeln!(stdout, "    {name} telemetry <on|off|status|show>")?;
     writeln!(stdout, "    {name} server check FORGE")?;
@@ -1061,8 +1061,8 @@ fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) 
 }
 
 fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
-    let usage = "usage: gfj auth login [HOST | --hostname HOST] [--with-token]";
-    let mut host_arg = None;
+    let usage = "usage: gfj auth login [HOST | -h HOST | --hostname HOST] [--with-token]";
+    let mut host_arg: Option<String> = None;
     let mut with_token = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -1072,17 +1072,17 @@ fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime
                 continue;
             }
             // A flag in the host's place would vanish, and with it `--with-token`.
-            "--hostname" => args
+            "--hostname" | "-h" => args
                 .next()
                 .filter(|host| !host.starts_with('-'))
                 .ok_or_else(|| ShimError::new(usage))?,
+            value if value.starts_with("--hostname=") => &value["--hostname=".len()..],
             flag if flag.starts_with('-') => return Err(ShimError::new(usage)),
-            _ => arg,
+            value => value,
         };
-        if host_arg
-            .replace(host)
-            .is_some_and(|previous| previous != host)
-        {
+        if host_arg.replace(host.to_string()).is_some_and(|previous| {
+            config::normalize_host(&previous) != config::normalize_host(host)
+        }) {
             return Err(ShimError::new(usage));
         }
     }
@@ -1093,7 +1093,7 @@ fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime
         ));
     }
     // Logout shares prompt_host, so it can still remove a token for any host an older version took.
-    let host = forgejo_host_arg(&prompt_host(host_arg, runtime)?)?;
+    let host = forgejo_host_arg(&prompt_host(host_arg.as_ref(), runtime)?)?;
     let token = if with_token {
         runtime.read_stdin()?
     } else {
@@ -1898,6 +1898,50 @@ mod tests {
             vec![("git.example.com".to_string(), "stdin-token".to_string())]
         );
         fs::remove_dir_all(home).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn login_takes_the_host_in_each_of_ghs_forms() -> Result<()> {
+        for args in [
+            vec!["auth", "login", "-h", "git.example.com", "--with-token"],
+            vec![
+                "auth",
+                "login",
+                "--hostname=git.example.com",
+                "--with-token",
+            ],
+            vec![
+                "auth",
+                "login",
+                "git.example.com",
+                "--hostname",
+                "Git.Example.com",
+                "--with-token",
+            ],
+        ] {
+            let home = temp_root()?;
+            let mut runtime = FakeRuntime::new(home.clone());
+            runtime.stdin = Some("stdin-token".to_string());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_runtime(
+                BinaryName::Gfj,
+                args.iter().map(OsString::from).collect::<Vec<_>>(),
+                &mut stdout,
+                &mut stderr,
+                &mut runtime,
+            );
+
+            assert_eq!(code, 0, "{args:?}: {}", String::from_utf8_lossy(&stderr));
+            assert_eq!(
+                runtime.validated,
+                vec![("git.example.com".to_string(), "stdin-token".to_string())],
+                "{args:?}"
+            );
+            fs::remove_dir_all(home).ok();
+        }
         Ok(())
     }
 
