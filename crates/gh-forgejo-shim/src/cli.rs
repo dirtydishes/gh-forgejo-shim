@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::{self, EnvMap};
@@ -212,6 +212,13 @@ impl Runtime for SystemRuntime {
     }
 
     fn read_stdin(&mut self) -> Result<String> {
+        // A token typed here would show on screen; the prompt hides it.
+        if io::stdin().is_terminal() {
+            return Err(ShimError::new(
+                "--with-token reads the token from stdin; pipe it in, or leave out --with-token \
+                 to type it at a hidden prompt",
+            ));
+        }
         let mut input = String::new();
         io::stdin()
             .read_to_string(&mut input)
