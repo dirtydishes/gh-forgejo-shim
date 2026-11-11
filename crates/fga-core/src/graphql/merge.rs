@@ -47,8 +47,10 @@ impl Extension for MergeMutationFields {
             .mutation_type
             .as_deref()
             .and_then(|name| registry.concrete_type_by_name(name));
+        // `__typename` is valid on every type, though no type lists it among its fields.
         merge(&mut document, &|name| {
-            mutation.is_some_and(|mutation| mutation.field_by_name(name).is_some())
+            name == "__typename"
+                || mutation.is_some_and(|mutation| mutation.field_by_name(name).is_some())
         })?;
         Ok(document)
     }
