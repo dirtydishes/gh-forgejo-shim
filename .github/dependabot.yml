@@ -1,0 +1,43 @@
+# Weekly update PRs, one per ecosystem for minor and patch releases, and one per dependency for a
+# major release. Security updates come as soon as an advisory is published, whatever the schedule.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # fga-core pins async-graphql-value to async-graphql's exact version: they move together.
+      async-graphql:
+        patterns: ["async-graphql*"]
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directories: [/packaging/gateway, /scripts/e2e]
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /telemetry/collector
+    schedule:
+      interval: weekly
+    groups:
+      collector:
+        update-types: [minor, patch]
