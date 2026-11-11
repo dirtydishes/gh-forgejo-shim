@@ -1107,7 +1107,11 @@ fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime
         return Err(ShimError::new("Forgejo token is required"));
     }
     // The error doesn't echo stdin, which may hold a second secret.
-    if with_token && token.chars().any(char::is_whitespace) {
+    if with_token
+        && token
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
         return Err(ShimError::new("stdin must hold one token and nothing else"));
     }
 
@@ -1984,6 +1988,7 @@ mod tests {
             " \n",
             "first-token\nsecond-token\n",
             "token with spaces",
+            "token\u{0}with-a-nul",
             &long,
         ] {
             let home = temp_root()?;
