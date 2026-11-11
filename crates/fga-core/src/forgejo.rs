@@ -347,7 +347,7 @@ impl Forgejo {
         while let Some(chunk) = response.chunk().await? {
             if body.len() + chunk.len() > MAX_RESPONSE_BYTES
                 || budget
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                         left.checked_sub(chunk.len())
                     })
                     .is_err()

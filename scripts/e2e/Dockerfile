@@ -1,5 +1,5 @@
 # Test runner only; packaging the service is outside G1.
-FROM rust:1.97.1
+FROM rust:1.99.1
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq openssl python3 \
     && rm -rf /var/lib/apt/lists/*
 ARG GH_VERSION=2.103.3
