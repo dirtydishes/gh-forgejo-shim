@@ -1,3 +1,16 @@
+# gh-forgejo-shim v0.5.1
+
+Upgrade straight from 0.4.0: 0.5.0's archives were published, but its gateway image and Homebrew
+formula never were. The v0.5.0 notes below list everything new since 0.4.0.
+
+- **Every dependency is current, and stays so.** The build moves to Rust 1.99.1 and the newest
+  compatible release of every crate, and drops `ureq`, which nothing called, with the older copy
+  of the bundled root certificates it pulled in. The gateway image builds on the same toolchain.
+  Dependabot now opens a PR the day a security advisory names a dependency, and weekly PRs keep
+  the rest current. TLS still uses `rustls` with the bundled roots, as before.
+
+The v0.5.0 notes follow.
+
 # gh-forgejo-shim v0.5.0
 
 Upgrade the wrapper and, in server mode, the gateway image.

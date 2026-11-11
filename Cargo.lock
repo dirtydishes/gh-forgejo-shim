@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "gh-forgejo-shim"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axum",
  "fga-core",
