@@ -41,7 +41,7 @@ Upgrade the wrapper and, in server mode, the gateway image.
 
 - **A GraphQL mutation selected twice under one name writes once.** A document that selected the
   same mutation twice, for example through two fragments, created two issues. The gateway now
-  merges the repeats before running them, and refuses repeats that differ (#319).
+  merges the repeats before running them, and refuses repeats that differ (#319, #324).
 
 - **`gh run list` works on Forgejo 17.** A run that hadn't started yet made the list fail with a
   502 (#297).
