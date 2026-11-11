@@ -146,7 +146,8 @@ trait Runtime {
     fn platform(&self) -> &str;
     fn prompt_host(&mut self, prompt: &str) -> Result<String>;
     fn prompt_token(&mut self, prompt: &str) -> Result<String>;
-    fn read_stdin(&mut self) -> Result<String>;
+    /// Stdin, up to `limit` bytes.
+    fn read_stdin(&mut self, limit: u64) -> Result<String>;
     fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>>;
     fn apply_gui_path(&mut self, path_value: &str) -> (bool, Option<String>);
     fn current_launchd_path(&self) -> Option<String>;
@@ -211,7 +212,7 @@ impl Runtime for SystemRuntime {
             .map_err(|error| ShimError::new(format!("could not read token: {error}")))
     }
 
-    fn read_stdin(&mut self) -> Result<String> {
+    fn read_stdin(&mut self, limit: u64) -> Result<String> {
         // A token typed here would show on screen; the prompt hides it.
         if io::stdin().is_terminal() {
             return Err(ShimError::new(
@@ -221,6 +222,7 @@ impl Runtime for SystemRuntime {
         }
         let mut input = String::new();
         io::stdin()
+            .take(limit)
             .read_to_string(&mut input)
             .map_err(|error| ShimError::new(format!("could not read token from stdin: {error}")))?;
         Ok(input)
@@ -1052,6 +1054,10 @@ fn run_auth(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) 
     }
 }
 
+/// The most `auth login --with-token` reads from stdin, far more than any token, so a wrong
+/// redirect such as `< /dev/zero` stops there.
+const TOKEN_LIMIT: u64 = 64 * 1024;
+
 fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime) -> Result<i32> {
     let usage = "usage: gfj auth login [HOST | -h HOST | --hostname HOST] [--with-token]";
     let mut host_arg: Option<String> = None;
@@ -1087,7 +1093,12 @@ fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime
     // Logout shares prompt_host, so it can still remove a token for any host an older version took.
     let host = forgejo_host_arg(&prompt_host(host_arg.as_ref(), runtime)?)?;
     let token = if with_token {
-        runtime.read_stdin()?
+        // One byte past the limit tells a long input from one that fits.
+        let input = runtime.read_stdin(TOKEN_LIMIT + 1)?;
+        if input.len() as u64 > TOKEN_LIMIT {
+            return Err(ShimError::new("stdin must hold one token and nothing else"));
+        }
+        input
     } else {
         runtime.prompt_token(&format!("Forgejo access token for {host}: "))?
     };
@@ -1370,8 +1381,10 @@ mod tests {
             Ok(self.token_prompts.remove(0))
         }
 
-        fn read_stdin(&mut self) -> Result<String> {
-            Ok(self.stdin.take().unwrap_or_default())
+        fn read_stdin(&mut self, limit: u64) -> Result<String> {
+            let mut stdin = self.stdin.take().unwrap_or_default();
+            stdin.truncate(limit as usize);
+            Ok(stdin)
         }
 
         fn validate_token(&mut self, host: &str, token: &str) -> Result<Option<String>> {
@@ -1965,11 +1978,13 @@ mod tests {
 
     #[test]
     fn login_with_token_refuses_stdin_that_holds_more_than_a_token() -> Result<()> {
+        let long = "t".repeat(TOKEN_LIMIT as usize + 1);
         for stdin in [
             "",
             " \n",
             "first-token\nsecond-token\n",
             "token with spaces",
+            &long,
         ] {
             let home = temp_root()?;
             let mut runtime = FakeRuntime::new(home.clone());
