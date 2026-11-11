@@ -171,7 +171,7 @@ gfj server check forge.example.com
 
 It sends no token. It asks Forgejo for its version, then each of the three routes, and says for
 each whether it reaches the gateway. When one doesn't, it says what answered instead: Forgejo
-(`404`, the route is missing), a gateway set up for another address (`421`, `FGA_PUBLIC_URL` or the
+(`404`, or `405` for a POST: the route is missing), a gateway set up for another address (`421`, `FGA_PUBLIC_URL` or the
 `Host` header), or nothing the proxy could reach (`502` to `504`).
 
 By hand, every API route needs a Forgejo token:

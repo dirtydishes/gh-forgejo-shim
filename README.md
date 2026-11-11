@@ -167,8 +167,8 @@ says what the gateway logs when a missing scope hides data.
    through unchanged. [docs/gateway/server-mode.md](docs/gateway/server-mode.md) has the nginx, Caddy
    and Nginx Proxy Manager steps.
 5. Check it from any machine with `gfj`: `gfj server check forge.example.com` asks each route
-   without a token and says which one doesn't reach the gateway, and why. Without `gfj`, the
-   [`curl` checks](docs/gateway/server-mode.md#3-check-it) do the same by hand.
+   without a token and says which one doesn't reach the gateway, and why. Without `gfj`, check one
+   route by hand with [`curl` and a token](docs/gateway/server-mode.md#3-check-it).
 
 6. Log in. gh's browser login doesn't work with Forgejo, so create a token in Forgejo under
    **Settings → Applications** with the [four scopes](#token-scopes), run
