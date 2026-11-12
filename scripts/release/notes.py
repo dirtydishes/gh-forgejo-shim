@@ -78,13 +78,18 @@ def section(text, tag, repo):
             marker = match.group(1) if match and not match.group(2).strip() else ""
             if marker[:1] == fence[0] and len(marker) >= len(fence):
                 fence = None
+            elif line.startswith(HEADING):
+                raise NotesError(f"an unclosed code block runs into '{line}'")
             body.append(line)
             continue
-        if match:
+        # A backtick fence's info string can't hold a backtick: ```foo``` is inline code.
+        if match and not (match.group(1)[0] == "`" and "`" in match.group(2)):
             fence = match.group(1)
         elif line.startswith("# "):
             break
         body.append(line if fence else _absolute_links(line, tag, repo))
+    if fence:
+        raise NotesError(f"the {tag} section ends inside a code block")
 
     while body and not body[-1].strip():
         body.pop()
