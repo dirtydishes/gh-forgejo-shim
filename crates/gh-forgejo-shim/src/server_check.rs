@@ -9,7 +9,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::config::{self, Config, EnvMap};
-use crate::forgejo::{Answer, ForgejoClient, CERTIFICATE_REFUSED};
+use crate::forgejo::{Answer, ForgejoClient, CERTIFICATE_UNTRUSTED};
 use crate::{Result, ShimError};
 
 /// Forgejo serves no `/pull/N` path, so only the gateway redirects this link, whatever
@@ -120,7 +120,7 @@ pub(crate) fn check(client: &ForgejoClient, origin: &str, host: &str) -> Vec<Fin
     let forgejo = "Forgejo";
     let mut findings = vec![match client.answer(host, Method::GET, "/api/v1/version") {
         Err(error) => {
-            let hint = if error.message() == CERTIFICATE_REFUSED {
+            let hint = if error.message() == CERTIFICATE_UNTRUSTED {
                 "; if the forge's certificate comes from a private CA, set the host's ca_file in \
                  the shim's config, or FJ_SHIM_CA_FILE"
             } else {
@@ -610,19 +610,33 @@ mod tests {
         let (code, output) = run_against(&origin);
 
         assert_eq!(code, 1, "{output}");
-        assert!(
-            output.contains("its TLS certificate couldn't be verified"),
-            "{output}"
-        );
+        assert!(output.contains(CERTIFICATE_UNTRUSTED), "{output}");
         assert!(output.contains("FJ_SHIM_CA_FILE"), "{output}");
 
+        let output = run_trusting_the_test_ca(&origin);
+        assert!(output.contains("[ok] Forgejo: version 15.0.1"), "{output}");
+    }
+
+    #[test]
+    fn a_certificate_for_another_name_says_so_without_the_ca_hint() {
+        let origin = tls_stand_in().replace("localhost", "127.0.0.1");
+
+        let output = run_trusting_the_test_ca(&origin);
+
+        assert!(
+            output.contains("[fix] Forgejo: ") && output.contains("names a different host"),
+            "{output}"
+        );
+        assert!(!output.contains("FJ_SHIM_CA_FILE"), "{output}");
+    }
+
+    fn run_trusting_the_test_ca(origin: &str) -> String {
         let ca =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-ca.pem");
         let env = EnvMap::from([("FJ_SHIM_CA_FILE".to_string(), ca.display().to_string())]);
         let mut stdout = Vec::new();
-        run(&origin, &empty_config(), &env, &mut stdout).expect("run");
-        let output = String::from_utf8(stdout).expect("utf-8");
-        assert!(output.contains("[ok] Forgejo: version 15.0.1"), "{output}");
+        run(origin, &empty_config(), &env, &mut stdout).expect("run");
+        String::from_utf8(stdout).expect("utf-8")
     }
 
     #[test]
