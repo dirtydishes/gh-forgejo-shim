@@ -1,3 +1,35 @@
+# gh-forgejo-shim v0.6.0
+
+Upgrade the wrapper. The gateway has no changes; its image is published as 0.6.0 to keep the
+versions together.
+
+- **An agent can install the shim for you.** The README has a prompt to paste into Claude Code,
+  Codex or another coding agent, opened in your Forgejo repository. The agent follows
+  [`docs/agent-install.md`](agent-install.md): it asks which apps you use, installs gh and the
+  shim, runs `gfj bootstrap` and its fixes with your OK, logs the shim in, and for Claude Code or
+  Claude desktop checks server mode with `gfj server check`. Your token never passes through the
+  chat: an agent that can ask you for a secret pipes it to `--with-token`, and one that can't gives
+  you the command to run in your own terminal. It changes nothing on your forge's server (#330).
+
+- **`gfj auth login --with-token` reads the token from stdin**, as `gh auth login --with-token`
+  does, so a script, a password manager or an agent's secret tool can log the shim in without
+  anyone typing at the prompt: `gfj auth login --hostname HOST --with-token < FILE`. The host must
+  be on the command line, stdin can't be a terminal, and it must hold one token of at most 64 KiB;
+  anything else is refused without echoing what was read. `auth login` also takes the host in each
+  form gh does: `HOST`, `-h HOST`, `--hostname HOST` and `--hostname=HOST` (#328).
+
+- **`gfj server check FORGE` says whether server mode is set up.** It replaces the `curl` checks at
+  the end of server mode setup. It sends no token, so it runs before anyone logs in, and it asks
+  the forge's version, the REST and GraphQL routes and a PR link, then says for each whether it
+  reaches the gateway and, if not, what answered and what to change in the proxy or the gateway's
+  settings. It exits 0 when nothing needs fixing (#329).
+
+- **A refused TLS certificate says why.** Commands that reach a forge used to report a certificate
+  TLS refused as "couldn't be reached". They now say whether the certificate comes from a CA the
+  shim doesn't trust, names another host, has expired, isn't valid yet or was revoked (#329).
+
+The v0.5.1 notes follow.
+
 # gh-forgejo-shim v0.5.1
 
 Upgrade straight from 0.4.0: 0.5.0's archives were published, but its gateway image and Homebrew
