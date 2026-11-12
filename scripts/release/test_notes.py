@@ -73,6 +73,18 @@ class SectionTest(unittest.TestCase):
         self.assertIn("# inside four backticks", body)
         self.assertTrue(body.endswith("- after\n"))
 
+    def test_one_line_code_is_not_a_fence(self):
+        text = "# gh-forgejo-shim v2.0.0\n\n```foo```\n- new\n\n# gh-forgejo-shim v1.0.0\n\n- old\n"
+        self.assertEqual(notes.section(text, "v2.0.0", REPO), "```foo```\n- new\n")
+
+    def test_an_unclosed_fence_fails(self):
+        for text in (
+            "# gh-forgejo-shim v2.0.0\n\n```\n- new\n\n# gh-forgejo-shim v1.0.0\n\n- old\n",
+            "# gh-forgejo-shim v2.0.0\n\n```\n- new\n",
+        ):
+            with self.subTest(text=text), self.assertRaises(notes.NotesError):
+                notes.section(text, "v2.0.0", REPO)
+
     def test_leaves_links_in_code_blocks(self):
         text = "# gh-forgejo-shim v1.0.0\n\n```\n[a](x.md)\n```\n"
         self.assertIn("\n[a](x.md)\n", notes.section(text, "v1.0.0", REPO))
