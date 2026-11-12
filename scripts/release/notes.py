@@ -18,9 +18,9 @@ HEADING = "# gh-forgejo-shim "
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 TRAILER = re.compile(r"^The v\S+ notes follow\.$")
 # An inline link or image's target, `<...>` or bare, up to an optional title; and a reference
-# definition's target, `[a]: target`.
+# definition's target, `[a]: target`, but not a footnote's, `[^1]: text`.
 INLINE = re.compile(r'(!\[[^\]]*)?(\]\(\s*)(<[^>]+>|[^)\s]+)')
-REFERENCE = re.compile(r"^(\s{0,3}\[[^\]]+\]:\s*)(<[^>]+>|\S+)")
+REFERENCE = re.compile(r"^(\s{0,3}\[[^\]^][^\]]*\]:\s*)(<[^>]+>|\S+)")
 CODE_SPAN = re.compile(r"(`+).+?\1")
 
 

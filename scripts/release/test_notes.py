@@ -85,6 +85,9 @@ class SectionTest(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(notes.NotesError):
                 notes.section(text, "v2.0.0", REPO)
 
+    def test_leaves_footnotes(self):
+        self.assertEqual(self._one("[^1]: See notes"), "[^1]: See notes")
+
     def test_leaves_links_in_code_blocks(self):
         text = "# gh-forgejo-shim v1.0.0\n\n```\n[a](x.md)\n```\n"
         self.assertIn("\n[a](x.md)\n", notes.section(text, "v1.0.0", REPO))
