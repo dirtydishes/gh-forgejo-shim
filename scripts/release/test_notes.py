@@ -90,6 +90,33 @@ class SectionTest(unittest.TestCase):
         self.assertIn("[the site](https://example.com)", body)
         self.assertIn("[above](#upgrading)", body)
 
+    def _one(self, line):
+        return notes.section(f"# gh-forgejo-shim v1.0.0\n\n{line}\n", "v1.0.0", REPO).rstrip("\n")
+
+    def test_rewrites_every_link_form(self):
+        blob = "https://github.com/owner/repo/blob/v1.0.0/docs"
+        self.assertEqual(self._one('[a](x.md "Title")'), f'[a]({blob}/x.md "Title")')
+        self.assertEqual(self._one("[a](<my file.md>)"), f"[a](<{blob}/my file.md>)")
+        self.assertEqual(self._one("[a]: x.md"), f"[a]: {blob}/x.md")
+        self.assertEqual(self._one('[a]: <x.md> "T"'), f'[a]: <{blob}/x.md> "T"')
+
+    def test_images_point_at_the_raw_file(self):
+        self.assertEqual(
+            self._one("![logo](img/logo.png)"),
+            "![logo](https://github.com/owner/repo/raw/v1.0.0/docs/img/logo.png)",
+        )
+
+    def test_leaves_links_in_inline_code(self):
+        self.assertEqual(
+            self._one("`[a](x.md)` and ``[b](y.md)`` then [c](z.md)"),
+            "`[a](x.md)` and ``[b](y.md)`` then "
+            "[c](https://github.com/owner/repo/blob/v1.0.0/docs/z.md)",
+        )
+
+    def test_a_link_out_of_the_repo_fails(self):
+        with self.assertRaises(notes.NotesError):
+            self._one("[a](../../x.md)")
+
     def test_last_section_runs_to_the_end(self):
         self.assertEqual(notes.section(SAMPLE, "v0.1.0", REPO), "- First release.\n")
 

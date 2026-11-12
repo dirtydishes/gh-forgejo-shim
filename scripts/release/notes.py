@@ -17,7 +17,11 @@ import sys
 HEADING = "# gh-forgejo-shim "
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 TRAILER = re.compile(r"^The v\S+ notes follow\.$")
-LINK = re.compile(r"\]\(([^)\s]+)\)")
+# An inline link or image's target, `<...>` or bare, up to an optional title; and a reference
+# definition's target, `[a]: target`.
+INLINE = re.compile(r'(!\[[^\]]*)?(\]\(\s*)(<[^>]+>|[^)\s]+)')
+REFERENCE = re.compile(r"^(\s{0,3}\[[^\]]+\]:\s*)(<[^>]+>|\S+)")
+CODE_SPAN = re.compile(r"(`+).+?\1")
 
 
 class NotesError(Exception):
@@ -28,16 +32,34 @@ def _relative(target):
     return not (target.startswith(("#", "/")) or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I))
 
 
-def _absolute_links(line, tag, repo):
-    def fix(match):
-        target = match.group(1)
-        if not _relative(target):
-            return match.group(0)
-        path, sep, anchor = target.partition("#")
-        path = posixpath.normpath(posixpath.join("docs", path))
-        return f"](https://github.com/{repo}/blob/{tag}/{path}{sep}{anchor})"
+def _absolute(target, tag, repo, image=False):
+    bracketed = target.startswith("<")
+    bare = target[1:-1] if bracketed else target
+    if not _relative(bare):
+        return target
+    path, sep, anchor = bare.partition("#")
+    path = posixpath.normpath(posixpath.join("docs", path))
+    if path.startswith(".."):
+        raise NotesError(f"link {bare!r} points outside the repository")
+    # /blob/ is GitHub's page for a file; an image needs the file itself.
+    url = f"https://github.com/{repo}/{'raw' if image else 'blob'}/{tag}/{path}{sep}{anchor}"
+    return f"<{url}>" if bracketed else url
 
-    return LINK.sub(fix, line)
+
+def _absolute_links(line, tag, repo):
+    def inline(match):
+        prefix, opening, target = match.groups()
+        return f"{prefix or ''}{opening}{_absolute(target, tag, repo, image=bool(prefix))}"
+
+    line = REFERENCE.sub(lambda m: m.group(1) + _absolute(m.group(2), tag, repo), line)
+    # Code spans show their text as written, so links inside them stay as they are.
+    out, pos = [], 0
+    for span in CODE_SPAN.finditer(line):
+        out.append(INLINE.sub(inline, line[pos : span.start()]))
+        out.append(span.group(0))
+        pos = span.end()
+    out.append(INLINE.sub(inline, line[pos:]))
+    return "".join(out)
 
 
 def section(text, tag, repo):
