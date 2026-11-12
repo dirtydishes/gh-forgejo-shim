@@ -1,7 +1,8 @@
 # gh-forgejo-shim v0.5.1
 
 Upgrade straight from 0.4.0: 0.5.0's archives were published, but its gateway image and Homebrew
-formula never were. The v0.5.0 notes below list everything new since 0.4.0.
+formula never were. The [v0.5.0 notes](https://github.com/dirtydishes/gh-forgejo-shim/releases/tag/v0.5.0)
+list everything new since 0.4.0.
 
 - **Every dependency is current, and stays so.** The build moves to Rust 1.99.1 and the newest
   compatible release of every crate, and drops `ureq`, which nothing called, with the older copy
