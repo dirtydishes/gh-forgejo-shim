@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print one release's notes from docs/release-notes.md.
+"""Write one release's notes from docs/release-notes.md to OUT_FILE.
 
 usage: notes.py NOTES_FILE TAG OWNER/REPO OUT_FILE
 
