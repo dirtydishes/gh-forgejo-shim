@@ -55,7 +55,9 @@ Done when you're in a checkout of the forge and know whether server mode is need
    features their agents ask for that the shim lacks, and that `gfj telemetry off` stops it.
    [telemetry.md](telemetry.md) lists every field.
 
-Done when `gfj --version`, or `~/.local/bin/gfj --version`, prints a version.
+Done when `gfj --version`, or `~/.local/bin/gfj --version`, prints 0.6.0 or newer. An older shim
+lacks the commands steps 4 and 5 use: upgrade it with `brew upgrade gh-forgejo-shim`, or install the
+latest tarball over it.
 
 ## 3. Set up the wrapper
 
@@ -65,14 +67,17 @@ is logged in yet; that's expected. Only its `[fix]` lines matter.
 
 **HOST** from here on is the entry in bootstrap's `repository` line,
 `[ok] repository: detected … and allowlisted HOST`. It can differ from the remote's host, such as
-when the remote uses SSH. If that line isn't `[ok]`, stop and hand over.
+when the remote uses SSH. If that line doesn't end in `and allowlisted HOST`, stop and hand over:
+gh resolves this checkout to another repository, such as a `github.com` remote or `GH_HOST`, and
+the wrapper won't send it to the forge.
 
 Bootstrap ends with a list of repair commands. Handle them this way:
 
 - **Login commands** (`auth login`, `auth import`): skip them; step 4 logs in.
 - **`export PATH="DIR:$PATH"`**: run in your shell, it lasts only for this session. Ask the user to
-  add that line to their shell's startup file (`~/.zshrc` on macOS, usually `~/.bashrc` on Linux),
-  then run it in your shell too. Skip the `bootstrap --bin-dir` command printed with it.
+  add that line to their shell's startup file (`~/.zshrc` on macOS, usually `~/.bashrc` on Linux)
+  and to open a new terminal, since one already open doesn't read it again. Run the line in your
+  shell too. Skip the `bootstrap --bin-dir` command printed with it.
 - **`git` commands**: they fix how this checkout tracks the forge. Run `git fetch origin` and
   `git remote set-head origin -a`; if that fails, show the user the
   `git remote set-head origin BRANCH` command bootstrap printed and ask which branch is the default.
@@ -82,7 +87,8 @@ Bootstrap ends with a list of repair commands. Handle them this way:
 
 If bootstrap says `Codex-style restricted PATH`, it ran with the agent's PATH rather than the
 user's. Ask the user to run `gfj bootstrap` once in their own terminal, so the wrapper goes where
-their shell looks.
+their shell looks, and to paste its output to you; it holds no secrets. Use that output from here
+on, for its repair commands and for step 6.
 
 Done when `gfj doctor` prints no `[fix]` line except the one for auth.
 
@@ -105,13 +111,17 @@ Skip this step unless step 1 found server mode is needed.
 
 Run `gfj server check HOST`. It sends no token.
 
-- **No line reads `[fix]`:** the forge serves the gateway. Log gh in to the forge with the same
-  token. With a secret tool, run `gh auth login --hostname HOST --with-token < "$file"`. Without
-  one, ask the user to run `gh auth login --hostname HOST` in their own terminal and answer
-  **HTTPS**, **No** to logging git in with these credentials, and **Paste an authentication
-  token**. Done when `gh api --hostname HOST /meta` prints `installed_version`.
-- **Any line reads `[fix]`:** the forge doesn't serve the gateway yet. Ask the user whether they, or
-  someone they can ask, run the forge and its reverse proxy.
+- **It exits 0** and ends with `The gateway answers on HOST`: the forge serves the gateway. Log gh
+  in to the forge with the same token. With a secret tool, ask for the token through it again, as
+  a file, and run `gh auth login --hostname HOST --with-token < "$file"`. Without one, ask the
+  user to run `gh auth login --hostname HOST` in their own terminal and answer **HTTPS**, **No**
+  to logging git in with these credentials, and **Paste an authentication token**. Done when
+  `gh api --hostname HOST /meta` prints `installed_version`.
+- **Its only line is `[fix] Forgejo:`**, or it fails before checking anything: it couldn't reach
+  the forge or refused the address. Follow the sandbox rule if you're in one; otherwise show the
+  user the output, and stop and hand over if they can't fix it.
+- **Any other `[fix]` line:** the forge doesn't serve the gateway right yet. Ask the user whether
+  they, or someone they can ask, run the forge and its reverse proxy.
   - If so, tell them what the check printed, and that whoever runs the forge sets the gateway up
     with [server-mode.md](gateway/server-mode.md); you'll check again once they have.
   - If not, as on a hosted forge such as Codeberg, server mode isn't possible. Tell the user that

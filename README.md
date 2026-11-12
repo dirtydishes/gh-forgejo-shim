@@ -95,8 +95,9 @@ and never ask me to paste a token into the chat.
 ```
 
 It asks which apps you use, installs and sets up the wrapper and logs it in. If you use Claude Code
-or Claude desktop, it also checks that your forge serves server mode. If the agent can ask you for a secret, it passes your token to the login command itself; if not,
-it gives you the command to run. It changes nothing on your forge's server.
+or Claude desktop, it also checks that your forge serves server mode. If the agent can ask you for
+a secret, it passes your token to the login command itself; if not, it gives you the command to
+run. It changes nothing on your forge's server.
 [docs/agent-install.md](docs/agent-install.md) has the steps it follows.
 
 ### Install paths
