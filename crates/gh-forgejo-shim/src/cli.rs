@@ -1121,12 +1121,9 @@ fn auth_login(args: &[String], stdout: &mut dyn Write, runtime: &mut dyn Runtime
     if token.is_empty() {
         return Err(ShimError::new("Forgejo token is required"));
     }
-    // The error doesn't echo stdin, which may hold a second secret.
-    if with_token
-        && token
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
-    {
+    // A token is printable ASCII; anything else (a second line, a byte-order mark, a zero-width
+    // space) means stdin held more. The error doesn't echo stdin, which may hold a second secret.
+    if with_token && !token.chars().all(|character| character.is_ascii_graphic()) {
         return Err(ShimError::new("stdin must hold one token and nothing else"));
     }
 
@@ -2004,6 +2001,8 @@ mod tests {
             "first-token\nsecond-token\n",
             "token with spaces",
             "token\u{0}with-a-nul",
+            "\u{feff}token-after-a-byte-order-mark",
+            "token\u{200b}with-a-zero-width-space",
             &long,
         ] {
             let home = temp_root()?;
