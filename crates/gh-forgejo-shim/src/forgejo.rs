@@ -362,8 +362,8 @@ impl ForgejoClient {
         let response = request.send().map_err(|error| {
             ForgejoError::new(if error.is_timeout() {
                 "it didn't answer in time".to_string()
-            } else if refused_certificate(&error) {
-                CERTIFICATE_REFUSED.to_string()
+            } else if let Some(refusal) = certificate_refusal(&error) {
+                refusal.to_string()
             } else if error.is_connect() {
                 "it couldn't be reached".to_string()
             } else {
@@ -864,27 +864,45 @@ fn list_of_objects(value: Value) -> Vec<Value> {
     }
 }
 
-/// [`ForgejoClient::answer`]'s error when TLS refused the server's certificate.
-pub const CERTIFICATE_REFUSED: &str = "its TLS certificate couldn't be verified";
+/// [`ForgejoClient::answer`]'s error when TLS refused the server's certificate because no CA the
+/// shim trusts issued it: the one refusal that a private CA's file fixes.
+pub const CERTIFICATE_UNTRUSTED: &str =
+    "its TLS certificate doesn't come from a CA the shim trusts";
 
-/// Whether TLS refused the server's certificate anywhere in `error`'s causes. An `io::Error`'s
-/// `source` skips the error it wraps, so each one's inner error is checked too.
-fn refused_certificate(error: &(dyn std::error::Error + 'static)) -> bool {
+/// Why TLS refused the server's certificate, if it did, anywhere in `error`'s causes. An
+/// `io::Error`'s `source` skips the error it wraps, so each one's inner error is checked too.
+fn certificate_refusal(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
     let mut cause = Some(error);
     while let Some(error) = cause {
-        if matches!(
-            error.downcast_ref::<rustls::Error>(),
-            Some(rustls::Error::InvalidCertificate(_))
-        ) || error
+        if let Some(rustls::Error::InvalidCertificate(kind)) = error.downcast_ref() {
+            return Some(certificate_problem(kind));
+        }
+        if let Some(refusal) = error
             .downcast_ref::<std::io::Error>()
             .and_then(std::io::Error::get_ref)
-            .is_some_and(|inner| refused_certificate(inner))
+            .and_then(|inner| certificate_refusal(inner))
         {
-            return true;
+            return Some(refusal);
         }
         cause = error.source();
     }
-    false
+    None
+}
+
+fn certificate_problem(kind: &rustls::CertificateError) -> &'static str {
+    use rustls::CertificateError as Kind;
+    match kind {
+        Kind::UnknownIssuer | Kind::BadSignature => CERTIFICATE_UNTRUSTED,
+        Kind::NotValidForName | Kind::NotValidForNameContext { .. } => {
+            "its TLS certificate names a different host"
+        }
+        Kind::Expired | Kind::ExpiredContext { .. } => "its TLS certificate has expired",
+        Kind::NotValidYet | Kind::NotValidYetContext { .. } => {
+            "its TLS certificate isn't valid yet"
+        }
+        Kind::Revoked => "its CA revoked its TLS certificate",
+        _ => "its TLS certificate couldn't be verified",
+    }
 }
 
 fn host_for_url(host: &str) -> String {
@@ -999,6 +1017,30 @@ mod tests {
     use std::thread::{self, JoinHandle};
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn each_certificate_refusal_says_what_is_wrong() {
+        use rustls::CertificateError as Kind;
+        for (kind, problem) in [
+            (Kind::UnknownIssuer, CERTIFICATE_UNTRUSTED),
+            (Kind::BadSignature, CERTIFICATE_UNTRUSTED),
+            (Kind::Expired, "its TLS certificate has expired"),
+            (
+                Kind::NotValidForName,
+                "its TLS certificate names a different host",
+            ),
+            (Kind::NotValidYet, "its TLS certificate isn't valid yet"),
+            (Kind::Revoked, "its CA revoked its TLS certificate"),
+            (
+                Kind::BadEncoding,
+                "its TLS certificate couldn't be verified",
+            ),
+        ] {
+            let wrapped = io::Error::other(rustls::Error::InvalidCertificate(kind.clone()));
+            assert_eq!(certificate_refusal(&wrapped), Some(problem), "{kind:?}");
+        }
+        assert_eq!(certificate_refusal(&io::Error::other("reset")), None);
+    }
 
     #[derive(Debug)]
     struct CapturedRequest {
