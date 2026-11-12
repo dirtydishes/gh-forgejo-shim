@@ -15,7 +15,7 @@ import re
 import sys
 
 HEADING = "# gh-forgejo-shim "
-FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 TRAILER = re.compile(r"^The v\S+ notes follow\.$")
 LINK = re.compile(r"\]\(([^)\s]+)\)")
 
@@ -48,13 +48,21 @@ def section(text, tag, repo):
     if len(starts) > 1:
         raise NotesError(f"'{HEADING}{tag}' appears {len(starts)} times")
 
-    body, fenced = [], False
+    # A fence closes only on its own character, at least as long and with nothing after it.
+    body, fence = [], None
     for line in lines[starts[0] + 1 :]:
-        if FENCE.match(line):
-            fenced = not fenced
-        elif not fenced and line.startswith("# "):
+        match = FENCE.match(line)
+        if fence:
+            marker = match.group(1) if match and not match.group(2).strip() else ""
+            if marker[:1] == fence[0] and len(marker) >= len(fence):
+                fence = None
+            body.append(line)
+            continue
+        if match:
+            fence = match.group(1)
+        elif line.startswith("# "):
             break
-        body.append(line if fenced else _absolute_links(line, tag, repo))
+        body.append(line if fence else _absolute_links(line, tag, repo))
 
     while body and not body[-1].strip():
         body.pop()

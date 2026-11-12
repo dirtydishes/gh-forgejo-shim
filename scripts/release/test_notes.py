@@ -61,6 +61,22 @@ class SectionTest(unittest.TestCase):
         self.assertIn("  # a comment, not a heading\n  gfj doctor", body)
         self.assertIn("## Upgrading", body)
 
+    def test_a_fence_closes_only_on_its_own_kind(self):
+        text = (
+            "# gh-forgejo-shim v1.0.0\n\n"
+            "~~~\n```\n# inside tildes\n~~~\n\n"
+            "````\n```\n# inside four backticks\n```\n````\n\n"
+            "- after\n\n# gh-forgejo-shim v0.9.0\n"
+        )
+        body = notes.section(text, "v1.0.0", REPO)
+        self.assertIn("# inside tildes", body)
+        self.assertIn("# inside four backticks", body)
+        self.assertTrue(body.endswith("- after\n"))
+
+    def test_leaves_links_in_code_blocks(self):
+        text = "# gh-forgejo-shim v1.0.0\n\n```\n[a](x.md)\n```\n"
+        self.assertIn("\n[a](x.md)\n", notes.section(text, "v1.0.0", REPO))
+
     def test_points_relative_links_at_the_tag(self):
         body = notes.section(SAMPLE, "v0.2.0", REPO)
         self.assertIn(
