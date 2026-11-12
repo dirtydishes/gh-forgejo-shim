@@ -67,9 +67,13 @@ is logged in yet; that's expected. Only its `[fix]` lines matter.
 
 **HOST** from here on is the entry in bootstrap's `repository` line,
 `[ok] repository: detected … and allowlisted HOST`. It can differ from the remote's host, such as
-when the remote uses SSH. If that line doesn't end in `and allowlisted HOST`, stop and hand over:
-gh resolves this checkout to another repository, such as a `github.com` remote or `GH_HOST`, and
-the wrapper won't send it to the forge.
+when the remote uses SSH.
+
+- If the line goes on with `; FJ_SHIM_HOSTS is set …`, that variable replaces the shim's list of
+  hosts. Tell the user HOST must be in it, or the variable unset, and ask which they want.
+- If the line has no `and allowlisted HOST` at all, stop and hand over: gh resolves this checkout
+  to another repository, such as a `github.com` remote or `GH_HOST`, and the wrapper won't send it
+  to the forge.
 
 Bootstrap ends with a list of repair commands. Handle them this way:
 
@@ -88,7 +92,9 @@ Bootstrap ends with a list of repair commands. Handle them this way:
 If bootstrap says `Codex-style restricted PATH`, it ran with the agent's PATH rather than the
 user's. Ask the user to run `gfj bootstrap` once in their own terminal, so the wrapper goes where
 their shell looks, and to paste its output to you; it holds no secrets. Use that output from here
-on, for its repair commands and for step 6.
+on, for its repair commands and for step 6. In this case `gfj doctor` in your shell keeps a
+`current PATH` `[fix]` line; for the done checks below, ask the user to run `gfj doctor` in their
+own terminal and paste its output.
 
 Done when `gfj doctor` prints no `[fix]` line except the one for auth.
 
@@ -111,15 +117,15 @@ Skip this step unless step 1 found server mode is needed.
 
 Run `gfj server check HOST`. It sends no token.
 
-- **It exits 0** and ends with `The gateway answers on HOST`: the forge serves the gateway. Log gh
-  in to the forge with the same token. With a secret tool, ask for the token through it again, as
-  a file, and run `gh auth login --hostname HOST --with-token < "$file"`. Without one, ask the
-  user to run `gh auth login --hostname HOST` in their own terminal and answer **HTTPS**, **No**
-  to logging git in with these credentials, and **Paste an authentication token**. Done when
-  `gh api --hostname HOST /meta` prints `installed_version`.
-- **Its only line is `[fix] Forgejo:`**, or it fails before checking anything: it couldn't reach
-  the forge or refused the address. Follow the sandbox rule if you're in one; otherwise show the
-  user the output, and stop and hand over if they can't fix it.
+- **It exits 0** and its last line starts with `The gateway answers on HOST`: the forge serves the
+  gateway. Log gh in to the forge with the same token. With a secret tool, ask for the token
+  through it again, as a file, and run `gh auth login --hostname HOST --with-token < "$file"`.
+  Without one, ask the user to run `gh auth login --hostname HOST` in their own terminal and answer
+  **HTTPS**, **No** to logging git in with these credentials, and **Paste an authentication
+  token**. Done when `gh api --hostname HOST /meta` prints `installed_version`.
+- **Its only `[…]` line is `[fix] Forgejo:`**, or it fails before checking anything: it couldn't
+  reach the forge or refused the address. Follow the sandbox rule if you're in one; otherwise show
+  the user the output, and stop and hand over if they can't fix it.
 - **Any other `[fix]` line:** the forge doesn't serve the gateway right yet. Ask the user whether
   they, or someone they can ask, run the forge and its reverse proxy.
   - If so, tell them what the check printed, and that whoever runs the forge sets the gateway up
