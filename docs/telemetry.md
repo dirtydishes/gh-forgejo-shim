@@ -40,19 +40,19 @@ From the gh wrapper, where Codex asked twice for a field the gateway lacks, and 
 calls failed:
 
 ```json
-{"schema":2,"version":"0.5.1","os":"macos","arch":"aarch64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"gh":"2.103","first_week":"2026-W45","unsupported":{"codex":{"graphql:Repository.projectsV2":2}},"failed":{"chatgpt":{"rest:repos.pulls":1}}}
+{"schema":2,"version":"0.6.0","os":"macos","arch":"aarch64","mode":"client","client":"codex","forge":"forgejo","forge_major":15,"gh":"2.103","first_week":"2026-W45","unsupported":{"codex":{"graphql:Repository.projectsV2":2}},"failed":{"chatgpt":{"rest:repos.pulls":1}}}
 ```
 
 From fga-server, which can't tell agents apart, so its counts are by name alone:
 
 ```json
-{"schema":2,"version":"0.5.1","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{},"failed":{"rest:repos.pulls":1}}
+{"schema":2,"version":"0.6.0","os":"linux","arch":"x86_64","mode":"server","forge":"forgejo","forge_major":15,"first_week":"2026-W45","unsupported":{},"failed":{"rest:repos.pulls":1}}
 ```
 
 | Field | Values | Where it comes from |
 |---|---|---|
 | `schema` | `2` | The report's format. 0.4.0 sends `1`, which has no `failed` and puts every agent's `unsupported` counts together, by name alone. |
-| `version` | `0.5.1` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
+| `version` | `0.6.0` | The shim's release: its numbers, and a pre-release suffix only of the form `-rc.1`, `-beta.1` or `-alpha.1`. Any other text in a custom build's version is dropped. |
 | `os` | `macos`, `linux`, `other` | The build. |
 | `arch` | `x86_64`, `aarch64`, `other` | The build. |
 | `mode` | `client`, `server` | The gh wrapper, or fga-server. |
