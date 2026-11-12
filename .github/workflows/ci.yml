@@ -71,6 +71,9 @@ jobs:
       - name: Test the capture tools
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/capture -p 'test_*.py' -v
 
+      - name: Test the release notes script
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
+
       # Prints where a finding is, never its text.
       - name: Check committed captures for anything identifying
         run: python3 scripts/capture/leaks.py fixtures/clients
