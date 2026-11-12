@@ -136,6 +136,13 @@ pub(crate) fn check(client: &ForgejoClient, origin: &str, host: &str) -> Vec<Fin
             Some(version) if answer.status == 200 => {
                 Finding::ok(forgejo, format!("version {version}"))
             }
+            // The gateway refuses every request without a token, Forgejo's own routes too when
+            // the proxy sends the whole site to it.
+            None if answer.status == 401 && gateway_shaped(&answer.body) => Finding::fix(
+                forgejo,
+                "/api/v1/version reaches the gateway, not Forgejo; send only the gateway's routes \
+                 to it",
+            ),
             // A forge that requires sign-in may hide its version from a request without a token.
             None if matches!(answer.status, 401 | 403) => Finding::new(
                 forgejo,
@@ -516,6 +523,23 @@ mod tests {
             "{output}"
         );
         assert!(output.contains("[ok] REST API"), "{output}");
+    }
+
+    #[test]
+    fn a_proxy_that_sends_the_whole_site_to_the_gateway_fails() {
+        let (origin, _) = stand_in({
+            let mut routes = gateway();
+            routes[0] = ("GET /api/v1/version", 401, "", UNAUTHORIZED);
+            routes
+        });
+
+        let (code, output) = run_against(&origin);
+
+        assert_eq!(code, 1, "{output}");
+        assert!(
+            output.contains("[fix] Forgejo: /api/v1/version reaches the gateway, not Forgejo"),
+            "{output}"
+        );
     }
 
     #[test]
