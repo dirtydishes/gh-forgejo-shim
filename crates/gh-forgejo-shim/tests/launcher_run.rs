@@ -2253,8 +2253,9 @@ ask >> "$REPORT""#,
 
 /// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
 /// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
-/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com. gh drops that remote, so
-/// the wrapper reads it under its own host and hands gh the repository in `GH_REPO`.
+/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com, unless `SSH_AS_WRITTEN` is
+/// set. gh drops that remote, so the wrapper reads it under its own host and hands gh the
+/// repository in `GH_REPO`.
 struct RenamedFixture {
     fixture: Fixture,
     gh: PathBuf,
@@ -2269,7 +2270,8 @@ impl RenamedFixture {
         let ssh = bin.join("ssh");
         fs::write(
             &ssh,
-            "#!/bin/sh\ncase \"$3\" in forge.test|git@forge.test|www.forge.test|git@www.forge.test) \
+            "#!/bin/sh\n[ -n \"$SSH_AS_WRITTEN\" ] && { echo \"hostname ${3#*@}\"; exit 0; }\n\
+             case \"$3\" in forge.test|git@forge.test|www.forge.test|git@www.forge.test) \
              echo 'hostname 192.0.2.10' ;; hub-alias.test|git@hub-alias.test) \
              echo 'hostname github.com' ;; *) echo \"hostname $3\" ;; esac\n",
         )
@@ -2448,6 +2450,20 @@ fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create() {
         &[],
         "remote origin pushes to 192.0.2.10, not forge.test",
     );
+    // A `www.` remote no `HostName` renames keeps the push check as it was before #334.
+    for (remote, ssh) in [
+        ("https://www.forge.test/o/r.git", None),
+        ("git@www.forge.test:o/r.git", Some(("SSH_AS_WRITTEN", "1"))),
+    ] {
+        let plain = RenamedFixture::new(remote);
+        plain
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: https\n");
+        plain.ran(
+            &["pr", "create", "--title", "t", "--body", "b"],
+            &ssh.into_iter().collect::<Vec<_>>(),
+        );
+    }
 }
 
 /// A forge remote under its own name counts as a forge in reach, as it would without the
