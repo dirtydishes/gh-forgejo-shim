@@ -2254,9 +2254,10 @@ ask >> "$REPORT""#,
 /// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
 /// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
 /// without a user, to 192.0.2.10, and `hub-alias.test` to github.com, unless `SSH_AS_WRITTEN`
-/// (every host as written) or `SSH_ADD_WWW` (every host with `www.` added) is set.
-/// `SSH_USER_AS_WRITTEN=1` leaves `user@host` lookups as written, as a `Match user` rule can. gh drops that remote, so the wrapper reads it under its own host and hands gh the
-/// repository in `GH_REPO`.
+/// (every host as written) or `SSH_ADD_WWW` (every host with `www.` added) is set. gh drops the
+/// renamed remote, so the wrapper reads it under its own host and hands gh the repository in
+/// `GH_REPO`. `SSH_USER_AS_WRITTEN=1` leaves `user@host` lookups as written, as a `Match user`
+/// rule can.
 struct RenamedFixture {
     fixture: Fixture,
     gh: PathBuf,
