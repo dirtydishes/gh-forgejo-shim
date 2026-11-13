@@ -776,8 +776,11 @@ pub(crate) fn push_leaves(
     // A remote counts as the forge's when git fetches from it there, or when its URL names the
     // forge and `ssh -G` sends it elsewhere: routing reads such a remote under its own host
     // (`detect_repo_by_own_host`), but git pushes where SSH resolves it.
+    // The host as gh reads it, a leading `www.` dropped (`gh_repo`).
     let names_forge = |raw: &str| {
-        GitUrl::parse(raw).is_some_and(|url| gh_hostname(&url.host).eq_ignore_ascii_case(&hostname))
+        GitUrl::parse(raw).is_some_and(|url| {
+            gh_hostname(url.host.strip_prefix("www.").unwrap_or(&url.host)) == hostname
+        })
     };
     for (name, url) in push {
         let on_forge = fetch.get(&name).is_some_and(|fetch| {

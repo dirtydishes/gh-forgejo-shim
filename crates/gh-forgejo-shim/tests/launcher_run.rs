@@ -2438,6 +2438,16 @@ fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create() {
         &[],
         "remote origin pushes to 192.0.2.10, not forge.test",
     );
+    // gh drops a leading `www.` from a remote's host, so this remote routes to forge.test too.
+    let renamed = RenamedFixture::new("ssh://git@www.forge.test/o/r.git");
+    renamed
+        .fixture
+        .user_hosts("forge.test:\n    git_protocol: https\n");
+    renamed.refused(
+        &["pr", "create", "--title", "t", "--body", "b"],
+        &[],
+        "remote origin pushes to 192.0.2.10, not forge.test",
+    );
 }
 
 /// A forge remote under its own name counts as a forge in reach, as it would without the
