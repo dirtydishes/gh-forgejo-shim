@@ -2254,7 +2254,8 @@ ask >> "$REPORT""#,
 /// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
 /// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
 /// without a user, to 192.0.2.10, and `hub-alias.test` to github.com, unless `SSH_AS_WRITTEN`
-/// (every host as written) or `SSH_ADD_WWW` (every host with `www.` added) is set. gh drops that remote, so the wrapper reads it under its own host and hands gh the
+/// (every host as written) or `SSH_ADD_WWW` (every host with `www.` added) is set.
+/// `SSH_USER_AS_WRITTEN=1` leaves `user@host` lookups as written, as a `Match user` rule can. gh drops that remote, so the wrapper reads it under its own host and hands gh the
 /// repository in `GH_REPO`.
 struct RenamedFixture {
     fixture: Fixture,
@@ -2272,6 +2273,7 @@ impl RenamedFixture {
             &ssh,
             "#!/bin/sh\n[ -n \"$SSH_AS_WRITTEN\" ] && { echo \"hostname ${3#*@}\"; exit 0; }\n\
              [ -n \"$SSH_ADD_WWW\" ] && { echo \"hostname www.${3#*@}\"; exit 0; }\n\
+             case \"$SSH_USER_AS_WRITTEN$3\" in 1*@*) echo \"hostname ${3#*@}\"; exit 0 ;; esac\n\
              case \"$3\" in forge.test|git@forge.test|www.forge.test|git@www.forge.test) \
              echo 'hostname 192.0.2.10' ;; hub-alias.test|git@hub-alias.test) \
              echo 'hostname github.com' ;; *) echo \"hostname $3\" ;; esac\n",
@@ -2450,6 +2452,22 @@ fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create() {
         &["pr", "create", "--title", "t", "--body", "b"],
         &[],
         "remote origin pushes to 192.0.2.10, not forge.test",
+    );
+    // A `Match user` rule can leave `ssh -G git@host` as written while the bare host, which
+    // routing reads, is renamed: the remote is still the forge's, and its push is judged.
+    let renamed = RenamedFixture::new("git@www.forge.test:o/r.git");
+    renamed.git(&[
+        "config",
+        "remote.origin.pushurl",
+        "git@elsewhere.test:o/r.git",
+    ]);
+    renamed
+        .fixture
+        .user_hosts("forge.test:\n    git_protocol: https\n");
+    renamed.refused(
+        &["pr", "create", "--title", "t", "--body", "b"],
+        &[("SSH_USER_AS_WRITTEN", "1")],
+        "remote origin pushes to elsewhere.test, not forge.test",
     );
     // A `www.` remote no `HostName` renames keeps the push check as it was before #334, and so
     // does a `HostName` that only adds `www.`, which gh reads as the same host.
