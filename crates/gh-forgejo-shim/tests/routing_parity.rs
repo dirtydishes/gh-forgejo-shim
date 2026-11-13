@@ -73,6 +73,10 @@ struct Case {
     /// The allowlist entry the wrapper routes to, or `None` when it delegates.
     route: Option<&'static str>,
     keys: Keys,
+    /// gh can't see the remote the wrapper chose, as `ssh -G` renames its host to one gh doesn't
+    /// know, so the wrapper hands the launched gh the repository in `GH_REPO`, and says so in its
+    /// route reason. Real gh is checked with that `GH_REPO`.
+    pinned: bool,
 }
 
 const BASE: Case = Case {
@@ -90,7 +94,11 @@ const BASE: Case = Case {
     expected: None,
     route: None,
     keys: Keys::Shim,
+    pinned: false,
 };
+
+/// A forge that `ssh -G` sends to `192.0.2.10`.
+const TUNNEL: &str = "tunnel.test";
 
 const ORIGIN_FORGE: (&str, &str, Option<&str>) =
     ("origin", "https://forge.test/local/project.git", None);
@@ -321,6 +329,56 @@ const CASES: &[Case] = &[
         remotes: &[("origin", "git@forge-alias:owner/repo.git", None)],
         expected: Some((FORGE, "owner", "repo")),
         route: Some(FORGE),
+        ..BASE
+    },
+    // #334: SSH reaches the forge through another `HostName`, such as a VPN address. gh drops the
+    // remote, since it knows no such host, so the wrapper reads it under its own host and hands the
+    // launched gh the repository.
+    Case {
+        name: "an allowlisted forge that ssh -G sends to an unknown host keeps its own name",
+        remotes: &[("origin", "ssh://git@tunnel.test:2222/owner/repo.git", None)],
+        allowlist: TUNNEL,
+        expected: Some((TUNNEL, "owner", "repo")),
+        route: Some(TUNNEL),
+        pinned: true,
+        ..BASE
+    },
+    Case {
+        name: "a renamed forge upstream still outranks a GitHub origin",
+        remotes: &[
+            ("origin", "https://github.com/me/fork.git", None),
+            ("upstream", "git@tunnel.test:up/stream.git", None),
+        ],
+        gh_hosts: &[GITHUB],
+        allowlist: TUNNEL,
+        expected: Some((TUNNEL, "up", "stream")),
+        route: Some(TUNNEL),
+        pinned: true,
+        ..BASE
+    },
+    Case {
+        name: "a renamed forge remote keeps gh repo set-default",
+        remotes: &[
+            ("origin", "git@tunnel.test:owner/repo.git", None),
+            ("upstream", "git@tunnel.test:up/stream.git", None),
+        ],
+        resolved: &[("origin", "base")],
+        allowlist: TUNNEL,
+        expected: Some((TUNNEL, "owner", "repo")),
+        route: Some(TUNNEL),
+        pinned: true,
+        ..BASE
+    },
+    Case {
+        name: "a renamed remote whose own host isn't allowlisted stays dropped",
+        remotes: &[("origin", "git@tunnel.test:owner/repo.git", None)],
+        ..BASE
+    },
+    Case {
+        name: "a remote ssh -G sends to a host gh knows stays on that host",
+        remotes: &[("origin", "git@hub-alias.test:owner/repo.git", None)],
+        allowlist: "hub-alias.test",
+        expected: Some((GITHUB, "owner", "repo")),
         ..BASE
     },
     Case {
@@ -761,7 +819,15 @@ fn wrapper_matches_table() -> TestResult {
             .as_str()
             .is_some_and(|reason| reason.ends_with("user's gh hosts"));
         let keys_match = case.route.is_none() || user_keys == (case.keys == Keys::User);
-        if actual != owned(case.expected) || route.as_deref() != case.route || !keys_match {
+        // Routing names the host `ssh -G` gave when it reads a remote under its own host.
+        let pinned = trace["route"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("ssh -G resolves"));
+        if actual != owned(case.expected)
+            || route.as_deref() != case.route
+            || !keys_match
+            || pinned != case.pinned
+        {
             failures.push(format!(
                 "{}: expected {:?} routed to {:?}, wrapper chose {actual:?} routed to {route:?} \
                  (reason {})",
@@ -789,8 +855,22 @@ fn real_gh_matches_table() -> TestResult {
     let mut failures = Vec::new();
     for case in CASES {
         let fixture = Fixture::new(case)?;
+        if case.pinned {
+            // gh drops the remote itself, so the launched gh finds the repository only in GH_REPO.
+            let unpinned = fixture.real_gh_target(&gh, case, case.keys, None)?;
+            if unpinned == owned(case.expected) {
+                failures.push(format!(
+                    "{}: gh chose {unpinned:?} without GH_REPO, so the wrapper needn't pin it",
+                    case.name
+                ));
+            }
+        }
         if case.route.is_some() {
-            let actual = fixture.real_gh_target(&gh, case, case.keys)?;
+            let gh_repo = case
+                .expected
+                .filter(|_| case.pinned)
+                .map(|(host, owner, name)| format!("{host}/{owner}/{name}"));
+            let actual = fixture.real_gh_target(&gh, case, case.keys, gh_repo.as_deref())?;
             let matches = if case.host_only {
                 actual.as_ref().map(|(host, _, _)| host.as_str())
                     == case.expected.map(|(host, _, _)| host)
@@ -805,7 +885,7 @@ fn real_gh_matches_table() -> TestResult {
             }
         } else {
             // The model the wrapper delegated on must still be gh's own choice...
-            let modelled = fixture.real_gh_target(&gh, case, Keys::Shim)?;
+            let modelled = fixture.real_gh_target(&gh, case, Keys::Shim, None)?;
             let matches = if case.host_only {
                 modelled.as_ref().map(|(host, _, _)| host.as_str())
                     == case.expected.map(|(host, _, _)| host)
@@ -819,7 +899,7 @@ fn real_gh_matches_table() -> TestResult {
                 ));
             }
             // ...and plain gh, which the call goes to, must not land on a served Forgejo host.
-            let plain = fixture.real_gh_target(&gh, case, Keys::User)?;
+            let plain = fixture.real_gh_target(&gh, case, Keys::User, None)?;
             if let Some((host, _, _)) = &plain {
                 if served(host, case.allowlist) {
                     failures.push(format!(
@@ -870,11 +950,13 @@ impl Fixture {
             fs::create_dir_all(dir)?;
         }
         executable(&bin.join("real-gh"), "#!/bin/sh\nexit 0\n")?;
-        // `ssh -G [--] HOST`: `forge-alias` resolves to forge.test, anything else to itself.
+        // `ssh -G [--] HOST`: `forge-alias` resolves to forge.test, `tunnel.test` to 192.0.2.10,
+        // `hub-alias.test` to github.com, anything else to itself.
         executable(
             &bin.join("ssh"),
             "#!/bin/sh\n[ \"$1\" = -G ] || exit 1\nshift\n[ \"$1\" = -- ] && shift\n\
-             case \"$1\" in forge-alias) host=forge.test ;; *) host=\"$1\" ;; esac\n\
+             case \"$1\" in forge-alias) host=forge.test ;; tunnel.test) host=192.0.2.10 ;;\n\
+             hub-alias.test) host=github.com ;; *) host=\"$1\" ;; esac\n\
              printf 'user git\\nhostname %s\\nport 22\\n' \"$host\"\n",
         )?;
         // Reuse the installed git binary, but never a wrapper script found on PATH.
@@ -1000,6 +1082,7 @@ impl Fixture {
         gh: &Path,
         case: &Case,
         keys: Keys,
+        gh_repo: Option<&str>,
     ) -> io::Result<Option<(String, String, String)>> {
         let mut hosts = case.gh_hosts.to_vec();
         if keys == Keys::Shim {
@@ -1031,6 +1114,9 @@ impl Fixture {
             .env("GH_TELEMETRY", "0")
             .env("GH_NO_UPDATE_NOTIFIER", "1")
             .envs(case.env.iter().copied());
+        if let Some(gh_repo) = gh_repo {
+            command.env("GH_REPO", gh_repo);
+        }
         let output = run(&mut command)?;
         let log = String::from_utf8_lossy(&output.stderr);
         let mut requests = log

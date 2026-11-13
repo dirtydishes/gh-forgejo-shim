@@ -2250,3 +2250,260 @@ ask >> "$REPORT""#,
         );
     }
 }
+
+/// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
+/// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
+/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com, unless `SSH_AS_WRITTEN`
+/// (every host as written) or `SSH_ADD_WWW` (every host with `www.` added) is set. gh drops the
+/// renamed remote, so the wrapper reads it under its own host and hands gh the repository in
+/// `GH_REPO`. `SSH_USER_AS_WRITTEN=1` leaves `user@host` lookups as written, as a `Match user`
+/// rule can.
+struct RenamedFixture {
+    fixture: Fixture,
+    gh: PathBuf,
+    path: String,
+}
+
+impl RenamedFixture {
+    fn new(remote: &str) -> Self {
+        let fixture = Fixture::new("http://127.0.0.1:9");
+        let bin = fixture.dir.join("bin");
+        fs::create_dir_all(&bin).expect("bin");
+        let ssh = bin.join("ssh");
+        fs::write(
+            &ssh,
+            "#!/bin/sh\n[ -n \"$SSH_AS_WRITTEN\" ] && { echo \"hostname ${3#*@}\"; exit 0; }\n\
+             [ -n \"$SSH_ADD_WWW\" ] && { echo \"hostname www.${3#*@}\"; exit 0; }\n\
+             case \"$SSH_USER_AS_WRITTEN$3\" in 1*@*) echo \"hostname ${3#*@}\"; exit 0 ;; esac\n\
+             case \"$3\" in forge.test|git@forge.test|www.forge.test|git@www.forge.test) \
+             echo 'hostname 192.0.2.10' ;; hub-alias.test|git@hub-alias.test) \
+             echo 'hostname github.com' ;; *) echo \"hostname $3\" ;; esac\n",
+        )
+        .expect("fake ssh");
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let gh = fixture.fake_gh(
+            r#"for name in GH_REPO GH_HOST GH_CONFIG_DIR FJ_SHIM_SAVED; do
+  eval "printf '%s=%s\n' $name \"\${$name-unset}\""
+done > "$REPORT""#,
+        );
+        let renamed = Self {
+            path: format!("{}:/usr/bin:/bin", bin.display()),
+            fixture,
+            gh,
+        };
+        renamed.git(&["init", "-q"]);
+        renamed.git(&["remote", "add", "origin", remote]);
+        renamed
+    }
+
+    fn git(&self, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&self.fixture.dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &self.fixture.home)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+
+    fn run(&self, args: &[&str], extra: &[(&str, &str)]) -> Output {
+        let _ = fs::remove_file(self.fixture.dir.join("report"));
+        let mut command = self.fixture.command(&self.gh, args);
+        command.env("PATH", &self.path);
+        for (name, value) in extra {
+            command.env(name, value);
+        }
+        command.output().expect("run wrapper")
+    }
+
+    /// The launched or stepped-aside gh's report, after checking it ran.
+    fn ran(&self, args: &[&str], extra: &[(&str, &str)]) -> String {
+        let output = self.run(args, extra);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let report = self.fixture.report();
+        assert!(!report.is_empty(), "{args:?}: gh ran");
+        report
+    }
+
+    fn refused(&self, args: &[&str], extra: &[(&str, &str)], why: &str) {
+        let output = self.run(args, extra);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(why),
+            "{args:?}: {output:?}"
+        );
+        assert_eq!(self.fixture.report(), "", "{args:?}: gh never ran");
+    }
+}
+
+#[test]
+fn a_forge_ssh_sends_elsewhere_launches_with_its_repository() {
+    let _serial = serial();
+    for remote in [
+        "ssh://git@forge.test:2222/o/r.git",
+        "git@forge.test:o/r.git",
+        // An `insteadOf` rule that sends the forge's HTTPS URLs over SSH, as `git remote -v` shows.
+        "https://forge.test/o/r.git",
+    ] {
+        let renamed = RenamedFixture::new(remote);
+        renamed.git(&[
+            "config",
+            "url.ssh://git@forge.test:2222/.insteadOf",
+            "https://forge.test/",
+        ]);
+        for args in [&["pr", "list"][..], &["pr", "view", "1"]] {
+            let report = renamed.ran(args, &[]);
+            assert_ne!(
+                reported(&report, "GH_CONFIG_DIR"),
+                "unset",
+                "{remote} {args:?}: launched"
+            );
+            assert_eq!(
+                reported(&report, "GH_REPO"),
+                "forge.test/o/r",
+                "{remote} {args:?}"
+            );
+            assert!(
+                reported(&report, "FJ_SHIM_SAVED").contains("GH_REPO"),
+                "{remote} {args:?}: recorded for nested calls: {report}"
+            );
+        }
+        // A host-less `gh api` goes to the forge, not github.com: a form the launcher serves
+        // launches with the forge as gh's default host (decision 4)...
+        // gh refuses `{branch}` whenever GH_REPO is set, so a call gets it only when it uses
+        // `{owner}` or `{repo}`, the placeholders gh fills from the base repository.
+        let report = renamed.ran(&["api", "graphql", "-f", "query={viewer{login}}"], &[]);
+        assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{remote}");
+        assert_eq!(reported(&report, "GH_REPO"), "unset", "{remote}");
+        let report = renamed.ran(
+            &[
+                "api",
+                "graphql",
+                "-F",
+                "owner={owner}",
+                "-f",
+                "query=query($owner:String!){repositoryOwner(login:$owner){login}}",
+            ],
+            &[],
+        );
+        assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{remote}");
+        assert_eq!(reported(&report, "GH_REPO"), "forge.test/o/r", "{remote}");
+        // ...and one it doesn't stays on the built-in path for the forge; plain gh never runs.
+        let trace = renamed.fixture.dir.join("trace.jsonl");
+        let output = renamed.run(
+            &["api", "repos/o/r"],
+            &[("FJ_SHIM_TRACE", trace.to_str().expect("path"))],
+        );
+        assert_eq!(renamed.fixture.report(), "", "{remote}: {output:?}");
+        let record = fs::read_to_string(&trace).unwrap_or_default();
+        let record: serde_json::Value =
+            serde_json::from_str(record.lines().last().unwrap_or("{}")).expect("json");
+        assert_eq!(record["route"]["kind"], "forgejo", "{remote}: {record}");
+        assert_eq!(record["host"], "forge.test", "{remote}: {record}");
+    }
+}
+
+#[test]
+fn a_forge_ssh_sends_elsewhere_steps_aside_with_its_repository() {
+    let _serial = serial();
+    let renamed = RenamedFixture::new("ssh://git@forge.test:2222/o/r.git");
+    renamed.fixture.user_hosts(FORGE_LOGIN);
+    // A launched form, and one the built-in path would serve.
+    for args in [&["pr", "view", "1"][..], &["search", "prs", "foo"]] {
+        let report = renamed.ran(args, &[]);
+        assert_eq!(
+            reported(&report, "GH_CONFIG_DIR"),
+            "unset",
+            "{args:?}: stepped aside"
+        );
+        assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{args:?}");
+        assert_eq!(reported(&report, "GH_REPO"), "forge.test/o/r", "{args:?}");
+    }
+    // The user's own GH_REPO wins, as it does for gh, and the wrapper leaves it alone.
+    let report = renamed.ran(&["pr", "view", "1"], &[("GH_REPO", "forge.test/o/other")]);
+    assert_eq!(reported(&report, "GH_REPO"), "forge.test/o/other");
+    assert!(
+        !reported(&report, "FJ_SHIM_SAVED").contains("GH_REPO"),
+        "{report}"
+    );
+}
+
+/// The remote reaches the forge's API under its own name, but git pushes to the address SSH
+/// resolves: `gh pr create` stays refused (#255), whichever way gh would push.
+#[test]
+fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create() {
+    let _serial = serial();
+    let renamed = RenamedFixture::new("ssh://git@forge.test:2222/o/r.git");
+    renamed
+        .fixture
+        .user_hosts("forge.test:\n    git_protocol: https\n");
+    renamed.refused(
+        &["pr", "create", "--title", "t", "--body", "b"],
+        &[],
+        "remote origin pushes to 192.0.2.10, not forge.test",
+    );
+    // gh drops a leading `www.` from a remote's host, so this remote routes to forge.test too.
+    let renamed = RenamedFixture::new("ssh://git@www.forge.test/o/r.git");
+    renamed
+        .fixture
+        .user_hosts("forge.test:\n    git_protocol: https\n");
+    renamed.refused(
+        &["pr", "create", "--title", "t", "--body", "b"],
+        &[],
+        "remote origin pushes to 192.0.2.10, not forge.test",
+    );
+    // A `Match user` rule can leave `ssh -G git@host` as written while the bare host, which
+    // routing reads, is renamed: the remote is still the forge's, and its push is judged.
+    let renamed = RenamedFixture::new("git@www.forge.test:o/r.git");
+    renamed.git(&[
+        "config",
+        "remote.origin.pushurl",
+        "git@elsewhere.test:o/r.git",
+    ]);
+    renamed
+        .fixture
+        .user_hosts("forge.test:\n    git_protocol: https\n");
+    renamed.refused(
+        &["pr", "create", "--title", "t", "--body", "b"],
+        &[("SSH_USER_AS_WRITTEN", "1")],
+        "remote origin pushes to elsewhere.test, not forge.test",
+    );
+    // A `www.` remote no `HostName` renames keeps the push check as it was before #334, and so
+    // does a `HostName` that only adds `www.`, which gh reads as the same host.
+    for (remote, ssh) in [
+        ("https://www.forge.test/o/r.git", None),
+        ("git@www.forge.test:o/r.git", Some(("SSH_AS_WRITTEN", "1"))),
+        ("git@forge.test:o/r.git", Some(("SSH_ADD_WWW", "1"))),
+    ] {
+        let plain = RenamedFixture::new(remote);
+        plain
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: https\n");
+        plain.ran(
+            &["pr", "create", "--title", "t", "--body", "b"],
+            &ssh.into_iter().collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// A forge remote under its own name counts as a forge in reach, as it would without the
+/// `HostName`: off the delegate list, a call routed elsewhere is refused, not run by plain gh.
+#[test]
+fn a_forge_ssh_sends_elsewhere_is_in_reach() {
+    let _serial = serial();
+    let renamed = RenamedFixture::new("ssh://git@forge.test:2222/o/r.git");
+    renamed.refused(
+        &["release", "list"],
+        &[("GH_HOST", "github.com")],
+        "a Forgejo host is in reach",
+    );
+    // A remote `ssh -G` sends to a host gh knows is that host's, as for gh: an allowlisted SSH
+    // alias of github.com doesn't put a forge in reach.
+    let alias = RenamedFixture::new("git@hub-alias.test:o/r.git");
+    alias.fixture.allowlist(&["hub-alias.test"]);
+    let report = alias.ran(&["release", "list"], &[]);
+    assert_eq!(reported(&report, "GH_CONFIG_DIR"), "unset", "plain gh ran");
+    assert_eq!(reported(&report, "GH_REPO"), "unset");
+}

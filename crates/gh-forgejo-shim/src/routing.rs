@@ -11,7 +11,7 @@ use crate::external::{find_program, run_program_capture};
 use crate::invocation::Invocation;
 use crate::read_only;
 use crate::repo::{
-    command_word, detect_repo, expand_alias, gh_command_word, gh_hostname,
+    command_word, detect_repo, detect_repo_by_own_host, expand_alias, gh_command_word, gh_hostname,
     user_gh_aliases_unreadable, user_gh_config_dir, user_gh_hosts_unreadable, Checkout, GhHosts,
     RepoRef,
 };
@@ -72,6 +72,9 @@ pub struct RouteDecision {
     pub reason: String,
     pub repo: Option<RepoRef>,
     pub host: Option<String>,
+    /// `HOST/OWNER/REPO` for gh's `GH_REPO`, when routing chose a remote gh drops itself (#334):
+    /// the launched or stepped-aside gh would otherwise find no repository.
+    pub gh_repo: Option<String>,
 }
 
 impl RouteDecision {
@@ -81,6 +84,7 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host: None,
+            gh_repo: None,
         }
     }
 
@@ -91,6 +95,7 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host: None,
+            gh_repo: None,
         }
     }
 
@@ -100,6 +105,7 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host,
+            gh_repo: None,
         }
     }
 
@@ -330,7 +336,7 @@ fn forgejo_in_reach(
         || gh_repo(&GhHosts::load(env, &config.hosts))
         || gh_repo(&GhHosts::user(env))
         || Checkout::new(cwd)
-            .remote_hosts()
+            .remote_hosts(&GhHosts::load(env, &config.hosts))
             .any(|host| config.forgejo_host(host).is_some())
 }
 
@@ -365,11 +371,14 @@ fn route_by_target(
         }
     }
     let checkout = Checkout::new(cwd);
-    let detection = detect_repo(
+    // A forge remote that `ssh -G` sends to a host gh doesn't know, such as a VPN address, counts
+    // under its own name, as it would without that `HostName` (#334).
+    let detection = detect_repo_by_own_host(
         invocation,
         env,
         &checkout,
         &GhHosts::load(env, &config.hosts),
+        &|host| config.forgejo_host(host).is_some(),
     );
     // A launched gh knows the user's hosts plus the allowlist hosts, so routing models that.
     // Plain gh knows only the user's hosts. Before delegating, check that plain gh wouldn't pick a
@@ -410,7 +419,47 @@ fn route_by_target(
             Some(repo),
         );
     };
-    RouteDecision::forgejo(detection.source, Some(repo), Some(host))
+    let Some(ssh_hostname) = detection.ssh_hostname else {
+        return RouteDecision::forgejo(detection.source, Some(repo), Some(host));
+    };
+    // gh drops this remote, so it gets the repository the wrapper chose in `GH_REPO`, as for
+    // `-R HOST/OWNER/REPO`. The host has no port, as gh reads a remote's. `gh api` reads the
+    // repository only for its `{owner}` and `{repo}` placeholders, and refuses `{branch}` whenever
+    // `GH_REPO` is set (`gh/pkg/cmd/api/api.go` `fillPlaceholders`), so it gets one only then.
+    let gh_repo = (invocation.command != "api" || uses_repo_placeholder(invocation))
+        .then(|| format!("{}/{}/{}", repo.host, repo.owner, repo.name));
+    RouteDecision {
+        gh_repo,
+        ..RouteDecision::forgejo(
+            format!(
+                "{}, under its own host: ssh -G resolves {} to {ssh_hostname}",
+                detection.source, repo.host
+            ),
+            Some(repo),
+            Some(host),
+        )
+    }
+}
+
+/// Whether any argument or flag value holds one of the placeholders gh's `api` fills from the base
+/// repository: `{owner}`, `{repo}`, `:owner` or `:repo` (`placeholderRE` in
+/// `gh/pkg/cmd/api/api.go`). A false match only costs the `{branch}` placeholder.
+fn uses_repo_placeholder(invocation: &Invocation) -> bool {
+    invocation
+        .positionals
+        .iter()
+        .chain(invocation.flags.values().flatten())
+        .any(|word| {
+            ["{owner}", "{repo}"].iter().any(|name| word.contains(name))
+                || word.match_indices(':').any(|(at, _)| {
+                    let rest = &word[at + 1..];
+                    ["owner", "repo"].iter().any(|name| {
+                        rest.strip_prefix(name).is_some_and(|after| {
+                            !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                        })
+                    })
+                })
+        })
 }
 
 /// The spec's delegate list (launcher §2): commands that call no API, or that write gh's own
@@ -674,7 +723,7 @@ fn launch_listed(
         return crate::launcher::start::launch(
             host,
             routed,
-            &decision.reason,
+            decision,
             argv,
             env,
             config.real_gh.as_deref(),
@@ -982,6 +1031,7 @@ fn step_aside_logged_in(
         }
         return crate::launcher::start::step_aside_if_logged_in(
             host,
+            decision.gh_repo.as_deref(),
             argv,
             env,
             config.real_gh.as_deref(),
@@ -1644,5 +1694,31 @@ mod tests {
 
         assert_eq!(decision.kind, RouteKind::Forgejo);
         assert_eq!(decision.reason, "GH_REPO");
+    }
+
+    #[test]
+    fn api_repo_placeholders_match_as_gh_s_pattern_does() {
+        let uses = |args: &[&str]| uses_repo_placeholder(&Invocation::parse(&argv(args)));
+        for args in [
+            &["api", "repos/{owner}/{repo}/pulls"][..],
+            &["api", "repos/:owner/:repo"],
+            &["api", "graphql", "-F", "name={repo}"],
+            &["api", "repos/:owner/x"],
+        ] {
+            assert!(uses(args), "{args:?}");
+        }
+        for args in [
+            &["api", "repos/o/r/branches/{branch}"][..],
+            &[
+                "api",
+                "graphql",
+                "-f",
+                "query=query($owner:String!){x(owner:$owner){id}}",
+            ],
+            &["api", "repos/:owners/x"],
+            &["api", "user"],
+        ] {
+            assert!(!uses(args), "{args:?}");
+        }
     }
 }

@@ -228,6 +228,22 @@ doesn't serve. Server mode redirects them; for client-only installs, add the red
 - In a Forgejo checkout, `gh pr create` checks where git will push before it runs. The check is best
   effort: a few unusual git or SSH setups can still send the push to another host
   ([#255](https://github.com/dirtydishes/gh-forgejo-shim/issues/255)).
+- When your SSH config sends the forge's name to another address, such as a VPN address for a forge
+  whose proxy doesn't carry SSH, gh reads the checkout's remote as that address and skips it. The
+  wrapper reads the remote under the forge's own name and hands gh the repository, but gh still
+  looks up the current branch's remote itself, so commands that find a pull request from the branch,
+  such as `gh pr view` or `gh pr checks` with no number, fail; name the pull request instead. `gh pr
+  create` fails the same way unless given `--head`. gh without the wrapper, as in server mode, skips
+  the remote, and `gfj doctor` warns. `gh pr create` is refused whenever git would push to that
+  address ([#334](https://github.com/dirtydishes/gh-forgejo-shim/issues/334)). To keep the forge's
+  name, connect through a proxy command instead of `HostName`, then copy the host key line that
+  `known_hosts` holds for the address and name it `[forge.example.com]:2222`:
+
+  ```
+  Host forge.example.com
+      Port 2222
+      ProxyCommand nc 192.0.2.10 %p
+  ```
 
 ## Doctor
 

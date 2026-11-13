@@ -33,6 +33,10 @@ impl RepoRef {
 pub struct Detection {
     pub repo: Option<RepoRef>,
     pub source: String,
+    /// The host `ssh -G` gives for the remote `repo` came from, when [`detect_repo_by_own_host`]
+    /// read that remote under its own host instead. gh drops such a remote, so it can't find
+    /// `repo` itself.
+    pub ssh_hostname: Option<String>,
 }
 
 impl Detection {
@@ -40,6 +44,7 @@ impl Detection {
         Self {
             repo: Some(repo),
             source: source.to_string(),
+            ssh_hostname: None,
         }
     }
 
@@ -47,6 +52,7 @@ impl Detection {
         Self {
             repo: None,
             source: "unknown".to_string(),
+            ssh_hostname: None,
         }
     }
 }
@@ -177,11 +183,18 @@ impl<'a> Checkout<'a> {
         self.remotes.get_or_init(|| git_remotes(self.cwd))
     }
 
-    /// Every remote's host, whichever one a command would pick.
-    pub fn remote_hosts(&self) -> impl Iterator<Item = &str> {
-        self.remotes()
-            .iter()
-            .map(|remote| remote.repo.host.as_str())
+    /// Every remote's host, whichever one a command would pick, and an SSH remote's own host
+    /// where `ssh -G` gives one `hosts` doesn't know, as [`detect_repo_by_own_host`] reads it.
+    pub fn remote_hosts<'h>(&'h self, hosts: &'h GhHosts) -> impl Iterator<Item = &'h str> {
+        self.remotes().iter().flat_map(move |remote| {
+            std::iter::once(remote.repo.host.as_str()).chain(
+                remote
+                    .own
+                    .as_ref()
+                    .filter(|_| !hosts.knows(&remote.repo.host))
+                    .map(|own| own.host.as_str()),
+            )
+        })
     }
 
     /// The remote to fetch a repository from, as gh's `FindByRepo` picks it (`gh/context/remote.go`):
@@ -215,6 +228,20 @@ pub fn detect_repo(
     env: &HashMap<String, String>,
     checkout: &Checkout<'_>,
     hosts: &GhHosts,
+) -> Detection {
+    detect_repo_by_own_host(invocation, env, checkout, hosts, &|_| false)
+}
+
+/// As [`detect_repo`], but an SSH remote whose host `ssh -G` turns into one `hosts` doesn't know,
+/// which gh drops, counts under its own host when `own` accepts that host: a forge that SSH
+/// reaches through a `HostName` such as a VPN address (#334). gh can't find a repository chosen
+/// so; the detection's `ssh_hostname` says when, and the caller must hand gh the repository.
+pub fn detect_repo_by_own_host(
+    invocation: &Invocation,
+    env: &HashMap<String, String>,
+    checkout: &Checkout<'_>,
+    hosts: &GhHosts,
+    own: &dyn Fn(&str) -> bool,
 ) -> Detection {
     // Routing expands a plain alias before parsing (`expand_alias`), so this is gh's command.
     let group = invocation
@@ -259,10 +286,25 @@ pub fn detect_repo(
     }
 
     let saved_default = honors_saved_default(&group);
-    base_repo_from_remotes(checkout.remotes(), hosts, saved_default)
-        .map_or_else(Detection::unknown, |(repo, source)| {
-            Detection::found(repo, source)
+    let remotes = checkout
+        .remotes()
+        .iter()
+        .map(|remote| match &remote.own {
+            Some(repo) if !hosts.knows(&remote.repo.host) && own(&repo.host) => Remote {
+                repo: repo.clone(),
+                ssh_hostname: Some(remote.repo.host.clone()),
+                ..remote.clone()
+            },
+            _ => remote.clone(),
         })
+        .collect::<Vec<_>>();
+    base_repo_from_remotes(&remotes, hosts, saved_default).map_or_else(
+        Detection::unknown,
+        |(repo, source, ssh_hostname)| Detection {
+            ssh_hostname,
+            ..Detection::found(repo, source)
+        },
+    )
 }
 
 /// gh's top-level commands in v2.103.3, with cobra's short names and the help topics: the names
@@ -536,12 +578,13 @@ fn override_repo(spec: &str, hosts: &GhHosts) -> Option<RepoRef> {
 /// gh's choice among the checkout's remotes when no override is given
 /// (`gh/pkg/cmd/factory/remote_resolver.go`, `gh/context/context.go` `BaseRepo`). With several
 /// candidates and a terminal, gh would also ask the API about the repository network; the
-/// wrapper takes the first candidate, which is what gh does without a terminal.
+/// wrapper takes the first candidate, which is what gh does without a terminal. Also the chosen
+/// remote's `ssh_hostname`.
 fn base_repo_from_remotes(
     remotes: &[Remote],
     hosts: &GhHosts,
     saved_default: bool,
-) -> Option<(RepoRef, &'static str)> {
+) -> Option<(RepoRef, &'static str, Option<String>)> {
     // gh sorts every remote with Go's unstable `sort.Sort`, then filters by host
     // (`remote_resolver.go`). Equally ranked remotes beyond 12 come out in that sort's own order.
     let mut remotes = remotes.to_vec();
@@ -565,13 +608,20 @@ fn base_repo_from_remotes(
 
     for remote in remotes.iter().filter(|_| saved_default) {
         match remote.resolved.as_deref() {
-            Some("base") => return Some((remote.repo.clone(), "repo set-default")),
+            Some("base") => {
+                return Some((
+                    remote.repo.clone(),
+                    "repo set-default",
+                    remote.ssh_hostname.clone(),
+                ))
+            }
             Some(value) if !value.is_empty() => {
                 let saved = override_repo(value, hosts)?;
                 // `ghrepo.NewWithHost` normalizes the remote's host a second time.
                 return Some((
                     gh_repo(&remote.repo.host, &saved.owner, &saved.name),
                     "repo set-default",
+                    remote.ssh_hostname.clone(),
                 ));
             }
             _ => {}
@@ -580,7 +630,7 @@ fn base_repo_from_remotes(
     remotes
         .into_iter()
         .next()
-        .map(|remote| (remote.repo, "git remote"))
+        .map(|remote| (remote.repo, "git remote", remote.ssh_hostname))
 }
 
 #[derive(Debug, Clone)]
@@ -590,6 +640,10 @@ struct Remote {
     /// The repository the URL git fetches from names, if any.
     fetch_repo: Option<RepoRef>,
     resolved: Option<String>,
+    /// `repo` under its URL's own host, when that's an SSH URL `ssh -G` gives another host for.
+    own: Option<RepoRef>,
+    /// Set when `repo` is `own` ([`detect_repo_by_own_host`]): the host `ssh -G` gives.
+    ssh_hostname: Option<String>,
 }
 
 /// `git remote -v` in git's order, each remote's repository taken from its fetch URL, or its
@@ -643,16 +697,18 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
     let mut ssh = SshHosts::default();
     urls.into_iter()
         .filter_map(|(name, fetch, push)| {
-            let fetch_repo = fetch.and_then(|url| remote_repo(&url, &mut ssh));
-            let repo = fetch_repo
-                .clone()
-                .or_else(|| push.and_then(|url| remote_repo(&url, &mut ssh)))?;
+            let fetched = fetch.and_then(|url| remote_repo(&url, &mut ssh));
+            let fetch_repo = fetched.as_ref().map(|(repo, _)| repo.clone());
+            let (repo, own) =
+                fetched.or_else(|| push.and_then(|url| remote_repo(&url, &mut ssh)))?;
             let resolved = saved.get(name.as_str()).map(|value| (*value).to_string());
             Some(Remote {
                 name,
                 repo,
                 fetch_repo,
                 resolved,
+                own,
+                ssh_hostname: None,
             })
         })
         .collect()
@@ -717,10 +773,30 @@ pub(crate) fn push_leaves(
             _ => {}
         }
     }
+    // A remote counts as the forge's when git fetches from it there, or when its SSH URL names
+    // the forge and `ssh -G` sends it elsewhere: routing reads such a remote under its own host
+    // (`detect_repo_by_own_host`), but git pushes where SSH resolves it. Renamed is judged as
+    // `remote_repo` judges it, with a leading `www.` dropped from both hosts, for the bare host
+    // routing resolves and for the `user@host` git connects to (`resolved`), which a `Match user`
+    // rule can send elsewhere: either lookup renaming it counts. A host both lookups leave as
+    // written counts as before.
+    let without_www = |host: &str| gh_hostname(host.strip_prefix("www.").unwrap_or(host));
+    let mut bare = SshHosts::default();
+    let mut renamed_forge = |raw: &str, resolved: Option<&str>| {
+        let Some(url) = GitUrl::parse(raw).filter(|url| url.scheme == "ssh") else {
+            return false;
+        };
+        let own = without_www(&url.host);
+        own == hostname
+            && (resolved.is_some_and(|resolved| without_www(resolved) != own)
+                || without_www(&bare.resolve(&url.host)) != own)
+    };
     for (name, url) in push {
-        let on_forge = fetch
-            .get(&name)
-            .is_some_and(|fetch| host_of(fetch, false).as_deref() == Some(hostname.as_str()));
+        let on_forge = fetch.get(&name).is_some_and(|fetch| {
+            let resolved = host_of(fetch, false);
+            resolved.as_deref() == Some(hostname.as_str())
+                || renamed_forge(fetch, resolved.as_deref())
+        });
         let host = host_of(&url, true);
         if on_forge && host.as_deref() != Some(hostname.as_str()) {
             return Some(format!("remote {name} pushes to {}", elsewhere(host)));
@@ -808,14 +884,17 @@ fn remote_rank(name: &str) -> u8 {
     }
 }
 
-fn remote_repo(raw: &str, ssh: &mut SshHosts) -> Option<RepoRef> {
+/// A remote URL's repository as gh reads it, an SSH URL's host resolved by `ssh -G`; and, when
+/// `ssh -G` gives another host, the repository under the URL's own host.
+fn remote_repo(raw: &str, ssh: &mut SshHosts) -> Option<(RepoRef, Option<RepoRef>)> {
     let url = GitUrl::parse(raw)?;
-    let host = if url.scheme == "ssh" {
-        ssh.resolve(&url.host)
-    } else {
-        url.host.clone()
-    };
-    url.repo(&host)
+    let own = url.repo(&url.host)?;
+    if url.scheme != "ssh" {
+        return Some((own, None));
+    }
+    let repo = url.repo(&ssh.resolve(&url.host))?;
+    let own = (own.host != repo.host).then_some(own);
+    Some((repo, own))
 }
 
 /// A remote URL as gh's `git.ParseURL` reads it: scp-style `host:path` becomes `ssh://host/path`.
