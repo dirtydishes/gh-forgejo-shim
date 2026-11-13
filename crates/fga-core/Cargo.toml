@@ -18,7 +18,7 @@ regex.workspace = true
 tokio.workspace = true
 yaml-rust2 = { version = "0.13", default-features = false }
 comrak = { version = "0.59.0", default-features = false }
-ammonia = "4.2.4"
+ammonia = "4.2.5"
 
 [dev-dependencies]
 axum.workspace = true
