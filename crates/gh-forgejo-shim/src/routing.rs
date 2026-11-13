@@ -423,10 +423,13 @@ fn route_by_target(
         return RouteDecision::forgejo(detection.source, Some(repo), Some(host));
     };
     // gh drops this remote, so it gets the repository the wrapper chose in `GH_REPO`, as for
-    // `-R HOST/OWNER/REPO`. The host has no port, as gh reads a remote's.
-    let gh_repo = format!("{}/{}/{}", repo.host, repo.owner, repo.name);
+    // `-R HOST/OWNER/REPO`. The host has no port, as gh reads a remote's. `gh api` reads the
+    // repository only for its `{owner}` and `{repo}` placeholders, and refuses `{branch}` whenever
+    // `GH_REPO` is set (`gh/pkg/cmd/api/api.go` `fillPlaceholders`), so it gets one only then.
+    let gh_repo = (invocation.command != "api" || uses_repo_placeholder(invocation))
+        .then(|| format!("{}/{}/{}", repo.host, repo.owner, repo.name));
     RouteDecision {
-        gh_repo: Some(gh_repo),
+        gh_repo,
         ..RouteDecision::forgejo(
             format!(
                 "{}, under its own host: ssh -G resolves {} to {ssh_hostname}",
@@ -436,6 +439,27 @@ fn route_by_target(
             Some(host),
         )
     }
+}
+
+/// Whether any argument or flag value holds one of the placeholders gh's `api` fills from the base
+/// repository: `{owner}`, `{repo}`, `:owner` or `:repo` (`placeholderRE` in
+/// `gh/pkg/cmd/api/api.go`). A false match only costs the `{branch}` placeholder.
+fn uses_repo_placeholder(invocation: &Invocation) -> bool {
+    invocation
+        .positionals
+        .iter()
+        .chain(invocation.flags.values().flatten())
+        .any(|word| {
+            ["{owner}", "{repo}"].iter().any(|name| word.contains(name))
+                || word.match_indices(':').any(|(at, _)| {
+                    let rest = &word[at + 1..];
+                    ["owner", "repo"].iter().any(|name| {
+                        rest.strip_prefix(name).is_some_and(|after| {
+                            !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                        })
+                    })
+                })
+        })
 }
 
 /// The spec's delegate list (launcher §2): commands that call no API, or that write gh's own
@@ -1670,5 +1694,26 @@ mod tests {
 
         assert_eq!(decision.kind, RouteKind::Forgejo);
         assert_eq!(decision.reason, "GH_REPO");
+    }
+
+    #[test]
+    fn api_repo_placeholders_match_as_gh_s_pattern_does() {
+        let uses = |args: &[&str]| uses_repo_placeholder(&Invocation::parse(&argv(args)));
+        for args in [
+            &["api", "repos/{owner}/{repo}/pulls"][..],
+            &["api", "repos/:owner/:repo"],
+            &["api", "graphql", "-F", "name={repo}"],
+            &["api", "repos/:owner/x"],
+        ] {
+            assert!(uses(args), "{args:?}");
+        }
+        for args in [
+            &["api", "repos/o/r/branches/{branch}"][..],
+            &["api", "graphql", "-f", "query=query($owner:String!){x(owner:$owner){id}}"],
+            &["api", "repos/:owners/x"],
+            &["api", "user"],
+        ] {
+            assert!(!uses(args), "{args:?}");
+        }
     }
 }

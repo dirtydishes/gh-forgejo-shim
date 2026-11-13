@@ -2365,7 +2365,22 @@ fn a_forge_ssh_sends_elsewhere_launches_with_its_repository() {
         }
         // A host-less `gh api` goes to the forge, not github.com: a form the launcher serves
         // launches with the forge as gh's default host (decision 4)...
+        // gh refuses `{branch}` whenever GH_REPO is set, so a call gets it only when it uses
+        // `{owner}` or `{repo}`, the placeholders gh fills from the base repository.
         let report = renamed.ran(&["api", "graphql", "-f", "query={viewer{login}}"], &[]);
+        assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{remote}");
+        assert_eq!(reported(&report, "GH_REPO"), "unset", "{remote}");
+        let report = renamed.ran(
+            &[
+                "api",
+                "graphql",
+                "-F",
+                "owner={owner}",
+                "-f",
+                "query=query($owner:String!){repositoryOwner(login:$owner){login}}",
+            ],
+            &[],
+        );
         assert_eq!(reported(&report, "GH_HOST"), "forge.test", "{remote}");
         assert_eq!(reported(&report, "GH_REPO"), "forge.test/o/r", "{remote}");
         // ...and one it doesn't stays on the built-in path for the forge; plain gh never runs.
