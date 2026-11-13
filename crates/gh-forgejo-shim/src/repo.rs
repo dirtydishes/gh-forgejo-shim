@@ -775,11 +775,11 @@ pub(crate) fn push_leaves(
     }
     // A remote counts as the forge's when git fetches from it there, or when its SSH URL names
     // the forge and `ssh -G` sends it elsewhere: routing reads such a remote under its own host
-    // as gh reads it, a leading `www.` dropped (`detect_repo_by_own_host`, `gh_repo`), but git
-    // pushes where SSH resolves it. A host `ssh -G` leaves as written counts as before.
-    // Renamed as routing judges it (`remote_repo`): both hosts with a leading `www.` dropped.
-    // Routing resolves the bare host and git the `user@host` (`resolved`), which a `Match user`
-    // rule can send elsewhere, so either one renaming it counts.
+    // (`detect_repo_by_own_host`), but git pushes where SSH resolves it. Renamed is judged as
+    // `remote_repo` judges it, with a leading `www.` dropped from both hosts, for the bare host
+    // routing resolves and for the `user@host` git connects to (`resolved`), which a `Match user`
+    // rule can send elsewhere: either lookup renaming it counts. A host both lookups leave as
+    // written counts as before.
     let without_www = |host: &str| gh_hostname(host.strip_prefix("www.").unwrap_or(host));
     let mut bare = SshHosts::default();
     let mut renamed_forge = |raw: &str, resolved: Option<&str>| {
