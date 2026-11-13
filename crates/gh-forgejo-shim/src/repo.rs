@@ -776,16 +776,19 @@ pub(crate) fn push_leaves(
     // A remote counts as the forge's when git fetches from it there, or when its SSH URL names
     // the forge and `ssh -G` sends it elsewhere: routing reads such a remote under its own host
     // as gh reads it, a leading `www.` dropped (`detect_repo_by_own_host`, `gh_repo`), but git
-    // pushes where SSH resolves it.
-    let names_forge = |raw: &str| {
+    // pushes where SSH resolves it. A host `ssh -G` leaves as written counts as before.
+    let renamed_forge = |raw: &str, resolved: Option<&str>| {
         GitUrl::parse(raw).is_some_and(|url| {
             url.scheme == "ssh"
+                && resolved.is_some_and(|resolved| resolved != gh_hostname(&url.host))
                 && gh_hostname(url.host.strip_prefix("www.").unwrap_or(&url.host)) == hostname
         })
     };
     for (name, url) in push {
         let on_forge = fetch.get(&name).is_some_and(|fetch| {
-            names_forge(fetch) || host_of(fetch, false).as_deref() == Some(hostname.as_str())
+            let resolved = host_of(fetch, false);
+            resolved.as_deref() == Some(hostname.as_str())
+                || renamed_forge(fetch, resolved.as_deref())
         });
         let host = host_of(&url, true);
         if on_forge && host.as_deref() != Some(hostname.as_str()) {
