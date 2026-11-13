@@ -172,15 +172,15 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
         }) = current_repo(options.cwd.as_deref(), &options.env, &config)
         {
             if let Some(ssh_hostname) = ssh_hostname {
-                // The wrapper routes it (#334), but gh alone finds no repository here, and git
-                // pushes where SSH resolves the host, which the push check refuses.
+                // The wrapper routes it (#334), but gh alone skips this remote, and gh can't find
+                // a pull request from the current branch even through the wrapper.
                 checks.push(Check::warn(
                     "current repo host",
                     format!(
                         "{host} is allowlisted for {}/{}, but ssh -G resolves {host} to \
-                         {ssh_hostname}: the wrapper routes this checkout, gh without the wrapper \
-                         finds no repository here, and gh pr create is refused; see Known gaps in \
-                         the README",
+                         {ssh_hostname}: the wrapper reads the remote as {host}, gh without the \
+                         wrapper skips it, and commands that find a pull request from the branch \
+                         fail; see Known gaps in the README",
                         repo.owner,
                         repo.name,
                         host = repo.host,
