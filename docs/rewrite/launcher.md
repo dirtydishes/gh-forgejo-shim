@@ -186,28 +186,28 @@ proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
 host through `ssh -G`, so when the user's SSH config gives the forge's name another `HostName`,
 such as a VPN address for a forge whose proxy doesn't carry SSH, gh sees that address, knows no
 such host, and drops the remote. An `insteadOf` rule that rewrites the forge's HTTPS URLs to SSH
-does the same to an HTTPS remote. Routing instead reads such a remote under its own host when
-that host is on the allowlist and gh knows none by the name `ssh -G` gives; a remote that `ssh
--G` sends to a host gh knows, such as github.com, stays there, as it does for gh. It then picks
-among the remotes as gh would. When the remote it picks is one gh drops, the launched or
-stepped-aside gh gets the repository as `GH_REPO`, `HOST/OWNER/REPO` with the portless hostname
-that gh reads from a remote, as if the call had said `-R`; without it, gh would find no
-repository. A host-less `gh api` gets it only when it uses `{owner}` or `{repo}` (or `:owner`,
-`:repo`), since gh refuses `{branch}` whenever `GH_REPO` is set. The route reason names the host
-`ssh -G` gave. `GH_REPO` supplies only the base repository: gh still looks up the current branch's
-remote by name among the remotes it kept, so a command that finds a PR from the branch (`pr view`,
-`pr checks`, `pr status` with no selector, and `pr create` without `--head`, on a branch that
-tracks the remote) fails with gh's "could not resolve remote". gh also reads `GH_REPO` as a repository the user chose: `gh browse
-PATH` takes the path from the repository root, `gh repo fork --remote` forks before it fails to
-find the remote, `gh secret` skips its question about several remotes, and `gh pr create` skips
-local templates. A user's own `GH_REPO`, `-R` or URL
-argument decides first, as for gh, so the wrapper never sets `GH_REPO` then. Such a remote also
-counts as a forge in reach (above), and as a forge remote for the push check (below), its SSH
-URL's host read as gh reads it, a leading `www.` dropped: git pushes to the address SSH gives, so `gh pr
-create` is refused unless the remote's push URL stays on the forge. Plain gh without the wrapper can't be
-helped; `gfj doctor` warns, and the README's Known gaps gives a proxy-command setup that keeps the
-forge's name in `ssh -G`. `gfj bootstrap` never allowlists a host on these grounds alone: the
-remote's own host may just as well be an SSH alias for the forge's real name.
+does the same to an HTTPS remote. Routing instead reads such a remote under its own host when that
+host is on the allowlist and gh knows none by the name `ssh -G` gives; a remote that `ssh -G`
+sends to a host gh knows, such as github.com, stays there, as it does for gh. It then picks among
+the remotes as gh would. When the remote it picks is one gh drops, the launched or stepped-aside
+gh gets the repository as `GH_REPO`, `HOST/OWNER/REPO` with the portless hostname that gh reads
+from a remote, as if the call had said `-R`; without it, gh would find no repository. A host-less
+`gh api` gets it only when it uses `{owner}` or `{repo}` (or `:owner`, `:repo`), since gh refuses
+`{branch}` whenever `GH_REPO` is set. The route reason names the host `ssh -G` gave. `GH_REPO`
+supplies only the base repository: gh still looks up the current branch's remote by name among the
+remotes it kept, so a command that finds a PR from the branch (`pr view`, `pr checks`, `pr status`
+with no selector, and `pr create` without `--head`, on a branch that tracks the remote) fails with
+gh's "could not resolve remote". gh also reads `GH_REPO` as a repository the user chose: `gh
+browse PATH` takes the path from the repository root, `gh repo fork --remote` forks before it
+fails to find the remote, `gh secret` skips its question about several remotes, and `gh pr create`
+skips local templates. A user's own `GH_REPO`, `-R` or URL argument decides first, as for gh, so
+the wrapper never sets `GH_REPO` then. Such a remote also counts as a forge in reach (above), and
+as a forge remote for the push check (below), its SSH URL's host read as gh reads it, a leading
+`www.` dropped: git pushes to the address SSH gives, so `gh pr create` is refused unless the
+remote's push URL stays on the forge. Plain gh without the wrapper can't be helped; `gfj doctor`
+warns, and the README's Known gaps gives a proxy-command setup that keeps the forge's name in `ssh
+-G`. `gfj bootstrap` never allowlists a host on these grounds alone: the remote's own host may
+just as well be an SSH alias for the forge's real name.
 
 **Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
 `/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
