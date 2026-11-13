@@ -569,9 +569,11 @@ fn plan_repo(cwd: Option<&Path>, env: &EnvMap, config: &Config) -> Option<RepoPl
         trial.hosts.push(entry.clone());
     }
     // Only a repository gh itself resolves counts: the wrapper never routes doctor's fallback to
-    // the first remote.
+    // the first remote. Nor does one the wrapper reads under its own host where `ssh -G` names
+    // another: that host may be an SSH alias, such as `forge-alias` for the forge's real name,
+    // which only the user can allowlist knowing what it is.
     let routed = doctor::current_repo(cwd, env, &trial)
-        .filter(|trial| trial.resolved_by_gh)
+        .filter(|trial| trial.resolved_by_gh && trial.ssh_hostname.is_none())
         .map(|trial| trial.repo)
         .filter(|repo| {
             doctor::routes_to_forgejo(&trial, &repo.host)

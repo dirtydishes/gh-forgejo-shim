@@ -662,6 +662,27 @@ fn bootstrap_never_allowlists_a_remote_gh_reads_differently() -> TestResult {
 }
 
 #[test]
+fn doctor_warns_when_ssh_sends_an_allowlisted_forge_elsewhere() -> TestResult {
+    // #334: the wrapper routes the remote under its own host, but plain gh finds no repository,
+    // and the push check refuses `gh pr create`.
+    let fixture = checkout_with_origin(
+        "ssh://git@git.example.com:2222/owner/repo.git",
+        "192.0.2.10",
+    )?;
+
+    let stdout = doctor(&fixture, &[("FJ_SHIM_HOSTS", "git.example.com")])?;
+
+    assert!(
+        stdout.contains(
+            "[warn] current repo host: git.example.com is allowlisted for owner/repo, but ssh -G \
+             resolves git.example.com to 192.0.2.10"
+        ),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
 fn bootstrap_never_names_an_ssh_alias_of_github_in_a_command() -> TestResult {
     // The usual setup for two GitHub accounts: gh turns github-work into github.com everywhere.
     let fixture = checkout_with_origin("git@github-work:org/repo.git", "github.com")?;

@@ -11,7 +11,7 @@ use crate::external::{find_program, run_program_capture};
 use crate::invocation::Invocation;
 use crate::read_only;
 use crate::repo::{
-    command_word, detect_repo, expand_alias, gh_command_word, gh_hostname,
+    command_word, detect_repo, detect_repo_by_own_host, expand_alias, gh_command_word, gh_hostname,
     user_gh_aliases_unreadable, user_gh_config_dir, user_gh_hosts_unreadable, Checkout, GhHosts,
     RepoRef,
 };
@@ -72,6 +72,9 @@ pub struct RouteDecision {
     pub reason: String,
     pub repo: Option<RepoRef>,
     pub host: Option<String>,
+    /// `HOST/OWNER/REPO` for gh's `GH_REPO`, when routing chose a remote gh drops itself (#334):
+    /// the launched or stepped-aside gh would otherwise find no repository.
+    pub gh_repo: Option<String>,
 }
 
 impl RouteDecision {
@@ -81,6 +84,7 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host: None,
+            gh_repo: None,
         }
     }
 
@@ -91,6 +95,7 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host: None,
+            gh_repo: None,
         }
     }
 
@@ -100,6 +105,7 @@ impl RouteDecision {
             reason: reason.into(),
             repo,
             host,
+            gh_repo: None,
         }
     }
 
@@ -365,11 +371,14 @@ fn route_by_target(
         }
     }
     let checkout = Checkout::new(cwd);
-    let detection = detect_repo(
+    // A forge remote that `ssh -G` sends to a host gh doesn't know, such as a VPN address, counts
+    // under its own name, as it would without that `HostName` (#334).
+    let detection = detect_repo_by_own_host(
         invocation,
         env,
         &checkout,
         &GhHosts::load(env, &config.hosts),
+        &|host| config.forgejo_host(host).is_some(),
     );
     // A launched gh knows the user's hosts plus the allowlist hosts, so routing models that.
     // Plain gh knows only the user's hosts. Before delegating, check that plain gh wouldn't pick a
@@ -410,7 +419,23 @@ fn route_by_target(
             Some(repo),
         );
     };
-    RouteDecision::forgejo(detection.source, Some(repo), Some(host))
+    let Some(ssh_hostname) = detection.ssh_hostname else {
+        return RouteDecision::forgejo(detection.source, Some(repo), Some(host));
+    };
+    // gh drops this remote, so it gets the repository the wrapper chose in `GH_REPO`, as for
+    // `-R HOST/OWNER/REPO`. The host has no port, as gh reads a remote's.
+    let gh_repo = format!("{}/{}/{}", repo.host, repo.owner, repo.name);
+    RouteDecision {
+        gh_repo: Some(gh_repo),
+        ..RouteDecision::forgejo(
+            format!(
+                "{}, under its own host: ssh -G resolves {} to {ssh_hostname}",
+                detection.source, repo.host
+            ),
+            Some(repo),
+            Some(host),
+        )
+    }
 }
 
 /// The spec's delegate list (launcher §2): commands that call no API, or that write gh's own
@@ -674,7 +699,7 @@ fn launch_listed(
         return crate::launcher::start::launch(
             host,
             routed,
-            &decision.reason,
+            decision,
             argv,
             env,
             config.real_gh.as_deref(),
@@ -982,6 +1007,7 @@ fn step_aside_logged_in(
         }
         return crate::launcher::start::step_aside_if_logged_in(
             host,
+            decision.gh_repo.as_deref(),
             argv,
             env,
             config.real_gh.as_deref(),
