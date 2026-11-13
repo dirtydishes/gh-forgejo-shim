@@ -182,6 +182,24 @@ the wrapper itself (§3, "Git's credentials"); otherwise it keeps its current ro
 exact table and
 proves R4 (`jko.5`: `gh --version` in a Forgejo checkout delegates).
 
+**A forge remote that SSH sends elsewhere keeps its own name** (#334). gh reads an SSH remote's
+host through `ssh -G`, so when the user's SSH config gives the forge's name another `HostName`,
+such as a VPN address for a forge whose proxy doesn't carry SSH, gh sees that address, knows no
+such host, and drops the remote. An `insteadOf` rule that rewrites the forge's HTTPS URLs to SSH
+does the same to an HTTPS remote. Routing instead reads such a remote under its own host when
+that host is on the allowlist and gh knows none by the name `ssh -G` gives; a remote that `ssh
+-G` sends to a host gh knows, such as github.com, stays there, as it does for gh. It then picks
+among the remotes as gh would. When the remote it picks is one gh drops, the launched or
+stepped-aside gh gets the repository as `GH_REPO`, `HOST/OWNER/REPO` with the portless hostname
+that gh reads from a remote, as if the call had said `-R`; without it, gh would find no
+repository. The route reason names the host `ssh -G` gave. A user's own `GH_REPO`, `-R` or URL
+argument decides first, as for gh, so the wrapper never sets `GH_REPO` then. Such a remote also
+counts as a forge in reach (above), and as a forge remote for the push check (below): git pushes
+to the address SSH gives, so `gh pr create` is refused there. Plain gh without the wrapper can't be
+helped; `gfj doctor` warns, and the README's Known gaps gives a proxy-command setup that keeps the
+forge's name in `ssh -G`. `gfj bootstrap` never allowlists a host on these grounds alone: the
+remote's own host may just as well be an SSH alias for the forge's real name.
+
 **Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
 `/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
 for server mode routes as delegate. The config key belongs to `cwe.42` and the config bridge (L4).
@@ -225,7 +243,8 @@ where routing already chose it. `GH_HOST` doesn't steer git: `gh pr create` push
 remote and `gh repo create --push` the remote it adds, and a remote's push URL or
 `url.<base>.pushInsteadOf` can send that push to another host, as can an SSH host alias. So a
 forge-routed `pr create` (or `pr new`), launched or not, is refused before gh runs when a forge
-remote's push URL in the checkout names another host, an `insteadOf` or `pushInsteadOf` rule whose
+remote's push URL in the checkout names another host (a forge remote is one git fetches from the
+forge, or one whose URL names the forge though `ssh -G` resolves it elsewhere), an `insteadOf` or `pushInsteadOf` rule whose
 prefix overlaps one of the forge's URL forms rewrites to another host, or, unless gh uses
 `https` there, SSH resolves `git@<forge>`, the remote gh adds for a fork, to another host. gh's
 protocol is read from its files, without running gh: the forge's portless entry, then the
@@ -788,6 +807,7 @@ thread at the edit point. Building gh's environment by hand and spawning it with
 | `GIT_CONFIG_PARAMETERS` | the inherited value and a space, if that value is non-empty, then `'credential.helper=' 'credential.helper=!<run dir>/gh auth git-credential'` (section 3, "Git's credentials") |
 | `GH_BROWSER` | the URL helper (section 9) |
 | `GH_HOST` | the routed host's hostname without its port, for a host-less `gh api` or `gh auth token` (section 2); otherwise unchanged |
+| `GH_REPO` | `HOST/OWNER/REPO`, when routing chose a forge remote gh drops because `ssh -G` sends it elsewhere (section 2); otherwise unchanged |
 | `GH_NO_UPDATE_NOTIFIER`, `GH_NO_EXTENSION_UPDATE_NOTIFIER` | `1`; these checks would call api.github.com through the socket |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | removed (section 3) |
 | `FJ_SHIM_LAUNCHER` | the launcher's pid |
@@ -797,7 +817,8 @@ thread at the edit point. Building gh's environment by hand and spawning it with
 | `FJ_SHIM_SET_<NAME>` | the value the launcher set for each changed variable it didn't remove |
 
 The table is the launch path. Stepping aside (§2) sets `GH_HOST` to the forge's portless hostname
-on every form, unless the user's own `GH_HOST` has that value, recorded with `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and
+on every form, unless the user's own `GH_HOST` has that value, and `GH_REPO` as on the launch
+path, both recorded with `FJ_SHIM_SAVED`, `FJ_SHIM_ORIG_<NAME>` and
 `FJ_SHIM_SET_<NAME>`. It removes the four token variables on every form, unrecorded, so no
 nested call gets them back. It never sets `FJ_SHIM_LAUNCHER`.
 
