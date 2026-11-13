@@ -17,6 +17,7 @@ use crate::launcher::run::{self, Edits, Files, Launch};
 use crate::launcher::rundir;
 use crate::launcher::upstream::Upstream;
 use crate::repo::{self, gh_hostname};
+use crate::routing::RouteDecision;
 
 /// The token variables gh would prefer over `hosts.yml` (spec fact 3). A launched gh never sees
 /// them: `GH_ENTERPRISE_TOKEN` would otherwise reach the forge.
@@ -30,10 +31,12 @@ const TOKEN_VARIABLES: [&str; 4] = [
 /// Launches real gh for `host`, or returns `None` when the built-in path should serve the call:
 /// an IPv6 host, settings the built-in client would refuse, which it then reports, or a forge the
 /// user's gh is logged in to when `may_step_aside` is false (routing found the call can't step aside).
+/// `decision` is routing's: its reason, and the repository gh gets in `GH_REPO` when routing chose a
+/// remote gh drops itself (#334).
 pub fn launch(
     host: &str,
     routed: &Invocation,
-    reason: &str,
+    decision: &RouteDecision,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
@@ -46,6 +49,11 @@ pub fn launch(
         look_up_logins,
         mut extra_edits,
     } = Plan::for_invocation(routed, host, env);
+    let reason = decision.reason.as_str();
+    let gh_repo = decision.gh_repo.as_deref();
+    if let Some(gh_repo) = gh_repo {
+        extra_edits.push(("GH_REPO", Edit::Set(gh_repo.into())));
+    }
     let env_map: EnvMap = env
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -112,6 +120,7 @@ pub fn launch(
             &gh,
             args,
             host,
+            gh_repo,
             env,
             crate::trace::tracing_enabled(env),
         ));
@@ -357,6 +366,7 @@ fn upstream(host: &str, config: &Config, env: &HashMap<String, String>) -> Optio
 /// then answers as before.
 pub fn step_aside_if_logged_in(
     host: &str,
+    gh_repo: Option<&str>,
     args: &[OsString],
     env: &HashMap<String, String>,
     real_gh: Option<&Path>,
@@ -375,6 +385,7 @@ pub fn step_aside_if_logged_in(
         &gh,
         args,
         host,
+        gh_repo,
         env,
         crate::trace::tracing_enabled(env),
     ))
@@ -404,7 +415,8 @@ fn logged_in(user_hosts: &serde_yaml::Mapping, host: &str) -> bool {
 }
 
 /// Runs plain gh for a forge that serves gh itself (§2): the user's environment, but with the
-/// forge's portless hostname as `GH_HOST`, and without the token variables.
+/// forge's portless hostname as `GH_HOST`, `gh_repo` as `GH_REPO` when routing chose a remote gh
+/// drops itself (#334), and without the token variables.
 ///
 /// `GH_HOST` makes the forge gh's default host, so gh sends every call routing picked the forge
 /// for there: a host-less `OWNER/REPO` (`gh repo delete o/r`), and commands that only use the
@@ -427,6 +439,7 @@ fn step_aside(
     gh: &Path,
     args: &[OsString],
     host: &str,
+    gh_repo: Option<&str>,
     env: &HashMap<String, String>,
     trace_enabled: bool,
 ) -> i32 {
@@ -435,6 +448,9 @@ fn step_aside(
     let mut edits = Edits::new();
     if env.get("GH_HOST") != Some(&hostname) {
         edits.push(("GH_HOST", Edit::Set(hostname.into())));
+    }
+    if let Some(gh_repo) = gh_repo {
+        edits.push(("GH_REPO", Edit::Set(gh_repo.into())));
     }
     // Still single-threaded: nothing in the wrapper has started a thread yet.
     crate::launcher::env::apply(&edits);

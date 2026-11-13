@@ -168,9 +168,25 @@ pub fn run_checks(options: CheckOptions) -> Result<Vec<Check>> {
         if let Some(CurrentRepo {
             repo,
             resolved_by_gh,
+            ssh_hostname,
         }) = current_repo(options.cwd.as_deref(), &options.env, &config)
         {
-            if routes_to_forgejo(&config, &repo.host) {
+            if let Some(ssh_hostname) = ssh_hostname {
+                // The wrapper routes it (#334), but gh alone finds no repository here, and git
+                // pushes where SSH resolves the host, which the push check refuses.
+                checks.push(Check::warn(
+                    "current repo host",
+                    format!(
+                        "{host} is allowlisted for {}/{}, but ssh -G resolves {host} to \
+                         {ssh_hostname}: the wrapper routes this checkout, gh without the wrapper \
+                         finds no repository here, and gh pr create is refused; see Known gaps in \
+                         the README",
+                        repo.owner,
+                        repo.name,
+                        host = repo.host,
+                    ),
+                ));
+            } else if routes_to_forgejo(&config, &repo.host) {
                 checks.push(Check::new(
                     "current repo host",
                     true,
@@ -233,6 +249,9 @@ pub(crate) struct CurrentRepo {
     /// allowlisted, otherwise to real gh. When false, gh resolved nothing and this is the first
     /// remote, on a host neither gh nor the allowlist knows yet.
     pub resolved_by_gh: bool,
+    /// The host `ssh -G` gives for the remote, when the wrapper reads it under its own,
+    /// allowlisted host because gh drops it (#334). gh alone can't find `repo` then.
+    pub ssh_hostname: Option<String>,
 }
 
 /// The repository a `gh` command run in `cwd` acts on, found the way the wrapper routes it, so
@@ -247,25 +266,29 @@ pub(crate) fn current_repo(
     // A command gh resolves a base repository for, with no -R and no URL to select another.
     let invocation = Invocation::parse(&["pr".to_string(), "status".to_string()]);
     let checkout = Checkout::new(cwd);
-    let launched = repo::detect_repo(
+    let launched = repo::detect_repo_by_own_host(
         &invocation,
         &env,
         &checkout,
         &GhHosts::load(&env, &config.hosts),
-    )
-    .repo;
+        &|host| routes_to_forgejo(config, host),
+    );
+    let ssh_hostname = launched.ssh_hostname;
+    let launched = launched.repo;
     // As routing does: plain gh knows only the user's hosts, and may still pick a Forgejo one.
     let found = match launched {
-        Some(repo) if routes_to_forgejo(config, &repo.host) => Some(repo),
+        Some(repo) if routes_to_forgejo(config, &repo.host) => Some((repo, ssh_hostname)),
         launched => repo::detect_repo(&invocation, &env, &checkout, &GhHosts::user(&env))
             .repo
             .filter(|repo| routes_to_forgejo(config, &repo.host))
-            .or(launched),
+            .or(launched)
+            .map(|repo| (repo, None)),
     };
-    if let Some(repo) = found {
+    if let Some((repo, ssh_hostname)) = found {
         return Some(CurrentRepo {
             repo,
             resolved_by_gh: true,
+            ssh_hostname,
         });
     }
     // GH_REPO or GH_HOST pins gh to a repository or a host; with nothing found there, gh and the
@@ -284,6 +307,7 @@ pub(crate) fn current_repo(
     repo::detect_from_git(cwd).map(|repo| CurrentRepo {
         repo,
         resolved_by_gh: false,
+        ssh_hostname: None,
     })
 }
 
