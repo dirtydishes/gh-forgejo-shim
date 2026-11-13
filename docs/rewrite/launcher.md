@@ -202,8 +202,9 @@ PATH` takes the path from the repository root, `gh repo fork --remote` forks bef
 find the remote, `gh secret` skips its question about several remotes, and `gh pr create` skips
 local templates. A user's own `GH_REPO`, `-R` or URL
 argument decides first, as for gh, so the wrapper never sets `GH_REPO` then. Such a remote also
-counts as a forge in reach (above), and as a forge remote for the push check (below): git pushes
-to the address SSH gives, so `gh pr create` is refused there. Plain gh without the wrapper can't be
+counts as a forge in reach (above), and as a forge remote for the push check (below), its host
+read as gh reads it, a leading `www.` dropped: git pushes to the address SSH gives, so `gh pr
+create` is refused unless the remote's push URL stays on the forge. Plain gh without the wrapper can't be
 helped; `gfj doctor` warns, and the README's Known gaps gives a proxy-command setup that keeps the
 forge's name in `ssh -G`. `gfj bootstrap` never allowlists a host on these grounds alone: the
 remote's own host may just as well be an SSH alias for the forge's real name.
