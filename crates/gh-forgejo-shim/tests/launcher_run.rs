@@ -2252,8 +2252,8 @@ ask >> "$REPORT""#,
 }
 
 /// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
-/// does (#334): a fake `ssh` first on PATH resolves `forge.test`, with or without a user, to
-/// 192.0.2.10. gh drops that remote, so the wrapper reads it under its own host and hands gh the
+/// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
+/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com. gh drops that remote, so the wrapper reads it under its own host and hands gh the
 /// repository in `GH_REPO`.
 struct RenamedFixture {
     fixture: Fixture,
@@ -2269,8 +2269,9 @@ impl RenamedFixture {
         let ssh = bin.join("ssh");
         fs::write(
             &ssh,
-            "#!/bin/sh\ncase \"$3\" in forge.test|git@forge.test) echo 'hostname 192.0.2.10' ;; \
-             *) echo \"hostname $3\" ;; esac\n",
+            "#!/bin/sh\ncase \"$3\" in forge.test|git@forge.test|www.forge.test|git@www.forge.test) \
+             echo 'hostname 192.0.2.10' ;; hub-alias.test|git@hub-alias.test) \
+             echo 'hostname github.com' ;; *) echo \"hostname $3\" ;; esac\n",
         )
         .expect("fake ssh");
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -2450,4 +2451,11 @@ fn a_forge_ssh_sends_elsewhere_is_in_reach() {
         &[("GH_HOST", "github.com")],
         "a Forgejo host is in reach",
     );
+    // A remote `ssh -G` sends to a host gh knows is that host's, as for gh: an allowlisted SSH
+    // alias of github.com doesn't put a forge in reach.
+    let alias = RenamedFixture::new("git@hub-alias.test:o/r.git");
+    alias.fixture.allowlist(&["hub-alias.test"]);
+    let report = alias.ran(&["release", "list"], &[]);
+    assert_eq!(reported(&report, "GH_CONFIG_DIR"), "unset", "plain gh ran");
+    assert_eq!(reported(&report, "GH_REPO"), "unset");
 }

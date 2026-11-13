@@ -336,7 +336,7 @@ fn forgejo_in_reach(
         || gh_repo(&GhHosts::load(env, &config.hosts))
         || gh_repo(&GhHosts::user(env))
         || Checkout::new(cwd)
-            .remote_hosts()
+            .remote_hosts(&GhHosts::load(env, &config.hosts))
             .any(|host| config.forgejo_host(host).is_some())
 }
 
