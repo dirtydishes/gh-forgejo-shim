@@ -777,11 +777,14 @@ pub(crate) fn push_leaves(
     // the forge and `ssh -G` sends it elsewhere: routing reads such a remote under its own host
     // as gh reads it, a leading `www.` dropped (`detect_repo_by_own_host`, `gh_repo`), but git
     // pushes where SSH resolves it. A host `ssh -G` leaves as written counts as before.
+    // Renamed as routing judges it (`remote_repo`): both hosts with a leading `www.` dropped.
+    let without_www = |host: &str| gh_hostname(host.strip_prefix("www.").unwrap_or(host));
     let renamed_forge = |raw: &str, resolved: Option<&str>| {
         GitUrl::parse(raw).is_some_and(|url| {
+            let own = without_www(&url.host);
             url.scheme == "ssh"
-                && resolved.is_some_and(|resolved| resolved != gh_hostname(&url.host))
-                && gh_hostname(url.host.strip_prefix("www.").unwrap_or(&url.host)) == hostname
+                && resolved.is_some_and(|resolved| without_www(resolved) != own)
+                && own == hostname
         })
     };
     for (name, url) in push {
