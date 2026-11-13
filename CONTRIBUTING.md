@@ -24,7 +24,7 @@ Installed runtime changes should be verified from a release-style archive built
 with `scripts/package-release.sh`: unpack it into a temporary directory, and run
 the `gh-forgejo-shim`, `gfj`, and managed `gh` wrapper smoke checks from there. The product runtime is Rust-only; do not add
 Python source, setuptools metadata, PyPI packaging, or pipx install paths unless
-a separate decision bead records a temporary migration exception.
+a separate decision issue records a temporary migration exception.
 
 ## Compatibility Goals
 
@@ -47,12 +47,23 @@ a separate decision bead records a temporary migration exception.
    add a PyPI release path except as a separately tracked temporary migration
    bridge with an owner and removal condition.
 
-## Beads Workflow
+## Issues
 
-This repository uses Beads for issue tracking. Run:
+Work is tracked in [GitHub issues](https://github.com/dirtydishes/gh-forgejo-shim/issues).
+
+- **Priority:** every open issue carries one of `p1` (do first), `p2` (do next) or `p3` (when time
+  allows).
+- **`ready`:** nothing blocks it, and it says enough to start without asking.
+- **`needs-maintainer`:** it waits on a maintainer's decision; leave it until that's made.
+- **Blocked work:** mark it with GitHub's issue dependencies ("blocked by"), not a label.
+- **Milestones:** `Core rewrite` and `Audit 2026-11-01` group the remaining work from those efforts.
+
+To pick up work, take the highest-priority open issue labelled `ready` that nothing blocks:
 
 ```sh
-bd prime
+gh issue list --label ready --label p1
 ```
 
-before starting work, and follow the repository session close protocol before handoff.
+When you file an issue, say what's wrong or missing, how to see it and what done looks like, and add
+a priority label. Close it from the pull request that fixes it (`Fixes #N`). Work you defer from a
+pull request becomes an issue too.
