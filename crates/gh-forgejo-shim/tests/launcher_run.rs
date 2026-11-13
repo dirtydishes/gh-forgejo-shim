@@ -2253,8 +2253,8 @@ ask >> "$REPORT""#,
 
 /// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
 /// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
-/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com. gh drops that remote, so the wrapper reads it under its own host and hands gh the
-/// repository in `GH_REPO`.
+/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com. gh drops that remote, so
+/// the wrapper reads it under its own host and hands gh the repository in `GH_REPO`.
 struct RenamedFixture {
     fixture: Fixture,
     gh: PathBuf,

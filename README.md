@@ -229,8 +229,8 @@ doesn't serve. Server mode redirects them; for client-only installs, add the red
   effort: a few unusual git or SSH setups can still send the push to another host
   ([#255](https://github.com/dirtydishes/gh-forgejo-shim/issues/255)).
 - When your SSH config sends the forge's name to another address, such as a VPN address for a forge
-  whose proxy doesn't carry SSH, gh reads the checkout's remote as that address and finds no
-  repository. The wrapper reads the remote under the forge's own name and hands gh the repository,
+  whose proxy doesn't carry SSH, gh reads the checkout's remote as that address and skips it. The
+  wrapper reads the remote under the forge's own name and hands gh the repository,
   but gh still looks up the current branch's remote itself, so commands that find a pull request
   from the branch, such as `gh pr view` or `gh pr checks` with no number, fail; name the pull
   request instead. gh without the wrapper, as in server mode, skips the remote, and `gfj doctor`
