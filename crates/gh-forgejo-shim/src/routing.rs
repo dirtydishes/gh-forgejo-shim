@@ -1709,7 +1709,12 @@ mod tests {
         }
         for args in [
             &["api", "repos/o/r/branches/{branch}"][..],
-            &["api", "graphql", "-f", "query=query($owner:String!){x(owner:$owner){id}}"],
+            &[
+                "api",
+                "graphql",
+                "-f",
+                "query=query($owner:String!){x(owner:$owner){id}}",
+            ],
             &["api", "repos/:owners/x"],
             &["api", "user"],
         ] {
