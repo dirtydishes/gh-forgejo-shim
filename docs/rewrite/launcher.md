@@ -192,7 +192,15 @@ that host is on the allowlist and gh knows none by the name `ssh -G` gives; a re
 among the remotes as gh would. When the remote it picks is one gh drops, the launched or
 stepped-aside gh gets the repository as `GH_REPO`, `HOST/OWNER/REPO` with the portless hostname
 that gh reads from a remote, as if the call had said `-R`; without it, gh would find no
-repository. The route reason names the host `ssh -G` gave. A user's own `GH_REPO`, `-R` or URL
+repository. A host-less `gh api` gets it only when it uses `{owner}` or `{repo}` (or `:owner`,
+`:repo`), since gh refuses `{branch}` whenever `GH_REPO` is set. The route reason names the host
+`ssh -G` gave. `GH_REPO` supplies only the base repository: gh still looks up the current branch's
+remote by name among the remotes it kept, so a command that finds a PR from the branch (`pr view`,
+`pr checks`, `pr status` with no selector, on a branch that tracks the remote) fails with gh's
+"could not resolve remote". gh also reads `GH_REPO` as a repository the user chose: `gh browse
+PATH` takes the path from the repository root, `gh repo fork --remote` forks before it fails to
+find the remote, `gh secret` skips its question about several remotes, and `gh pr create` skips
+local templates. A user's own `GH_REPO`, `-R` or URL
 argument decides first, as for gh, so the wrapper never sets `GH_REPO` then. Such a remote also
 counts as a forge in reach (above), and as a forge remote for the push check (below): git pushes
 to the address SSH gives, so `gh pr create` is refused there. Plain gh without the wrapper can't be
