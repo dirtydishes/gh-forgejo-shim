@@ -184,11 +184,16 @@ impl<'a> Checkout<'a> {
     }
 
     /// Every remote's host, whichever one a command would pick, and an SSH remote's own host
-    /// where `ssh -G` gives another.
-    pub fn remote_hosts(&self) -> impl Iterator<Item = &str> {
-        self.remotes().iter().flat_map(|remote| {
-            std::iter::once(remote.repo.host.as_str())
-                .chain(remote.own.as_ref().map(|own| own.host.as_str()))
+    /// where `ssh -G` gives one `hosts` doesn't know, as [`detect_repo_by_own_host`] reads it.
+    pub fn remote_hosts<'h>(&'h self, hosts: &'h GhHosts) -> impl Iterator<Item = &'h str> {
+        self.remotes().iter().flat_map(move |remote| {
+            std::iter::once(remote.repo.host.as_str()).chain(
+                remote
+                    .own
+                    .as_ref()
+                    .filter(|_| !hosts.knows(&remote.repo.host))
+                    .map(|own| own.host.as_str()),
+            )
         })
     }
 
