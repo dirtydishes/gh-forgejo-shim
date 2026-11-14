@@ -2553,25 +2553,37 @@ fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create_elsewhere() {
         "remote origin pushes to 192.0.2.10, not forge.test",
     );
     // The forge's own name sent to a host gh knows reads as that host, for routing and so for the
-    // push: with `-R` choosing the forge, the push to github.com stays refused.
-    let renamed = RenamedFixture::new("git@forge.test:o/r.git");
-    renamed
-        .fixture
-        .user_hosts("forge.test:\n    git_protocol: ssh\n");
-    renamed.refused(
-        &[
-            "pr",
-            "create",
-            "-R",
-            "forge.test/o/r",
-            "--title",
-            "t",
-            "--body",
-            "b",
-        ],
-        &[("SSH_FORGE_TO", "github.com")],
-        "remote origin pushes to github.com, not forge.test",
-    );
+    // push, `www.` dropped as gh drops it: with `-R` choosing the forge, the push stays refused,
+    // and so does gh's fork remote.
+    for to in ["github.com", "www.github.com"] {
+        let renamed = RenamedFixture::new("git@forge.test:o/r.git");
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: ssh\n");
+        renamed.refused(
+            &[
+                "pr",
+                "create",
+                "-R",
+                "forge.test/o/r",
+                "--title",
+                "t",
+                "--body",
+                "b",
+            ],
+            &[("SSH_FORGE_TO", to)],
+            &format!("remote origin pushes to {to}, not forge.test"),
+        );
+        let renamed = RenamedFixture::new("https://forge.test/o/r.git");
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: ssh\n");
+        renamed.refused(
+            &pr_create,
+            &[("SSH_FORGE_TO", to)],
+            &format!("ssh resolves git@forge.test to {to}, not forge.test"),
+        );
+    }
     // gh drops a leading `www.` from a remote's host, so this remote routes to forge.test too.
     let renamed = RenamedFixture::new("ssh://git@www.forge.test/o/r.git");
     renamed

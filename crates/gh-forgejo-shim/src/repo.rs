@@ -902,8 +902,9 @@ pub(crate) fn ssh_push_leaves(
 /// knows, such as github.com, which routing reads as that host's.
 fn forge_address(hostname: &str, hosts: &GhHosts, ssh: &mut SshHosts) -> Option<String> {
     let address = gh_hostname(&ssh.try_resolve(hostname)?);
-    let renamed = gh_repo(&address, "", "").host != gh_repo(hostname, "", "").host;
-    (renamed && !hosts.knows(&address)).then_some(address)
+    // gh drops a leading `www.` before it compares hosts, so `www.github.com` is github.com.
+    let gh_host = gh_repo(&address, "", "").host;
+    (gh_host != gh_repo(hostname, "", "").host && !hosts.knows(&gh_host)).then_some(address)
 }
 
 fn remote_rank(name: &str) -> u8 {
