@@ -59,12 +59,21 @@ pub const LAUNCH_LIST: &[&str] = &[
 /// For these commands the list replaces `is_native()`, which can't see the built-in path's
 /// per-flag refusals.
 const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
+    // gh reads `--body-file` itself and sends the body as `--body` does (#356).
     (
         "pr create",
-        &["head", "base", "title", "body", "draft", "repo"],
+        &[
+            "head",
+            "base",
+            "title",
+            "body",
+            "body-file",
+            "draft",
+            "repo",
+        ],
     ),
-    ("pr comment", &["body", "repo"]),
-    ("pr edit", &["title", "body", "repo"]),
+    ("pr comment", &["body", "body-file", "repo"]),
+    ("pr edit", &["title", "body", "body-file", "repo"]),
     (
         "pr merge",
         &[
@@ -383,6 +392,25 @@ mod tests {
         assert!(launches(&invocation(&[
             "pr", "create", "-H", "x", "-B", "main", "-t", "t", "-b", "b", "-d"
         ])));
+        // A body from a file launches too, so `--draft` gets the gateway's WIP prefix (#356).
+        for args in [
+            &[
+                "pr",
+                "create",
+                "-t",
+                "t",
+                "--body-file",
+                "body.md",
+                "--draft",
+            ][..],
+            &["pr", "create", "-t", "t", "-F", "-", "-d"][..],
+            &["pr", "edit", "12", "--body-file", "body.md"][..],
+            &["pr", "edit", "12", "-t", "t", "-F", "body.md"][..],
+            &["pr", "comment", "12", "--body-file", "body.md"][..],
+            &["pr", "comment", "12", "-F", "-"][..],
+        ] {
+            assert!(launches(&invocation(args)), "{args:?}");
+        }
         // Flags the gateway doesn't serve keep the built-in path, which refuses them before
         // writing: gh would write the title, then fail on the reviewer.
         for refused in [

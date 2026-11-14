@@ -1,0 +1,43 @@
+{
+  "id": "twin-pr-create-draft-body-file",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-create-draft-body-file",
+    "body_file": "made by gh from a file"
+  },
+  "shim_config": {
+    "wip_prefixes": [
+      "scenario: draft"
+    ]
+  },
+  "argv": [
+    "pr",
+    "create",
+    "--head",
+    "{branch}",
+    "--base",
+    "main",
+    "--title",
+    "twin: draft from a file",
+    "--body-file",
+    "body.md",
+    "--draft"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/pull/(?P<pr>[0-9]+)\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "pulls/{pr}",
+      "fields": {
+        "draft": true,
+        "title": "scenario: draft twin: draft from a file",
+        "body": "made by gh from a file"
+      }
+    }
+  ],
+  "normalize": []
+}

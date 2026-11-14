@@ -203,6 +203,32 @@ class ContractTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
 
+    def test_a_body_file_is_the_one_the_runner_writes(self):
+        # gh reads --body-file in the checkout; the runner writes it there from setup.body_file.
+        good = {"id": "twin-x", "kind": "twin", "repo": REPO,
+                "setup": {"branch": "twin/x", "body_file": "from a file"},
+                "argv": ["pr", "create", "--head", "{branch}", "--title", "t", "--body-file", "body.md", "--draft"],
+                "expect": {"exit": 0, "stdout": "", "stderr": ""}, "normalize": []}
+        validate_case(good)
+        for argv in (["pr", "edit", "{pr}", "--body-file", "body.md"], ["pr", "comment", "{pr}", "--body-file", "body.md"]):
+            validate_case(good | {"argv": argv, "setup": {"branch": "twin/x", "pr": True, "body_file": "b"}})
+        for change, message in [
+            ({"argv": ["pr", "create", "--head", "{branch}", "--title", "t", "--body-file", "/etc/hosts"]}, "body.md"),
+            ({"argv": ["pr", "create", "--head", "{branch}", "--title", "t", "--body-file", "-"]}, "body.md"),
+            ({"argv": ["pr", "create", "--head", "{branch}", "--title", "t", "--body", "b"]}, "setup.body_file"),
+            ({"setup": {"branch": "twin/x"}}, "setup.body_file"),
+            ({"setup": {"branch": "twin/x", "body_file": True}}, "setup.body_file"),
+        ]:
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
+                validate_case(good | change)
+        with tempfile.TemporaryDirectory() as temporary:
+            twin.write_inputs(good, Path(temporary))
+            self.assertEqual((Path(temporary) / "body.md").read_text(), "from a file")
+            empty = Path(temporary) / "none"
+            empty.mkdir()
+            twin.write_inputs(good | {"setup": {"branch": "twin/x"}}, empty)
+            self.assertEqual(list(empty.iterdir()), [])
+
     def test_a_merge_case_waits_until_forgejo_calls_its_pr_mergeable(self):
         # A merge sent while Forgejo still checks the PR reads as a conflict (the gateway's #174).
         replies = iter([False, False, True])

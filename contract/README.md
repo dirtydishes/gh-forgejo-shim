@@ -58,8 +58,9 @@ with one new file, and with `setup.pr` opens a pull request from it, both throug
 Other setup options: `base` puts the branch on a base branch of its own (`<branch>-base`), which
 the pull request targets, so a merge never reaches `main`; every `pr merge` case needs it, and no
 case's own branch may end in `-base`. `draft` opens the pull request with the twin's draft prefix,
-`closed` closes it, `status` posts a check (`context`, `state`) on the head commit, and `protect`
-requires the named checks on the case's own base. `argv` may use `{branch}`, `{pr}` and, as
+`closed` closes it, `body_file` writes its text to `body.md` in the checkout, the only file a
+case's `--body-file` may name, `status` posts a check (`context`, `state`) on the head commit, and
+`protect` requires the named checks on the case's own base. `argv` may use `{branch}`, `{pr}` and, as
 `--match-head-commit`'s value, `{head}`. `expect` holds the exit code and full-match regular
 expressions for stdout and stderr; a stdout pattern can name the pull request gh made with
 `(?P<pr>[0-9]+)`. Each `state` entry then reads the case's own pull request, its comments or its

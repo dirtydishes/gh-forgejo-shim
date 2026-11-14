@@ -82,6 +82,7 @@ def execute(case, binary, seed_home, work_dir, real_gh=None):
         argv = case["argv"]
         if case.get("kind") == "twin":
             subs = twin.prepare(case, home, env["GFJS_TOKEN"])
+            twin.write_inputs(case, checkout)
             argv = [twin.fill(arg, subs) for arg in argv]
         result = subprocess.run([str(entrypoint), *argv], cwd=checkout, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)

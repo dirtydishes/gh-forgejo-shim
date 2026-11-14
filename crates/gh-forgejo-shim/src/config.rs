@@ -478,6 +478,15 @@ fn config_file_target(path: &Path) -> PathBuf {
     target
 }
 
+/// A host's draft prefixes: its `wip_prefixes`, or the gateway's default. The launched gateway
+/// and the built-in path both mark a new draft with the first one.
+pub fn wip_prefixes(configured: Option<&[String]>) -> fga_core::map::WipPrefixes {
+    match configured {
+        Some(prefixes) => fga_core::map::WipPrefixes::from_csv(&prefixes.join(",")),
+        None => fga_core::map::WipPrefixes::default(),
+    }
+}
+
 pub fn normalize_host(host: &str) -> String {
     let mut value = host.trim();
     if let Some((_, rest)) = value.split_once("://") {
