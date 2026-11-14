@@ -723,20 +723,30 @@ fn git_remotes(cwd: Option<&Path>) -> Vec<Remote> {
 /// target gh can't read counts as elsewhere. An SSH push URL that `ssh -G` can't resolve counts
 /// as elsewhere when git connects through its own SSH command (`ssh_command`, such as
 /// `GIT_SSH_COMMAND`), whose configuration ssh on PATH wouldn't see; without either, git can't
-/// push over SSH at all. `None` when every push to the forge stays there.
+/// push over SSH at all. An SSH URL that names the forge and that SSH sends to the address `ssh -G`
+/// gives the forge's own name stays on the forge ([`forge_address`]). `hosts` are the hosts gh
+/// knows, as routing has them. `None` when every push to the forge stays there.
 pub(crate) fn push_leaves(
     forge: &str,
+    hosts: &GhHosts,
     cwd: Option<&Path>,
     ssh_command: Option<&str>,
 ) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
     let mut ssh = SshHosts::default();
+    let address = forge_address(&hostname, hosts, &mut ssh);
     let mut host_of = |raw: &str, push: bool| {
         let url = GitUrl::parse(raw)?;
         // SSH resolves the push's own `user@host`, which a `Match user` rule can send elsewhere.
         let host = if url.scheme == "ssh" {
+            let names_forge = gh_hostname(&url.host) == hostname;
             let target = ssh_user_host(raw).unwrap_or(url.host);
             match (ssh.try_resolve(&target), ssh_command) {
+                (Some(resolved), _)
+                    if names_forge && address.as_deref() == Some(&gh_hostname(&resolved)) =>
+                {
+                    hostname.clone()
+                }
                 (Some(resolved), _) => resolved,
                 (None, Some(command)) if push => {
                     return Some(format!(
@@ -859,12 +869,21 @@ fn ssh_user_host(raw: &str) -> Option<String> {
 /// When ssh can't resolve it and git connects through its own SSH command (`ssh_command`), that
 /// command's configuration decides, so it counts as elsewhere; without either, git can't push
 /// over SSH at all.
-pub(crate) fn ssh_push_leaves(forge: &str, ssh_command: Option<&str>) -> Option<String> {
+/// The address `ssh -G` gives `git@<host>` counts as the forge when it's the one the forge's own
+/// name gets ([`forge_address`]).
+pub(crate) fn ssh_push_leaves(
+    forge: &str,
+    hosts: &GhHosts,
+    ssh_command: Option<&str>,
+) -> Option<String> {
     let hostname = gh_hostname(forge).to_ascii_lowercase();
-    match SshHosts::default().try_resolve(&format!("git@{hostname}")) {
+    let mut ssh = SshHosts::default();
+    let address = forge_address(&hostname, hosts, &mut ssh);
+    match ssh.try_resolve(&format!("git@{hostname}")) {
         Some(resolved) => {
-            let resolved = gh_hostname(&resolved).to_ascii_lowercase();
-            (resolved != hostname).then(|| format!("ssh resolves git@{hostname} to {resolved}"))
+            let resolved = gh_hostname(&resolved);
+            (resolved != hostname && address.as_ref() != Some(&resolved))
+                .then(|| format!("ssh resolves git@{hostname} to {resolved}"))
         }
         None => ssh_command.map(|command| {
             format!(
@@ -873,6 +892,18 @@ pub(crate) fn ssh_push_leaves(forge: &str, ssh_command: Option<&str>) -> Option<
             )
         }),
     }
+}
+
+/// The address `ssh -G` gives the forge's own name (`hostname`, portless and lowercase) when
+/// routing reads a remote renamed so under the forge's name ([`detect_repo_by_own_host`]): another
+/// host, as gh compares hosts ([`remote_repo`]), that gh doesn't know (`hosts`). git pushes to the
+/// forge there: the user's SSH configuration sends every SSH connection to the forge's name to it
+/// (#358). `None` when ssh can't resolve the name, leaves it as written, or sends it to a host gh
+/// knows, such as github.com, which routing reads as that host's.
+fn forge_address(hostname: &str, hosts: &GhHosts, ssh: &mut SshHosts) -> Option<String> {
+    let address = gh_hostname(&ssh.try_resolve(hostname)?);
+    let renamed = gh_repo(&address, "", "").host != gh_repo(hostname, "", "").host;
+    (renamed && !hosts.knows(&address)).then_some(address)
 }
 
 fn remote_rank(name: &str) -> u8 {
