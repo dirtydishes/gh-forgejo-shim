@@ -84,10 +84,7 @@ impl Upstream {
 
     /// The gateway's draft prefixes for this host.
     pub fn wip(&self) -> WipPrefixes {
-        match &self.wip_prefixes {
-            Some(prefixes) => WipPrefixes::from_csv(&prefixes.join(",")),
-            None => WipPrefixes::default(),
-        }
+        config::wip_prefixes(self.wip_prefixes.as_deref())
     }
 }
 

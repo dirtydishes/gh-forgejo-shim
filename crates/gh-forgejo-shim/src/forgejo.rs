@@ -2,6 +2,7 @@ use std::fmt;
 use std::time::Duration;
 
 use fga_core::forgejo::{CommitStatus, Protection};
+use fga_core::map::WipPrefixes;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LOCATION, USER_AGENT};
 use reqwest::redirect::Policy;
@@ -182,6 +183,9 @@ pub struct ForgejoClient {
     /// The path segments of `<base>/api/v1/repos` when the client follows a renamed repository's
     /// redirect ([`renames_repository`]), or `None` when it follows no redirect.
     renames: Option<Vec<String>>,
+    /// The title prefixes this host marks drafts with; [`ForgejoClient::create_pull`] adds the
+    /// first to a draft's title.
+    wip_prefixes: WipPrefixes,
     http: Client,
 }
 
@@ -193,6 +197,7 @@ impl ForgejoClient {
             scheme: "https".to_string(),
             base_url: None,
             renames: None,
+            wip_prefixes: WipPrefixes::default(),
             http: Client::builder()
                 .redirect(Policy::none())
                 .build()
@@ -264,6 +269,8 @@ impl ForgejoClient {
         let mut client = Self::with_ca_files(token, &paths)?;
         client.base_url = Some(base_url);
         client.renames = renames;
+        client.wip_prefixes =
+            crate::config::wip_prefixes(settings.and_then(|s| s.wip_prefixes.as_deref()));
         Ok(client)
     }
 
@@ -308,6 +315,7 @@ impl ForgejoClient {
             scheme: "https".to_string(),
             base_url: None,
             renames: None,
+            wip_prefixes: WipPrefixes::default(),
             http,
         })
     }
@@ -409,15 +417,23 @@ impl ForgejoClient {
         )
     }
 
+    /// Forgejo ignores a `draft` field and reads a draft only from a WIP title prefix, so a draft
+    /// gets the host's first prefix, as the gateway's `createPullRequest` gives it (#356).
     pub fn create_pull(&self, repo: &RepoRef, request: &CreatePullRequest) -> ForgejoResult<Value> {
+        let title = if request.draft {
+            self.wip_prefixes
+                .draft_title(&request.title)
+                .ok_or_else(|| ForgejoError::new("drafts require a configured WIP prefix"))?
+        } else {
+            request.title.clone()
+        };
         self.create(
             format!("{}/pulls", self.repo_api_base_url(repo)?),
             json!({
-                "title": request.title,
+                "title": title,
                 "body": request.body,
                 "base": request.base,
                 "head": request.head,
-                "draft": request.draft,
             }),
             "pull request",
             "number",
@@ -1396,16 +1412,52 @@ mod tests {
             Some("application/json")
         );
         let body: Value = serde_json::from_str(&requests[0].body)?;
+        // Forgejo reads a draft only from a WIP title prefix, and ignores a `draft` field (#356).
         assert_eq!(
             body,
             json!({
-                "title": "Ship it",
+                "title": "WIP: Ship it",
                 "body": "body",
                 "base": "main",
                 "head": "feature",
-                "draft": true,
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_draft_takes_the_hosts_first_wip_prefix() -> TestResult {
+        let (host, handle) = start_fake_server(vec![
+            FakeResponse::json(r#"{"number":7}"#),
+            FakeResponse::json(r#"{"number":8}"#),
+        ])?;
+        let mut config = configured_host(Some(format!("http://{host}")), None);
+        config
+            .host
+            .get_mut("git.example.com")
+            .expect("host table")
+            .wip_prefixes = Some(vec!["[DRAFT]".to_string(), "WIP:".to_string()]);
+        let client = ForgejoClient::for_host(
+            "git.example.com",
+            None,
+            &config,
+            &crate::config::EnvMap::new(),
+        )?;
+        let repo = RepoRef::new("git.example.com", "owner", "repo");
+        client.create_pull(
+            &repo,
+            &CreatePullRequest::new("WIP: Ship it", "b", "main", "f").draft(true),
+        )?;
+        client.create_pull(&repo, &CreatePullRequest::new("Ship it", "b", "main", "f"))?;
+        let requests = finish_fake_server(handle)?;
+        let titles: Vec<Value> = requests
+            .iter()
+            .map(|request| {
+                serde_json::from_str::<Value>(&request.body).map(|body| body["title"].clone())
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        // The gateway's rule: the first prefix goes first, whatever the title starts with.
+        assert_eq!(titles, [json!("[DRAFT] WIP: Ship it"), json!("Ship it")]);
         Ok(())
     }
 
