@@ -29,7 +29,7 @@ fj = "/opt/homebrew/bin/fj"
 A `[host."NAME"]` table sets `api_url`, `token_env`, `ca_file` and `wip_prefixes`
 for one host.
 
-The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store. `wip_prefixes` lists the title prefixes the forge marks drafts with, and should match the forge's own WIP setting: commands that launch real gh strip them from a draft's title, and the first one marks a new draft. It defaults to `["WIP:", "[WIP]"]`; the list can't be empty, and a prefix can't contain a comma.
+The optional `[host."<hostname>"]` tables also configure hosts without an array entry. The singular `host` lets tables coexist with existing `hosts = [...]` files, including multi-line arrays. `api_url` defaults to `https://<hostname>` and accepts HTTP for tests or LAN servers; API requests append `/api/v1/...`. Omit `ca_file` unless the host needs an extra root CA. Its certificates and `FJ_SHIM_CA_FILE` both add to the normal trust store. `wip_prefixes` lists the title prefixes the forge marks drafts with, and should match the forge's own WIP setting: every `gh pr create --draft` puts the first one before the new pull request's title, and commands that launch real gh strip them from a draft's title when they show it. It defaults to `["WIP:", "[WIP]"]`; the list can't be empty, and a prefix can't contain a comma.
 
 ## Host Allowlist
 
