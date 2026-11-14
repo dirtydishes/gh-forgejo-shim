@@ -207,8 +207,9 @@ as a forge remote for the push check (below), its SSH URL's host read as gh read
 when it is the one the forge's own name gets (below, #358), so the wrapper lets `gh pr create`
 through unless the remote's push URL names another host or SSH sends it elsewhere. Plain gh
 without the wrapper can't be helped; `gfj doctor` warns, and the README's Known gaps gives a
-proxy-command setup that keeps the forge's name in `ssh -G`. `gfj bootstrap` never allowlists a host on these grounds alone: the remote's own host may
-just as well be an SSH alias for the forge's real name.
+proxy-command setup that keeps the forge's name in `ssh -G`. `gfj bootstrap` never allowlists a
+host on these grounds alone: the remote's own host may just as well be an SSH alias for the
+forge's real name.
 
 **Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
 `/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
