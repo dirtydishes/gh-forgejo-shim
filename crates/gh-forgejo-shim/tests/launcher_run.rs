@@ -2252,12 +2252,13 @@ ask >> "$REPORT""#,
 }
 
 /// A forge checkout whose SSH remote `ssh -G` sends to another address, as a `HostName` for a VPN
-/// does (#334): a fake `ssh` first on PATH resolves `forge.test` and `www.forge.test`, with or
-/// without a user, to 192.0.2.10, and `hub-alias.test` to github.com, unless `SSH_AS_WRITTEN`
-/// (every host as written) or `SSH_ADD_WWW` (every host with `www.` added) is set. gh drops the
-/// renamed remote, so the wrapper reads it under its own host and hands gh the repository in
-/// `GH_REPO`. `SSH_USER_AS_WRITTEN=1` leaves `user@host` lookups as written, as a `Match user`
-/// rule can.
+/// does (#334): a fake `ssh` first on PATH resolves `forge.test`, `www.forge.test` and
+/// `alias.test`, with or without a user, to 192.0.2.10 (or to `SSH_FORGE_TO`), and
+/// `hub-alias.test` to github.com, unless `SSH_AS_WRITTEN` (every host as written) or
+/// `SSH_ADD_WWW` (every host with `www.` added) is set. gh drops the renamed remote, so the
+/// wrapper reads it under its own host and hands gh the repository in `GH_REPO`. As a `Match user`
+/// rule can, `SSH_USER_AS_WRITTEN=1` leaves `user@host` lookups as written, and
+/// `SSH_USER_TO=<host>` sends them to that host.
 struct RenamedFixture {
     fixture: Fixture,
     gh: PathBuf,
@@ -2275,9 +2276,11 @@ impl RenamedFixture {
             "#!/bin/sh\n[ -n \"$SSH_AS_WRITTEN\" ] && { echo \"hostname ${3#*@}\"; exit 0; }\n\
              [ -n \"$SSH_ADD_WWW\" ] && { echo \"hostname www.${3#*@}\"; exit 0; }\n\
              case \"$SSH_USER_AS_WRITTEN$3\" in 1*@*) echo \"hostname ${3#*@}\"; exit 0 ;; esac\n\
-             case \"$3\" in forge.test|git@forge.test|www.forge.test|git@www.forge.test) \
-             echo 'hostname 192.0.2.10' ;; hub-alias.test|git@hub-alias.test) \
-             echo 'hostname github.com' ;; *) echo \"hostname $3\" ;; esac\n",
+             case \"$3\" in *@*) [ -n \"$SSH_USER_TO\" ] && \
+             { echo \"hostname $SSH_USER_TO\"; exit 0; } ;; esac\n\
+             case \"${3#*@}\" in forge.test|www.forge.test|alias.test) \
+             echo \"hostname ${SSH_FORGE_TO:-192.0.2.10}\" ;; hub-alias.test) \
+             echo 'hostname github.com' ;; *) echo \"hostname ${3#*@}\" ;; esac\n",
         )
         .expect("fake ssh");
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -2430,20 +2433,157 @@ fn a_forge_ssh_sends_elsewhere_steps_aside_with_its_repository() {
     );
 }
 
-/// The remote reaches the forge's API under its own name, but git pushes to the address SSH
-/// resolves: `gh pr create` stays refused (#255), whichever way gh would push.
+/// git pushes to the address SSH resolves, and the push check (#255) counts the address `ssh -G`
+/// gives the forge's own name as the forge, as routing reads such a remote (#358): `gh pr create`
+/// runs, whether git pushes the branch's remote, a remote an `insteadOf` rule sends over SSH, or a
+/// fork remote gh adds over SSH, and whether gh launches or steps aside.
 #[test]
-fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create() {
+fn a_forge_ssh_sends_elsewhere_creates_prs() {
     let _serial = serial();
-    let renamed = RenamedFixture::new("ssh://git@forge.test:2222/o/r.git");
+    for remote in [
+        "ssh://git@forge.test:2222/o/r.git",
+        "git@forge.test:o/r.git",
+        "https://forge.test/o/r.git",
+    ] {
+        for (hosts, launched) in [
+            ("forge.test:\n    git_protocol: https\n", true),
+            ("forge.test:\n    git_protocol: ssh\n", true),
+            (
+                "forge.test:\n    oauth_token: forge-login\n    git_protocol: ssh\n",
+                false,
+            ),
+        ] {
+            let renamed = RenamedFixture::new(remote);
+            renamed.git(&[
+                "config",
+                "url.ssh://git@forge.test:2222/.insteadOf",
+                "https://forge.test/",
+            ]);
+            renamed.fixture.user_hosts(hosts);
+            // gh pushes only without `--head`, a form that waits on #352 for gh to find the
+            // branch's remote; the wrapper lets both through.
+            for head in [&[][..], &["--head", "topic"]] {
+                let args = [&["pr", "create", "--title", "t", "--body", "b"][..], head].concat();
+                let report = renamed.ran(&args, &[]);
+                assert_eq!(
+                    reported(&report, "GH_CONFIG_DIR") != "unset",
+                    launched,
+                    "{remote} {hosts} {args:?}: {report}"
+                );
+                assert_eq!(
+                    reported(&report, "GH_REPO"),
+                    "forge.test/o/r",
+                    "{remote} {hosts} {args:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The address the forge's own name resolves to counts only for a URL that names the forge and
+/// that SSH sends there: `gh pr create` stays refused (#255) when git would push anywhere else.
+#[test]
+fn a_forge_ssh_sends_elsewhere_still_refuses_pr_create_elsewhere() {
+    let _serial = serial();
+    let pr_create = ["pr", "create", "--title", "t", "--body", "b"];
+    // A push URL on another host, even one SSH sends to the forge's address, whether or not that
+    // host is allowlisted: its own rename isn't the forge's.
+    for (push, allowlist, why) in [
+        ("git@alias.test:o/r.git", &["forge.test"][..], "192.0.2.10"),
+        (
+            "git@alias.test:o/r.git",
+            &["forge.test", "alias.test"],
+            "192.0.2.10",
+        ),
+        (
+            "ssh://git@elsewhere.test/o/r.git",
+            &["forge.test"],
+            "elsewhere.test",
+        ),
+        ("git@github.com:o/r.git", &["forge.test"], "github.com"),
+        ("https://github.com/o/r.git", &["forge.test"], "github.com"),
+    ] {
+        let renamed = RenamedFixture::new("git@forge.test:o/r.git");
+        renamed.fixture.allowlist(allowlist);
+        renamed.git(&["config", "remote.origin.pushurl", push]);
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: https\n");
+        renamed.refused(
+            &pr_create,
+            &[],
+            &format!("remote origin pushes to {why}, not forge.test"),
+        );
+    }
+    // A `Match user` rule that sends `git@forge.test` somewhere other than the bare name: git
+    // connects with the user, so that's where the push goes, for the branch's remote and for a
+    // fork remote gh adds over SSH.
+    for to in ["192.0.2.99", "github.com"] {
+        let renamed = RenamedFixture::new("git@forge.test:o/r.git");
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: https\n");
+        renamed.refused(
+            &pr_create,
+            &[("SSH_USER_TO", to)],
+            &format!("remote origin pushes to {to}, not forge.test"),
+        );
+        let renamed = RenamedFixture::new("https://forge.test/o/r.git");
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: ssh\n");
+        renamed.refused(
+            &pr_create,
+            &[("SSH_USER_TO", to)],
+            &format!("ssh resolves git@forge.test to {to}, not forge.test"),
+        );
+    }
+    // The address counts only when the bare name, which routing resolves, gets it: a `Match user`
+    // rule alone that sends `git@forge.test` to a VPN address doesn't make that address the forge.
+    let renamed = RenamedFixture::new("git@forge.test:o/r.git");
     renamed
         .fixture
         .user_hosts("forge.test:\n    git_protocol: https\n");
     renamed.refused(
-        &["pr", "create", "--title", "t", "--body", "b"],
-        &[],
+        &pr_create,
+        &[
+            ("SSH_USER_TO", "192.0.2.10"),
+            ("SSH_FORGE_TO", "forge.test"),
+        ],
         "remote origin pushes to 192.0.2.10, not forge.test",
     );
+    // The forge's own name sent to a host gh knows reads as that host, for routing and so for the
+    // push, `www.` dropped as gh drops it: with `-R` choosing the forge, the push stays refused,
+    // and so does gh's fork remote.
+    for to in ["github.com", "www.github.com"] {
+        let renamed = RenamedFixture::new("git@forge.test:o/r.git");
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: ssh\n");
+        renamed.refused(
+            &[
+                "pr",
+                "create",
+                "-R",
+                "forge.test/o/r",
+                "--title",
+                "t",
+                "--body",
+                "b",
+            ],
+            &[("SSH_FORGE_TO", to)],
+            &format!("remote origin pushes to {to}, not forge.test"),
+        );
+        let renamed = RenamedFixture::new("https://forge.test/o/r.git");
+        renamed
+            .fixture
+            .user_hosts("forge.test:\n    git_protocol: ssh\n");
+        renamed.refused(
+            &pr_create,
+            &[("SSH_FORGE_TO", to)],
+            &format!("ssh resolves git@forge.test to {to}, not forge.test"),
+        );
+    }
     // gh drops a leading `www.` from a remote's host, so this remote routes to forge.test too.
     let renamed = RenamedFixture::new("ssh://git@www.forge.test/o/r.git");
     renamed
