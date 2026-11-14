@@ -23,9 +23,9 @@ from common import REPO
 
 # What a twin case may run: the launched write commands, and only these flags.
 TWIN_COMMANDS = {
-    ("pr", "create"): {"--head", "--base", "--title", "--body", "--draft"},
-    ("pr", "comment"): {"--body"},
-    ("pr", "edit"): {"--title", "--body"},
+    ("pr", "create"): {"--head", "--base", "--title", "--body", "--body-file", "--draft"},
+    ("pr", "comment"): {"--body", "--body-file"},
+    ("pr", "edit"): {"--title", "--body", "--body-file"},
     ("pr", "merge"): {"--merge", "--squash", "--rebase", "--auto", "--match-head-commit", "--delete-branch"},
     ("pr", "ready"): {"--undo"},
     ("pr", "close"): {"--delete-branch"},
@@ -48,7 +48,10 @@ ISSUE_SELECT = "select(.number == {issue})"
 SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
 STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}")
 SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label",
-         "protect_head", "fork", "agit"}
+         "protect_head", "fork", "agit", "body_file"}
+# The one file a case's --body-file names: write_inputs() writes setup.body_file there, in the
+# checkout gh runs in.
+BODY_FILE = "body.md"
 # The organization a `fork` case forks into, then deletes its fork from.
 FORK_OWNER = "gfj-forks"
 # The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
@@ -97,6 +100,8 @@ def validate(case):
                 if arg == "--branch":
                     branches.append(argv[index])
                 values.setdefault(arg, []).append(argv[index])
+                if arg == "--body-file" and argv[index] != BODY_FILE:
+                    raise ValueError(f"--body-file takes {BODY_FILE}, the file setup.body_file writes")
                 if arg == "--match-head-commit" and not re.fullmatch(r"\{head\}|[0-9a-f]{40}", argv[index]):
                     raise ValueError("--match-head-commit takes {head} or a full sha")
         elif arg in SELECTORS.get(command, {"{pr}", "{branch}"}):
@@ -142,6 +147,8 @@ def validate(case):
     for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label", "agit"):
         if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
+    if ("body_file" in setup) != ("--body-file" in values) or not isinstance(setup.get("body_file", ""), str):
+        raise ValueError("--body-file and setup.body_file, its text, come together")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
         raise ValueError("setup.draft and setup.closed need setup.pr")
     if setup.get("fork") and (not setup.get("pr") or setup.get("closed") or setup.get("protect_head")):
@@ -307,6 +314,13 @@ def prepare(case, home, token):
     if setup.get("workflow"):
         subs["run"] = own_run(base, token, branch)
     return subs
+
+
+def write_inputs(case, checkout):
+    """Write the file a case's --body-file reads into the checkout gh runs in."""
+    text = case["setup"].get("body_file")
+    if text is not None:
+        (Path(checkout) / BODY_FILE).write_text(text)
 
 
 def agit_pull(base, token, branch, target, title):
