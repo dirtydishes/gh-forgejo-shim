@@ -78,18 +78,33 @@ async fn subject(ctx: &Context<'_>, value: &ID) -> async_graphql::Result<ids::No
     }
     Ok(id)
 }
+/// GitHub's refusal of a write to an archived repository. Forgejo answers some such writes with 423,
+/// which reads as a server fault, and takes others, label writes among them.
+fn archived() -> async_graphql::Error {
+    async_graphql::Error::new("Repository was archived so is read-only.")
+        .extend_with(|_, e| e.set("type", "UNPROCESSABLE"))
+}
 /// The issue or pull request `labelable` names, the labels its repository offers, and the IDs among
 /// them that `labels` names, each once. A label ID must have been read through the same repository
 /// and still be one of its labels or its organization's; Forgejo would otherwise take any label on
-/// the instance by ID. Anything else answers GitHub's "Not Found" before a write.
+/// the instance by ID. Anything else answers GitHub's "Not Found" before a write, and an archived
+/// repository GitHub's refusal.
 async fn labeling(
     ctx: &Context<'_>,
     labelable: &ID,
     labels: &[ID],
 ) -> async_graphql::Result<(ids::NodeId, forgejo::Labels, Vec<i64>)> {
     let target = subject(ctx, labelable).await?;
-    let offered = ctx
-        .data_unchecked::<Session>()
+    let session = ctx.data_unchecked::<Session>();
+    if session
+        .repository(&target.owner, &target.repository)
+        .await
+        .map_err(error)?
+        .archived
+    {
+        return Err(archived());
+    }
+    let offered = session
         .labels(&target.owner, &target.repository)
         .await
         .map_err(error)?;
@@ -174,10 +189,7 @@ impl Mutation {
         // Forgejo answers an archived repository's create with 423, which reads as a server fault;
         // gh doesn't check first, so say what GitHub says.
         if repository.archived {
-            return Err(
-                async_graphql::Error::new("Repository was archived so is read-only.")
-                    .extend_with(|_, e| e.set("type", "UNPROCESSABLE")),
-            );
+            return Err(archived());
         }
         let session = ctx.data_unchecked::<Session>();
         let source = session
