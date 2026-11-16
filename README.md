@@ -217,6 +217,10 @@ doesn't serve. Server mode redirects them; for client-only installs, add the red
   ([#161](https://github.com/dirtydishes/gh-forgejo-shim/issues/161)).
 - Some `gh repo view --json` fields and some `gh api` routes aren't served by the gateway yet
   ([#189](https://github.com/dirtydishes/gh-forgejo-shim/issues/189)).
+- `gh label create`, `edit` and `delete`, `gh pr create --label`, and `gh issue edit` flags other
+  than `--add-label` and `--remove-label` aren't served yet
+  ([#364](https://github.com/dirtydishes/gh-forgejo-shim/issues/364),
+  [#365](https://github.com/dirtydishes/gh-forgejo-shim/issues/365)).
 - In server mode without the wrapper, a `gh api` call with no `--hostname` goes to github.com when
   gh is also logged in there; that's how gh picks a host. Agents run such calls, so install the
   wrapper too, or tell the agent to pass `--hostname`
