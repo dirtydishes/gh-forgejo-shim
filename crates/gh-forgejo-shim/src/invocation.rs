@@ -489,6 +489,13 @@ impl Invocation {
                     format!("[{arguments}]")
                 }
             ));
+        } else if positional_usage.starts_with("{<numbers> |") {
+            // `issue edit` takes one or more (`cobra.MinimumNArgs(1)`).
+            if count == 0 {
+                self.fail(InvocationError::Argument(
+                    "requires at least 1 arg(s), only received 0".into(),
+                ));
+            }
         } else if (positional_usage.starts_with('{') || positional_usage.starts_with('<'))
             && count != 1
         {
@@ -567,7 +574,7 @@ fn discover_command(argv: &[String]) -> (String, Vec<usize>, Option<(String, Str
             let verb = match (command.as_str(), arg.as_str()) {
                 ("pr", "co") => "checkout",
                 ("pr" | "issue", "new") => "create",
-                ("pr" | "issue", "ls") => "list",
+                ("pr" | "issue" | "label", "ls") => "list",
                 _ => arg,
             };
             words.push(index);
@@ -911,6 +918,14 @@ mod tests {
             parsed.validate().expect_err("missing selector").render(),
             "accepts 1 arg(s), received 0\n"
         );
+        let parsed = parse(&["issue", "edit", "--add-label", "bug"]);
+        assert_eq!(
+            parsed.validate().expect_err("missing selector").render(),
+            "requires at least 1 arg(s), only received 0\n"
+        );
+        assert!(parse(&["issue", "edit", "3", "4", "--add-label", "bug"])
+            .validate()
+            .is_ok());
         let parsed = parse(&["pr", "view", "1", "--json", "x", "--gfjs-unknown"]);
         assert!(parsed
             .validate()

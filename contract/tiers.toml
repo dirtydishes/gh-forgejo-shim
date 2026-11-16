@@ -1096,3 +1096,151 @@ takes_value = true
 value = "[HOST/]OWNER/REPO"
 inherited = true
 
+[command."issue edit"]
+tier = "TA"
+usage = "gh issue edit {<numbers> | <urls>} [flags]"   # positional arguments come from here
+support = "planned"   # planned | native | error (fail locally with gh-shaped message)
+[[command."issue edit".flag]]
+long = "add-assignee"
+takes_value = true
+value = "login"
+[[command."issue edit".flag]]
+long = "add-blocked-by"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "add-blocking"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "add-label"
+takes_value = true
+value = "name"
+[[command."issue edit".flag]]
+long = "add-project"
+takes_value = true
+value = "title"
+[[command."issue edit".flag]]
+long = "add-sub-issue"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "attach"
+takes_value = true
+value = "file"
+[[command."issue edit".flag]]
+long = "body"
+short = "b"
+takes_value = true
+value = "string"
+[[command."issue edit".flag]]
+long = "body-file"
+short = "F"
+takes_value = true
+value = "file"
+[[command."issue edit".flag]]
+long = "milestone"
+short = "m"
+takes_value = true
+value = "name"
+[[command."issue edit".flag]]
+long = "parent"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "remove-assignee"
+takes_value = true
+value = "login"
+[[command."issue edit".flag]]
+long = "remove-blocked-by"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "remove-blocking"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "remove-label"
+takes_value = true
+value = "name"
+[[command."issue edit".flag]]
+long = "remove-milestone"
+takes_value = false
+[[command."issue edit".flag]]
+long = "remove-parent"
+takes_value = false
+[[command."issue edit".flag]]
+long = "remove-project"
+takes_value = true
+value = "title"
+[[command."issue edit".flag]]
+long = "remove-sub-issue"
+takes_value = true
+value = "number"
+[[command."issue edit".flag]]
+long = "remove-type"
+takes_value = false
+[[command."issue edit".flag]]
+long = "title"
+short = "t"
+takes_value = true
+value = "string"
+[[command."issue edit".flag]]
+long = "type"
+takes_value = true
+value = "name"
+[[command."issue edit".flag]]
+long = "repo"
+short = "R"
+takes_value = true
+value = "[HOST/]OWNER/REPO"
+inherited = true
+
+[command."label list"]
+tier = "TA"
+usage = "gh label list [flags]"   # positional arguments come from here
+support = "planned"   # planned | native | error (fail locally with gh-shaped message)
+json_fields = ["color", "createdAt", "description", "id", "isDefault", "name", "updatedAt", "url"]
+[[command."label list".flag]]
+long = "jq"
+short = "q"
+takes_value = true
+value = "expression"
+[[command."label list".flag]]
+long = "json"
+takes_value = true
+value = "fields"
+[[command."label list".flag]]
+long = "limit"
+short = "L"
+takes_value = true
+value = "int"
+[[command."label list".flag]]
+long = "order"
+takes_value = true
+value = "string"
+[[command."label list".flag]]
+long = "search"
+short = "S"
+takes_value = true
+value = "string"
+[[command."label list".flag]]
+long = "sort"
+takes_value = true
+value = "string"
+[[command."label list".flag]]
+long = "template"
+short = "t"
+takes_value = true
+value = "string"
+[[command."label list".flag]]
+long = "web"
+short = "w"
+takes_value = false
+[[command."label list".flag]]
+long = "repo"
+short = "R"
+takes_value = true
+value = "[HOST/]OWNER/REPO"
+inherited = true
+

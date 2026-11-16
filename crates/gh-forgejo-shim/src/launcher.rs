@@ -46,6 +46,8 @@ pub const LAUNCH_LIST: &[&str] = &[
     "issue list",
     "issue view",
     "issue create",
+    "issue edit",
+    "label list",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
@@ -64,7 +66,10 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
         &["head", "base", "title", "body", "draft", "repo"],
     ),
     ("pr comment", &["body", "repo"]),
-    ("pr edit", &["title", "body", "repo"]),
+    (
+        "pr edit",
+        &["title", "body", "add-label", "remove-label", "repo"],
+    ),
     (
         "pr merge",
         &[
@@ -108,6 +113,15 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     // Title and body only. `--type`, `--parent`, `--blocked-by` and `--blocking` fail after the
     // issue is made (bead `r0t`); labels, assignees, milestone, projects and templates fail first.
     ("issue create", &["title", "body", "body-file", "repo"]),
+    // Labels only: title, body, assignees, milestone and the rest need an `updateIssue` the gateway
+    // lacks (#365).
+    ("issue edit", &["add-label", "remove-label", "repo"]),
+    // `--web` opens the forge's labels page, and `--template` formats `--json` with Go templates;
+    // neither has been run against the gateway.
+    (
+        "label list",
+        &["json", "jq", "limit", "order", "search", "sort", "repo"],
+    ),
 ];
 
 /// ChatGPT's PR card and pane (`gh api graphql --hostname <host> -f query=<document>`, variables as
@@ -227,6 +241,10 @@ pub fn launches(invocation: &Invocation) -> bool {
             && !(invocation.flags.contains_key("title")
                 && (invocation.flags.contains_key("body")
                     || invocation.flags.contains_key("body-file"))))
+        // Without a flag to apply, gh prompts for the fields to edit in a terminal.
+        && !(command == "issue edit"
+            && !invocation.flags.contains_key("add-label")
+            && !invocation.flags.contains_key("remove-label"))
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -380,6 +398,44 @@ mod tests {
         assert!(launches(&invocation(&[
             "pr", "edit", "12", "-t", "t", "-b", "b"
         ])));
+        for labels in [
+            &[
+                "pr",
+                "edit",
+                "12",
+                "--add-label",
+                "bug",
+                "--remove-label",
+                "wip",
+            ][..],
+            &[
+                "pr",
+                "edit",
+                "12",
+                "-t",
+                "t",
+                "--add-label",
+                "bug,help wanted",
+            ][..],
+            &["issue", "edit", "3", "4", "--add-label", "bug"][..],
+            &["issue", "edit", "3", "--remove-label", "bug", "-R", "o/r"][..],
+            &["label", "list"][..],
+            &[
+                "label", "ls", "--search", "bug", "--sort", "name", "--order", "desc",
+            ][..],
+            &[
+                "label",
+                "list",
+                "-L",
+                "200",
+                "--json",
+                "name,color",
+                "-q",
+                ".[].name",
+            ][..],
+        ] {
+            assert!(launches(&invocation(labels)), "{labels:?}");
+        }
         assert!(launches(&invocation(&[
             "pr", "create", "-H", "x", "-B", "main", "-t", "t", "-b", "b", "-d"
         ])));
@@ -395,7 +451,13 @@ mod tests {
                 "--add-reviewer",
                 "alice",
             ][..],
-            &["pr", "edit", "12", "--add-label", "bug"][..],
+            // Without a label flag, gh would prompt for the fields to edit.
+            &["issue", "edit", "3"][..],
+            &["issue", "edit", "3", "--title", "t", "--add-label", "bug"][..],
+            &["issue", "edit", "3", "--add-assignee", "@me"][..],
+            &["label", "list", "--web"][..],
+            &["label", "list", "--json", "name", "--template", "{{.}}"][..],
+            &["label", "create", "bug"][..],
             &[
                 "pr", "create", "--title", "t", "--body", "b", "--label", "bug",
             ][..],

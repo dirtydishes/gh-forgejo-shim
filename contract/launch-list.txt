@@ -21,3 +21,5 @@ issue comment
 issue list
 issue view
 issue create
+issue edit
+label list
