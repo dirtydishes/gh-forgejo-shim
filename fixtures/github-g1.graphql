@@ -19,6 +19,16 @@ type AddCommentPayload {
   commentEdge: IssueCommentEdge
 }
 
+input AddLabelsToLabelableInput {
+  labelableId: ID!
+  labelIds: [ID!]!
+  clientMutationId: String
+}
+
+type AddLabelsToLabelablePayload {
+  clientMutationId: String
+}
+
 type AutoMergeRequest {
   authorEmail: String
   commitBody: String
@@ -367,6 +377,16 @@ type LabelConnection {
   pageInfo: PageInfo!
 }
 
+input LabelOrder {
+  field: LabelOrderField!
+  direction: OrderDirection!
+}
+
+enum LabelOrderField {
+  CREATED_AT
+  NAME
+}
+
 input MarkPullRequestReadyForReviewInput {
   pullRequestId: ID!
   clientMutationId: String
@@ -416,6 +436,8 @@ type Milestone implements Node {
 }
 
 type Mutation {
+  addLabelsToLabelable( input: AddLabelsToLabelableInput! ): AddLabelsToLabelablePayload
+  removeLabelsFromLabelable( input: RemoveLabelsFromLabelableInput! ): RemoveLabelsFromLabelablePayload
   createIssue( input: CreateIssueInput! ): CreateIssuePayload
   createPullRequest( input: CreatePullRequestInput! ): CreatePullRequestPayload
   addComment( input: AddCommentInput! ): AddCommentPayload
@@ -749,6 +771,16 @@ type Ref implements Node {
   branchProtectionRule: BranchProtectionRule
 }
 
+input RemoveLabelsFromLabelableInput {
+  labelableId: ID!
+  labelIds: [ID!]!
+  clientMutationId: String
+}
+
+type RemoveLabelsFromLabelablePayload {
+  clientMutationId: String
+}
+
 input ReopenPullRequestInput {
   pullRequestId: ID!
   clientMutationId: String
@@ -781,6 +813,7 @@ type Repository implements Node {
   issue( number: Int! ): Issue
   issueOrPullRequest( number: Int! ): IssueOrPullRequest
   issues( after: String before: String filterBy: IssueFilters first: Int labels: [String!] last: Int orderBy: IssueOrder states: [IssueState!] ): IssueConnection!
+  labels( after: String before: String first: Int last: Int orderBy: LabelOrder = {field: CREATED_AT, direction: ASC} query: String ): LabelConnection
   defaultBranchRef: Ref
   pullRequest( number: Int! ): PullRequest
   pullRequests( after: String baseRefName: String before: String first: Int headRefName: String labels: [String!] last: Int orderBy: IssueOrder states: [PullRequestState!] ): PullRequestConnection!

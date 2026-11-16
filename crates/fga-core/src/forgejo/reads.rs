@@ -224,6 +224,20 @@ impl Session {
         self.bytes(&segments, &query).await
     }
 
+    /// The labels an issue or pull request in this repository can carry: the repository's own, then
+    /// its organization's. A user's repository has none of the latter: Forgejo answers 404 for an
+    /// owner that isn't an organization.
+    pub async fn labels(&self, owner: &str, repo: &str) -> Result<Vec<Label>, Error> {
+        let mut labels: Vec<Label> = self.pages(&["repos", owner, repo, "labels"], &[]).await?;
+        match self.pages::<Label>(&["orgs", owner, "labels"], &[]).await {
+            Ok(shared) => labels.extend(shared),
+            Err(Error::NotFound) => {}
+            Err(Error::MissingScope(scope)) => self.hidden(&scope),
+            Err(e) => return Err(e),
+        }
+        Ok(labels)
+    }
+
     pub async fn issue(&self, owner: &str, repo: &str, number: i32) -> Result<Issue, Error> {
         let issue: Issue = self
             .get(&["repos", owner, repo, "issues", &number.to_string()], &[])

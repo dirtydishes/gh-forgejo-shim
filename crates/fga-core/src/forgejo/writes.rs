@@ -247,6 +247,51 @@ impl Session {
         Ok(written(response)?.json()?)
     }
 
+    /// Add labels, by Forgejo ID, to an issue or pull request. Forgejo keeps labels it already has
+    /// and, for an exclusive scoped label, drops the others in its scope.
+    pub async fn add_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i32,
+        ids: &[i64],
+    ) -> Result<(), WriteError> {
+        let segments = [
+            "repos",
+            owner,
+            repo,
+            "issues",
+            &number.to_string(),
+            "labels",
+        ];
+        let body = serde_json::json!({ "labels": ids });
+        written(self.write(Method::POST, &segments, Some(&body)).await?)?;
+        Ok(())
+    }
+
+    /// Remove one label, by Forgejo ID, from an issue or pull request. Forgejo reads the ID as a
+    /// label name first (`routers/api/v1/repo/issue_label.go`, `DeleteIssueLabel`), so the caller
+    /// checks that no label has it as a name.
+    pub async fn remove_label(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i32,
+        id: i64,
+    ) -> Result<(), WriteError> {
+        let segments = [
+            "repos",
+            owner,
+            repo,
+            "issues",
+            &number.to_string(),
+            "labels",
+            &id.to_string(),
+        ];
+        written(self.write::<()>(Method::DELETE, &segments, None).await?)?;
+        Ok(())
+    }
+
     pub async fn merge_pull(
         &self,
         owner: &str,

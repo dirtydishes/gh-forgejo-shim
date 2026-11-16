@@ -166,10 +166,12 @@ pub struct Label {
     pub description: Option<String>,
     pub color: String,
 }
-impl From<forgejo::Label> for Label {
-    fn from(l: forgejo::Label) -> Self {
+impl Label {
+    /// A label as read through `owner/repo`, which its ID names, so a mutation can check that it
+    /// belongs there. An organization's label read through two repositories has two IDs.
+    pub fn new(l: forgejo::Label, owner: &str, repo: &str) -> Self {
         Self {
-            id: ID(node_id("Label", "", l.id)),
+            id: ID(node_id("Label", &format!("{owner}/{repo}"), l.id)),
             name: l.name,
             description: l.description,
             color: l.color,

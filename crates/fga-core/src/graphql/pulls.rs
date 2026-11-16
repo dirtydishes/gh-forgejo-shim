@@ -428,9 +428,8 @@ impl PullRequest {
             page(
                 self.source
                     .labels
-                    .clone()
-                    .into_iter()
-                    .map(Into::into)
+                    .iter()
+                    .map(|label| Label::new(label.clone(), &self.owner, &self.repo))
                     .collect(),
                 first,
                 last,

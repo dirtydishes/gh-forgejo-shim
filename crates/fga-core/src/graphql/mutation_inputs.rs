@@ -25,6 +25,19 @@ pub struct CreateIssueInput {
     pub client_mutation_id: Option<String>,
 }
 
+macro_rules! labels_input {
+    ($name:ident) => {
+        #[derive(InputObject)]
+        pub struct $name {
+            pub labelable_id: ID,
+            pub label_ids: Vec<ID>,
+            pub client_mutation_id: Option<String>,
+        }
+    };
+}
+labels_input!(AddLabelsToLabelableInput);
+labels_input!(RemoveLabelsFromLabelableInput);
+
 #[derive(InputObject)]
 pub struct AddCommentInput {
     pub subject_id: ID,
