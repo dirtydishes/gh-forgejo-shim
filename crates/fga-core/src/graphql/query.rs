@@ -260,7 +260,8 @@ impl Repository {
             .data_unchecked::<Session>()
             .labels(owner, &self.source.name)
             .await
-            .map_err(error)?;
+            .map_err(error)?
+            .labels;
         if let Some(query) = query.map(|q| q.to_lowercase()).filter(|q| !q.is_empty()) {
             labels.retain(|label| {
                 label.name.to_lowercase().contains(&query)

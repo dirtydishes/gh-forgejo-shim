@@ -86,7 +86,7 @@ async fn labeling(
     ctx: &Context<'_>,
     labelable: &ID,
     labels: &[ID],
-) -> async_graphql::Result<(ids::NodeId, Vec<forgejo::Label>, Vec<i64>)> {
+) -> async_graphql::Result<(ids::NodeId, forgejo::Labels, Vec<i64>)> {
     let target = subject(ctx, labelable).await?;
     let offered = ctx
         .data_unchecked::<Session>()
@@ -98,7 +98,12 @@ async fn labeling(
         let label = id(value, "Label")?;
         let offered = (label.owner.eq_ignore_ascii_case(&target.owner)
             && label.repository.eq_ignore_ascii_case(&target.repository))
-        .then(|| offered.iter().find(|l| l.id == i64::from(label.number)))
+        .then(|| {
+            offered
+                .labels
+                .iter()
+                .find(|l| l.id == i64::from(label.number))
+        })
         .flatten()
         .ok_or_else(|| error(forgejo::Error::NotFound))?;
         if !chosen.contains(&offered.id) {
@@ -131,11 +136,18 @@ impl Mutation {
     ) -> async_graphql::Result<Option<RemoveLabelsFromLabelablePayload>> {
         let (target, offered, chosen) =
             labeling(ctx, &input.labelable_id, &input.label_ids).await?;
-        // Forgejo reads the ID it is sent as a label name first, so a label named like another's
-        // ID would be removed in its place. Refuse before removing any.
+        // Forgejo reads the ID it is sent as a label name first, the organization's labels among
+        // them, so a label named like another's ID would be removed in its place. Refuse before
+        // removing any, and when the token can't see the organization's labels to check.
         for id in &chosen {
+            if offered.organization_hidden {
+                return Err(async_graphql::Error::new(format!(
+                    "Forgejo may read label {id} as the name of an organization label this token can't read; give the token read:organization"
+                ))
+                .extend_with(|_, e| e.set("type", "UNPROCESSABLE")));
+            }
             let name = id.to_string();
-            if offered.iter().any(|l| l.name == name && l.id != *id) {
+            if offered.labels.iter().any(|l| l.name == name && l.id != *id) {
                 return Err(async_graphql::Error::new(format!(
                     "Forgejo would read label {id} as the label named \"{id}\"; remove it on the forge"
                 ))

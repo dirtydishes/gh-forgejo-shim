@@ -40,7 +40,8 @@ pub const REQUIRED: [Scope; 4] = [
     Scope {
         name: "read:organization",
         category: "organization",
-        without: "a repository an organization owns reads as owned by a user",
+        without: "a repository an organization owns reads as owned by a user, its labels are missing \
+                  from label lists, and labels can't be removed",
         read_only: None,
     },
 ];

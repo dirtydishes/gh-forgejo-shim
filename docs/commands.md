@@ -143,7 +143,9 @@ Forgejo labels differ from GitHub's in two ways:
 
 - **Organization labels.** A repository owned by an organization can use the organization's
   labels as well as its own. `gh label list` lists both, and `--add-label` accepts either. When a
-  repository label and an organization label share a name, gh picks the repository's.
+  repository label and an organization label share a name, gh picks the repository's. Without
+  the token's `read:organization` scope, the organization's labels are missing, and removing a
+  label is refused: Forgejo could read the label as an organization label it can't check.
 - **Scoped labels.** Forgejo can mark a label such as `kind/bug` as exclusive: adding it removes the
   issue's other `kind/…` labels. GitHub has nothing like it, so `gh` doesn't report the labels
   Forgejo removed.
