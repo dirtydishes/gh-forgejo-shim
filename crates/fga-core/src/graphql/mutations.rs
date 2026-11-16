@@ -60,8 +60,99 @@ async fn edit(
     Ok(PullRequest::new(source, &id.owner, &id.repository))
 }
 
+/// The issue or pull request an ID names. Forgejo's issue endpoints take issues and PRs alike, so
+/// confirm the typed ID names what it says (`issue` refuses a PR's number).
+async fn subject(ctx: &Context<'_>, value: &ID) -> async_graphql::Result<ids::NodeId> {
+    let id = id(value, "PullRequest").or_else(|_| id(value, "Issue"))?;
+    let session = ctx.data_unchecked::<Session>();
+    if id.kind == "PullRequest" {
+        session
+            .pull_request(&id.owner, &id.repository, id.number)
+            .await
+            .map_err(error)?;
+    } else {
+        session
+            .issue(&id.owner, &id.repository, id.number)
+            .await
+            .map_err(error)?;
+    }
+    Ok(id)
+}
+/// The issue or pull request `labelable` names, the labels its repository offers, and the IDs among
+/// them that `labels` names, each once. A label ID must have been read through the same repository
+/// and still be one of its labels or its organization's; Forgejo would otherwise take any label on
+/// the instance by ID. Anything else answers GitHub's "Not Found" before a write.
+async fn labeling(
+    ctx: &Context<'_>,
+    labelable: &ID,
+    labels: &[ID],
+) -> async_graphql::Result<(ids::NodeId, Vec<forgejo::Label>, Vec<i64>)> {
+    let target = subject(ctx, labelable).await?;
+    let offered = ctx
+        .data_unchecked::<Session>()
+        .labels(&target.owner, &target.repository)
+        .await
+        .map_err(error)?;
+    let mut chosen = Vec::new();
+    for value in labels {
+        let label = id(value, "Label")?;
+        let offered = (label.owner.eq_ignore_ascii_case(&target.owner)
+            && label.repository.eq_ignore_ascii_case(&target.repository))
+        .then(|| offered.iter().find(|l| l.id == i64::from(label.number)))
+        .flatten()
+        .ok_or_else(|| error(forgejo::Error::NotFound))?;
+        if !chosen.contains(&offered.id) {
+            chosen.push(offered.id);
+        }
+    }
+    Ok((target, offered, chosen))
+}
+
 #[Object]
 impl Mutation {
+    async fn add_labels_to_labelable(
+        &self,
+        ctx: &Context<'_>,
+        input: AddLabelsToLabelableInput,
+    ) -> async_graphql::Result<Option<AddLabelsToLabelablePayload>> {
+        let (target, _, chosen) = labeling(ctx, &input.labelable_id, &input.label_ids).await?;
+        ctx.data_unchecked::<Session>()
+            .add_labels(&target.owner, &target.repository, target.number, &chosen)
+            .await
+            .map_err(write_error)?;
+        Ok(Some(AddLabelsToLabelablePayload {
+            client_mutation_id: input.client_mutation_id,
+        }))
+    }
+    async fn remove_labels_from_labelable(
+        &self,
+        ctx: &Context<'_>,
+        input: RemoveLabelsFromLabelableInput,
+    ) -> async_graphql::Result<Option<RemoveLabelsFromLabelablePayload>> {
+        let (target, offered, chosen) =
+            labeling(ctx, &input.labelable_id, &input.label_ids).await?;
+        // Forgejo reads the ID it is sent as a label name first, so a label named like another's
+        // ID would be removed in its place. Refuse before removing any.
+        for id in &chosen {
+            let name = id.to_string();
+            if offered.iter().any(|l| l.name == name && l.id != *id) {
+                return Err(async_graphql::Error::new(format!(
+                    "Forgejo would read label {id} as the label named \"{id}\"; remove it on the forge"
+                ))
+                .extend_with(|_, e| e.set("type", "UNPROCESSABLE")));
+            }
+        }
+        let session = ctx.data_unchecked::<Session>();
+        for id in chosen {
+            session
+                .remove_label(&target.owner, &target.repository, target.number, id)
+                .await
+                .map_err(write_error)?;
+        }
+        Ok(Some(RemoveLabelsFromLabelablePayload {
+            client_mutation_id: input.client_mutation_id,
+        }))
+    }
     async fn create_issue(
         &self,
         ctx: &Context<'_>,
@@ -158,22 +249,8 @@ impl Mutation {
         ctx: &Context<'_>,
         input: AddCommentInput,
     ) -> async_graphql::Result<Option<AddCommentPayload>> {
-        let id =
-            id(&input.subject_id, "PullRequest").or_else(|_| id(&input.subject_id, "Issue"))?;
+        let id = subject(ctx, &input.subject_id).await?;
         let session = ctx.data_unchecked::<Session>();
-        // Forgejo's issue comments endpoint takes issues and PRs alike; confirm the typed ID names
-        // what it says (`issue` refuses a PR's number).
-        if id.kind == "PullRequest" {
-            session
-                .pull_request(&id.owner, &id.repository, id.number)
-                .await
-                .map_err(error)?;
-        } else {
-            session
-                .issue(&id.owner, &id.repository, id.number)
-                .await
-                .map_err(error)?;
-        }
         let source = session
             .add_comment(&id.owner, &id.repository, id.number, &input.body)
             .await
@@ -533,6 +610,14 @@ pull_payload!(MarkPullRequestReadyForReviewPayload);
 pull_payload!(MergePullRequestPayload);
 pull_payload!(EnablePullRequestAutoMergePayload);
 pull_payload!(DisablePullRequestAutoMergePayload);
+#[derive(SimpleObject)]
+pub struct AddLabelsToLabelablePayload {
+    pub client_mutation_id: Option<String>,
+}
+#[derive(SimpleObject)]
+pub struct RemoveLabelsFromLabelablePayload {
+    pub client_mutation_id: Option<String>,
+}
 #[derive(SimpleObject)]
 pub struct AddCommentPayload {
     pub client_mutation_id: Option<String>,
