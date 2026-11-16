@@ -360,3 +360,59 @@ async fn a_remove_that_forgejo_would_read_as_another_label_is_refused() {
     );
     assert!(writes.lock().unwrap().is_empty());
 }
+
+/// A token without `read:organization` can't see the organization's labels, but Forgejo's remove
+/// still reads them by name: an organization label named "3" would go in place of label 3. So with
+/// the organization's labels hidden, a remove is refused unwritten, naming the scope; the list and
+/// adds go on with the repository's own labels (parallax sol-r1).
+#[tokio::test]
+async fn hidden_organization_labels_refuse_a_remove() {
+    let hidden = || async {
+        (
+            StatusCode::FORBIDDEN,
+            Json(
+                json!({"message":"token does not have at least one of required scope(s): [read:organization]"}),
+            ),
+        )
+    };
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let router = forge(false, writes.clone()).route("/api/v1/orgs/o/labels", get(hidden));
+    let response = execute(
+        router,
+        request(
+            LABEL_REMOVE,
+            json!({"input":{"labelableId":node_id("Issue", "o/r", 2),"labelIds":[node_id("Label", "o/r", 3)]}}),
+        ),
+    )
+    .await;
+    assert_eq!(response.errors.len(), 1);
+    assert_eq!(
+        response.errors[0].message,
+        "Forgejo may read label 3 as the name of an organization label this token can't read; give the token read:organization"
+    );
+    assert!(writes.lock().unwrap().is_empty());
+
+    let router = forge(false, writes.clone()).route("/api/v1/orgs/o/labels", get(hidden));
+    let response = execute(
+        router,
+        request(
+            LABEL_ADD,
+            json!({"input":{"labelableId":node_id("Issue", "o/r", 2),"labelIds":[node_id("Label", "o/r", 3)]}}),
+        ),
+    )
+    .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(*writes.lock().unwrap(), [r#"POST 2 {"labels":[3]}"#]);
+
+    let router = forge(false, Default::default()).route("/api/v1/orgs/o/labels", get(hidden));
+    let response = execute(
+        router,
+        request(LABEL_LIST, json!({"owner":"o","repo":"r","limit":30})),
+    )
+    .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        names(&response.data.into_json().unwrap()["repository"]["labels"]),
+        ["Wip", "bug", "kind/feature", "9"]
+    );
+}

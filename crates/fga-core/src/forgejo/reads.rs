@@ -226,16 +226,24 @@ impl Session {
 
     /// The labels an issue or pull request in this repository can carry: the repository's own, then
     /// its organization's. A user's repository has none of the latter: Forgejo answers 404 for an
-    /// owner that isn't an organization.
-    pub async fn labels(&self, owner: &str, repo: &str) -> Result<Vec<Label>, Error> {
+    /// owner that isn't an organization. A token without `read:organization` sees the repository's
+    /// alone, whoever owns it, and `organization_hidden` says so.
+    pub async fn labels(&self, owner: &str, repo: &str) -> Result<Labels, Error> {
         let mut labels: Vec<Label> = self.pages(&["repos", owner, repo, "labels"], &[]).await?;
+        let mut organization_hidden = false;
         match self.pages::<Label>(&["orgs", owner, "labels"], &[]).await {
             Ok(shared) => labels.extend(shared),
             Err(Error::NotFound) => {}
-            Err(Error::MissingScope(scope)) => self.hidden(&scope),
+            Err(Error::MissingScope(scope)) => {
+                self.hidden(&scope);
+                organization_hidden = true;
+            }
             Err(e) => return Err(e),
         }
-        Ok(labels)
+        Ok(Labels {
+            labels,
+            organization_hidden,
+        })
     }
 
     pub async fn issue(&self, owner: &str, repo: &str, number: i32) -> Result<Issue, Error> {

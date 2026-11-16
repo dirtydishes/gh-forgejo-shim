@@ -152,7 +152,7 @@ Create the Forgejo token under **Settings → Applications** with these four sco
 | `read:user` | Every gh call fails, since the gateway can't tell whose token it is. |
 | `write:repository` | Pull requests, branches and checks can't be read. With `read:repository` only, pull requests can't be created, edited or merged. |
 | `write:issue` | Issues can't be read, and a pull request's comments and scheduled auto-merge read as none. With `read:issue` only, issues and comments can't be created or edited. |
-| `read:organization` | A repository an organization owns reads as owned by a user. |
+| `read:organization` | A repository an organization owns reads as owned by a user, its labels are missing from label lists, and labels can't be removed. |
 
 `gfj doctor` names any scope a host's token lacks. [docs/configuration.md](docs/configuration.md#auth)
 says what the gateway logs when a missing scope hides data.
