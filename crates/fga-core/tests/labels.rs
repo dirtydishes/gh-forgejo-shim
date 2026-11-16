@@ -5,12 +5,13 @@ use async_graphql::{Request, Variables};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::Path,
+    extract::{Path, Query},
     http::StatusCode,
     routing::{delete, get, post},
 };
 use fga_core::{forgejo::Forgejo, graphql, ids::node_id};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const LABEL_LIST: &str = r#"fragment label on Label{color,description,name}
@@ -52,34 +53,81 @@ fn pull() -> Value {
     "base":{"ref":"main","label":"main","sha":"def"},"user":user(),"merged_at":null,"labels":[]})
 }
 
+/// One page of `items`, as Forgejo's label lists send it: at most `cap` items whatever `limit`
+/// asks (its `MAX_RESPONSE_ITEMS`), and no `Link` header, only `X-Total-Count`.
+fn paged(items: &[Value], query: &HashMap<String, String>, cap: usize) -> Json<Value> {
+    let get = |key: &str, default: usize| {
+        query
+            .get(key)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    let size = get("limit", cap).min(cap);
+    let page = get("page", 1).max(1);
+    Json(json!(
+        items
+            .iter()
+            .skip((page - 1) * size)
+            .take(size)
+            .collect::<Vec<_>>()
+    ))
+}
+
+/// The forge's shape: the organization's labels (`None` for a user's repository), whether the
+/// repository is archived, and the most items Forgejo sends a page.
+struct Shape {
+    organization: Option<Vec<Value>>,
+    archived: bool,
+    cap: usize,
+}
+
 /// A forge with repository `o/r`, issue #2 and pull request #1. Its labels are `Wip` (1), `bug`
 /// (3), `kind/feature` (7) and `9` (9); an organization `o`, when there is one, adds `triage` (5).
 /// It records each label write as `METHOD number body-or-id`.
 fn forge(organization: bool, writes: Arc<Mutex<Vec<String>>>) -> Router {
+    let organization = organization.then(|| vec![label(5, "triage", "00ff00", "Needs a look")]);
+    forge_shaped(
+        Shape {
+            organization,
+            archived: false,
+            cap: 50,
+        },
+        writes,
+    )
+}
+fn forge_shaped(shape: Shape, writes: Arc<Mutex<Vec<String>>>) -> Router {
     let (added, removed) = (writes.clone(), writes);
+    let Shape {
+        organization,
+        archived,
+        cap,
+    } = shape;
+    let labels = vec![
+        label(1, "Wip", "aaaaaa", ""),
+        label(3, "bug", "ee0701", "Something broke"),
+        label(7, "kind/feature", "0052cc", "New work"),
+        label(9, "9", "cccccc", "Numbered"),
+    ];
     let mut router = Router::new()
         .route("/api/v1/user", get(|| async { Json(user()) }))
         .route(
             "/api/v1/repos/o/r",
-            get(|| async {
+            get(move || async move {
                 Json(
                     json!({"id":1,"name":"r","full_name":"o/r","private":false,"owner":user(),
                     "html_url":"https://forge.test/o/r","default_branch":"main","fork":false,
-                    "archived":false,"has_issues":true,
+                    "archived":archived,"has_issues":true,
                     "permissions":{"admin":false,"push":true,"pull":true}}),
                 )
             }),
         )
         .route(
             "/api/v1/repos/o/r/labels",
-            get(|| async {
-                Json(json!([
-                    label(1, "Wip", "aaaaaa", ""),
-                    label(3, "bug", "ee0701", "Something broke"),
-                    label(7, "kind/feature", "0052cc", "New work"),
-                    label(9, "9", "cccccc", "Numbered"),
-                ]))
-            }),
+            get(
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    paged(&labels, &query, cap)
+                },
+            ),
         )
         .route(
             "/api/v1/repos/o/r/issues/2",
@@ -108,10 +156,14 @@ fn forge(organization: bool, writes: Arc<Mutex<Vec<String>>>) -> Router {
                 async { StatusCode::NO_CONTENT }
             }),
         );
-    if organization {
+    if let Some(shared) = organization {
         router = router.route(
             "/api/v1/orgs/o/labels",
-            get(|| async { Json(json!([label(5, "triage", "00ff00", "Needs a look")])) }),
+            get(
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    paged(&shared, &query, cap)
+                },
+            ),
         );
     }
     router
@@ -341,9 +393,13 @@ async fn a_remove_that_forgejo_would_read_as_another_label_is_refused() {
     assert_eq!(writes, ["DELETE 2 9"]);
 
     let writes = Arc::new(Mutex::new(Vec::new()));
-    let router = forge(false, writes.clone()).route(
-        "/api/v1/orgs/o/labels",
-        get(|| async { Json(json!([label(5, "3", "00ff00", "")])) }),
+    let router = forge_shaped(
+        Shape {
+            organization: Some(vec![label(5, "3", "00ff00", "")]),
+            archived: false,
+            cap: 50,
+        },
+        writes.clone(),
     );
     let response = execute(
         router,
@@ -415,4 +471,77 @@ async fn hidden_organization_labels_refuse_a_remove() {
         names(&response.data.into_json().unwrap()["repository"]["labels"]),
         ["Wip", "bug", "kind/feature", "9"]
     );
+}
+
+/// Forgejo sends at most its `MAX_RESPONSE_ITEMS` labels a page, which may be fewer than the
+/// gateway asks for, and no `Link`. Both lists are read to the end, so the organization label named
+/// "3" on the third page still stops the remove of label 3 (parallax sol-r1#1).
+#[tokio::test]
+async fn short_pages_are_read_to_the_end() {
+    let shape = || Shape {
+        organization: Some(vec![
+            label(11, "1", "00ff00", ""),
+            label(12, "2", "00ff00", ""),
+            label(13, "3", "00ff00", ""),
+        ]),
+        archived: false,
+        cap: 1,
+    };
+    let response = execute(
+        forge_shaped(shape(), Default::default()),
+        request(LABEL_LIST, json!({"owner":"o","repo":"r","limit":30})),
+    )
+    .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        names(&response.data.into_json().unwrap()["repository"]["labels"]),
+        ["Wip", "bug", "kind/feature", "9", "1", "2", "3"]
+    );
+
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let response = execute(
+        forge_shaped(shape(), writes.clone()),
+        request(
+            LABEL_REMOVE,
+            json!({"input":{"labelableId":node_id("Issue", "o/r", 2),"labelIds":[node_id("Label", "o/r", 3)]}}),
+        ),
+    )
+    .await;
+    assert_eq!(response.errors.len(), 1);
+    assert_eq!(
+        response.errors[0].message,
+        "Forgejo would read label 3 as the label named \"3\"; remove it on the forge"
+    );
+    assert!(writes.lock().unwrap().is_empty());
+}
+
+/// An archived repository is read-only on GitHub, and Forgejo's label routes don't check: both
+/// mutations refuse it unwritten, with GitHub's message (parallax sol-r1#2).
+#[tokio::test]
+async fn an_archived_repository_takes_no_label_writes() {
+    for document in [LABEL_ADD, LABEL_REMOVE] {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let router = forge_shaped(
+            Shape {
+                organization: None,
+                archived: true,
+                cap: 50,
+            },
+            writes.clone(),
+        );
+        let response = execute(
+            router,
+            request(
+                document,
+                json!({"input":{"labelableId":node_id("Issue", "o/r", 2),"labelIds":[node_id("Label", "o/r", 3)]}}),
+            ),
+        )
+        .await;
+        assert_eq!(response.errors.len(), 1, "{document}");
+        assert_eq!(
+            response.errors[0].message,
+            "Repository was archived so is read-only."
+        );
+        assert!(writes.lock().unwrap().is_empty(), "{document}");
+    }
 }
