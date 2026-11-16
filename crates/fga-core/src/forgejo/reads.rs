@@ -224,6 +224,48 @@ impl Session {
         self.bytes(&segments, &query).await
     }
 
+    /// The labels an issue or pull request in this repository can carry: the repository's own, then
+    /// its organization's. A user's repository has none of the latter: Forgejo answers 404 for an
+    /// owner that isn't an organization. A token without `read:organization` sees the repository's
+    /// alone, whoever owns it, and `organization_hidden` says so.
+    pub async fn labels(&self, owner: &str, repo: &str) -> Result<Labels, Error> {
+        let mut labels: Vec<Label> = self.until_empty(&["repos", owner, repo, "labels"]).await?;
+        let mut organization_hidden = false;
+        match self.until_empty::<Label>(&["orgs", owner, "labels"]).await {
+            Ok(shared) => labels.extend(shared),
+            Err(Error::NotFound) => {}
+            Err(Error::MissingScope(scope)) => {
+                self.hidden(&scope);
+                organization_hidden = true;
+            }
+            Err(e) => return Err(e),
+        }
+        Ok(Labels {
+            labels,
+            organization_hidden,
+        })
+    }
+
+    /// Every item of a list Forgejo pages without a `Link` header, such as its label lists
+    /// (`routers/api/v1/repo/label.go`, `ListLabels`), which may also send fewer items a page than
+    /// asked (its `MAX_RESPONSE_ITEMS`), so a short page proves nothing: read until a page comes
+    /// back empty.
+    async fn until_empty<T: serde::de::DeserializeOwned>(
+        &self,
+        segments: &[&str],
+    ) -> Result<Vec<T>, Error> {
+        let mut items = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let query = [("limit", PAGE_SIZE.to_string()), ("page", page.to_string())];
+            let (batch, _): (Vec<T>, _) = self.page(segments, &query).await?;
+            if batch.is_empty() {
+                return Ok(items);
+            }
+            items.extend(batch);
+        }
+        Err(Error::Upstream)
+    }
+
     pub async fn issue(&self, owner: &str, repo: &str, number: i32) -> Result<Issue, Error> {
         let issue: Issue = self
             .get(&["repos", owner, repo, "issues", &number.to_string()], &[])

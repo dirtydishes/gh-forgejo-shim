@@ -893,7 +893,8 @@ async fn a_scope_that_hides_data_warns_once_per_process() {
             ),
             format!(
                 "warning: {limited}: the token lacks read:organization, so a repository an \
-                 organization owns reads as owned by a user; give it read:organization (README: \
+                 organization owns reads as owned by a user, its labels are missing from label lists, \
+                 and labels can't be removed; give it read:organization (README: \
                  Token scopes)"
             ),
         ],

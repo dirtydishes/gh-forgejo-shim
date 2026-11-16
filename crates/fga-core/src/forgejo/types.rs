@@ -380,6 +380,12 @@ pub struct Label {
     pub description: Option<String>,
     pub color: String,
 }
+/// The labels a repository offers ([`Session::labels`]).
+pub struct Labels {
+    pub labels: Vec<Label>,
+    /// The token can't read the organization's labels, so some may be missing.
+    pub organization_hidden: bool,
+}
 #[derive(Clone, Debug, Deserialize)]
 pub struct Milestone {
     pub id: i64,

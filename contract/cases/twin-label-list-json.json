@@ -1,0 +1,27 @@
+{
+  "id": "twin-label-list-json",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/label-list-json",
+    "pr": true,
+    "label": true
+  },
+  "argv": [
+    "label",
+    "list",
+    "--search",
+    "{label}",
+    "--json",
+    "name,color,description",
+    "--jq",
+    ".[] | [.name, .color, .description] | join(\",\")"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "{label},ededed,\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

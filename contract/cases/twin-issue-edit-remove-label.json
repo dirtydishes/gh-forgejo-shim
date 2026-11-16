@@ -1,0 +1,31 @@
+{
+  "id": "twin-issue-edit-remove-label",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/issue-edit-remove-label",
+    "issue": true,
+    "label": true
+  },
+  "argv": [
+    "issue",
+    "edit",
+    "{issue}",
+    "--remove-label",
+    "{label}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/issues/{issue}\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "issues/{issue}/labels",
+      "none": {
+        "name": "{label}"
+      }
+    }
+  ],
+  "normalize": []
+}

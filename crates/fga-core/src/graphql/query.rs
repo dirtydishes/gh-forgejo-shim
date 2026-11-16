@@ -94,6 +94,16 @@ pub enum IssueOrderField {
     CreatedAt,
     UpdatedAt,
 }
+#[derive(Clone, Copy, Eq, PartialEq, Enum)]
+pub enum LabelOrderField {
+    CreatedAt,
+    Name,
+}
+#[derive(Clone, Copy, InputObject)]
+pub struct LabelOrder {
+    pub field: LabelOrderField,
+    pub direction: OrderDirection,
+}
 #[derive(InputObject)]
 pub struct IssueOrder {
     pub field: IssueOrderField,
@@ -227,6 +237,64 @@ impl Repository {
         order_by: Option<IssueOrder>,
     ) -> async_graphql::Result<IssueConnection> {
         super::issues::list(ctx, &self.source, states, filter_by, first, after, order_by).await
+    }
+    /// The labels its issues and pull requests can carry, the organization's among them. Forgejo
+    /// records no creation time, so `CREATED_AT` orders by Forgejo's IDs, which rise with each new
+    /// label. `NAME` ignores case. `query` matches a name or description, ignoring case.
+    #[allow(clippy::too_many_arguments)]
+    async fn labels(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        last: Option<i32>,
+        after: Option<String>,
+        before: Option<String>,
+        #[graphql(
+            default_with = "Some(LabelOrder { field: LabelOrderField::CreatedAt, direction: OrderDirection::Asc })"
+        )]
+        order_by: Option<LabelOrder>,
+        query: Option<String>,
+    ) -> async_graphql::Result<Option<LabelConnection>> {
+        let owner = &self.source.owner.login;
+        let mut labels = ctx
+            .data_unchecked::<Session>()
+            .labels(owner, &self.source.name)
+            .await
+            .map_err(error)?
+            .labels;
+        if let Some(query) = query.map(|q| q.to_lowercase()).filter(|q| !q.is_empty()) {
+            labels.retain(|label| {
+                label.name.to_lowercase().contains(&query)
+                    || label
+                        .description
+                        .as_ref()
+                        .is_some_and(|d| d.to_lowercase().contains(&query))
+            });
+        }
+        let order = order_by.unwrap_or(LabelOrder {
+            field: LabelOrderField::CreatedAt,
+            direction: OrderDirection::Asc,
+        });
+        match order.field {
+            LabelOrderField::CreatedAt => labels.sort_by_key(|label| label.id),
+            LabelOrderField::Name => labels.sort_by_cached_key(|label| label.name.to_lowercase()),
+        }
+        if order.direction == OrderDirection::Desc {
+            labels.reverse();
+        }
+        Ok(Some(
+            page(
+                labels
+                    .into_iter()
+                    .map(|label| Label::new(label, owner, &self.source.name))
+                    .collect(),
+                first,
+                last,
+                after,
+                before,
+            )?
+            .into(),
+        ))
     }
     /// A blob (`REV:PATH`) or a commit (`REV`); null when there is none. Look-ups by `oid`
     /// aren't served.

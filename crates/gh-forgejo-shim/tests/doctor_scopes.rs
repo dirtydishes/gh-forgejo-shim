@@ -225,7 +225,7 @@ fn doctor_names_each_missing_scope_and_what_breaks() -> TestResult {
         ),
         (
             "no-org-secret",
-            "read:organization is missing, so a repository an organization owns reads as owned by a user",
+            "read:organization is missing, so a repository an organization owns reads as owned by a user, its labels are missing from label lists, and labels can't be removed",
         ),
     ];
     for (token, problem) in cases {
