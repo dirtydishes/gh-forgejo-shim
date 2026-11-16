@@ -1,0 +1,23 @@
+{
+  "id": "twin-label-list-text",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/label-list-text",
+    "pr": true,
+    "label": true
+  },
+  "argv": [
+    "label",
+    "list",
+    "--search",
+    "{label}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "{label}\\t\\t#ededed\\n",
+    "stderr": ""
+  },
+  "state": [],
+  "normalize": []
+}

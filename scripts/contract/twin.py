@@ -25,7 +25,7 @@ from common import REPO
 TWIN_COMMANDS = {
     ("pr", "create"): {"--head", "--base", "--title", "--body", "--draft"},
     ("pr", "comment"): {"--body"},
-    ("pr", "edit"): {"--title", "--body"},
+    ("pr", "edit"): {"--title", "--body", "--add-label", "--remove-label"},
     ("pr", "merge"): {"--merge", "--squash", "--rebase", "--auto", "--match-head-commit", "--delete-branch"},
     ("pr", "ready"): {"--undo"},
     ("pr", "close"): {"--delete-branch"},
@@ -38,6 +38,9 @@ TWIN_COMMANDS = {
     ("issue", "view"): {"--json", "--jq"},
     ("issue", "list"): {"--json", "--jq", "--state", "--author", "--assignee", "--label", "--limit"},
     ("issue", "create"): {"--title", "--body"},
+    # The case's own label, on its own issue or pull request, or listed by a search for it.
+    ("issue", "edit"): {"--add-label", "--remove-label"},
+    ("label", "list"): {"--search", "--json", "--jq", "--sort", "--order", "--limit"},
     # ChatGPT's PR card shape: a GraphQL query about the case's own PR (`-F number={pr}`).
     ("api", "graphql"): {"--hostname", "-f", "-F"},
 }
@@ -45,8 +48,12 @@ BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", 
 PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
 ISSUE_SELECT = "select(.number == {issue})"
 # The selector each command takes; `run list` takes `--branch {branch}` instead.
-SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
-STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}")
+SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"},
+             ("issue", "edit"): {"{issue}"}}
+STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{pr\}/labels"
+                        r"|issues/\{issue\}(/comments|/labels)?|branches/\{branch\}")
+# Label flags name the case's own label, or one made from its name that no case creates.
+LABEL_FLAGS = {"--add-label", "--remove-label", "--search"}
 SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label",
          "protect_head", "fork", "agit"}
 # The organization a `fork` case forks into, then deletes its fork from.
@@ -124,6 +131,10 @@ def validate(case):
         if (len(queries) != 1 or words & {"mutation", "subscription"} or "number={pr}" not in values.get("-F", [])
                 or values.get("--hostname") != ["forge.test"] or selectors):
             raise ValueError("api graphql needs one -f query (no mutation), -F number={pr} and --hostname forge.test")
+    elif command == ("label", "list"):
+        # Other cases make labels too: a search for its own keeps theirs out of what it prints.
+        if values.get("--search") != ["{label}"] or selectors:
+            raise ValueError("label list needs --search {label}, the case's own label, and no selector")
     elif command == ("issue", "create"):
         # The issue it makes names the case, and stdout gives its number as (?P<issue>...).
         titles = values.get("--title", [])
@@ -131,6 +142,9 @@ def validate(case):
             raise ValueError("issue create needs --title naming {branch}, a --body, and no selector")
     elif len(selectors) != 1:
         raise ValueError("a twin pr command needs one selector, {pr} or {branch}")
+    for flag in LABEL_FLAGS & set(values):
+        if not all(value.startswith("{label}") for value in values[flag]):
+            raise ValueError(f"{flag} takes the case's own {{label}}, or a name made from it")
     setup = case.get("setup")
     if not isinstance(setup, dict) or not BRANCH.fullmatch(setup.get("branch", "")):
         raise ValueError("twin setup needs a branch named twin/<name>")
@@ -159,8 +173,10 @@ def validate(case):
         raise ValueError('setup.workflow "branch" needs a branch outside twin/run-*, made from main')
     if command[0] == "issue" and (not setup.get("issue")) != (command == ("issue", "create")):
         raise ValueError("a twin issue command needs setup.issue, its own issue (issue create makes its own)")
-    if setup.get("label") and not setup.get("issue"):
-        raise ValueError("setup.label labels the case's own issue, so it needs setup.issue")
+    if setup.get("label") and not (setup.get("issue") or setup.get("pr")):
+        raise ValueError("setup.label labels the case's own issue, or makes a label for its pull request")
+    if LABEL_FLAGS & set(values) and not setup.get("label"):
+        raise ValueError("a label flag needs setup.label, the case's own label")
     # A merge goes into the case's own base branch, never main, which other cases read.
     if command == ("pr", "merge") and not setup.get("base"):
         raise ValueError("a twin merge needs setup.base, its own base branch")
@@ -206,8 +222,9 @@ def validate(case):
         if "fields" in check and not isinstance(check["fields"], dict):
             raise ValueError("twin state fields must be an object")
         for key in ("any", "none"):
-            if key in check and (not path.endswith(("/comments", "/timeline")) or not isinstance(check[key], dict)):
-                raise ValueError(f"twin state {key} is an object, on a comments or timeline list")
+            if key in check and (not path.endswith(("/comments", "/timeline", "/labels"))
+                                 or not isinstance(check[key], dict)):
+                raise ValueError(f"twin state {key} is an object, on a comments, timeline or labels list")
     if set(case) & {"oracle", "expected", "xfail"}:
         raise ValueError("twin cases expect only their own expect and state")
 
@@ -295,12 +312,13 @@ def prepare(case, home, token):
         # seed.py does. A fork case's head is gone on purpose, so it never gets there.
         if tuple(case["argv"][:2]) == ("pr", "merge") and not setup.get("fork"):
             wait_mergeable(base, token, pr["number"])
+    if setup.get("label"):
+        subs["label"] = "twin-" + branch.removeprefix("twin/")
+        label = request(base, token, "POST", "labels", {"name": subs["label"], "color": "#ededed"})
     if setup.get("issue"):
         # Assigned to the twin's user, and labelled with the case's own label when asked.
         body = {"title": f"twin: {branch}", "body": "twin", "assignees": [REPO.split("/")[0]]}
         if setup.get("label"):
-            subs["label"] = "twin-" + branch.removeprefix("twin/")
-            label = request(base, token, "POST", "labels", {"name": subs["label"], "color": "#ededed"})
             body["labels"] = [label["id"]]
         issue = request(base, token, "POST", "issues", body)
         subs["issue"] = str(issue["number"])
@@ -443,10 +461,12 @@ def check(case, actual, home, token, subs):
                     got = got.get(part) if isinstance(got, dict) else None
                 if got != (fill(want, subs) if isinstance(want, str) else want):
                     diffs.append(f"{path} {key}: expected {want!r}, got {got!r}")
+        def has(item, want):
+            return all(item.get(k) == (fill(v, subs) if isinstance(v, str) else v) for k, v in want.items())
         if "any" in state:
-            if not any(all(item.get(k) == v for k, v in state["any"].items()) for item in value or []):
+            if not any(has(item, state["any"]) for item in value or []):
                 diffs.append(f"{path}: no item has {state['any']!r}")
         if "none" in state:
-            if any(all(item.get(k) == v for k, v in state["none"].items()) for item in value or []):
+            if any(has(item, state["none"]) for item in value or []):
                 diffs.append(f"{path}: an item has {state['none']!r}")
     return diffs
