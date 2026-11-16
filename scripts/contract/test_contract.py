@@ -26,6 +26,24 @@ class ContractTests(unittest.TestCase):
     def test_all_committed_cases_validate(self):
         self.assertGreaterEqual(len(load_cases(ROOT / "contract/cases")), 9)
 
+    def test_a_label_search_finds_only_its_own_cases_label(self):
+        # `--search twin-label-list` would also find twin-label-list-json's label.
+        def case(name, argv):
+            return {"id": f"twin-{name}", "kind": "twin", "repo": REPO,
+                    "setup": {"branch": f"twin/{name}", "pr": True, "label": True}, "argv": argv,
+                    "expect": {"exit": 0, "stdout": "", "stderr": ""}, "state": [], "normalize": []}
+        search = ["label", "list", "--search", "{label}"]
+        for mine, other, clash in [("label-list", "label-list-json", True),
+                                   ("label-list-text", "label-list-json", False)]:
+            with self.subTest(mine=mine), tempfile.TemporaryDirectory() as directory:
+                for body in [case(mine, search), case(other, search)]:
+                    (Path(directory) / f"{body['id']}.json").write_text(json.dumps(body))
+                if clash:
+                    with self.assertRaisesRegex(ValueError, "twin-label-list searches"):
+                        load_cases(directory)
+                else:
+                    load_cases(directory)
+
     def test_reject_writes_and_credential_disclosure(self):
         unsafe = [
             ["pr", "create"], ["pr", "close", "1"], ["auth", "token"], ["repo", "delete"],
@@ -109,6 +127,18 @@ class ContractTests(unittest.TestCase):
                 "state": [{"path": "pulls/{pr}", "fields": {"title": "t"}}], "normalize": []}
         validate_case(good)
         self.assertTrue(launched(good, ["pr edit"]))
+        for change in [
+            {"argv": ["pr", "edit", "{pr}", "--add-label", "{label}", "--remove-label", "{label}-gone"],
+             "setup": {"branch": "twin/x", "pr": True, "label": True},
+             "state": [{"path": "issues/{pr}/labels", "any": {"name": "{label}"}}]},
+            {"argv": ["issue", "edit", "{issue}", "--remove-label", "{label}"],
+             "setup": {"branch": "twin/x", "issue": True, "label": True},
+             "state": [{"path": "issues/{issue}/labels", "none": {"name": "{label}"}}]},
+            {"argv": ["label", "list", "--search", "{label}", "--json", "name", "--jq", ".[].name"],
+             "setup": {"branch": "twin/x", "pr": True, "label": True}, "state": []},
+        ]:
+            with self.subTest(change=change):
+                validate_case(good | change)
         with self.assertRaisesRegex(ValueError, "only oracle cases are captured"):
             oracle_argv(good)
         for change, message in [
@@ -138,8 +168,8 @@ class ContractTests(unittest.TestCase):
             ({"setup": {"branch": "twin/x"}}, "needs setup.pr"),
             ({"expect": {"exit": 0, "stdout": "(", "stderr": ""}}, "isn't a pattern"),
             ({"expect": {"exit": "0", "stdout": "", "stderr": ""}}, "integer"),
-            ({"state": [{"path": "pulls/{pr}", "any": {"title": "t"}}]}, "comments or timeline list"),
-            ({"state": [{"path": "pulls/{pr}", "none": {"title": "t"}}]}, "comments or timeline list"),
+            ({"state": [{"path": "pulls/{pr}", "any": {"title": "t"}}]}, "timeline or labels list"),
+            ({"state": [{"path": "pulls/{pr}", "none": {"title": "t"}}]}, "timeline or labels list"),
             ({"setup": {"branch": "twin/x-base", "pr": True}}, "end in -base"),
             ({"setup": {"branch": "twin/x", "pr": True, "base": "no"}}, "true or false"),
             ({"state": [{"path": "branches/{branch}", "fields": {}}]}, "exactly {path, gone"),
@@ -199,6 +229,20 @@ class ContractTests(unittest.TestCase):
             ({"argv": ["api", "graphql", "--hostname", "github.com", "-f", "query={x}", "-F", "number={pr}"]}, "no mutation"),
             ({"setup": {"branch": "twin/x", "agit": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "agit needs setup.pr"),
             ({"setup": {"branch": "twin/x", "pr": True, "agit": True, "fork": True}}, "no fork"),
+            # Label cases touch only their own label: another case's could be on its issue.
+            ({"argv": ["pr", "edit", "{pr}", "--add-label", "bug"],
+              "setup": {"branch": "twin/x", "pr": True, "label": True}}, "own {label}"),
+            ({"argv": ["pr", "edit", "{pr}", "--add-label", "{label}"]}, "needs setup.label"),
+            ({"argv": ["issue", "edit", "{pr}", "--add-label", "{label}"],
+              "setup": {"branch": "twin/x", "pr": True, "issue": True, "label": True}}, "selector"),
+            ({"argv": ["issue", "edit", "{issue}", "--title", "t"],
+              "setup": {"branch": "twin/x", "issue": True}}, "flag is not allowed"),
+            ({"argv": ["label", "list", "--json", "name"], "setup": {"branch": "twin/x", "pr": True, "label": True}},
+             "--search {label}"),
+            ({"argv": ["label", "list", "--search", "{label}"], "setup": {"branch": "twin/x", "label": True}},
+             "makes a label"),
+            ({"argv": ["label", "list", "--search", "{label}", "--web"],
+              "setup": {"branch": "twin/x", "pr": True, "label": True}}, "flag is not allowed"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)

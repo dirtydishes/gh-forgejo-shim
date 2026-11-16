@@ -1,0 +1,31 @@
+{
+  "id": "twin-pr-edit-add-label",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-edit-add-label",
+    "pr": true,
+    "label": true
+  },
+  "argv": [
+    "pr",
+    "edit",
+    "{pr}",
+    "--add-label",
+    "{label}"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj-oracle/pull/{pr}\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "issues/{pr}/labels",
+      "any": {
+        "name": "{label}"
+      }
+    }
+  ],
+  "normalize": []
+}

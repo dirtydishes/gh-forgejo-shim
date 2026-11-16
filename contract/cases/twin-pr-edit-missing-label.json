@@ -1,0 +1,33 @@
+{
+  "id": "twin-pr-edit-missing-label",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/pr-edit-missing-label",
+    "pr": true,
+    "label": true
+  },
+  "argv": [
+    "pr",
+    "edit",
+    "{pr}",
+    "--add-label",
+    "{label}",
+    "--add-label",
+    "{label}-missing"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "'{label}-missing' not found\\n"
+  },
+  "state": [
+    {
+      "path": "issues/{pr}/labels",
+      "none": {
+        "name": "{label}"
+      }
+    }
+  ],
+  "normalize": []
+}

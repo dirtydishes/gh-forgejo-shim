@@ -169,6 +169,15 @@ def load_cases(directory):
     branches = [case["setup"]["branch"] for _, case in cases if case.get("kind") == "twin"]
     if len(set(branches)) != len(branches):
         raise ValueError("twin cases need a branch each")
+    # `label list --search` matches part of a name, and every case's label is on the one twin, so
+    # a case that searches for its label must not find another case's.
+    labels = {case["id"]: "twin-" + case["setup"]["branch"].removeprefix("twin/")
+              for _, case in cases if case.get("kind") == "twin" and case["setup"].get("label")}
+    for _, case in cases:
+        if case.get("kind") == "twin" and "--search" in case["argv"]:
+            mine = labels[case["id"]]
+            if any(mine in label for other, label in labels.items() if other != case["id"]):
+                raise ValueError(f"{case['id']} searches for its label, which another case's label contains")
     return cases
 
 
