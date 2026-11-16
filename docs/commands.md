@@ -19,7 +19,8 @@ These run the real `gh`, against a gateway the wrapper starts for the call, with
 
 ```sh
 gh pr view | checks | list | create | comment | edit | merge | ready | close | reopen | checkout
-gh issue list | view | create | comment
+gh issue list | view | create | comment | edit
+gh label list
 gh run list | view
 gh api
 gh auth token | status
@@ -32,7 +33,7 @@ gh pr diff | status
 gh repo view
 ```
 
-gh's short forms (`pr co`, `pr new`, `issue ls`, `issue new`) are routed too.
+gh's short forms (`pr co`, `pr new`, `issue ls`, `issue new`, `label ls`) are routed too.
 
 Unsupported commands and unsupported flags fail explicitly when routed, or delegate to the real `gh` when they are outside the shimmed Forgejo surface.
 
@@ -68,6 +69,9 @@ reverse proxy.
 `gh pr view` and `gh pr status` return successfully when the current branch has no open PR. For JSON output, `gh pr view --json ...` returns `{}`, and `gh pr status --json ...` returns the GitHub CLI status envelope with `"currentBranch": null`.
 
 `gh pr diff` supports pull number or branch resolution, `--repo`, `--web`, `--name-only`, `--patch`, `--color`, and `--exclude`.
+
+`gh pr edit` supports `--title`, `--body`, `--add-label` and `--remove-label`. Labels are
+described under [Labels](#labels).
 
 `gh pr comment` supports pull number or branch resolution, `--repo`, `--body`, `--body-file`, and `--web`.
 
@@ -122,6 +126,31 @@ Labels are resolved to Forgejo label IDs before issue creation. Milestones are p
 ```
 
 `gh issue view` supports issue numbers or URLs, JSON output, repo selection, `--jq`, `--template`, `--comments`, and `--web`.
+
+## Labels
+
+`gh pr edit` and `gh issue edit` add and remove labels with `--add-label` and `--remove-label`.
+`gh issue edit` takes only those two flags and `--repo`, and one or more issue numbers; its other
+flags aren't served yet ([#365](https://github.com/dirtydishes/gh-forgejo-shim/issues/365)).
+
+`gh label list` supports `--search`, `--sort`, `--order`, `--limit`, `--json` and `--jq`. Its JSON
+fields are `id`, `name`, `color` and `description`; Forgejo has no `createdAt`, `updatedAt` or
+`isDefault` for a label, and asking for one fails. `--sort created` follows the order Forgejo
+created the labels in. `--search` matches a name or description and keeps the `--sort` order,
+where GitHub sorts by best match.
+
+Forgejo labels differ from GitHub's in two ways:
+
+- **Organization labels.** A repository owned by an organization can use the organization's
+  labels as well as its own. `gh label list` lists both, and `--add-label` accepts either. When a
+  repository label and an organization label share a name, gh picks the repository's.
+- **Scoped labels.** Forgejo can mark a label such as `kind/bug` as exclusive: adding it removes the
+  issue's other `kind/…` labels. GitHub has nothing like it, so `gh` doesn't report the labels
+  Forgejo removed.
+
+`gh label create`, `edit`, `delete` and `clone`, and `gh pr create --label`, aren't served yet
+([#364](https://github.com/dirtydishes/gh-forgejo-shim/issues/364),
+[#365](https://github.com/dirtydishes/gh-forgejo-shim/issues/365)).
 
 ## JSON output
 
