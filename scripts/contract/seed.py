@@ -16,7 +16,15 @@ from pathlib import Path
 
 from common import REPO, ROOT
 
-IMAGE = "codeberg.org/forgejo/forgejo:15"
+# The pinned Forgejo. The weekly upstream workflow sets CONTRACT_FORGEJO_IMAGE to the latest release.
+IMAGE = os.environ.get("CONTRACT_FORGEJO_IMAGE") or "codeberg.org/forgejo/forgejo:15"
+
+
+def expected_major(image):
+    """The major version an image's tag names, such as "15" for forgejo:15, or None for other tags."""
+    name = image.rsplit("/", 1)[-1]
+    tag = name.partition(":")[2].split(".")[0]
+    return tag if tag.isdigit() else None
 
 
 def docker(*args):
@@ -169,15 +177,16 @@ def main():
                    "-e", "FORGEJO__repository.pull-request__WORK_IN_PROGRESS_PREFIXES=scenario: draft", IMAGE)
             port = docker("port", name, "3000/tcp").rsplit(":", 1)[1]
             forgejo = Forgejo(f"http://127.0.0.1:{port}")
-            wait_until("Forgejo 15 readiness", lambda: forgejo.api("version"))
+            wait_until("Forgejo readiness", lambda: forgejo.api("version"))
             version = forgejo.api("version")["version"]
-            if not version.startswith("15."):
-                raise RuntimeError(f"expected Forgejo 15, got {version}")
+            major = expected_major(IMAGE)
+            if major and not version.startswith(major + "."):
+                raise RuntimeError(f"expected Forgejo {major}, got {version}")
             docker("exec", "--user", "git", name, "forgejo", "--config", "/data/gitea/conf/app.ini", "admin", "user", "create",
                    "--username", "dirtydishes", "--password", "gfjs-disposable-password", "--email", "gfjs@example.invalid",
                    "--admin", "--must-change-password=false")
             env = os.environ | seed(forgejo, Path(temporary))
-            print("seeded Forgejo 15: PRs 1-7, Actions-style statuses on 1 and 2; PR 3 is stale and untested", flush=True)
+            print(f"seeded Forgejo {version}: PRs 1-7, Actions-style statuses on 1 and 2; PR 3 is stale and untested", flush=True)
             return subprocess.run(sys.argv[1:], cwd=ROOT, env=env).returncode
         finally:
             for args in (("rm", "-fv", name), ("network", "rm", name), ("volume", "rm", volume)):
