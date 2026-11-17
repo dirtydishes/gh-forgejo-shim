@@ -20,6 +20,7 @@ These run the real `gh`, against a gateway the wrapper starts for the call, with
 ```sh
 gh pr view | checks | list | create | comment | edit | merge | ready | close | reopen | checkout
 gh issue list | view | create | comment
+gh repo create
 gh run list | view
 gh api
 gh auth token | status
@@ -32,7 +33,7 @@ gh pr diff | status
 gh repo view
 ```
 
-gh's short forms (`pr co`, `pr new`, `issue ls`, `issue new`) are routed too.
+gh's short forms (`pr co`, `pr new`, `issue ls`, `issue new`, `repo new`) are routed too.
 
 Unsupported commands and unsupported flags fail explicitly when routed, or delegate to the real `gh` when they are outside the shimmed Forgejo surface.
 
@@ -122,6 +123,32 @@ Labels are resolved to Forgejo label IDs before issue creation. Milestones are p
 ```
 
 `gh issue view` supports issue numbers or URLs, JSON output, repo selection, `--jq`, `--template`, `--comments`, and `--web`.
+
+## Repositories
+
+`gh repo create OWNER/NAME` and `gh repo new` create a repository in your account, or in an
+organization you belong to, with these flags:
+
+```text
+--private
+--public
+--description/-d
+--homepage/-h
+--disable-issues
+--disable-wiki
+```
+
+Forgejo has no internal repositories, so `--internal` fails. `--add-readme`, `--license`,
+`--gitignore`, `--template`, `--team`, `--clone` and `--source` aren't supported yet. `--push`
+stops before gh runs, because the shim can't yet make sure git pushes to the forge: create the
+repository, then push with git.
+
+The repository goes where the call is routed. In a checkout of a forge repository that is the
+forge. Elsewhere, name the forge with `GH_HOST`:
+
+```sh
+GH_HOST=forge.example.com gh repo create OWNER/NAME --private
+```
 
 ## JSON output
 
