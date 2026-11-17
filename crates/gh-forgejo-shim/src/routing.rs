@@ -1634,6 +1634,25 @@ mod tests {
         assert_eq!(decision.host.as_deref(), Some("git.example.com"));
     }
 
+    /// Outside a forge checkout, `repo create` reaches the forge only when `GH_HOST` names it, as
+    /// gh's own default host; otherwise it creates on github.com, as plain gh would.
+    #[test]
+    fn repo_create_outside_a_checkout_follows_gh_host() {
+        let create = argv(&["repo", "create", "owner/new", "--private"]);
+        let outside = Some(Path::new("/nonexistent-gfjs-repo"));
+        let decision = decide_route(
+            &create,
+            &config(&["git.example.com"]),
+            &env(&[("GH_HOST", "git.example.com")]),
+            outside,
+        );
+        assert_eq!(decision.kind, RouteKind::Forgejo);
+        assert_eq!(decision.host.as_deref(), Some("git.example.com"));
+
+        let decision = decide_route(&create, &config(&["git.example.com"]), &env(&[]), outside);
+        assert_eq!(decision.kind, RouteKind::Delegate);
+    }
+
     #[test]
     fn routes_issue_url_for_allowlisted_host() {
         let decision = decide_route(
