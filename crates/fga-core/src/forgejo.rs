@@ -695,6 +695,11 @@ impl Session {
         self.get(&["repos", owner, name], &[]).await
     }
 
+    /// A user or an organization by login: Forgejo's `users/{name}` answers for both.
+    pub async fn user(&self, login: &str) -> Result<User, Error> {
+        self.get(&["users", login], &[]).await
+    }
+
     /// Forgejo's repository owner is a User-shaped object even for organizations. A token without
     /// `read:organization` gets 403 where an organization lookup would say 404, so the owner reads
     /// as a user then: its login and repositories stay right, and only its type can be wrong.
