@@ -179,6 +179,24 @@ type CreatePullRequestPayload {
   pullRequest: PullRequest
 }
 
+input CreateRepositoryInput {
+  name: String!
+  ownerId: ID
+  description: String
+  homepageUrl: URI
+  visibility: RepositoryVisibility!
+  template: Boolean = false
+  teamId: ID
+  hasIssuesEnabled: Boolean = true
+  hasWikiEnabled: Boolean = false
+  clientMutationId: String
+}
+
+type CreateRepositoryPayload {
+  clientMutationId: String
+  repository: Repository
+}
+
 scalar DateTime
 
 enum DiffSide {
@@ -416,6 +434,7 @@ type Milestone implements Node {
 }
 
 type Mutation {
+  createRepository( input: CreateRepositoryInput! ): CreateRepositoryPayload
   createIssue( input: CreateIssueInput! ): CreateIssuePayload
   createPullRequest( input: CreatePullRequestInput! ): CreatePullRequestPayload
   addComment( input: AddCommentInput! ): AddCommentPayload
@@ -798,6 +817,12 @@ enum RepositoryPermission {
   READ
   TRIAGE
   WRITE
+}
+
+enum RepositoryVisibility {
+  INTERNAL
+  PRIVATE
+  PUBLIC
 }
 
 union RequestedReviewer = User | Bot | Team

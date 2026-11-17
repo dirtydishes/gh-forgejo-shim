@@ -35,6 +35,8 @@ pub enum WriteError {
     Validation,
     #[error("The gateway can't send this branch name to Forgejo")]
     UnsendableBranch,
+    #[error("Name already exists on this account")]
+    NameTaken,
 }
 
 /// Forgejo v15 pull.go:940-1033 uses both ctx.Error messages and raw Go structs.
@@ -123,6 +125,29 @@ pub struct CreateIssue<'a> {
     pub body: &'a str,
 }
 
+/// Forgejo's `CreateRepoOption`. It has no homepage and no issue or wiki switches; those go in
+/// [`EditRepository`] once the repository exists.
+#[derive(Serialize)]
+pub struct CreateRepository<'a> {
+    pub name: &'a str,
+    pub private: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub template: bool,
+}
+
+/// The parts of Forgejo's `EditRepoOption` a new repository may need.
+#[derive(Default, Serialize)]
+pub struct EditRepository<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_issues: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_wiki: Option<bool>,
+}
+
 #[derive(Default, Serialize)]
 pub struct EditPull {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,6 +220,36 @@ impl Session {
     ) -> Result<PullRequest, WriteError> {
         let response = self
             .write(Method::POST, &["repos", owner, repo, "pulls"], Some(&input))
+            .await?;
+        Ok(written(response)?.json()?)
+    }
+
+    /// Create a repository for the viewer, or in `organization`. Forgejo answers a name already in
+    /// use with 409 (`routers/api/v1/repo/repo.go` `CreateUserRepo`).
+    pub async fn create_repository(
+        &self,
+        organization: Option<&str>,
+        input: CreateRepository<'_>,
+    ) -> Result<Repository, WriteError> {
+        let segments = match organization {
+            Some(org) => vec!["orgs", org, "repos"],
+            None => vec!["user", "repos"],
+        };
+        let response = self.write(Method::POST, &segments, Some(&input)).await?;
+        if response.status == StatusCode::CONFLICT {
+            return Err(WriteError::NameTaken);
+        }
+        Ok(written(response)?.json()?)
+    }
+
+    pub async fn edit_repository(
+        &self,
+        owner: &str,
+        name: &str,
+        input: EditRepository<'_>,
+    ) -> Result<Repository, WriteError> {
+        let response = self
+            .write(Method::PATCH, &["repos", owner, name], Some(&input))
             .await?;
         Ok(written(response)?.json()?)
     }

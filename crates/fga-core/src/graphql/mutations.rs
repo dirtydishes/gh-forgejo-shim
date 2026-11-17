@@ -60,8 +60,108 @@ async fn edit(
     Ok(PullRequest::new(source, &id.owner, &id.repository))
 }
 
+fn unprocessable(message: &str) -> async_graphql::Error {
+    async_graphql::Error::new(message).extend_with(|_, e| e.set("type", "UNPROCESSABLE"))
+}
+
+/// The organization `owner_id` names, or `None` for the viewer's own account, which is also what no
+/// owner means. Forgejo creates only there: in another user's account or an organization the
+/// viewer isn't in, it would refuse anyway.
+async fn new_repository_owner(
+    session: &Session,
+    owner_id: Option<&ID>,
+) -> async_graphql::Result<Option<String>> {
+    let elsewhere = || {
+        unprocessable(
+            "Forgejo creates repositories only in your account or an organization you belong to",
+        )
+    };
+    let Some(value) = owner_id else {
+        return Ok(None);
+    };
+    match ids::decode_account(value) {
+        None => Err(error(forgejo::Error::NotFound)),
+        Some((kind, id)) if kind == "User" => {
+            if id == session.viewer.id {
+                Ok(None)
+            } else {
+                Err(elsewhere())
+            }
+        }
+        Some((_, id)) => session
+            .organizations()
+            .await
+            .map_err(error)?
+            .into_iter()
+            .find(|(org, _)| *org == id)
+            .map(|(_, login)| Some(login))
+            .ok_or_else(elsewhere),
+    }
+}
+
 #[Object]
 impl Mutation {
+    /// `gh repo create` without a template, license, gitignore or README. Forgejo's create takes
+    /// the name, description and privacy; a homepage, and issues or a wiki set otherwise than
+    /// Forgejo made them, need an edit after.
+    async fn create_repository(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateRepositoryInput,
+    ) -> async_graphql::Result<Option<CreateRepositoryPayload>> {
+        if input.visibility == RepositoryVisibility::Internal {
+            return Err(unprocessable(
+                "Forgejo has no internal repositories; create it as private or public",
+            ));
+        }
+        if input.team_id.is_some() {
+            return Err(unprocessable(
+                "The gateway can't give a team access to a new repository yet",
+            ));
+        }
+        let session = ctx.data_unchecked::<Session>();
+        let organization = new_repository_owner(session, input.owner_id.as_ref()).await?;
+        let mut source = session
+            .create_repository(
+                organization.as_deref(),
+                forgejo::CreateRepository {
+                    name: &input.name,
+                    private: input.visibility == RepositoryVisibility::Private,
+                    description: input.description.as_deref().filter(|d| !d.is_empty()),
+                    template: input.template.unwrap_or(false),
+                },
+            )
+            .await
+            .map_err(write_error)?;
+        let issues = input.has_issues_enabled.unwrap_or(true);
+        let wiki = input.has_wiki_enabled.unwrap_or(false);
+        let edit = forgejo::EditRepository {
+            website: input
+                .homepage_url
+                .as_ref()
+                .map(|url| url.0.as_str())
+                .filter(|url| !url.is_empty()),
+            has_issues: (source.has_issues != issues).then_some(issues),
+            has_wiki: (source.has_wiki != wiki).then_some(wiki),
+        };
+        if edit.website.is_some() || edit.has_issues.is_some() || edit.has_wiki.is_some() {
+            let (owner, name) = (source.owner.login.clone(), source.name.clone());
+            match session.edit_repository(&owner, &name, edit).await {
+                Ok(edited) => source = edited,
+                Err(_) => ctx.add_error(
+                    unprocessable(&format!(
+                        "Created {}, but Forgejo refused its homepage, issues or wiki setting",
+                        source.html_url
+                    ))
+                    .into_server_error(ctx.item.pos),
+                ),
+            }
+        }
+        Ok(Some(CreateRepositoryPayload {
+            client_mutation_id: input.client_mutation_id,
+            repository: Some(Repository { source }),
+        }))
+    }
     async fn create_issue(
         &self,
         ctx: &Context<'_>,
@@ -518,6 +618,11 @@ macro_rules! pull_payload {
             pub pull_request: Option<PullRequest>,
         }
     };
+}
+#[derive(SimpleObject)]
+pub struct CreateRepositoryPayload {
+    pub client_mutation_id: Option<String>,
+    pub repository: Option<Repository>,
 }
 #[derive(SimpleObject)]
 pub struct CreateIssuePayload {

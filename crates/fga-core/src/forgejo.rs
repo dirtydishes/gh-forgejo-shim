@@ -700,6 +700,17 @@ impl Session {
         self.get(&["users", login], &[]).await
     }
 
+    /// The organizations the viewer belongs to, as `(ID, login)`.
+    pub async fn organizations(&self) -> Result<Vec<(i64, String)>, Error> {
+        #[derive(serde::Deserialize)]
+        struct Organization {
+            id: i64,
+            name: String,
+        }
+        let orgs: Vec<Organization> = self.pages(&["user", "orgs"], &[]).await?;
+        Ok(orgs.into_iter().map(|org| (org.id, org.name)).collect())
+    }
+
     /// Forgejo's repository owner is a User-shaped object even for organizations. A token without
     /// `read:organization` gets 403 where an organization lookup would say 404, so the owner reads
     /// as a user then: its login and repositories stay right, and only its type can be wrong.
