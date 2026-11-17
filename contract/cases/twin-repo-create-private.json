@@ -1,0 +1,38 @@
+{
+  "id": "twin-repo-create-private",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/repo-create-private"
+  },
+  "argv": [
+    "repo",
+    "create",
+    "{repo}",
+    "--private",
+    "--description",
+    "twin repository",
+    "--homepage",
+    "https://example.test",
+    "--disable-wiki"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/dirtydishes/gfj\\-twin\\-repo\\-create\\-private\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "repository",
+      "fields": {
+        "full_name": "dirtydishes/gfj-twin-repo-create-private",
+        "private": true,
+        "description": "twin repository",
+        "website": "https://example.test",
+        "has_issues": true,
+        "has_wiki": false
+      }
+    }
+  ],
+  "normalize": []
+}

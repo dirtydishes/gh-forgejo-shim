@@ -1,0 +1,34 @@
+{
+  "id": "twin-repo-create-organization",
+  "kind": "twin",
+  "repo": "dirtydishes/gfj-oracle",
+  "setup": {
+    "branch": "twin/repo-create-organization",
+    "organization": true
+  },
+  "argv": [
+    "repo",
+    "create",
+    "{repo}",
+    "--public",
+    "--disable-issues"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "https://forge\\.test/gfj\\-forks/gfj\\-twin\\-repo\\-create\\-organization\\n",
+    "stderr": ""
+  },
+  "state": [
+    {
+      "path": "repository",
+      "fields": {
+        "full_name": "gfj-forks/gfj-twin-repo-create-organization",
+        "owner.login": "gfj-forks",
+        "private": false,
+        "has_issues": false,
+        "has_wiki": true
+      }
+    }
+  ],
+  "normalize": []
+}
