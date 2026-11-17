@@ -1,7 +1,7 @@
 //! `gh repo create OWNER/NAME` reads the owner with `GET users/{owner}` (`resolveOwner` in
 //! `pkg/cmd/repo/create/http.go`, gh 2.103.3) and sends its `node_id` as `createRepository`'s
-//! `ownerId`, creating in an organization when `type` is `Organization`. Forgejo answers
-//! `users/{name}` for organizations too, so only `orgs/{name}` tells them apart.
+//! `ownerId`, creating in an organization when `type` is `Organization`. Forgejo 15 answers
+//! `users/{name}` with 404 for an organization, which `orgs/{name}` answers instead.
 use axum::{Json, Router, http::StatusCode, routing::get};
 use fga_core::{forgejo::Forgejo, ids::node_id, map::WipPrefixes};
 use fga_server::{AppState, Host, app};
@@ -16,14 +16,13 @@ async fn gateway() -> SocketAddr {
         json!({"id":id,"login":login,"full_name":"","avatar_url":"https://forge.test/avatar",
             "html_url":format!("https://forge.test/{login}")})
     };
-    let (viewer, acme) = (account(1, "o"), account(5, "acme"));
+    let viewer = account(1, "o");
     let user = viewer.clone();
     let upstream = Router::new()
         .route("/api/v1/user", get(move || async move { Json(user) }))
         .route("/api/v1/users/o", get(move || async move { Json(viewer) }))
-        .route("/api/v1/users/acme", get(move || async move { Json(acme) }))
         .route(
-            "/api/v1/users/ghost",
+            "/api/v1/users/{other}",
             get(|| async {
                 (
                     StatusCode::NOT_FOUND,
@@ -33,9 +32,17 @@ async fn gateway() -> SocketAddr {
         )
         .route(
             "/api/v1/orgs/acme",
-            get(|| async { Json(json!({"id":5,"name":"acme","username":"acme"})) }),
+            get(|| async {
+                Json(
+                    json!({"id":5,"name":"acme","username":"acme","full_name":"Acme",
+                    "avatar_url":"https://forge.test/acme.png","visibility":"public"}),
+                )
+            }),
         )
-        .route("/api/v1/orgs/o", get(|| async { StatusCode::NOT_FOUND }));
+        .route(
+            "/api/v1/orgs/{other}",
+            get(|| async { StatusCode::NOT_FOUND }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
@@ -89,6 +96,8 @@ async fn an_organization_reads_with_its_type_and_organization_id() {
     assert_eq!(org["login"], "acme");
     assert_eq!(org["type"], "Organization");
     assert_eq!(org["node_id"], node_id("Organization", "", 5));
+    assert_eq!(org["avatar_url"], "https://forge.test/acme.png");
+    assert_eq!(org["html_url"], "https://forge.test/acme");
 }
 
 #[tokio::test]

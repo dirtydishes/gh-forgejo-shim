@@ -695,9 +695,33 @@ impl Session {
         self.get(&["repos", owner, name], &[]).await
     }
 
-    /// A user or an organization by login: Forgejo's `users/{name}` answers for both.
-    pub async fn user(&self, login: &str) -> Result<User, Error> {
-        self.get(&["users", login], &[]).await
+    /// A user or an organization by login, with its type (`User` or `Organization`). Forgejo 15
+    /// answers `users/{name}` with 404 for an organization, so `orgs/{name}` is read first. A token
+    /// without `read:organization` reads only users, as [`Session::owner_type`] does.
+    pub async fn account(&self, login: &str) -> Result<(User, &'static str), Error> {
+        #[derive(serde::Deserialize)]
+        struct Organization {
+            id: i64,
+            name: String,
+            full_name: Option<String>,
+            avatar_url: String,
+        }
+        match self.get::<Organization>(&["orgs", login], &[]).await {
+            Ok(org) => {
+                let user = User {
+                    id: org.id,
+                    login: org.name,
+                    full_name: org.full_name,
+                    html_url: None,
+                    avatar_url: org.avatar_url,
+                };
+                return Ok((user, "Organization"));
+            }
+            Err(Error::NotFound) => {}
+            Err(Error::MissingScope(scope)) => self.hidden(&scope),
+            Err(error) => return Err(error),
+        }
+        Ok((self.get(&["users", login], &[]).await?, "User"))
     }
 
     /// The organizations the viewer belongs to, as `(ID, login)`.

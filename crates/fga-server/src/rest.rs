@@ -67,12 +67,8 @@ pub async fn account(
     Extension(session): Extension<Session>,
     Path(login): Path<String>,
 ) -> Response {
-    let user = match session.user(&login).await {
-        Ok(user) => user,
-        Err(error) => return rest_error(error),
-    };
-    match session.owner_type(&user.login).await {
-        Ok(kind) => Json(map::account(&user, kind, &host.public_url)).into_response(),
+    match session.account(&login).await {
+        Ok((user, kind)) => Json(map::account(&user, kind, &host.public_url)).into_response(),
         Err(error) => rest_error(error),
     }
 }
