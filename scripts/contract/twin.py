@@ -38,17 +38,24 @@ TWIN_COMMANDS = {
     ("issue", "view"): {"--json", "--jq"},
     ("issue", "list"): {"--json", "--jq", "--state", "--author", "--assignee", "--label", "--limit"},
     ("issue", "create"): {"--title", "--body"},
+    # A repository of the case's own, named after its branch (`{repo}`).
+    ("repo", "create"): {"--private", "--public", "--description", "--homepage", "--disable-issues",
+                         "--disable-wiki"},
     # ChatGPT's PR card shape: a GraphQL query about the case's own PR (`-F number={pr}`).
     ("api", "graphql"): {"--hostname", "-f", "-F"},
 }
-BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--delete-branch"}
-PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}"}
+BOOL_FLAGS = {"--draft", "--merge", "--squash", "--rebase", "--auto", "--undo", "--delete-branch",
+              "--private", "--public", "--disable-issues", "--disable-wiki"}
+PLACEHOLDERS = {"{pr}", "{branch}", "{run}", "{issue}", "{repo}"}
 ISSUE_SELECT = "select(.number == {issue})"
 # The selector each command takes; `run list` takes `--branch {branch}` instead.
-SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"}}
-STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}")
+SELECTORS = {("run", "view"): {"{run}"}, ("issue", "comment"): {"{issue}"}, ("issue", "view"): {"{issue}"},
+             ("repo", "create"): {"{repo}"}}
+# `repository` reads the repository a `repo create` case made, not the twin's.
+STATE_PATH = re.compile(r"(pulls|issues)/\{pr\}(/comments|/timeline)?|issues/\{issue\}(/comments)?|branches/\{branch\}"
+                        r"|repository")
 SETUP = {"branch", "pr", "base", "draft", "closed", "protect", "status", "workflow", "issue", "label",
-         "protect_head", "fork", "agit"}
+         "protect_head", "fork", "agit", "organization"}
 # The organization a `fork` case forks into, then deletes its fork from.
 FORK_OWNER = "gfj-forks"
 # The workflow a `workflow` case needs on main: the gateway names a run's workflow from the
@@ -102,7 +109,7 @@ def validate(case):
         elif arg in SELECTORS.get(command, {"{pr}", "{branch}"}):
             selectors.append(arg)
         else:
-            raise ValueError("a twin selector must be the case's own {pr}, {branch}, {run} or {issue}")
+            raise ValueError("a twin selector must be the case's own {pr}, {branch}, {run}, {issue} or {repo}")
         index += 1
     # Without a selector gh picks the checkout's branch, s/pass: scenario PR 1.
     if command == ("pr", "create"):
@@ -129,6 +136,9 @@ def validate(case):
         titles = values.get("--title", [])
         if not titles or "{branch}" not in titles[-1] or "--body" not in values or selectors:
             raise ValueError("issue create needs --title naming {branch}, a --body, and no selector")
+    elif command == ("repo", "create"):
+        if selectors != ["{repo}"]:
+            raise ValueError("repo create needs one {repo}, the case's own repository")
     elif len(selectors) != 1:
         raise ValueError("a twin pr command needs one selector, {pr} or {branch}")
     setup = case.get("setup")
@@ -139,7 +149,8 @@ def validate(case):
     # prepare() names a case's own base <branch>-base; no case may claim such a name.
     if setup["branch"].endswith("-base"):
         raise ValueError("a twin branch can't end in -base, which names a case's own base")
-    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label", "agit"):
+    for flag in ("pr", "base", "draft", "closed", "protect_head", "fork", "workflow", "issue", "label", "agit",
+                 "organization"):
         if flag in setup and not isinstance(setup[flag], bool) and not (flag == "workflow" and setup[flag] == "branch"):
             raise ValueError(f"setup.{flag} is true or false")
     if (setup.get("draft") or setup.get("closed")) and not setup.get("pr"):
@@ -157,6 +168,8 @@ def validate(case):
         raise ValueError("setup.workflow needs a twin/run-<name> branch made from main")
     if setup.get("workflow") == "branch" and (RUN_BRANCH.fullmatch(setup["branch"]) or setup.get("base")):
         raise ValueError('setup.workflow "branch" needs a branch outside twin/run-*, made from main')
+    if setup.get("organization") and command != ("repo", "create"):
+        raise ValueError("setup.organization puts a repo create case's repository in the twin's organization")
     if command[0] == "issue" and (not setup.get("issue")) != (command == ("issue", "create")):
         raise ValueError("a twin issue command needs setup.issue, its own issue (issue create makes its own)")
     if setup.get("label") and not setup.get("issue"):
@@ -191,11 +204,13 @@ def validate(case):
     # {issue} would point the state checks at another case's issue (o2#3).
     bound = {"branch", "head"} | {name for name, made in (
         ("pr", setup.get("pr")), ("issue", setup.get("issue")), ("run", setup.get("workflow")),
-        ("label", setup.get("label"))) if made}
+        ("label", setup.get("label")), ("repo", command == ("repo", "create"))) if made}
     if any(set(re.compile(expect[stream]).groupindex) & bound for stream in ("stdout", "stderr")):
         raise ValueError("a stdout pattern can't rebind a placeholder the case's setup made")
     for check in case.get("state", []):
         path = check.get("path", "")
+        if (path == "repository") != (command == ("repo", "create")):
+            raise ValueError("a repository check reads the repository a repo create case made, and only that")
         if not STATE_PATH.fullmatch(path) or not (set(check) - {"path"}) <= {"fields", "any", "none", "gone"}:
             raise ValueError("twin state checks read the case's own pull request or branch")
         # A branch check says only whether the case's own branch is gone.
@@ -263,6 +278,10 @@ def prepare(case, home, token):
                 {"content": base64.b64encode(BRANCH_WORKFLOW.encode()).decode(), "branch": branch, "message": "branch"})
     head = request(base, token, "GET", f"branches/{urllib.parse.quote(branch, safe='')}")["commit"]["id"]
     subs = {"branch": branch, "head": head}
+    if tuple(case.get("argv", [])[:2]) == ("repo", "create"):
+        if setup.get("organization"):
+            ensure_organization(base, token)
+        subs["repo"] = own_repository(branch, setup.get("organization", False))
     if setup.get("status"):
         request(base, token, "POST", f"statuses/{head}", setup["status"] | {"description": "twin"})
     # Protecting the head branch makes Forgejo refuse to delete it.
@@ -309,6 +328,22 @@ def prepare(case, home, token):
     return subs
 
 
+def ensure_organization(base, token):
+    """The twin's organization, which the twin user owns, made by whichever case needs it first."""
+    try:
+        api(base, token, "POST", "orgs", {"username": FORK_OWNER})
+    except urllib.error.HTTPError as error:
+        if error.code != 422:  # the organization already exists
+            raise
+
+
+def own_repository(branch, organization=False):
+    """The repository a `repo create` case makes, named after the case's branch: the twin user's,
+    or with `organization` the twin's organization's, which the user owns."""
+    owner = FORK_OWNER if organization else REPO.split("/")[0]
+    return f"{owner}/gfj-{branch.replace('/', '-')}"
+
+
 def agit_pull(base, token, branch, target, title):
     """An AGit pull request into `target`: a commit pushed to `refs/for/<target>`, with no branch
     of its own. The token goes to git as a header in its environment, never in argv, and only to
@@ -348,11 +383,7 @@ def fork_head(base, token, branch):
     """A fork of the twin repo with a commit of its own on `branch`, as a pull request's
     `owner:branch` head. The base repo keeps its own `branch`, which a delete aimed at the base
     would remove. Forgejo copies every branch into a fork, so the fork starts with that one."""
-    try:
-        api(base, token, "POST", "orgs", {"username": FORK_OWNER})
-    except urllib.error.HTTPError as error:
-        if error.code != 422:  # the organization already exists
-            raise
+    ensure_organization(base, token)
     name = fork_name(branch)
     request(base, token, "POST", "forks", {"organization": FORK_OWNER, "name": name})
     try:
@@ -435,7 +466,10 @@ def check(case, actual, home, token, subs):
             if gone != state["gone"]:
                 diffs.append(f"branch {subs['branch']}: expected gone={state['gone']}, got gone={gone}")
             continue
-        value = request(base, token, "GET", path)
+        if path == "repository":
+            value = api(base, token, "GET", f"repos/{subs['repo']}")
+        else:
+            value = request(base, token, "GET", path)
         if "fields" in state:
             for key, want in state["fields"].items():
                 got = value

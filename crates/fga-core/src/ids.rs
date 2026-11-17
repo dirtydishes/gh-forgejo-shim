@@ -56,6 +56,19 @@ pub fn decode(value: &str) -> Option<NodeId> {
     })
 }
 
+/// A user's or organization's ID, `fga:{kind}::{id}`, as `(kind, Forgejo ID)`. Accounts belong to
+/// no repository, so [`decode`] refuses them.
+pub fn decode_account(value: &str) -> Option<(String, i64)> {
+    let bytes = STANDARD.decode(value).ok()?;
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let rest = text.strip_prefix("fga:")?;
+    let (kind, id) = rest.split_once("::")?;
+    if !matches!(kind, "User" | "Organization") {
+        return None;
+    }
+    Some((kind.to_owned(), id.parse().ok().filter(|n: &i64| *n > 0)?))
+}
+
 #[cfg(test)]
 mod decode_tests {
     use super::*;
@@ -78,6 +91,27 @@ mod decode_tests {
             STANDARD.encode("fga:PullRequest:o/r:1:extra"),
         ] {
             assert_eq!(decode(&value), None);
+        }
+    }
+
+    #[test]
+    fn accounts_decode_by_kind_and_id() {
+        assert_eq!(
+            decode_account(&node_id("User", "", 1)),
+            Some(("User".into(), 1))
+        );
+        assert_eq!(
+            decode_account(&node_id("Organization", "", 5)),
+            Some(("Organization".into(), 5))
+        );
+        for value in [
+            node_id("Repository", "o/r", 1),
+            node_id("Label", "", 1),
+            node_id("User", "", 0),
+            node_id("User", "", "x"),
+            "garbage".into(),
+        ] {
+            assert_eq!(decode_account(&value), None);
         }
     }
 }

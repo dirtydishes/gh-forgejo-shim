@@ -199,6 +199,19 @@ class ContractTests(unittest.TestCase):
             ({"argv": ["api", "graphql", "--hostname", "github.com", "-f", "query={x}", "-F", "number={pr}"]}, "no mutation"),
             ({"setup": {"branch": "twin/x", "agit": True}, "argv": ["pr", "edit", "{branch}", "--title", "t"]}, "agit needs setup.pr"),
             ({"setup": {"branch": "twin/x", "pr": True, "agit": True, "fork": True}}, "no fork"),
+            # A repo create case makes only its own repository, and reads only that back.
+            ({"argv": ["repo", "create", "o/new", "--private"], "setup": {"branch": "twin/x"}}, "selector"),
+            ({"argv": ["repo", "create", "--private"], "setup": {"branch": "twin/x"}}, "one {repo}"),
+            ({"argv": ["repo", "create", "{repo}", "--private", "--add-readme"], "setup": {"branch": "twin/x"}},
+             "flag is not allowed"),
+            ({"argv": ["repo", "create", "{repo}", "--private"], "setup": {"branch": "twin/x"},
+              "state": [{"path": "pulls/{pr}", "fields": {}}]}, "only that"),
+            ({"state": [{"path": "repository", "fields": {}}]}, "only that"),
+            # A stdout pattern can't point the repository check at another repository (sol-r1#3).
+            ({"argv": ["repo", "create", "{repo}", "--private"], "setup": {"branch": "twin/x"},
+              "expect": {"exit": 0, "stdout": "https://forge.test/(?P<repo>[^\\n]+)\\n", "stderr": ""},
+              "state": [{"path": "repository", "fields": {}}]}, "rebind"),
+            ({"setup": {"branch": "twin/x", "pr": True, "organization": True}}, "setup.organization"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 validate_case(good | change)
@@ -233,6 +246,15 @@ class ContractTests(unittest.TestCase):
                     patch.object(twin, "delete_fork", lambda *a: None):
                 twin.prepare(case | other, "/nonexistent", "t")
             self.assertNotIn(("GET", f"repos/{REPO}/pulls/7"), calls)
+
+    def test_a_repo_create_case_names_its_repository_after_its_branch(self):
+        case = {"id": "twin-x", "kind": "twin", "repo": REPO, "setup": {"branch": "twin/repo-x"},
+                "argv": ["repo", "create", "{repo}", "--private"],
+                "expect": {"exit": 0, "stdout": "", "stderr": ""},
+                "state": [{"path": "repository", "fields": {"private": True}}], "normalize": []}
+        validate_case(case)
+        self.assertEqual(twin.own_repository("twin/repo-x"), f"{REPO.split('/')[0]}/gfj-twin-repo-x")
+        self.assertEqual(twin.own_repository("twin/repo-x", True), f"{twin.FORK_OWNER}/gfj-twin-repo-x")
 
     def test_a_fork_case_deletes_its_fork_when_setup_fails(self):
         # Forgejo allows one fork per owner: a fork left behind would fail the next fork case.

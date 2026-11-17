@@ -21,3 +21,4 @@ issue comment
 issue list
 issue view
 issue create
+repo create

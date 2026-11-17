@@ -695,6 +695,46 @@ impl Session {
         self.get(&["repos", owner, name], &[]).await
     }
 
+    /// A user or an organization by login, with its type (`User` or `Organization`). Forgejo 15
+    /// answers `users/{name}` with 404 for an organization, so `orgs/{name}` is read first. A token
+    /// without `read:organization` reads only users, as [`Session::owner_type`] does.
+    pub async fn account(&self, login: &str) -> Result<(User, &'static str), Error> {
+        #[derive(serde::Deserialize)]
+        struct Organization {
+            id: i64,
+            name: String,
+            full_name: Option<String>,
+            avatar_url: String,
+        }
+        match self.get::<Organization>(&["orgs", login], &[]).await {
+            Ok(org) => {
+                let user = User {
+                    id: org.id,
+                    login: org.name,
+                    full_name: org.full_name,
+                    html_url: None,
+                    avatar_url: org.avatar_url,
+                };
+                return Ok((user, "Organization"));
+            }
+            Err(Error::NotFound) => {}
+            Err(Error::MissingScope(scope)) => self.hidden(&scope),
+            Err(error) => return Err(error),
+        }
+        Ok((self.get(&["users", login], &[]).await?, "User"))
+    }
+
+    /// The organizations the viewer belongs to, as `(ID, login)`.
+    pub async fn organizations(&self) -> Result<Vec<(i64, String)>, Error> {
+        #[derive(serde::Deserialize)]
+        struct Organization {
+            id: i64,
+            name: String,
+        }
+        let orgs: Vec<Organization> = self.pages(&["user", "orgs"], &[]).await?;
+        Ok(orgs.into_iter().map(|org| (org.id, org.name)).collect())
+    }
+
     /// Forgejo's repository owner is a User-shaped object even for organizations. A token without
     /// `read:organization` gets 403 where an organization lookup would say 404, so the owner reads
     /// as a user then: its login and repositories stay right, and only its type can be wrong.

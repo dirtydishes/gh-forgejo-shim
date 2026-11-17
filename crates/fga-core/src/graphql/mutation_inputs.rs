@@ -25,6 +25,30 @@ pub struct CreateIssueInput {
     pub client_mutation_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Enum, Eq, PartialEq)]
+pub enum RepositoryVisibility {
+    Internal,
+    Private,
+    Public,
+}
+
+/// `gh repo create` sends `name`, `visibility`, `hasIssuesEnabled` and `hasWikiEnabled` always, and
+/// `ownerId`, `teamId`, `description` and `homepageUrl` when set. The defaults are GitHub's.
+#[derive(InputObject)]
+pub struct CreateRepositoryInput {
+    pub name: String,
+    pub owner_id: Option<ID>,
+    pub description: Option<String>,
+    pub homepage_url: Option<Uri>,
+    pub visibility: RepositoryVisibility,
+    pub team_id: Option<ID>,
+    #[graphql(default_with = "Some(true)")]
+    pub has_issues_enabled: Option<bool>,
+    #[graphql(default_with = "Some(false)")]
+    pub has_wiki_enabled: Option<bool>,
+    pub client_mutation_id: Option<String>,
+}
+
 #[derive(InputObject)]
 pub struct AddCommentInput {
     pub subject_id: ID,

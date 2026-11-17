@@ -60,6 +60,19 @@ pub async fn user(
     Json(map::user(&session.viewer, &host.public_url))
 }
 
+/// An account by login, a user's or an organization's, as `gh repo create OWNER/NAME` reads it
+/// before creating there.
+pub async fn account(
+    Extension(host): Extension<Arc<Host>>,
+    Extension(session): Extension<Session>,
+    Path(login): Path<String>,
+) -> Response {
+    match session.account(&login).await {
+        Ok((user, kind)) => Json(map::account(&user, kind, &host.public_url)).into_response(),
+        Err(error) => rest_error(error),
+    }
+}
+
 /// `gh pr merge --delete-branch` deletes the head branch through Forgejo. gh reads 404 and 422 as
 /// "already deleted", so only a branch known to be absent gets GitHub's 422; a refusal (default
 /// or protected branch, no write access, a 404 that doesn't name the branch) keeps its own code, a

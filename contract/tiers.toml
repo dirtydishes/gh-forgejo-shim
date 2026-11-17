@@ -125,6 +125,79 @@ value = "string"
 long = "verbose"
 takes_value = false
 
+[command."repo create"]
+tier = "T2"
+usage = "gh repo create [<name>] [flags]"   # positional arguments come from here
+support = "planned"   # planned | native | error (fail locally with gh-shaped message)
+[[command."repo create".flag]]
+long = "add-readme"
+takes_value = false
+[[command."repo create".flag]]
+long = "clone"
+short = "c"
+takes_value = false
+[[command."repo create".flag]]
+long = "description"
+short = "d"
+takes_value = true
+value = "string"
+[[command."repo create".flag]]
+long = "disable-issues"
+takes_value = false
+[[command."repo create".flag]]
+long = "disable-wiki"
+takes_value = false
+[[command."repo create".flag]]
+long = "gitignore"
+short = "g"
+takes_value = true
+value = "string"
+[[command."repo create".flag]]
+long = "homepage"
+short = "h"
+takes_value = true
+value = "URL"
+[[command."repo create".flag]]
+long = "include-all-branches"
+takes_value = false
+[[command."repo create".flag]]
+long = "internal"
+takes_value = false
+[[command."repo create".flag]]
+long = "license"
+short = "l"
+takes_value = true
+value = "string"
+[[command."repo create".flag]]
+long = "private"
+takes_value = false
+[[command."repo create".flag]]
+long = "public"
+takes_value = false
+[[command."repo create".flag]]
+long = "push"
+takes_value = false
+[[command."repo create".flag]]
+long = "remote"
+short = "r"
+takes_value = true
+value = "string"
+[[command."repo create".flag]]
+long = "source"
+short = "s"
+takes_value = true
+value = "string"
+[[command."repo create".flag]]
+long = "team"
+short = "t"
+takes_value = true
+value = "name"
+[[command."repo create".flag]]
+long = "template"
+short = "p"
+takes_value = true
+value = "repository"
+
 [command."repo view"]
 tier = "T1"
 usage = "gh repo view [<repository>] [flags]"   # positional arguments come from here

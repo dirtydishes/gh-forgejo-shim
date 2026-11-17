@@ -3,11 +3,17 @@ use serde_json::{Value, json};
 use url::Url;
 
 pub fn user(user: &forgejo::User, public: &Url) -> Value {
+    account(user, "User", public)
+}
+
+/// A Forgejo account as GitHub's REST API shows it. `kind` is `User` or `Organization`, which sets
+/// its `type` and gives it the ID GraphQL gives the same account.
+pub fn account(user: &forgejo::User, kind: &str, public: &Url) -> Value {
     let mut value = json!({
         "login": user.login,
         "id": user.id,
-        "node_id": node_id("User", "", user.id),
-        "type": "User",
+        "node_id": node_id(kind, "", user.id),
+        "type": kind,
         "avatar_url": user.avatar_url,
         "html_url": user.html_url.clone().unwrap_or_else(|| {
             let mut url = public.clone();

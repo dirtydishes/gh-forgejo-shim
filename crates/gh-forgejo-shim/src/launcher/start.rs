@@ -497,9 +497,11 @@ impl Plan {
         let hostname = routed.flag("hostname").filter(|value| !value.is_empty());
         let mut extra_edits = Edits::new();
         // Decision 4 (§2): host-less `gh api` and `gh auth token` use gh's default host, so the
-        // forge becomes it. Portless, because gh drops the port from remotes before comparing
-        // them with GH_HOST. A user GH_HOST with that value already stays as it is.
-        if matches!(command, "api" | "auth token") && hostname.is_none() {
+        // forge becomes it. So does `gh repo create`, which creates there whatever the checkout's
+        // remotes say (`create.go`'s `DefaultHost`). Portless, because gh drops the port from
+        // remotes before comparing them with GH_HOST. A user GH_HOST with that value already
+        // stays as it is.
+        if matches!(command, "api" | "auth token" | "repo create") && hostname.is_none() {
             let hostname = gh_hostname(host);
             if env.get("GH_HOST") != Some(&hostname) {
                 extra_edits.push(("GH_HOST", Edit::Set(hostname.into())));
@@ -638,9 +640,14 @@ mod tests {
     }
 
     #[test]
-    fn host_less_api_and_auth_token_get_the_forges_portless_gh_host() {
+    fn host_less_api_auth_token_and_repo_create_get_the_forges_portless_gh_host() {
         let gh_host = Edit::Set("forge.test".into());
-        for args in [&["api", "user"][..], &["auth", "token"][..]] {
+        // `repo create` creates on gh's default host, not a remote's (parallax sol-r1#1).
+        for args in [
+            &["api", "user"][..],
+            &["auth", "token"][..],
+            &["repo", "create", "o/new", "--private"][..],
+        ] {
             assert_eq!(
                 plan(args, &[]).extra_edits,
                 vec![("GH_HOST", gh_host.clone())],

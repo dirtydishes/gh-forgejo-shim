@@ -566,7 +566,7 @@ fn discover_command(argv: &[String]) -> (String, Vec<usize>, Option<(String, Str
         } else {
             let verb = match (command.as_str(), arg.as_str()) {
                 ("pr", "co") => "checkout",
-                ("pr" | "issue", "new") => "create",
+                ("pr" | "issue" | "repo", "new") => "create",
                 ("pr" | "issue", "ls") => "list",
                 _ => arg,
             };
