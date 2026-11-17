@@ -46,6 +46,7 @@ pub const LAUNCH_LIST: &[&str] = &[
     "issue list",
     "issue view",
     "issue create",
+    "repo create",
 ];
 
 /// Listed commands that launch only with the flags a trace showed the gateway serves (C3a,
@@ -108,6 +109,20 @@ const LAUNCH_FLAGS: &[(&str, &[&str])] = &[
     // Title and body only. `--type`, `--parent`, `--blocked-by` and `--blocking` fail after the
     // issue is made (bead `r0t`); labels, assignees, milestone, projects and templates fail first.
     ("issue create", &["title", "body", "body-file", "repo"]),
+    // The gateway's `createRepository` (#369). `--add-readme`, `--license` and `--gitignore`
+    // send a REST create it doesn't serve; `--template`, `--team`, `--clone` and `--source` read
+    // or write more than it serves; Forgejo has no internal repositories.
+    (
+        "repo create",
+        &[
+            "private",
+            "public",
+            "description",
+            "homepage",
+            "disable-issues",
+            "disable-wiki",
+        ],
+    ),
 ];
 
 /// ChatGPT's PR card and pane (`gh api graphql --hostname <host> -f query=<document>`, variables as
@@ -227,6 +242,8 @@ pub fn launches(invocation: &Invocation) -> bool {
             && !(invocation.flags.contains_key("title")
                 && (invocation.flags.contains_key("body")
                     || invocation.flags.contains_key("body-file"))))
+        // Without a name gh prompts in a terminal, or fails.
+        && !(command == "repo create" && invocation.positionals.is_empty())
         // gh opens `pr checks --web` at `/pull/N/checks`, which Forgejo has no page for; the
         // built-in path prints the checks instead.
         && !(invocation.command == "pr checks" && invocation.flags.contains_key("web"))
@@ -484,6 +501,40 @@ mod tests {
             assert!(!launches(&invocation(refused)), "{refused:?}");
         }
         assert!(!launches(&invocation(&["repo", "list"])));
+        // `repo create` with a name, a visibility and the settings the gateway's
+        // `createRepository` takes; `-h` is `--homepage` there.
+        for args in [
+            &["repo", "create", "o/new", "--private"][..],
+            &["repo", "new", "new", "--public", "-d", "Tools"][..],
+            &[
+                "repo",
+                "create",
+                "acme/new",
+                "--private",
+                "-h",
+                "https://example.test",
+                "--disable-issues",
+                "--disable-wiki",
+            ][..],
+        ] {
+            assert!(launches(&invocation(args)), "{args:?}");
+        }
+        for refused in [
+            // gh prompts in a terminal, or pushes (`routing` refuses both first).
+            &["repo", "create"][..],
+            &["repo", "create", "--private", "--source", "."][..],
+            // Forms the gateway can't serve yet: REST creates, templates, teams, a local
+            // checkout, and internal visibility, which Forgejo lacks.
+            &["repo", "create", "o/new", "--private", "--add-readme"][..],
+            &["repo", "create", "o/new", "--private", "-l", "mit"][..],
+            &["repo", "create", "o/new", "--private", "-g", "Go"][..],
+            &["repo", "create", "o/new", "--private", "-p", "o/tpl"][..],
+            &["repo", "create", "acme/new", "--private", "-t", "core"][..],
+            &["repo", "create", "o/new", "--private", "--clone"][..],
+            &["repo", "create", "acme/new", "--internal"][..],
+        ] {
+            assert!(!launches(&invocation(refused)), "{refused:?}");
+        }
         assert!(!launches(&invocation(&["release", "view", "v1"])));
         assert!(
             launches(&invocation(&["pr", "view", "12", "--web"])),
