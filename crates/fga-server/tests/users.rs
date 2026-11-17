@@ -11,14 +11,16 @@ use std::{
     net::{SocketAddr, TcpStream},
 };
 
-async fn gateway() -> SocketAddr {
+/// A Forgejo where `o` is the viewer and `acme` an organization. With `read_org` false, the
+/// token lacks `read:organization`, and Forgejo refuses every `orgs/…` read with 403.
+async fn gateway(read_org: bool) -> SocketAddr {
     let account = |id: i64, login: &str| {
         json!({"id":id,"login":login,"full_name":"","avatar_url":"https://forge.test/avatar",
             "html_url":format!("https://forge.test/{login}")})
     };
     let viewer = account(1, "o");
     let user = viewer.clone();
-    let upstream = Router::new()
+    let mut upstream = Router::new()
         .route("/api/v1/user", get(move || async move { Json(user) }))
         .route("/api/v1/users/o", get(move || async move { Json(viewer) }))
         .route(
@@ -29,20 +31,34 @@ async fn gateway() -> SocketAddr {
                     Json(json!({"message":"user does not exist"})),
                 )
             }),
-        )
-        .route(
-            "/api/v1/orgs/acme",
-            get(|| async {
-                Json(
-                    json!({"id":5,"name":"acme","username":"acme","full_name":"Acme",
+        );
+    upstream = if read_org {
+        upstream
+            .route(
+                "/api/v1/orgs/acme",
+                get(|| async {
+                    Json(
+                        json!({"id":5,"name":"acme","username":"acme","full_name":"Acme",
                     "avatar_url":"https://forge.test/acme.png","visibility":"public"}),
+                    )
+                }),
+            )
+            .route(
+                "/api/v1/orgs/{other}",
+                get(|| async { StatusCode::NOT_FOUND }),
+            )
+    } else {
+        upstream.route(
+            "/api/v1/orgs/{any}",
+            get(|| async {
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"message":
+                        "token does not have at least one of required scope(s): [read:organization]"})),
                 )
             }),
         )
-        .route(
-            "/api/v1/orgs/{other}",
-            get(|| async { StatusCode::NOT_FOUND }),
-        );
+    };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
@@ -79,7 +95,7 @@ async fn get_json(addr: SocketAddr, path: &str) -> (u16, Value) {
 
 #[tokio::test]
 async fn a_user_reads_as_github_does_with_the_id_graphql_gives_it() {
-    let addr = gateway().await;
+    let addr = gateway(true).await;
     let (code, user) = get_json(addr, "/api/v3/users/o").await;
     assert_eq!(code, 200, "{user}");
     assert_eq!(user["login"], "o");
@@ -90,7 +106,7 @@ async fn a_user_reads_as_github_does_with_the_id_graphql_gives_it() {
 
 #[tokio::test]
 async fn an_organization_reads_with_its_type_and_organization_id() {
-    let addr = gateway().await;
+    let addr = gateway(true).await;
     let (code, org) = get_json(addr, "/api/v3/users/acme").await;
     assert_eq!(code, 200, "{org}");
     assert_eq!(org["login"], "acme");
@@ -102,7 +118,18 @@ async fn an_organization_reads_with_its_type_and_organization_id() {
 
 #[tokio::test]
 async fn a_missing_account_is_githubs_not_found() {
-    let addr = gateway().await;
+    let addr = gateway(true).await;
     let (code, body) = get_json(addr, "/api/v3/users/ghost").await;
     assert_eq!((code, &body["message"]), (404, &json!("Not Found")));
+}
+
+/// Without `read:organization` an organization can't be read, so it answers GitHub's 404 and gh
+/// stops before creating anything; a user still reads as one (parallax deepseek-r1#3).
+#[tokio::test]
+async fn without_read_organization_only_users_read() {
+    let addr = gateway(false).await;
+    let (code, user) = get_json(addr, "/api/v3/users/o").await;
+    assert_eq!((code, &user["type"]), (200, &json!("User")), "{user}");
+    let (code, org) = get_json(addr, "/api/v3/users/acme").await;
+    assert_eq!((code, &org["message"]), (404, &json!("Not Found")), "{org}");
 }
