@@ -1340,6 +1340,7 @@ mod tests {
             &["pr", "view", "--", "--help"][..],
             // No grammar: -h is --homepage there, and --help may be a value. These are writes.
             &["repo", "edit", "-h", "https://x.test"][..],
+            // `repo create` defines its own -h, `--homepage` (parallax deepseek-r1#2).
             &["repo", "create", "foo", "--public", "-h", "https://x.test"][..],
             &["release", "create", "v1", "--notes", "--help"][..],
         ] {
