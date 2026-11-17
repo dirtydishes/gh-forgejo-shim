@@ -128,7 +128,6 @@ impl Mutation {
                     name: &input.name,
                     private: input.visibility == RepositoryVisibility::Private,
                     description: input.description.as_deref().filter(|d| !d.is_empty()),
-                    template: input.template.unwrap_or(false),
                 },
             )
             .await

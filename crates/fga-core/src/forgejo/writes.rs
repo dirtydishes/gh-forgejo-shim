@@ -133,8 +133,6 @@ pub struct CreateRepository<'a> {
     pub private: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<&'a str>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub template: bool,
 }
 
 /// The parts of Forgejo's `EditRepoOption` a new repository may need.

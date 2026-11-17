@@ -274,6 +274,16 @@ async fn what_forgejo_cant_create_is_refused_and_nothing_is_written() {
         let response = create(&session, input.clone()).await;
         assert_eq!(response.errors[0].message, message, "{input}");
     }
+    // gh never marks a new repository a template, so the gateway takes no such field
+    // (parallax sol-r1#2).
+    let response = create(&session, with("template", json!(true))).await;
+    assert!(
+        response.errors[0]
+            .message
+            .contains("unknown field \"template\""),
+        "{:?}",
+        response.errors
+    );
     assert!(sent.lock().unwrap().is_empty());
     // A name already in use is Forgejo's 409, which GitHub words this way.
     let response = create(&session, with("name", json!("taken"))).await;

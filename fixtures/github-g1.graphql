@@ -185,7 +185,6 @@ input CreateRepositoryInput {
   description: String
   homepageUrl: URI
   visibility: RepositoryVisibility!
-  template: Boolean = false
   teamId: ID
   hasIssuesEnabled: Boolean = true
   hasWikiEnabled: Boolean = false

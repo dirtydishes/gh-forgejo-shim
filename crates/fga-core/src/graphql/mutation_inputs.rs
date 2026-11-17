@@ -41,8 +41,6 @@ pub struct CreateRepositoryInput {
     pub description: Option<String>,
     pub homepage_url: Option<Uri>,
     pub visibility: RepositoryVisibility,
-    #[graphql(default_with = "Some(false)")]
-    pub template: Option<bool>,
     pub team_id: Option<ID>,
     #[graphql(default_with = "Some(true)")]
     pub has_issues_enabled: Option<bool>,
