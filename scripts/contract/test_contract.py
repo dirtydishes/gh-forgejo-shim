@@ -207,6 +207,10 @@ class ContractTests(unittest.TestCase):
             ({"argv": ["repo", "create", "{repo}", "--private"], "setup": {"branch": "twin/x"},
               "state": [{"path": "pulls/{pr}", "fields": {}}]}, "only that"),
             ({"state": [{"path": "repository", "fields": {}}]}, "only that"),
+            # A stdout pattern can't point the repository check at another repository (sol-r1#3).
+            ({"argv": ["repo", "create", "{repo}", "--private"], "setup": {"branch": "twin/x"},
+              "expect": {"exit": 0, "stdout": "https://forge.test/(?P<repo>[^\\n]+)\\n", "stderr": ""},
+              "state": [{"path": "repository", "fields": {}}]}, "rebind"),
             ({"setup": {"branch": "twin/x", "pr": True, "organization": True}}, "setup.organization"),
         ]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):

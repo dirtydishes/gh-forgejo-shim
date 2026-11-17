@@ -204,7 +204,7 @@ def validate(case):
     # {issue} would point the state checks at another case's issue (o2#3).
     bound = {"branch", "head"} | {name for name, made in (
         ("pr", setup.get("pr")), ("issue", setup.get("issue")), ("run", setup.get("workflow")),
-        ("label", setup.get("label"))) if made}
+        ("label", setup.get("label")), ("repo", command == ("repo", "create"))) if made}
     if any(set(re.compile(expect[stream]).groupindex) & bound for stream in ("stdout", "stderr")):
         raise ValueError("a stdout pattern can't rebind a placeholder the case's setup made")
     for check in case.get("state", []):
