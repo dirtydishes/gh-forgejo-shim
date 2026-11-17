@@ -171,7 +171,8 @@ refuses it with 421. So when routing sends a host-less `gh api` or `gh auth toke
 host, the launcher sets `GH_HOST` to that host's hostname without its port (`gh_hostname`), which
 makes it gh's default host. Both commands then talk to the forge, as the shim's versions of them
 always have. Kell chose this (§13, decision 4). The alternative, following gh to github.com, was
-declined. The value has no port because gh drops the port from remotes before comparing them
+declined. `gh repo create` uses gh's default host the same way, whatever the checkout's remotes
+say (`gh/pkg/cmd/repo/create/create.go`, `DefaultHost`), so a launched one gets `GH_HOST` too. The value has no port because gh drops the port from remotes before comparing them
 with `GH_HOST`: with `forge.test:3443`, gh refuses with "none of the git remotes … correspond to
 the GH_HOST environment variable". The portless value also keeps `gh auth token`'s lookup on the
 same key as gh's API requests. The launched `hosts.yml` has that key, and the gateway answers to
