@@ -170,6 +170,25 @@ fn reads_rate_limit(invocation: &Invocation) -> bool {
             .is_none_or(|method| method.eq_ignore_ascii_case("GET"))
 }
 
+/// The flags that keep a `repo create` off the launch path, in order. The built-in path serves
+/// none of its forms, so its refusal names these. Other listed commands have built-in forms that
+/// take more flags, and get none here.
+pub fn unlaunched_flags(invocation: &Invocation) -> Vec<&str> {
+    if invocation.command != "repo create" {
+        return Vec::new();
+    }
+    let served = LAUNCH_FLAGS
+        .iter()
+        .find(|(listed, _)| *listed == "repo create")
+        .map_or(&[][..], |(_, flags)| *flags);
+    invocation
+        .flags
+        .keys()
+        .map(String::as_str)
+        .filter(|flag| !served.contains(flag))
+        .collect()
+}
+
 /// Whether a Forgejo-routed invocation goes through the launcher.
 pub fn launches(invocation: &Invocation) -> bool {
     let command = invocation.command.as_str();

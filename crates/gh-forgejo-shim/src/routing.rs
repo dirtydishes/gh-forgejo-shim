@@ -1118,11 +1118,7 @@ fn run_forgejo(
     if !invocation.is_native() {
         write_error(
             mode,
-            &format!(
-                "gh-forgejo-shim: \"gh {}\" is not supported for Forgejo host {} yet",
-                invocation.command,
-                decision.trace_host().unwrap_or_default(),
-            ),
+            &unsupported(invocation, decision.trace_host().unwrap_or_default()),
         );
         return 1;
     }
@@ -1154,6 +1150,25 @@ fn run_forgejo(
                 &mut stdin.lock(),
             )
         }
+    }
+}
+
+/// The built-in path's refusal of a form it doesn't serve. A command that launches with some flags
+/// (`repo create`) names the others, which kept it off the launch path.
+fn unsupported(invocation: &Invocation, host: &str) -> String {
+    let command = &invocation.command;
+    match crate::launcher::unlaunched_flags(invocation).as_slice() {
+        [] => format!(
+            "gh-forgejo-shim: \"gh {command}\" is not supported for Forgejo host {host} yet"
+        ),
+        flags => format!(
+            "gh-forgejo-shim: \"gh {command}\" doesn't take {} on Forgejo host {host} yet",
+            flags
+                .iter()
+                .map(|flag| format!("--{flag}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1632,6 +1647,25 @@ mod tests {
 
         assert_eq!(decision.kind, RouteKind::Forgejo);
         assert_eq!(decision.host.as_deref(), Some("git.example.com"));
+    }
+
+    /// `repo create` launches with some flags, so its refusal names the others rather than
+    /// calling the whole command unsupported (parallax deepseek-r1#1).
+    #[test]
+    fn a_refused_repo_create_names_the_flags_that_kept_it_off() {
+        let message = |args: &[&str]| unsupported(&Invocation::parse(&argv(args)), "forge.test");
+        assert_eq!(
+            message(&["repo", "create", "o/new", "--private", "--add-readme", "-l", "mit"]),
+            "gh-forgejo-shim: \"gh repo create\" doesn't take --add-readme, --license on Forgejo host forge.test yet"
+        );
+        assert_eq!(
+            message(&["repo", "create", "o/new", "--internal"]),
+            "gh-forgejo-shim: \"gh repo create\" doesn't take --internal on Forgejo host forge.test yet"
+        );
+        assert_eq!(
+            message(&["pr", "edit", "1", "--add-reviewer", "x"]),
+            "gh-forgejo-shim: \"gh pr edit\" is not supported for Forgejo host forge.test yet"
+        );
     }
 
     /// Outside a forge checkout, `repo create` reaches the forge only when `GH_HOST` names it, as
