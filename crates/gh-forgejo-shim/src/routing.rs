@@ -589,7 +589,9 @@ fn run_gh(
         }
         RouteKind::Forgejo => {
             let host = decision.trace_host().unwrap_or_default().to_string();
-            if let Some(message) = push_goes_elsewhere(&routed, &words, &env, cwd, &host) {
+            if let Some(message) =
+                push_goes_elsewhere(&routed, &words, &env, cwd, &host, &config.hosts)
+            {
                 write_error(&mut mode, &format!("gh-forgejo-shim: {message}"));
                 1
             } else {
@@ -778,6 +780,7 @@ fn push_goes_elsewhere(
     env: &HashMap<String, String>,
     cwd: Option<&Path>,
     host: &str,
+    forgejo_hosts: &[String],
 ) -> Option<String> {
     let forge = gh_hostname(host);
     if creates(routed, words, "repo") && repo_create_pushes(words) {
@@ -789,10 +792,12 @@ fn push_goes_elsewhere(
     }
     if creates(routed, words, "pr") {
         let ssh_command = git_ssh_command(env, cwd);
-        let elsewhere =
-            crate::repo::push_leaves(host, cwd, ssh_command.as_deref()).or_else(|| {
+        // The hosts a launched gh knows, as routing reads remotes with them.
+        let hosts = GhHosts::load(env, forgejo_hosts);
+        let elsewhere = crate::repo::push_leaves(host, &hosts, cwd, ssh_command.as_deref())
+            .or_else(|| {
                 (!gh_uses_https(env, host))
-                    .then(|| crate::repo::ssh_push_leaves(host, ssh_command.as_deref()))
+                    .then(|| crate::repo::ssh_push_leaves(host, &hosts, ssh_command.as_deref()))
                     .flatten()
             })?;
         return Some(format!(

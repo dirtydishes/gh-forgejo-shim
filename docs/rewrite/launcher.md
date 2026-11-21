@@ -203,11 +203,13 @@ fails to find the remote, `gh secret` skips its question about several remotes, 
 skips local templates. A user's own `GH_REPO`, `-R` or URL argument decides first, as for gh, so
 the wrapper never sets `GH_REPO` then. Such a remote also counts as a forge in reach (above), and
 as a forge remote for the push check (below), its SSH URL's host read as gh reads it, a leading
-`www.` dropped: git pushes to the address SSH gives, so `gh pr create` is refused unless the
-remote's push URL stays on the forge. Plain gh without the wrapper can't be helped; `gfj doctor`
-warns, and the README's Known gaps gives a proxy-command setup that keeps the forge's name in `ssh
--G`. `gfj bootstrap` never allowlists a host on these grounds alone: the remote's own host may
-just as well be an SSH alias for the forge's real name.
+`www.` dropped. git pushes to the address SSH gives, which the push check counts as the forge
+when it is the one the forge's own name gets (below, #358), so the wrapper lets `gh pr create`
+through unless the remote's push URL names another host or SSH sends it elsewhere. Plain gh
+without the wrapper can't be helped; `gfj doctor` warns, and the README's Known gaps gives a
+proxy-command setup that keeps the forge's name in `ssh -G`. `gfj bootstrap` never allowlists a
+host on these grounds alone: the remote's own host may just as well be an SSH alias for the
+forge's real name.
 
 **Server mode never launches.** In server mode (D1, `cwe.42`) the forge host serves `/api/v3` and
 `/api/graphql` itself, so plain gh works against it with a normal `gh auth login`. A host configured
@@ -261,6 +263,14 @@ top-level `git_protocol`, then `https`, both as the launched gh reads them (`hos
 plain gh does (a legacy `hosts` key in `config.yml` first); both must say `https`. When ssh
 can't resolve an SSH host and git connects through its own SSH command (`GIT_SSH_COMMAND`,
 `GIT_SSH` or `core.sshCommand`), the push is refused; with neither, git can't push over SSH.
+A push stays on the forge when SSH sends it to the forge's hostname, or (#358) when its SSH URL
+names the forge, as written with no `www.` dropped, and `ssh -G` with the URL's own user gives
+the address the forge's bare name gets, as long as that address is another host gh doesn't
+know: the rule routing reads a renamed remote by (§2). The user's SSH configuration sends every
+connection to the forge's name there. This holds for a push URL, an `insteadOf` or
+`pushInsteadOf` target and the fork remote gh adds; a URL that names another host stays refused,
+even one SSH sends to the same address, and so does a `Match user` rule that alone renames the
+forge.
 A `repo create` (or `repo new`) that pushes, with
 `--push` or when it prompts (no argument and no flag; a lone `--` counts as none), is refused
 outright: it pushes from a `--source` checkout the wrapper would have to read as gh does. Without
