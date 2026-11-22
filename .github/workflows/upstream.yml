@@ -1,7 +1,8 @@
 name: upstream
 
-# An early warning: the e2e suites against the newest gh and Forgejo, and cargo audit against
-# today's advisories. ci.yml keeps the pinned versions, so pull request results stay stable.
+# An early warning: the e2e suites against the newest gh and Forgejo, the contract suite against
+# the newest Forgejo, and cargo audit against today's advisories. ci.yml keeps the pinned versions,
+# so pull request results stay stable.
 # GitHub emails the workflow's owner when a scheduled run fails.
 on:
   schedule:
@@ -48,6 +49,7 @@ jobs:
           {
             echo "E2E_GH_VERSION=$gh_version"
             echo "E2E_FORGEJO_IMAGE=$forgejo_image"
+            echo "CONTRACT_FORGEJO_IMAGE=$forgejo_image"
           } >> "$GITHUB_ENV"
           {
             echo '### Upstream versions under test'
@@ -64,6 +66,17 @@ jobs:
       - name: Run gh and Claude's lookups through the server-mode image and nginx snippet
         if: ${{ !cancelled() && steps.versions.outcome == 'success' }}
         run: scripts/e2e-server.sh
+
+      - name: Install Rust toolchain
+        if: ${{ !cancelled() && steps.versions.outcome == 'success' }}
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      # ci.yml's contract job, seeded on the latest Forgejo instead of the pin.
+      - name: Compare shim with committed gh oracle on the latest Forgejo
+        if: ${{ !cancelled() && steps.versions.outcome == 'success' }}
+        run: scripts/contract/run.sh
 
       - name: Upload e2e results
         if: always()
