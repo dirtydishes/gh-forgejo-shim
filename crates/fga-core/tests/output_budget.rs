@@ -97,6 +97,14 @@ async fn aliased_bodies_stop_at_the_output_budget() {
     stopped_by_the_budget(&response, size);
 }
 
+/// The most aliases the field limit lets through: 1,998 copies of the body would build 120 MB.
+#[tokio::test]
+async fn bodies_under_the_most_aliases_the_limit_allows_stop_at_the_output_budget() {
+    let aliases = fga_core::graphql::MAX_COMPLEXITY - 2;
+    let (response, size) = aliased_bodies("A".repeat(BODY_LEN), aliases).await;
+    stopped_by_the_budget(&response, size);
+}
+
 #[tokio::test]
 async fn escaped_bodies_stop_at_the_output_budget() {
     // Each control character is six bytes as JSON: 400 aliases would build 144 MB.
