@@ -181,6 +181,15 @@ async fn list(
     if let Some(exclude) = q.exclude_pull_requests {
         public.push(("exclude_pull_requests", exclude.to_string()));
     }
+    // A repository's own run list answers at once; a workflow's still reads the workflows, so an
+    // unknown one stays a 404.
+    if none && workflow.is_none() {
+        return (
+            links(host, owner, repo, &["runs"], (page, limit), 0, &public),
+            Json(json!({"total_count":0,"workflow_runs":[]})),
+        )
+            .into_response();
+    }
     let result = async {
         let workflows = session.workflows(owner, repo).await?;
         let mut resource = vec!["runs"];
