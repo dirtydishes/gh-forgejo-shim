@@ -70,6 +70,26 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
             }),
         )
         .route(
+            // A repository with Actions turned off: it reads, and its runs are refused.
+            "/api/v1/repos/o/off",
+            get(|| async {
+                Json(
+                    json!({"id":2,"name":"off","full_name":"o/off","default_branch":"main",
+                    "owner":{"id":1,"login":"o","full_name":"","avatar_url":""},"private":false,
+                    "html_url":"https://forge.test/o/off","fork":false,"archived":false}),
+                )
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/off/actions/runs",
+            get(|| async {
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    Json(json!({"message":"Actions are disabled"})),
+                )
+            }),
+        )
+        .route(
             "/api/v1/repos/o/r/actions/runs",
             get(move |RawQuery(query): RawQuery| {
                 let query = query.unwrap_or_default();
@@ -334,6 +354,14 @@ async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
     )
     .await;
     assert_eq!(code, 404);
+    // A repository whose Actions are off: Forgejo refuses its runs, and it has none awaiting.
+    let (code, _, page) = get_json(
+        addr,
+        "/api/v3/repos/o/off/actions/runs?head_sha=c6&status=action_required",
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page, json!({"total_count":0,"workflow_runs":[]}));
     // GitHub's other statuses the gateway doesn't map are refused, as before.
     for status in ["neutral", "timed_out", "sideways"] {
         let (code, _, _) = get_json(
