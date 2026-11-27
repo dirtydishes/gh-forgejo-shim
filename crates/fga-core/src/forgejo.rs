@@ -101,6 +101,8 @@ pub struct Session {
     budget: Arc<AtomicUsize>,
     /// Markdown work this request may still do (see [`Session::body_html`]).
     render_budget: Arc<AtomicUsize>,
+    /// Commit counts this request may still ask Forgejo for ([`MAX_REQUEST_COMMIT_COUNTS`]).
+    counts: Arc<AtomicUsize>,
 }
 
 /// Paged reads ask Forgejo for this many items per page.
@@ -116,6 +118,10 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 /// with more, such as a long timeline, shows the rest as escaped paragraphs, so its cost stays
 /// bounded however many bodies it holds.
 const MAX_REQUEST_RENDERED_BYTES: usize = 1024 * 1024;
+/// Distinct commit counts one request may ask Forgejo for. Each makes Forgejo walk the history
+/// between two commits to return one number, work no output or document limit sees, so a
+/// document that names many pull requests counts only the first few. T3 Code asks for one.
+pub const MAX_REQUEST_COMMIT_COUNTS: usize = 4;
 
 /// Map Forgejo's error statuses onto the gateway's errors; success passes through.
 fn ok(reply: Reply) -> Result<Reply, Error> {
@@ -299,6 +305,7 @@ impl Forgejo {
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
             budget,
             render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
+            counts: Arc::new(AtomicUsize::new(MAX_REQUEST_COMMIT_COUNTS)),
         })
     }
 
@@ -422,6 +429,15 @@ impl Session {
     /// answer goes without that data ([`crate::scopes`]).
     pub(crate) fn hidden(&self, scope: &str) {
         crate::scopes::warn_hidden(self.forgejo.base.as_str(), scope);
+    }
+
+    /// Takes one of this request's commit counts; false once they're spent.
+    pub(crate) fn take_count(&self) -> bool {
+        self.counts
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
     }
 
     /// Drop every memoized read; writes call this so later reads see their effect.
@@ -805,6 +821,7 @@ mod tests {
             deadline: tokio::time::Instant::now() + Duration::from_millis(50),
             budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
             render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
+            counts: Arc::new(AtomicUsize::new(MAX_REQUEST_COMMIT_COUNTS)),
         };
         let result = session.get::<serde_json::Value>(&["slow"], &[]).await;
         assert!(matches!(result, Err(Error::Timeout)), "{result:?}");
@@ -838,6 +855,7 @@ mod tests {
             deadline: tokio::time::Instant::now() + Duration::from_secs(2),
             budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
             render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
+            counts: Arc::new(AtomicUsize::new(MAX_REQUEST_COMMIT_COUNTS)),
         };
         let result = session.text(&["big.diff"], &[]).await;
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
@@ -878,6 +896,7 @@ mod tests {
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
             budget: Arc::new(AtomicUsize::new(MAX_REQUEST_BYTES)),
             render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
+            counts: Arc::new(AtomicUsize::new(MAX_REQUEST_COMMIT_COUNTS)),
         };
         let result = session.text(&["big.diff"], &[]).await;
         assert!(matches!(result, Err(Error::TooLarge)), "{result:?}");
@@ -1196,6 +1215,7 @@ mod tests {
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
             budget: Arc::new(AtomicUsize::new(20)),
             render_budget: Arc::new(AtomicUsize::new(MAX_REQUEST_RENDERED_BYTES)),
+            counts: Arc::new(AtomicUsize::new(MAX_REQUEST_COMMIT_COUNTS)),
         };
         let other = session.clone();
         let (a, b) = tokio::join!(

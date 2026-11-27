@@ -515,3 +515,43 @@ async fn the_count_reads_the_pull_requests_own_ref() {
         json!({"behindBy":2})
     );
 }
+
+/// Each count makes Forgejo walk history for one number, so a request counts only a few distinct
+/// pairs; a repeated pair is free.
+#[tokio::test]
+async fn a_request_counts_only_a_few_distinct_pairs() {
+    let hits = Arc::new(Mutex::new(0));
+    let seen = hits.clone();
+    let app = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user("e2e")) }))
+        .route(
+            "/api/v1/repos/e2e/oracle/commits",
+            get(move || {
+                *seen.lock().unwrap() += 1;
+                async { ([("x-total-count", "2")], Json(json!([]))).into_response() }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = Forgejo::new(base.parse().unwrap())
+        .unwrap()
+        .authenticate("token disposable")
+        .await
+        .unwrap();
+    let mut counted = Vec::new();
+    for head in ["a1", "a2", "a3", "a4", "a5", "a6", "a1"] {
+        counted.push(
+            session
+                .commits_missing_from("e2e", "oracle", BASE, head)
+                .await
+                .unwrap(),
+        );
+    }
+    server.abort();
+    let limit = fga_core::forgejo::MAX_REQUEST_COMMIT_COUNTS;
+    assert_eq!(counted.iter().filter(|c| c.is_some()).count(), limit + 1);
+    assert_eq!(counted[limit], None);
+    assert_eq!(counted[6], Some(2), "a repeated pair reads the memo");
+    assert_eq!(*hits.lock().unwrap(), limit);
+}
