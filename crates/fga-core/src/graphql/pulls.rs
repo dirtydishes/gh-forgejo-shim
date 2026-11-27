@@ -263,7 +263,6 @@ impl PullRequest {
             pull: Some(PullRefs {
                 number: self.source.number,
                 base_sha: self.source.base.sha.clone(),
-                head_sha: self.source.head.sha.clone(),
             }),
             name: self.source.base.ref_name.clone(),
             branch_protection_rule: p.map(|p| BranchProtectionRule {

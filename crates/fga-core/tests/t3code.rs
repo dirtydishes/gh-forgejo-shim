@@ -71,6 +71,23 @@ fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
             }),
         )
         .route(
+            // Reopened after its branch moved on: Forgejo's `head.sha` is the branch's tip, and
+            // the pull request's own ref still points at `HEAD`.
+            "/api/v1/repos/e2e/oracle/pulls/3",
+            get(move || async move {
+                Json(json!({"number":3,"title":"T","body":"","state":"open","merged":false,"draft":false,
+                    "html_url":"https://forge.test/e2e/oracle/pulls/3","mergeable":true,
+                    "created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-02T00:00:00Z",
+                    "head":{"ref":"feat","label":"feat","sha":PARENT,"repo":repo()},
+                    "base":{"ref":"main","label":"main","sha":BASE,"repo":repo()},
+                    "user":user("e2e"),"merged_at":null,"labels":[],"requested_reviewers":[]}))
+            }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/git/refs/pull/3/head",
+            get(|| async { Json(json!([{"ref":"refs/pull/3/head","object":{"sha":HEAD}}])) }),
+        )
+        .route(
             "/api/v1/repos/e2e/oracle/git/refs/pull/1/head",
             get(|| async { Json(json!([{"ref":"refs/pull/1/head","object":{"sha":HEAD}}])) }),
         )
@@ -487,4 +504,14 @@ async fn a_deleted_base_compares_as_null() {
     );
     let asked = missed.lock().unwrap();
     assert!(!asked.iter().any(|path| path == "counted"), "{asked:?}");
+}
+
+/// The count reads the pull request's own ref, not its branch, which can move apart from it.
+#[tokio::test]
+async fn the_count_reads_the_pull_requests_own_ref() {
+    let data = run("{repository(owner:\"e2e\",name:\"oracle\"){pullRequest(number:3){baseRef{compare(headRef:\"refs/pull/3/head\"){behindBy}}}}}").await;
+    assert_eq!(
+        data["repository"]["pullRequest"]["baseRef"]["compare"],
+        json!({"behindBy":2})
+    );
 }
