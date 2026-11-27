@@ -97,9 +97,11 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
             // A token that may read this repository but not its Actions.
             "/api/v1/repos/o/denied",
             get(|| async {
-                Json(json!({"id":3,"name":"denied","full_name":"o/denied","default_branch":"main",
+                Json(
+                    json!({"id":3,"name":"denied","full_name":"o/denied","default_branch":"main",
                     "owner":{"id":1,"login":"o","full_name":"","avatar_url":""},"private":true,
-                    "html_url":"https://forge.test/o/denied","fork":false,"archived":false}))
+                    "html_url":"https://forge.test/o/denied","fork":false,"archived":false}),
+                )
             }),
         )
         .route(
@@ -109,18 +111,6 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
                     axum::http::StatusCode::FORBIDDEN,
                     Json(json!({"message":"Forbidden"})),
                 )
-            }),
-        )
-        .route(
-            // The fork's pull request that run 6 belongs to.
-            "/api/v1/repos/o/r/pulls/9",
-            get(|| async {
-                Json(json!({"number":9,"title":"t","body":"","state":"open","merged":false,"draft":false,
-                    "html_url":"https://forge.test/o/r/pulls/9","mergeable":true,
-                    "created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z",
-                    "head":{"ref":"feat","label":"fork:feat","sha":"c6"},
-                    "base":{"ref":"main","label":"main","sha":"c1"},
-                    "user":{"id":4,"login":"fork","full_name":"","avatar_url":""},"merged_at":null}))
             }),
         )
         .route(
@@ -384,13 +374,15 @@ async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
     assert_eq!(page["total_count"], 1);
     let held = &page["workflow_runs"][0];
     assert_eq!(held["id"], 6);
-    // As GitHub reports a run held for approval, named by its pull request and head branch.
-    assert_eq!(
-        (&held["status"], &held["conclusion"]),
-        (&json!("completed"), &json!("action_required"))
-    );
     assert_eq!(held["pull_requests"], json!([{"number":9}]));
-    assert_eq!(held["head_branch"], "feat");
+    // Another event still filters, by head commit too.
+    let (code, _, page) = get_json(
+        addr,
+        "/api/v3/repos/o/r/actions/runs?head_sha=c6&event=push&status=action_required",
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["total_count"], 0);
 
     // A repository the token can't read is still not found.
     let (code, _, _) = get_json(

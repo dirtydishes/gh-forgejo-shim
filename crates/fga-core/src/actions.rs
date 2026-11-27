@@ -61,8 +61,12 @@ pub fn status(native: &str) -> Result<(&'static str, Option<&'static str>), Erro
     })
 }
 
-/// The pull request a run belongs to: Forgejo labels a pull request's run `#N`.
+/// The pull request a run belongs to: Forgejo labels a pull request event's run `#N`. A push to a
+/// branch named `#N` has the same label, so only pull request events count.
 pub fn pull_number(run: &Run) -> Option<i64> {
+    if !run.event.starts_with("pull_request") {
+        return None;
+    }
     run.prettyref.strip_prefix('#')?.parse().ok()
 }
 
@@ -72,12 +76,7 @@ pub fn awaits_approval(run: &Run) -> bool {
 }
 
 pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
-    // GitHub reports a run held for approval as completed, with `action_required`.
-    let (status, conclusion) = if awaits_approval(run) {
-        ("completed", Some("action_required"))
-    } else {
-        status(&run.status)?
-    };
+    let (status, conclusion) = status(&run.status)?;
     let pull_requests: Vec<Value> = pull_number(run)
         .map(|number| json!({"number": number}))
         .into_iter()
@@ -146,6 +145,37 @@ impl Session {
             }
         }
         Err(Error::Upstream)
+    }
+
+    /// The runs on the first `pages` pages Forgejo serves for `filters`, whatever its page size:
+    /// at most `pages` reads.
+    pub async fn action_runs_pages(
+        &self,
+        owner: &str,
+        repo: &str,
+        filters: &[(&str, String)],
+        pages: usize,
+    ) -> Result<RunList, Error> {
+        let size = self.page_size().await?;
+        let mut collected = Vec::new();
+        let mut total = 0;
+        for page in 1..=pages {
+            let mut query = filters.to_vec();
+            query.extend([("page", page.to_string()), ("limit", size.to_string())]);
+            let (batch, _): (RunList, _) = self
+                .page(&["repos", owner, repo, "actions", "runs"], &query)
+                .await?;
+            total = batch.total_count;
+            let count = batch.workflow_runs.len();
+            collected.extend(batch.workflow_runs);
+            if count == 0 || collected.len() as u64 >= total {
+                break;
+            }
+        }
+        Ok(RunList {
+            total_count: total,
+            workflow_runs: collected,
+        })
     }
 
     pub async fn workflows(

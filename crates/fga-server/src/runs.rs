@@ -233,9 +233,7 @@ async fn list(
         .await;
         let mut mapped = Vec::new();
         for (run, workflow) in runs.workflow_runs.iter().zip(&named) {
-            let mut json = with_links(host, owner, repo, actions::run(run, workflow)?);
-            head_branch_of_held_run(session, owner, repo, run, &mut json).await?;
-            mapped.push(json);
+            mapped.push(with_links(host, owner, repo, actions::run(run, workflow)?));
         }
         Ok((
             links(
@@ -253,30 +251,6 @@ async fn list(
     }
     .await;
     result.unwrap_or_else(rest_error)
-}
-
-/// A run held for approval belongs to a fork's pull request, which Forgejo labels `#N`; GitHub
-/// names the pull request's head branch, as T3 Code matches it. Only held runs are looked up, so
-/// a run list costs no pull request reads otherwise.
-async fn head_branch_of_held_run(
-    session: &Session,
-    owner: &str,
-    repo: &str,
-    run: &actions::Run,
-    json: &mut Value,
-) -> Result<(), fga_core::forgejo::Error> {
-    if !actions::awaits_approval(run) {
-        return Ok(());
-    }
-    let Some(number) = actions::pull_number(run).and_then(|n| i32::try_from(n).ok()) else {
-        return Ok(());
-    };
-    match session.pull_request(owner, repo, number).await {
-        Ok(pull) => json["head_branch"] = Value::String(pull.head.ref_name.clone()),
-        Err(fga_core::forgejo::Error::NotFound) => {}
-        Err(e) => return Err(e),
-    }
-    Ok(())
 }
 
 /// The most pages of blocked runs one `status=action_required` request reads. Forgejo can't
@@ -299,15 +273,27 @@ async fn awaiting_approval(
     use fga_core::forgejo::Error;
     // A fork pull request's run is stored under the pull request's own ref, not its branch, and
     // as `pull_request_sync` once the fork pushes again. So when the caller names the head
-    // commit, as T3 Code does, that narrows it, and the branch and event would only drop it.
+    // commit, as T3 Code does, the branch doesn't narrow it, and `event=pull_request` matches
+    // every pull request event; other events still must match.
     let by_commit = upstream.iter().any(|(key, _)| *key == "head_sha");
+    let event = upstream
+        .iter()
+        .find(|(key, _)| *key == "event")
+        .map(|(_, value)| value.clone());
     let upstream: Vec<(&str, String)> = upstream
         .iter()
         .filter(|(key, _)| !by_commit || !matches!(*key, "ref" | "event"))
         .cloned()
         .collect();
-    let rows = MAX_BLOCKED_PAGES.saturating_mul(session.page_size().await?);
-    let blocked = match session.action_runs(owner, repo, &upstream, 0, rows).await {
+    let event_matches = |run: &actions::Run| match (&event, by_commit) {
+        (Some(event), true) if event == "pull_request" => run.event.starts_with("pull_request"),
+        (Some(event), true) => run.event == *event,
+        _ => true,
+    };
+    let blocked = match session
+        .action_runs_pages(owner, repo, &upstream, MAX_BLOCKED_PAGES)
+        .await
+    {
         Ok(blocked) => blocked,
         Err(Error::NotFound) => {
             session.repository(owner, repo).await?;
@@ -322,6 +308,7 @@ async fn awaiting_approval(
         .workflow_runs
         .into_iter()
         .filter(actions::awaits_approval)
+        .filter(event_matches)
         .collect();
     Ok(actions::RunList {
         total_count: waiting.len() as u64,
