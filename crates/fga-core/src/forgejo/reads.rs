@@ -158,14 +158,14 @@ impl Session {
     /// How many commits `base` has that `head` lacks: Forgejo counts `commits?sha={base}&not={head}`
     /// in its `X-Total-Count`, without listing them, as a comparison would. 404 when either isn't
     /// a commit of the repository. Memoized like a read, so aliases asking the same count share
-    /// one request.
+    /// one request. `None` once the request has spent its [`MAX_REQUEST_COMMIT_COUNTS`].
     pub async fn commits_missing_from(
         &self,
         owner: &str,
         repo: &str,
         base: &str,
         head: &str,
-    ) -> Result<u64, Error> {
+    ) -> Result<Option<u64>, Error> {
         let segments = ["repos", owner, repo, "commits"];
         let query = [
             ("sha", base.to_owned()),
@@ -179,6 +179,9 @@ impl Session {
             serde_json::to_string(&("count", &segments, &query)).expect("request key serializes");
         let (total, _) = self
             .memoize(key, || async {
+                if !self.take_count() {
+                    return Ok((serde_json::Value::Null, None));
+                }
                 let reply = super::ok(
                     self.send::<()>(reqwest::Method::GET, &segments, &query, None)
                         .await?,
@@ -186,7 +189,10 @@ impl Session {
                 Ok((serde_json::json!(reply.total.ok_or(Error::Upstream)?), None))
             })
             .await?;
-        total.as_u64().ok_or(Error::Upstream)
+        if total.is_null() {
+            return Ok(None);
+        }
+        total.as_u64().map(Some).ok_or(Error::Upstream)
     }
 
     /// One commit by SHA or ref; 404 when there is none.

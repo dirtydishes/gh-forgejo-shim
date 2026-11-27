@@ -520,7 +520,8 @@ impl Ref {
             .commits_missing_from(&self.owner, &self.repo, &pull.base_sha, &head)
             .await
         {
-            Ok(behind) => Ok(Some(Comparison {
+            // Null too once the request has counted as often as it may.
+            Ok(behind) => Ok(behind.map(|behind| Comparison {
                 behind_by: i32::try_from(behind).unwrap_or(i32::MAX),
             })),
             Err(forgejo::Error::NotFound) => Ok(None),
