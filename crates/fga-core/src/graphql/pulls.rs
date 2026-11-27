@@ -693,6 +693,7 @@ impl PullRequest {
                     repo: self.repo.clone(),
                     sha: source.sha.clone(),
                     source: Some(source),
+                    parent: false,
                 },
             })
             .collect();
@@ -793,6 +794,9 @@ pub struct Commit {
     pub repo: String,
     pub sha: String,
     pub source: Option<forgejo::PullCommit>,
+    /// Read as another commit's parent, which serves no statuses: each distinct parent would be
+    /// one more status read for a single selection.
+    pub parent: bool,
 }
 impl Commit {
     pub fn head(owner: &str, repo: &str, sha: &str) -> Self {
@@ -801,6 +805,7 @@ impl Commit {
             repo: repo.into(),
             sha: sha.into(),
             source: None,
+            parent: false,
         }
     }
 }
@@ -831,7 +836,10 @@ impl Commit {
             .parents
             .clone()
             .into_iter()
-            .map(|parent| Commit::head(&self.owner, &self.repo, &parent.sha))
+            .map(|parent| Commit {
+                parent: true,
+                ..Commit::head(&self.owner, &self.repo, &parent.sha)
+            })
             .collect();
         Ok(page(nodes, first, last, after, before)?.into())
     }
@@ -854,6 +862,9 @@ impl Commit {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<StatusCheckRollup>> {
+        if self.parent {
+            return Err("statuses aren't served for a commit read as a parent".into());
+        }
         let statuses = ctx
             .data_unchecked::<Session>()
             .statuses(&self.owner, &self.repo, &self.sha)
