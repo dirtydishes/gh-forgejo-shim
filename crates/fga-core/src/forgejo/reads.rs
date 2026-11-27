@@ -157,7 +157,8 @@ impl Session {
 
     /// How many commits `base` has that `head` lacks: Forgejo counts `commits?sha={base}&not={head}`
     /// in its `X-Total-Count`, without listing them, as a comparison would. 404 when either isn't
-    /// a commit of the repository.
+    /// a commit of the repository. Memoized like a read, so aliases asking the same count share
+    /// one request.
     pub async fn commits_missing_from(
         &self,
         owner: &str,
@@ -165,23 +166,27 @@ impl Session {
         base: &str,
         head: &str,
     ) -> Result<u64, Error> {
-        let reply = super::ok(
-            self.send::<()>(
-                reqwest::Method::GET,
-                &["repos", owner, repo, "commits"],
-                &[
-                    ("sha", base.to_owned()),
-                    ("not", head.to_owned()),
-                    ("limit", "1".into()),
-                    ("stat", "false".into()),
-                    ("verification", "false".into()),
-                    ("files", "false".into()),
-                ],
-                None,
-            )
-            .await?,
-        )?;
-        reply.total.ok_or(Error::Upstream)
+        let segments = ["repos", owner, repo, "commits"];
+        let query = [
+            ("sha", base.to_owned()),
+            ("not", head.to_owned()),
+            ("limit", "1".into()),
+            ("stat", "false".into()),
+            ("verification", "false".into()),
+            ("files", "false".into()),
+        ];
+        let key =
+            serde_json::to_string(&("count", &segments, &query)).expect("request key serializes");
+        let (total, _) = self
+            .memoize(key, || async {
+                let reply = super::ok(
+                    self.send::<()>(reqwest::Method::GET, &segments, &query, None)
+                        .await?,
+                )?;
+                Ok((serde_json::json!(reply.total.ok_or(Error::Upstream)?), None))
+            })
+            .await?;
+        total.as_u64().ok_or(Error::Upstream)
     }
 
     /// One commit by SHA or ref; 404 when there is none.

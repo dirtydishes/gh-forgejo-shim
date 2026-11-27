@@ -500,7 +500,12 @@ impl Ref {
         let Some(pull) = &self.pull else {
             return Ok(None);
         };
-        if head_ref != format!("refs/pull/{}/head", pull.number) {
+        // Forgejo sends no base commit once the base branch is deleted, and counts from the
+        // default branch for an empty `sha`.
+        if head_ref != format!("refs/pull/{}/head", pull.number)
+            || pull.base_sha.is_empty()
+            || pull.head_sha.is_empty()
+        {
             return Ok(None);
         }
         match ctx
