@@ -98,7 +98,9 @@ async fn object_keys_are_written_sorted() {
 #[tokio::test]
 async fn the_reports_aliased_document_is_refused() {
     let addr = gateway().await;
-    let fields: Vec<String> = (0..1000).map(|i| format!("a{i}:body")).collect();
+    // The report's 1,000 aliases, and more: past the field limit.
+    let count = 2 * fga_core::graphql::MAX_COMPLEXITY;
+    let fields: Vec<String> = (0..count).map(|i| format!("a{i}:body")).collect();
     let query = format!(
         "{{repository(owner:\"o\",name:\"r\"){{issue(number:1){{{}}}}}}}",
         fields.join(" ")
