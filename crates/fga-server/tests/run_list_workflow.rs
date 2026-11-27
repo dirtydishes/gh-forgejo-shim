@@ -41,6 +41,10 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
     let blocked = |id: i64, need_approval: bool, approved_by: i64| {
         let mut run = run(id, "fork.yml", "c6");
         run["status"] = json!("blocked");
+        // Forgejo keeps a fork pull request's run under the pull request's ref, and names a
+        // push to the fork `pull_request_sync`.
+        run["prettyref"] = json!("refs/pull/9/head");
+        run["event"] = json!("pull_request_sync");
         run["need_approval"] = json!(need_approval);
         run["approved_by"] = json!(approved_by);
         run
@@ -106,6 +110,7 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
                 };
                 let (wanted, statuses, sha) =
                     (values("workflow_id"), values("status"), values("head_sha"));
+                let (refs, events) = (values("ref"), values("event"));
                 let runs: Vec<Value> = all
                     .iter()
                     .filter(|run| wanted.iter().all(|w| run["workflow_id"] == *w.as_str()))
@@ -113,6 +118,8 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
                         statuses.is_empty() || statuses.iter().any(|s| run["status"] == *s.as_str())
                     })
                     .filter(|run| sha.iter().all(|s| run["commit_sha"] == *s.as_str()))
+                    .filter(|run| refs.iter().all(|r| run["prettyref"] == *r.as_str()))
+                    .filter(|run| events.iter().all(|e| run["event"] == *e.as_str()))
                     .cloned()
                     .collect();
                 async move { Json(json!({"total_count":runs.len(),"workflow_runs":runs})) }
@@ -340,7 +347,7 @@ async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
 
     let (code, _, page) = get_json(
         addr,
-        "/api/v3/repos/o/r/actions/runs?head_sha=c6&status=action_required&per_page=100",
+        "/api/v3/repos/o/r/actions/runs?head_sha=c6&branch=feat&event=pull_request&status=action_required&per_page=100&page=1",
     )
     .await;
     assert_eq!(code, 200, "{page}");

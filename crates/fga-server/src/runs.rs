@@ -270,8 +270,16 @@ async fn awaiting_approval(
     limit: usize,
 ) -> Result<actions::RunList, fga_core::forgejo::Error> {
     use fga_core::forgejo::Error;
+    // A fork pull request's run is stored under the pull request's own ref, not its branch, and
+    // as `pull_request_sync` once the fork pushes again, so neither the branch nor the event
+    // narrows it; the head commit does.
+    let upstream: Vec<(&str, String)> = upstream
+        .iter()
+        .filter(|(key, _)| !matches!(*key, "ref" | "event"))
+        .cloned()
+        .collect();
     let blocked = match session
-        .action_runs(owner, repo, upstream, 0, MAX_BLOCKED_RUNS)
+        .action_runs(owner, repo, &upstream, 0, MAX_BLOCKED_RUNS)
         .await
     {
         Ok(blocked) => blocked,
