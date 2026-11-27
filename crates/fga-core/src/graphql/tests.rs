@@ -72,6 +72,40 @@ fn refused_by_a_limit(errors: &[ServerError]) -> bool {
 /// T3 Code's GraphQL documents, as its build renders them (`fixtures/clients/README.md`).
 const T3_DOCUMENTS: &str = "fixtures/clients/t3code-0.1.13-documents";
 
+/// The documents T3 Code sends to show a pull request, run `pull_request_read`, and poll a
+/// watched one, each at the largest batch it aliases. T3 Code fails the whole read when a
+/// document names one field the gateway doesn't serve, so each must validate.
+const T3_PULL_REQUEST_READS: [&str; 15] = [
+    "query-PullRequestActionState.graphql",
+    "query-PullRequestActivity.graphql",
+    "query-PullRequestCheckContexts.graphql",
+    "query-PullRequestCore.graphql",
+    "query-PullRequestList.graphql",
+    "query-PullRequestSearch.graphql",
+    "query-PullRequestStackMembership.graphql",
+    "query-PullRequestStackMembership-batch-25.graphql",
+    "query-PullRequestStats-batch-25.graphql",
+    "query-PullRequestSummary.graphql",
+    "query-PullRequestSummary-batch-25.graphql",
+    "query-PullRequestWatchFingerprint.graphql",
+    "query-PullRequestWatchFingerprint-batch-25.graphql",
+    "query-PullRequestsByHead-batch-50.graphql",
+    "query-ViewerPermissions.graphql",
+];
+
+#[tokio::test]
+async fn t3_codes_pull_request_reads_validate() {
+    let mut failed = Vec::new();
+    for name in T3_PULL_REQUEST_READS {
+        let query = std::fs::read_to_string(root().join(T3_DOCUMENTS).join(name)).expect(name);
+        if let Err(errors) = validate(builder(), &query).await {
+            let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            failed.push(format!("{name}: {}", messages.join("; ")));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -214,7 +248,8 @@ async fn every_captured_document_is_within_the_limits() {
 
 /// T3 Code's documents that name fields or mutations the gateway doesn't serve yet: review
 /// threads and their comments, reactions, issue detail and statuses, commit stats, branch
-/// updates and deletes, and the merge message. T3 Code reads each in its own request.
+/// updates and deletes, and the merge message. T3 Code reads each in its own request, and none
+/// is in `T3_PULL_REQUEST_READS`.
 const T3_UNSERVED: &[&str] = &[
     "mutation-AddReaction.graphql",
     "mutation-AddReviewThreadReply.graphql",
@@ -237,29 +272,16 @@ const T3_UNSERVED: &[&str] = &[
     "query-IssueSearchWithStatus.graphql",
     "query-IssueStatuses.graphql",
     "query-IssueTemplates.graphql",
-    "query-PullRequestActionState.graphql",
-    "query-PullRequestActivity.graphql",
-    "query-PullRequestCheckContexts.graphql",
     "query-PullRequestCommitStats.graphql",
-    "query-PullRequestCore.graphql",
-    "query-PullRequestList.graphql",
     "query-PullRequestMergeMessage.graphql",
-    "query-PullRequestSearch.graphql",
     "query-PullRequestSourceBranch.graphql",
-    "query-PullRequestStackMembership-batch-25.graphql",
-    "query-PullRequestStackMembership.graphql",
     "query-PullRequestSubject.graphql",
-    "query-PullRequestSummary-batch-25.graphql",
-    "query-PullRequestSummary.graphql",
-    "query-PullRequestWatchFingerprint-batch-25.graphql",
-    "query-PullRequestWatchFingerprint.graphql",
     "query-RepositoryAuthors.graphql",
     "query-ReviewDismissals.graphql",
     "query-ReviewThreadComments.graphql",
     "query-ReviewThreadPages.graphql",
     "query-ReviewThreads.graphql",
     "query-ReviewerCandidates.graphql",
-    "query-ViewerPermissions.graphql",
 ];
 
 /// The report's document: one issue body under many aliases. Each field costs one, so

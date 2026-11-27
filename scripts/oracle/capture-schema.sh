@@ -9,13 +9,14 @@ GH_TOKEN=$(gh auth token --hostname github.com)
 mkdir -p .local
 capture=$(mktemp -d "$PWD/.local/schema.XXXXXX")
 trap 'rm -rf "$capture"' EXIT
-for name in Issue IssueType IssueTypeColor SearchType; do
+for name in Issue IssueType IssueTypeColor PullRequest PullRequestStack PullRequestStackEntry SearchType; do
     gh api --hostname github.com graphql -F query=@scripts/oracle/schema-supplement.graphql -f name="$name" >"$capture/$name.json"
 done
 python3 - "$capture" <<'PYTHON' | python3 scripts/oracle/scrub.py
 import json, sys
 from pathlib import Path
-selected = {'Issue': {'issueType', 'blockedBy', 'blocking'}, 'IssueType': {'id', 'name', 'description', 'color'}}
+selected = {'Issue': {'issueType', 'blockedBy', 'blocking'}, 'IssueType': {'id', 'name', 'description', 'color'},
+            'PullRequest': {'stack', 'stackEntry'}}
 data = {}
 for p in sorted(Path(sys.argv[1]).glob('*.json')):
     value = json.loads(p.read_text())['data']['__type']

@@ -43,6 +43,7 @@ impl StatusCheckRollup {
                     workflow,
                     job,
                     event,
+                    run,
                     details_url,
                     status,
                     conclusion,
@@ -55,7 +56,15 @@ impl StatusCheckRollup {
                     check_suite: CheckSuite {
                         workflow_run: Some(WorkflowRun {
                             event,
-                            workflow: Workflow { name: workflow },
+                            run_number: i32::try_from(run).unwrap_or(i32::MAX),
+                            workflow: Workflow {
+                                id: ID(ids::node_id(
+                                    "Workflow",
+                                    &format!("{}/{}", self.owner, self.repo),
+                                    &workflow,
+                                )),
+                                name: workflow,
+                            },
                         }),
                     },
                     status,
@@ -291,9 +300,14 @@ pub struct CheckSuite {
 #[derive(SimpleObject)]
 pub struct WorkflowRun {
     pub event: String,
+    /// Forgejo's run number in the repository, which its links use.
+    pub run_number: i32,
     pub workflow: Workflow,
 }
+/// A workflow as a job's status names it: by the `name:` its file gives, which is all a commit
+/// status carries. Its ID is that name's, so two runs of one workflow share it.
 #[derive(SimpleObject)]
 pub struct Workflow {
+    pub id: ID,
     pub name: String,
 }

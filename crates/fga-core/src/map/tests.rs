@@ -166,6 +166,7 @@ fn action_status_and_conclusion_table() {
             workflow,
             job,
             event,
+            run,
             details_url,
             status,
             conclusion,
@@ -178,6 +179,7 @@ fn action_status_and_conclusion_table() {
             (workflow.as_str(), job.as_str(), event.as_str()),
             ("ci", "check", "push")
         );
+        assert_eq!(*run, 5);
         assert_eq!(
             details_url.as_str(),
             "https://forge.test/o/r/actions/runs/5/jobs/1"
@@ -216,6 +218,9 @@ fn plain_status_and_action_detection_table() {
         ),
         ("ci / lint (push)", "/o/other/actions/runs/1", false),
         ("ci / lint (push)", "/o/r/status/1", false),
+        // A link without a run number names no run.
+        ("ci / lint (push)", "/o/r/actions/runs/", false),
+        ("ci / lint (push)", "/o/r/actions/runs/latest/jobs/1", false),
         ("lint", "/o/r/actions/runs/1", false),
         ("ci / lint ()", "/o/r/actions/runs/1", false),
     ] {

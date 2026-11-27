@@ -273,6 +273,242 @@
         }
       ]
     },
+    "PullRequest": {
+      "kind": "OBJECT",
+      "name": "PullRequest",
+      "interfaces": [
+        {
+          "name": "Assignable"
+        },
+        {
+          "name": "Closable"
+        },
+        {
+          "name": "Comment"
+        },
+        {
+          "name": "Labelable"
+        },
+        {
+          "name": "Lockable"
+        },
+        {
+          "name": "Node"
+        },
+        {
+          "name": "ProjectV2Owner"
+        },
+        {
+          "name": "Reactable"
+        },
+        {
+          "name": "RepositoryNode"
+        },
+        {
+          "name": "Subscribable"
+        },
+        {
+          "name": "UniformResourceLocatable"
+        },
+        {
+          "name": "Updatable"
+        },
+        {
+          "name": "UpdatableComment"
+        }
+      ],
+      "fields": [
+        {
+          "name": "stack",
+          "type": {
+            "kind": "OBJECT",
+            "name": "PullRequestStack",
+            "ofType": null
+          },
+          "args": []
+        },
+        {
+          "name": "stackEntry",
+          "type": {
+            "kind": "OBJECT",
+            "name": "PullRequestStackEntry",
+            "ofType": null
+          },
+          "args": []
+        }
+      ],
+      "enumValues": null
+    },
+    "PullRequestStack": {
+      "kind": "OBJECT",
+      "name": "PullRequestStack",
+      "interfaces": [
+        {
+          "name": "Node"
+        }
+      ],
+      "fields": [
+        {
+          "name": "baseRefName",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "entries",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "PullRequestStackEntryConnection",
+              "ofType": null
+            }
+          },
+          "args": [
+            {
+              "name": "after",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            },
+            {
+              "name": "before",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            },
+            {
+              "name": "first",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int",
+                "ofType": null
+              }
+            },
+            {
+              "name": "last",
+              "defaultValue": null,
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int",
+                "ofType": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "id",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "ID",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "number",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "Int",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "size",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "Int",
+              "ofType": null
+            }
+          },
+          "args": []
+        }
+      ],
+      "enumValues": null
+    },
+    "PullRequestStackEntry": {
+      "kind": "OBJECT",
+      "name": "PullRequestStackEntry",
+      "interfaces": [
+        {
+          "name": "Node"
+        }
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "ID",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "position",
+          "type": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "Int",
+              "ofType": null
+            }
+          },
+          "args": []
+        },
+        {
+          "name": "pullRequest",
+          "type": {
+            "kind": "OBJECT",
+            "name": "PullRequest",
+            "ofType": null
+          },
+          "args": []
+        },
+        {
+          "name": "stack",
+          "type": {
+            "kind": "OBJECT",
+            "name": "PullRequestStack",
+            "ofType": null
+          },
+          "args": []
+        }
+      ],
+      "enumValues": null
+    },
     "SearchType": {
       "kind": "ENUM",
       "name": "SearchType",

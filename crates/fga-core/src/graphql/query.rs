@@ -104,6 +104,15 @@ pub struct LabelOrder {
     pub field: LabelOrderField,
     pub direction: OrderDirection,
 }
+#[derive(Clone, Copy, Eq, PartialEq, Enum)]
+pub enum IssueCommentOrderField {
+    UpdatedAt,
+}
+#[derive(Clone, Copy, InputObject)]
+pub struct IssueCommentOrder {
+    pub field: IssueCommentOrderField,
+    pub direction: OrderDirection,
+}
 #[derive(InputObject)]
 pub struct IssueOrder {
     pub field: IssueOrderField,
@@ -163,6 +172,11 @@ impl Repository {
     }
     async fn squash_merge_allowed(&self) -> bool {
         self.source.allow_squash_merge
+    }
+    /// Forgejo has no repository setting for auto-merge: anyone who may merge can schedule one,
+    /// which `enablePullRequestAutoMerge` does.
+    async fn auto_merge_allowed(&self) -> bool {
+        true
     }
     /// Forgejo's own issues: an external tracker also sets `has_issues`, but the gateway can't create
     /// or read its issues, and gh checks this before `issue create`.
@@ -319,6 +333,9 @@ impl Repository {
     }
     async fn default_branch_ref(&self) -> Option<Ref> {
         Some(Ref {
+            owner: self.source.owner.login.clone(),
+            repo: self.source.name.clone(),
+            oid: None,
             name: self.source.default_branch.clone(),
             branch_protection_rule: None,
         })
