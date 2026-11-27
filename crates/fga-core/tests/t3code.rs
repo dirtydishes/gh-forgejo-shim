@@ -112,7 +112,9 @@ fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
                     {"id":10,"user":user("other"),"body":"first","created_at":"2026-11-01T00:00:00Z",
                      "updated_at":"2026-11-03T00:00:00Z","html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-10"},
                     {"id":11,"user":user("e2e"),"body":"second","created_at":"2026-11-02T00:00:00Z",
-                     "updated_at":"2026-11-02T00:00:00Z","html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-11"}
+                     // Edited at 23:30 UTC, in a zone two hours ahead: later as text than the
+                     // first comment's edit, and earlier in time.
+                     "updated_at":"2026-11-03T01:30:00+02:00","html_url":"https://forge.test/e2e/oracle/pulls/1#issuecomment-11"}
                 ]))
             }),
         )
@@ -260,10 +262,10 @@ async fn the_watch_fingerprint_counts_checks_and_edits() {
     .await;
     let pr = &data["repository"]["pullRequest"];
     assert_eq!(pr["headRefOid"], HEAD);
-    // Newest edit first: the first comment was edited after the second was posted.
+    // Newest edit first, by time rather than text.
     assert_eq!(
         pr["comments"],
-        json!({"totalCount":2,"nodes":[{"lastEditedAt":"2026-11-03T00:00:00Z"},{"lastEditedAt":null}]})
+        json!({"totalCount":2,"nodes":[{"lastEditedAt":"2026-11-03T00:00:00Z"},{"lastEditedAt":"2026-11-03T01:30:00+02:00"}]})
     );
     assert_eq!(
         pr["reviews"],
@@ -334,7 +336,10 @@ async fn the_activity_read_lists_commits_comments_and_reviews() {
         pr["comments"]["nodes"][0]["lastEditedAt"],
         "2026-11-03T00:00:00Z"
     );
-    assert_eq!(pr["comments"]["nodes"][1]["lastEditedAt"], Value::Null);
+    assert_eq!(
+        pr["comments"]["nodes"][1]["lastEditedAt"],
+        "2026-11-03T01:30:00+02:00"
+    );
     assert_eq!(pr["reviews"]["nodes"][0]["state"], "APPROVED");
 }
 
