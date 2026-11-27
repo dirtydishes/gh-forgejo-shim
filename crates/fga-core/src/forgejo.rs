@@ -74,6 +74,8 @@ struct Reply {
     status: StatusCode,
     /// Whether Forgejo's `Link` header names a next page; `None` when it sent no links.
     next: Option<bool>,
+    /// Forgejo's `X-Total-Count`, the size of the whole list a page came from.
+    total: Option<u64>,
     body: Vec<u8>,
 }
 
@@ -335,6 +337,10 @@ impl Forgejo {
             h.to_str()
                 .is_ok_and(|h| h.split(',').any(|link| link.contains("rel=\"next\"")))
         });
+        let total = response
+            .headers()
+            .get("x-total-count")
+            .and_then(|h| h.to_str().ok()?.parse().ok());
         let status = response.status();
         // A declared length past the cap fails before any of the body is read.
         if response
@@ -356,7 +362,12 @@ impl Forgejo {
             }
             body.extend_from_slice(&chunk);
         }
-        Ok(Reply { status, next, body })
+        Ok(Reply {
+            status,
+            next,
+            total,
+            body,
+        })
     }
 }
 

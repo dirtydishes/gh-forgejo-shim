@@ -246,7 +246,7 @@ impl PullRequest {
         Some(Ref {
             owner: head.owner.login.clone(),
             repo: head.name.clone().unwrap_or_else(|| self.repo.clone()),
-            oid: Some(self.source.head.sha.clone()),
+            pull: None,
             name: self.source.head.ref_name.clone(),
             branch_protection_rule: None,
         })
@@ -260,7 +260,11 @@ impl PullRequest {
         Ok(Some(Ref {
             owner: self.owner.clone(),
             repo: self.repo.clone(),
-            oid: Some(self.source.base.sha.clone()),
+            pull: Some(PullRefs {
+                number: self.source.number,
+                base_sha: self.source.base.sha.clone(),
+                head_sha: self.source.head.sha.clone(),
+            }),
             name: self.source.base.ref_name.clone(),
             branch_protection_rule: p.map(|p| BranchProtectionRule {
                 requires_strict_status_checks: p.block_on_outdated_branch,

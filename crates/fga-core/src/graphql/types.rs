@@ -468,9 +468,9 @@ pub struct Ref {
     pub owner: String,
     #[graphql(skip)]
     pub repo: String,
-    /// The commit the ref names, when the reader already knows it.
+    /// The pull request whose base this is, which `compare` reads against.
     #[graphql(skip)]
-    pub oid: Option<String>,
+    pub pull: Option<PullRefs>,
     pub name: String,
     pub branch_protection_rule: Option<BranchProtectionRule>,
 }
@@ -488,42 +488,40 @@ impl Ref {
             &self.name,
         ))
     }
-    /// This ref against `headRef`, as GitHub compares a pull request's base with its head. A
-    /// pull request's own ref, `refs/pull/N/head`, reads as that pull request's head commit.
-    /// Null when either side isn't a commit of the repository.
+    /// A pull request's base against that pull request's own ref, `refs/pull/N/head`, which is
+    /// what T3 Code compares. Forgejo counts the base's commits the head lacks without listing
+    /// them. Any other ref, or another pull request's, reads as null: a comparison the client
+    /// chooses would let one document make Forgejo walk any history, once per alias.
     async fn compare(
         &self,
         ctx: &Context<'_>,
         head_ref: String,
     ) -> async_graphql::Result<Option<Comparison>> {
-        let session = ctx.data_unchecked::<Session>();
-        let pull = head_ref
-            .strip_prefix("refs/pull/")
-            .and_then(|rest| rest.strip_suffix("/head"))
-            .map(str::parse::<i32>);
-        let head = match pull {
-            Some(Ok(number)) => match session.pull_head(&self.owner, &self.repo, number).await {
-                Ok(sha) => sha,
-                Err(forgejo::Error::NotFound) => return Ok(None),
-                Err(e) => return Err(error(e)),
-            },
-            Some(Err(_)) => return Ok(None),
-            None => head_ref
-                .strip_prefix("refs/heads/")
-                .unwrap_or(&head_ref)
-                .to_string(),
+        let Some(pull) = &self.pull else {
+            return Ok(None);
         };
-        let base = self.oid.clone().unwrap_or_else(|| self.name.clone());
-        // Forgejo counts the commits in its second ref and not its first, so the base's own
-        // commits are the head compared back to the base.
-        match session.compare(&self.owner, &self.repo, &head, &base).await {
+        if head_ref != format!("refs/pull/{}/head", pull.number) {
+            return Ok(None);
+        }
+        match ctx
+            .data_unchecked::<Session>()
+            .commits_missing_from(&self.owner, &self.repo, &pull.base_sha, &pull.head_sha)
+            .await
+        {
             Ok(behind) => Ok(Some(Comparison {
-                behind_by: i32::try_from(behind.total_commits).unwrap_or(i32::MAX),
+                behind_by: i32::try_from(behind).unwrap_or(i32::MAX),
             })),
             Err(forgejo::Error::NotFound) => Ok(None),
             Err(e) => Err(error(e)),
         }
     }
+}
+/// A pull request's number and the commits its two ends point at.
+#[derive(Clone)]
+pub struct PullRefs {
+    pub number: i32,
+    pub base_sha: String,
+    pub head_sha: String,
 }
 #[derive(SimpleObject)]
 pub struct Comparison {
