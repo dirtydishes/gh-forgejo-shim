@@ -181,9 +181,13 @@ async fn list(
     if let Some(exclude) = q.exclude_pull_requests {
         public.push(("exclude_pull_requests", exclude.to_string()));
     }
-    // A repository's own run list answers at once; a workflow's still reads the workflows, so an
-    // unknown one stays a 404.
+    // A repository's own run list answers after one read of the repository, which keeps a
+    // missing or unreadable one a 404; a workflow's still reads the workflows, so an unknown one
+    // stays a 404 too.
     if none && workflow.is_none() {
+        if let Err(error) = session.repository(owner, repo).await {
+            return rest_error(error);
+        }
         return (
             links(host, owner, repo, &["runs"], (page, limit), 0, &public),
             Json(json!({"total_count":0,"workflow_runs":[]})),
