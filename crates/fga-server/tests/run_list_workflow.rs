@@ -36,7 +36,19 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
     let record = queries.clone();
     let asked: Arc<Mutex<Vec<String>>> = Arc::default();
     let paths = asked.clone();
+    // Blocked runs of a fork's pull request: 6 waits for approval, 5 was approved, 7 waits on
+    // something else.
+    let blocked = |id: i64, need_approval: bool, approved_by: i64| {
+        let mut run = run(id, "fork.yml", "c6");
+        run["status"] = json!("blocked");
+        run["need_approval"] = json!(need_approval);
+        run["approved_by"] = json!(approved_by);
+        run
+    };
     let all = [
+        blocked(7, false, 0),
+        blocked(6, true, 0),
+        blocked(5, true, 1),
         run(4, "ci.yml", "c4"),
         run(3, "ci.yml", "c3"),
         run(2, "new.yml", "c2"),
@@ -62,12 +74,25 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
             get(move |RawQuery(query): RawQuery| {
                 let query = query.unwrap_or_default();
                 record.lock().unwrap().push(query.clone());
-                let wanted = url::form_urlencoded::parse(query.as_bytes())
-                    .find(|(key, _)| key == "workflow_id")
-                    .map(|(_, value)| value.into_owned());
+                let pairs: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
+                    .into_owned()
+                    .collect();
+                let values = |name: &str| -> Vec<String> {
+                    pairs
+                        .iter()
+                        .filter(|(key, _)| key == name)
+                        .map(|(_, value)| value.clone())
+                        .collect()
+                };
+                let (wanted, statuses, sha) =
+                    (values("workflow_id"), values("status"), values("head_sha"));
                 let runs: Vec<Value> = all
                     .iter()
-                    .filter(|run| wanted.as_ref().is_none_or(|w| run["workflow_id"] == *w))
+                    .filter(|run| wanted.iter().all(|w| run["workflow_id"] == *w.as_str()))
+                    .filter(|run| {
+                        statuses.is_empty() || statuses.iter().any(|s| run["status"] == *s.as_str())
+                    })
+                    .filter(|run| sha.iter().all(|s| run["commit_sha"] == *s.as_str()))
                     .cloned()
                     .collect();
                 async move { Json(json!({"total_count":runs.len(),"workflow_runs":runs})) }
@@ -268,11 +293,11 @@ async fn an_unknown_workflow_is_not_found() {
     }
 }
 
-/// T3 Code asks for a pull request's runs awaiting approval on every read of its checks, and
-/// shows checks it couldn't read when refused. No run the gateway reports awaits approval (a
-/// Forgejo run waiting for one reads as `queued`), so the list is empty, and Forgejo isn't asked.
+/// T3 Code asks for a pull request's runs awaiting approval on every read of its checks, and shows
+/// checks it couldn't read when refused. They are the blocked runs Forgejo holds for approval:
+/// `need_approval` and not yet approved. With none, the workflow files go unread.
 #[tokio::test]
-async fn runs_in_a_status_the_gateway_never_reports_list_none() {
+async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
     let (addr, queries, asked) = gateway_with_paths().await;
     let (code, _, page) = get_json(
         addr,
@@ -281,12 +306,27 @@ async fn runs_in_a_status_the_gateway_never_reports_list_none() {
     .await;
     assert_eq!(code, 200, "{page}");
     assert_eq!(page, json!({"total_count":0,"workflow_runs":[]}));
-    assert!(queries.lock().unwrap().is_empty());
-    // The token's check and the repository's: no runs, no workflow files.
-    assert_eq!(
-        *asked.lock().unwrap(),
-        ["/api/v1/user", "/api/v1/repos/o/r"]
+    let query = queries.lock().unwrap()[0].clone();
+    assert!(query.contains("status=blocked"), "{query}");
+    assert!(
+        !asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|path| path.contains("/contents/")),
+        "{:?}",
+        asked.lock().unwrap()
     );
+
+    let (code, _, page) = get_json(
+        addr,
+        "/api/v3/repos/o/r/actions/runs?head_sha=c6&status=action_required&per_page=100",
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["total_count"], 1);
+    assert_eq!(page["workflow_runs"][0]["id"], 6);
+
     // A repository the token can't read is still not found.
     let (code, _, _) = get_json(
         addr,
@@ -294,9 +334,13 @@ async fn runs_in_a_status_the_gateway_never_reports_list_none() {
     )
     .await;
     assert_eq!(code, 404);
-
-    let (code, _, page) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=queued").await;
-    assert_eq!(code, 200, "{page}");
-    let (code, _, _) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=sideways").await;
-    assert_eq!(code, 422);
+    // GitHub's other statuses the gateway doesn't map are refused, as before.
+    for status in ["neutral", "timed_out", "sideways"] {
+        let (code, _, _) = get_json(
+            addr,
+            &format!("/api/v3/repos/o/r/actions/runs?status={status}"),
+        )
+        .await;
+        assert_eq!(code, 422, "{status}");
+    }
 }

@@ -28,6 +28,12 @@ pub struct Run {
     /// Forgejo 17 sends `null` for a run it never started; earlier versions send Unix time 0.
     #[serde(default)]
     pub started: Option<String>,
+    /// A fork pull request's run waiting for a maintainer to approve it, until `approved_by`
+    /// names one (`services/convert/action.go`).
+    #[serde(default)]
+    pub need_approval: bool,
+    #[serde(default)]
+    pub approved_by: i64,
 }
 #[derive(Clone, Serialize)]
 pub struct Workflow {
@@ -270,6 +276,8 @@ mod tests {
                 created: created.into(),
                 updated: "2026-11-03T00:00:09Z".into(),
                 started: started.map(Into::into),
+                need_approval: false,
+                approved_by: 0,
             };
             run(&source, &workflow).unwrap()["run_started_at"].clone()
         };
