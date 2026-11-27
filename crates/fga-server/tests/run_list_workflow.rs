@@ -48,6 +48,16 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
             get(|| async { Json(json!({"id":1,"login":"e2e","full_name":"","avatar_url":""})) }),
         )
         .route(
+            "/api/v1/repos/o/r",
+            get(|| async {
+                Json(
+                    json!({"id":1,"name":"r","full_name":"o/r","default_branch":"main",
+                    "owner":{"id":1,"login":"o","full_name":"","avatar_url":""},"private":false,
+                    "html_url":"https://forge.test/o/r","fork":false,"archived":false}),
+                )
+            }),
+        )
+        .route(
             "/api/v1/repos/o/r/actions/runs",
             get(move |RawQuery(query): RawQuery| {
                 let query = query.unwrap_or_default();
@@ -272,8 +282,18 @@ async fn runs_in_a_status_the_gateway_never_reports_list_none() {
     assert_eq!(code, 200, "{page}");
     assert_eq!(page, json!({"total_count":0,"workflow_runs":[]}));
     assert!(queries.lock().unwrap().is_empty());
-    // Only the token's own check: no runs, no workflow files.
-    assert_eq!(*asked.lock().unwrap(), ["/api/v1/user"]);
+    // The token's check and the repository's: no runs, no workflow files.
+    assert_eq!(
+        *asked.lock().unwrap(),
+        ["/api/v1/user", "/api/v1/repos/o/r"]
+    );
+    // A repository the token can't read is still not found.
+    let (code, _, _) = get_json(
+        addr,
+        "/api/v3/repos/nobody/nothing/actions/runs?status=action_required",
+    )
+    .await;
+    assert_eq!(code, 404);
 
     let (code, _, page) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=queued").await;
     assert_eq!(code, 200, "{page}");
