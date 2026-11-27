@@ -25,8 +25,17 @@ fn run(id: i64, workflow: &str, sha: &str) -> Value {
 /// of `ci.yml`, one of `lint.yml` and one of `new.yml`, which exists only on a branch. Forgejo filters runs by
 /// `workflow_id`, a bare file name; the queries it was sent are returned.
 async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+    let (addr, queries, _) = gateway_with_paths().await;
+    (addr, queries)
+}
+
+/// The same gateway, with every path its Forgejo was asked for.
+#[allow(clippy::type_complexity)]
+async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>) {
     let queries = Arc::new(Mutex::new(Vec::new()));
     let record = queries.clone();
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let paths = asked.clone();
     let all = [
         run(4, "ci.yml", "c4"),
         run(3, "ci.yml", "c3"),
@@ -69,7 +78,16 @@ async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
             "/api/v1/repos/o/r/contents/.forgejo/workflows/lint.yml",
             // "name: lint\non: push\n"
             get(|| async { Json(json!({"content":"bmFtZTogbGludApvbjogcHVzaAo="})) }),
-        );
+        )
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let paths = paths.clone();
+                async move {
+                    paths.lock().unwrap().push(request.uri().path().to_owned());
+                    next.run(request).await
+                }
+            },
+        ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
@@ -82,7 +100,7 @@ async fn gateway() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
     let addr = listener.local_addr().unwrap();
     let state = AppState::new(vec![host], "3.19.0".into()).unwrap();
     tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
-    (addr, queries)
+    (addr, queries, asked)
 }
 
 /// The status, the `Link` header and the JSON body.
@@ -245,7 +263,7 @@ async fn an_unknown_workflow_is_not_found() {
 /// Forgejo run waiting for one reads as `queued`), so the list is empty, and Forgejo isn't asked.
 #[tokio::test]
 async fn runs_in_a_status_the_gateway_never_reports_list_none() {
-    let (addr, queries) = gateway().await;
+    let (addr, queries, asked) = gateway_with_paths().await;
     let (code, _, page) = get_json(
         addr,
         "/api/v3/repos/o/r/actions/runs?head_sha=c4&branch=feat&event=pull_request&status=action_required&per_page=100&page=1",
@@ -254,6 +272,8 @@ async fn runs_in_a_status_the_gateway_never_reports_list_none() {
     assert_eq!(code, 200, "{page}");
     assert_eq!(page, json!({"total_count":0,"workflow_runs":[]}));
     assert!(queries.lock().unwrap().is_empty());
+    // Only the token's own check: no runs, no workflow files.
+    assert_eq!(*asked.lock().unwrap(), ["/api/v1/user"]);
 
     let (code, _, page) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=queued").await;
     assert_eq!(code, 200, "{page}");
