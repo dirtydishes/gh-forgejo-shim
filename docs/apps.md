@@ -8,6 +8,20 @@ Agents that can run `gh` from a shell may also work, but most are untested. The
 needs. Tried an app? Tell us how it went in
 [#271](https://github.com/dirtydishes/gh-forgejo-shim/issues/271).
 
+## T3 Code
+
+T3 Code reads pull requests by sending GitHub GraphQL to `https://<forge>/api/graphql` itself, not
+through `gh`, once `gh auth token` gives it a token for the host. Only a gateway in
+[server mode](gateway/server-mode.md) answers there. The gateway serves the documents behind its
+pull request panel, the `pull_request_read` tool and its pull request watch, so a watched pull
+request wakes its thread when Forgejo's checks finish. Forgejo has no stacked pull requests or merge
+queue, so those read as none.
+
+Review threads, reactions, commit stats, issue detail, and updating or deleting a branch still use
+fields the gateway doesn't serve; T3 Code shows those parts empty or fails those reads.
+[#379](https://github.com/dirtydishes/gh-forgejo-shim/issues/379) tracks them. In client-only mode
+nothing answers T3 Code's requests.
+
 ## Agents that can run `gh`
 
 - **GitHub Copilot CLI.** On GitHub Enterprise Server, GitHub's docs say it can do issue and pull

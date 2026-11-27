@@ -65,9 +65,12 @@ Forgejo has commit statuses only. Reads return the state in the field **`status`
 
 - **Decision: Actions statuses become `CheckRun`; everything else becomes `StatusContext`.** gh, ChatGPT
   and Claude render CheckRuns with workflow and event information. Identify an Actions status by its
-  `target_url` pointing to `/{o}/{r}/actions/runs/` and its context matching `^(.+) / (.+) \((.+)\)$`.
-  Then:
+  `target_url` pointing to `/{o}/{r}/actions/runs/{n}` and its context matching
+  `^(.+) / (.+) \((.+)\)$`. Then:
   - `name` ← job, `checkSuite.workflowRun.workflow.name` ← workflow, `.event` ← event.
+  - `workflowRun.runNumber` ← `{n}`, the run's number in the repository, which Forgejo's run links
+    use. `workflow.id` is an ID for the workflow's name, all a status names it by, so every run of
+    one workflow shares it. T3 Code reads both to drop a cancelled check a later run replaced.
   - `detailsUrl` ← `target_url`. Forgejo returns it **relative** (`/o/r/actions/runs/5/jobs/1`), so prefix the forge's public web base. `startedAt` ← `created_at`, `completedAt` ← `updated_at` when terminal.
   - `status`/`conclusion`:
 
@@ -446,6 +449,18 @@ returns GitHub's empty or null value, never an error.
 | thread `isCollapsed`, `resolvedBy` | resolved, and who resolved it |
 | `Repository.object(expression:)` | `REV:PATH` is a `Blob` from `GET contents/{path}?ref=REV`; a bare `REV` is a `Commit`, resolved as a comparison's ends are (below); `HEAD` or an empty revision is the default branch. A missing path or revision is null, as on GitHub. A directory or a submodule is null too: the gateway serves no `Tree`. Look-ups by `oid` are null |
 | `Blob.text` | the file's text, at most 1 MiB, with `isTruncated` past that. Null for a binary blob (one with a NUL byte or that isn't UTF-8) and when Forgejo sent no content |
+| `Ref.compare(headRef:)` `behindBy` | the base's commits the head lacks: Forgejo's `compare/{head}...{base}` count. A pull request's base compares from the base branch's commit; `refs/pull/N/head` is that pull request's head commit, and `refs/heads/NAME` the branch. Null when Forgejo can't find either end, which includes a branch name with a slash |
+| `PullRequest.headRef` | the head branch, while `headRepository` would show it (an open PR whose branch tip is the PR's head); else null |
+| `Commit.parents` | the commit's parents from Forgejo; a commit read without them (a merge commit) reads them from `git/commits` |
+| `comments(orderBy: {field: UPDATED_AT})` | by `updated_at`, falling back to `created_at` |
+| `IssueComment.lastEditedAt` | `updated_at` when it differs from `created_at`, else null |
+| `PullRequestReview.lastEditedAt` | null: Forgejo's review `updated_at` also moves on a dismissal or a change to its code comments |
+| `viewerDidAuthor` | the viewer wrote the pull request |
+| `viewerCanUpdateBranch` | false: the gateway doesn't serve `updatePullRequestBranch` |
+| `Repository.autoMergeAllowed` | true: Forgejo has no switch for it, and anyone who may merge can schedule a merge |
+| `Team.combinedSlug`, `avatarUrl` | `org/team`; null, as Forgejo teams have no avatar |
+| `PullRequest.stack`, `stackEntry` | null: Forgejo has no stacked pull requests |
+| `timelineItems(itemTypes:)` | merge queue events only, and always none, since Forgejo has no merge queue. Any other kind, or no `itemTypes`, is an error rather than an empty timeline the pull request may not have |
 
 **REST.** Each route reads everything from Forgejo, then pages it as GitHub does: `per_page` (30
 unless asked, at most 100), `page`, and a `Link` header when there is more than one page, which
