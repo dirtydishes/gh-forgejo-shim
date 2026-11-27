@@ -502,15 +502,22 @@ impl Ref {
         };
         // Forgejo sends no base commit once the base branch is deleted, and counts from the
         // default branch for an empty `sha`.
-        if head_ref != format!("refs/pull/{}/head", pull.number)
-            || pull.base_sha.is_empty()
-            || pull.head_sha.is_empty()
-        {
+        if head_ref != format!("refs/pull/{}/head", pull.number) || pull.base_sha.is_empty() {
             return Ok(None);
         }
-        match ctx
-            .data_unchecked::<Session>()
-            .commits_missing_from(&self.owner, &self.repo, &pull.base_sha, &pull.head_sha)
+        // The pull request's own ref, which T3 Code names: Forgejo's `head.sha` follows the head
+        // branch when it exists, and the two part once a reopened pull request's branch moved.
+        let session = ctx.data_unchecked::<Session>();
+        let head = match session
+            .pull_head(&self.owner, &self.repo, pull.number)
+            .await
+        {
+            Ok(sha) if !sha.is_empty() => sha,
+            Ok(_) | Err(forgejo::Error::NotFound) => return Ok(None),
+            Err(e) => return Err(error(e)),
+        };
+        match session
+            .commits_missing_from(&self.owner, &self.repo, &pull.base_sha, &head)
             .await
         {
             Ok(behind) => Ok(Some(Comparison {
@@ -521,12 +528,11 @@ impl Ref {
         }
     }
 }
-/// A pull request's number and the commits its two ends point at.
+/// A pull request's number and the commit its base branch points at.
 #[derive(Clone)]
 pub struct PullRefs {
     pub number: i32,
     pub base_sha: String,
-    pub head_sha: String,
 }
 #[derive(SimpleObject)]
 pub struct Comparison {
