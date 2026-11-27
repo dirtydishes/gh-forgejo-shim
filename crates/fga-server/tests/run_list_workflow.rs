@@ -43,7 +43,7 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
         run["status"] = json!("blocked");
         // Forgejo keeps a fork pull request's run under the pull request's ref, and names a
         // push to the fork `pull_request_sync`.
-        run["prettyref"] = json!("refs/pull/9/head");
+        run["prettyref"] = json!("#9");
         run["event"] = json!("pull_request_sync");
         run["need_approval"] = json!(need_approval);
         run["approved_by"] = json!(approved_by);
@@ -88,9 +88,39 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
             "/api/v1/repos/o/off/actions/runs",
             get(|| async {
                 (
-                    axum::http::StatusCode::FORBIDDEN,
-                    Json(json!({"message":"Actions are disabled"})),
+                    axum::http::StatusCode::NOT_FOUND,
+                    Json(json!({"message":"Not Found"})),
                 )
+            }),
+        )
+        .route(
+            // A token that may read this repository but not its Actions.
+            "/api/v1/repos/o/denied",
+            get(|| async {
+                Json(json!({"id":3,"name":"denied","full_name":"o/denied","default_branch":"main",
+                    "owner":{"id":1,"login":"o","full_name":"","avatar_url":""},"private":true,
+                    "html_url":"https://forge.test/o/denied","fork":false,"archived":false}))
+            }),
+        )
+        .route(
+            "/api/v1/repos/o/denied/actions/runs",
+            get(|| async {
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    Json(json!({"message":"Forbidden"})),
+                )
+            }),
+        )
+        .route(
+            // The fork's pull request that run 6 belongs to.
+            "/api/v1/repos/o/r/pulls/9",
+            get(|| async {
+                Json(json!({"number":9,"title":"t","body":"","state":"open","merged":false,"draft":false,
+                    "html_url":"https://forge.test/o/r/pulls/9","mergeable":true,
+                    "created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z",
+                    "head":{"ref":"feat","label":"fork:feat","sha":"c6"},
+                    "base":{"ref":"main","label":"main","sha":"c1"},
+                    "user":{"id":4,"login":"fork","full_name":"","avatar_url":""},"merged_at":null}))
             }),
         )
         .route(
@@ -352,7 +382,15 @@ async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
     .await;
     assert_eq!(code, 200, "{page}");
     assert_eq!(page["total_count"], 1);
-    assert_eq!(page["workflow_runs"][0]["id"], 6);
+    let held = &page["workflow_runs"][0];
+    assert_eq!(held["id"], 6);
+    // As GitHub reports a run held for approval, named by its pull request and head branch.
+    assert_eq!(
+        (&held["status"], &held["conclusion"]),
+        (&json!("completed"), &json!("action_required"))
+    );
+    assert_eq!(held["pull_requests"], json!([{"number":9}]));
+    assert_eq!(held["head_branch"], "feat");
 
     // A repository the token can't read is still not found.
     let (code, _, _) = get_json(
@@ -361,7 +399,23 @@ async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
     )
     .await;
     assert_eq!(code, 404);
-    // A repository whose Actions are off: Forgejo refuses its runs, and it has none awaiting.
+    // Without a head commit, the branch and event still filter: the fork's run is under its
+    // pull request's ref.
+    let (code, _, page) = get_json(
+        addr,
+        "/api/v3/repos/o/r/actions/runs?branch=feat&status=action_required",
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["total_count"], 0);
+    // A token that may read the repository but not its Actions can't tell whether a run waits.
+    let (code, _, _) = get_json(
+        addr,
+        "/api/v3/repos/o/denied/actions/runs?head_sha=c6&status=action_required",
+    )
+    .await;
+    assert_eq!(code, 403);
+    // A repository whose Actions are off: Forgejo has no runs to serve, and none awaits.
     let (code, _, page) = get_json(
         addr,
         "/api/v3/repos/o/off/actions/runs?head_sha=c6&status=action_required",

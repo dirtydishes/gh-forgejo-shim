@@ -478,7 +478,7 @@ impl Session {
     /// How many items Forgejo returns per page when asked for [`PAGE_SIZE`]: it clamps every page to
     /// its `MAX_RESPONSE_ITEMS` (`services/convert/utils.go:15-20`), which may be lower.
     /// An upstream that hides the settings endpoint keeps Forgejo's default of 50.
-    pub(crate) async fn page_size(&self) -> Result<usize, Error> {
+    pub async fn page_size(&self) -> Result<usize, Error> {
         #[derive(serde::Deserialize)]
         struct ApiSettings {
             max_response_items: usize,

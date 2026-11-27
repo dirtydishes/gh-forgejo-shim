@@ -61,8 +61,27 @@ pub fn status(native: &str) -> Result<(&'static str, Option<&'static str>), Erro
     })
 }
 
+/// The pull request a run belongs to: Forgejo labels a pull request's run `#N`.
+pub fn pull_number(run: &Run) -> Option<i64> {
+    run.prettyref.strip_prefix('#')?.parse().ok()
+}
+
+/// Whether Forgejo holds `run` for a maintainer's approval, a fork pull request's run.
+pub fn awaits_approval(run: &Run) -> bool {
+    run.need_approval && run.approved_by == 0
+}
+
 pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
-    let (status, conclusion) = status(&run.status)?;
+    // GitHub reports a run held for approval as completed, with `action_required`.
+    let (status, conclusion) = if awaits_approval(run) {
+        ("completed", Some("action_required"))
+    } else {
+        status(&run.status)?
+    };
+    let pull_requests: Vec<Value> = pull_number(run)
+        .map(|number| json!({"number": number}))
+        .into_iter()
+        .collect();
     // A run Forgejo never started carries no start (Forgejo 17) or Unix time 0 in its display
     // timezone, which is 1969-12-31 west of UTC (Forgejo 15). GitHub reports the creation time,
     // as gh does for a missing start.
@@ -81,6 +100,7 @@ pub fn run(run: &Run, workflow: &Workflow) -> Result<Value, Error> {
         "display_title":run.title,"head_branch":run.prettyref.strip_prefix("refs/heads/").unwrap_or(&run.prettyref),
         "head_sha":run.commit_sha,"run_number":run.index_in_repo,"event":run.event,
         "status":status,"conclusion":conclusion,"html_url":run.html_url,"path":workflow.path,
+        "pull_requests":pull_requests,
         "created_at":run.created,"updated_at":run.updated,"run_started_at":started,
         "run_attempt":1}),
     )
