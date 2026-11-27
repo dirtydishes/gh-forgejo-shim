@@ -854,3 +854,48 @@ async fn an_oversized_diff_fails_at_the_response_cap() {
     );
     server.abort();
 }
+
+/// The approval read is at most four run-list reads, even when Forgejo serves one run a page: a
+/// held run on page five reads as none.
+#[tokio::test]
+async fn a_page_counted_run_read_stops_after_its_pages() {
+    let pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = pages.clone();
+    let upstream = Router::new()
+        .route("/api/v1/user", get(|| async { Json(user()) }))
+        .route(
+            "/api/v1/settings/api",
+            get(|| async { Json(json!({"max_response_items": 1})) }),
+        )
+        .route(
+            "/api/v1/repos/e2e/oracle/actions/runs",
+            get(
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    let page: i64 = query["page"].parse().unwrap();
+                    seen.lock().unwrap().push(query["page"].clone());
+                    let run = json!({"id":page,"workflow_id":"ci.yml","index_in_repo":page,
+                        "title":"t","prettyref":"#9","commit_sha":"c6","status":"blocked",
+                        "event":"pull_request","html_url":"","created":"2026-11-03T00:00:00Z",
+                        "updated":"2026-11-03T00:00:00Z","need_approval":page == 5,"approved_by":0});
+                    Json(json!({"total_count":10,"workflow_runs":[run]}))
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forgejo = Forgejo::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let session = forgejo.authenticate("token good").await.unwrap();
+    let runs = session
+        .action_runs_pages("e2e", "oracle", &[], 4)
+        .await
+        .unwrap();
+    server.abort();
+    assert_eq!(*pages.lock().unwrap(), ["1", "2", "3", "4"]);
+    assert_eq!(runs.workflow_runs.len(), 4);
+    assert!(!runs.workflow_runs.iter().any(|run| run.need_approval));
+}

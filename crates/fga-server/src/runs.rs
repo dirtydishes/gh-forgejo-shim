@@ -272,9 +272,10 @@ async fn awaiting_approval(
 ) -> Result<actions::RunList, fga_core::forgejo::Error> {
     use fga_core::forgejo::Error;
     // A fork pull request's run is stored under the pull request's own ref, not its branch, and
-    // as `pull_request_sync` once the fork pushes again. So when the caller names the head
-    // commit, as T3 Code does, the branch doesn't narrow it, and `event=pull_request` matches
-    // every pull request event; other events still must match.
+    // as `pull_request_sync` once the fork pushes again, which Forgejo's API sends as
+    // `pull_request` (`modules/webhook/type.go`). So when the caller names the head commit, as T3
+    // Code does, the branch doesn't narrow it, and any pull request event matches any pull request
+    // run; other events still must match.
     let by_commit = upstream.iter().any(|(key, _)| *key == "head_sha");
     let event = upstream
         .iter()
@@ -286,7 +287,9 @@ async fn awaiting_approval(
         .cloned()
         .collect();
     let event_matches = |run: &actions::Run| match (&event, by_commit) {
-        (Some(event), true) if event == "pull_request" => run.event.starts_with("pull_request"),
+        (Some(event), true) if event.starts_with("pull_request") => {
+            run.event.starts_with("pull_request")
+        }
         (Some(event), true) => run.event == *event,
         _ => true,
     };

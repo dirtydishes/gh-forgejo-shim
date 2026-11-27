@@ -41,10 +41,11 @@ async fn gateway_with_paths() -> (SocketAddr, Arc<Mutex<Vec<String>>>, Arc<Mutex
     let blocked = |id: i64, need_approval: bool, approved_by: i64| {
         let mut run = run(id, "fork.yml", "c6");
         run["status"] = json!("blocked");
-        // Forgejo keeps a fork pull request's run under the pull request's ref, and names a
-        // push to the fork `pull_request_sync`.
+        // Forgejo keeps a fork pull request's run under the pull request's ref, and its API sends
+        // `pull_request` even for a push to the fork, stored as `pull_request_sync`; this fake
+        // filters on the field it sends.
         run["prettyref"] = json!("#9");
-        run["event"] = json!("pull_request_sync");
+        run["event"] = json!("pull_request");
         run["need_approval"] = json!(need_approval);
         run["approved_by"] = json!(approved_by);
         run
@@ -375,6 +376,14 @@ async fn runs_awaiting_approval_are_those_forgejo_holds_for_it() {
     let held = &page["workflow_runs"][0];
     assert_eq!(held["id"], 6);
     assert_eq!(held["pull_requests"], json!([{"number":9}]));
+    // `pull_request_sync` asks for the same runs, as Forgejo stores a fork's later pushes.
+    let (code, _, page) = get_json(
+        addr,
+        "/api/v3/repos/o/r/actions/runs?head_sha=c6&event=pull_request_sync&status=action_required",
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["total_count"], 1);
     // Another event still filters, by head commit too.
     let (code, _, page) = get_json(
         addr,
