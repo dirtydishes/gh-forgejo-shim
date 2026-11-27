@@ -253,9 +253,14 @@ async fn list(
     result.unwrap_or_else(rest_error)
 }
 
-/// The `limit` blocked runs from `start` that wait for a maintainer's approval, out of every one
-/// that does. Forgejo can't filter on approval, so every blocked run is read and filtered here;
-/// blocked runs are few.
+/// The most blocked runs one `status=action_required` request reads. Forgejo can't filter on
+/// approval, so blocked runs are read and filtered here, and anyone who can open a fork pull
+/// request adds blocked runs. T3 Code's read names a head commit, which keeps its set small.
+const MAX_BLOCKED_RUNS: usize = 200;
+
+/// The `limit` blocked runs from `start` that wait for a maintainer's approval, among the newest
+/// [`MAX_BLOCKED_RUNS`] blocked ones. A repository whose Actions are off, which Forgejo answers
+/// 403 or 404 for, has none, as long as the repository itself reads.
 async fn awaiting_approval(
     session: &Session,
     owner: &str,
@@ -264,9 +269,21 @@ async fn awaiting_approval(
     start: usize,
     limit: usize,
 ) -> Result<actions::RunList, fga_core::forgejo::Error> {
-    let blocked = session
-        .action_runs(owner, repo, upstream, 0, usize::MAX)
-        .await?;
+    use fga_core::forgejo::Error;
+    let blocked = match session
+        .action_runs(owner, repo, upstream, 0, MAX_BLOCKED_RUNS)
+        .await
+    {
+        Ok(blocked) => blocked,
+        Err(Error::Forbidden | Error::NotFound) => {
+            session.repository(owner, repo).await?;
+            return Ok(actions::RunList {
+                total_count: 0,
+                workflow_runs: Vec::new(),
+            });
+        }
+        Err(e) => return Err(e),
+    };
     let waiting: Vec<actions::Run> = blocked
         .workflow_runs
         .into_iter()
