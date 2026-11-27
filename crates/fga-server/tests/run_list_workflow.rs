@@ -239,3 +239,24 @@ async fn an_unknown_workflow_is_not_found() {
         );
     }
 }
+
+/// T3 Code asks for a pull request's runs awaiting approval on every read of its checks, and
+/// shows checks it couldn't read when refused. No run the gateway reports awaits approval (a
+/// Forgejo run waiting for one reads as `queued`), so the list is empty, and Forgejo isn't asked.
+#[tokio::test]
+async fn runs_in_a_status_the_gateway_never_reports_list_none() {
+    let (addr, queries) = gateway().await;
+    let (code, _, page) = get_json(
+        addr,
+        "/api/v3/repos/o/r/actions/runs?head_sha=c4&branch=feat&event=pull_request&status=action_required&per_page=100&page=1",
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page, json!({"total_count":0,"workflow_runs":[]}));
+    assert!(queries.lock().unwrap().is_empty());
+
+    let (code, _, page) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=queued").await;
+    assert_eq!(code, 200, "{page}");
+    let (code, _, _) = get_json(addr, "/api/v3/repos/o/r/actions/runs?status=sideways").await;
+    assert_eq!(code, 422);
+}

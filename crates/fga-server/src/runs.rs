@@ -143,6 +143,8 @@ async fn list(
     }
     let mut upstream = Vec::new();
     let mut public = Vec::new();
+    // Set for a status no run the gateway reports has, which lists none.
+    let mut none = false;
     if let Some(branch) = q.branch {
         upstream.push(("ref", format!("refs/heads/{branch}")));
         public.push(("branch", branch));
@@ -162,6 +164,15 @@ async fn list(
             "failure" => &["failure"],
             "cancelled" => &["cancelled"],
             "skipped" => &["skipped"],
+            // GitHub's other statuses and conclusions, which no run the gateway reports has:
+            // it reports a Forgejo run awaiting approval, or any waiting run, as `queued`. T3
+            // Code asks for `action_required` runs on every read of a pull request's checks, and
+            // counts a refusal as checks it couldn't read.
+            "action_required" | "neutral" | "pending" | "requested" | "stale"
+            | "startup_failure" | "timed_out" | "waiting" => {
+                none = true;
+                &[]
+            }
             _ => return invalid(),
         };
         upstream.extend(native.iter().map(|value| ("status", (*value).to_owned())));
@@ -179,6 +190,13 @@ async fn list(
             let file = found.path.rsplit('/').next().unwrap_or_default();
             upstream.push(("workflow_id", file.to_owned()));
             resource = vec!["workflows", selector, "runs"];
+        }
+        if none {
+            return Ok((
+                links(host, owner, repo, &resource, (page, limit), 0, &public),
+                Json(json!({"total_count":0,"workflow_runs":[]})),
+            )
+                .into_response());
         }
         let runs = session
             .action_runs(
