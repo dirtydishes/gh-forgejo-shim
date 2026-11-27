@@ -237,6 +237,20 @@ impl PullRequest {
             .map_err(error)?;
         Ok(Some(Repository { source }))
     }
+    /// The head branch, on the same terms as `headRepository`: only while it is the PR's head.
+    async fn head_ref(&self, ctx: &Context<'_>) -> Option<Ref> {
+        let head = self.source.head.repo.as_ref()?;
+        if !self.head_is_pr_head(ctx.data_unchecked::<Session>()).await {
+            return None;
+        }
+        Some(Ref {
+            owner: head.owner.login.clone(),
+            repo: head.name.clone().unwrap_or_else(|| self.repo.clone()),
+            oid: Some(self.source.head.sha.clone()),
+            name: self.source.head.ref_name.clone(),
+            branch_protection_rule: None,
+        })
+    }
     async fn base_ref(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Ref>> {
         let p = ctx
             .data_unchecked::<Session>()
@@ -244,6 +258,9 @@ impl PullRequest {
             .await
             .map_err(error)?;
         Ok(Some(Ref {
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            oid: Some(self.source.base.sha.clone()),
             name: self.source.base.ref_name.clone(),
             branch_protection_rule: p.map(|p| BranchProtectionRule {
                 requires_strict_status_checks: p.block_on_outdated_branch,
@@ -354,6 +371,15 @@ impl PullRequest {
     async fn viewer_can_update(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         self.viewer_can_change(ctx).await
     }
+    async fn viewer_did_author(&self, ctx: &Context<'_>) -> bool {
+        let viewer = &ctx.data_unchecked::<Session>().viewer.login;
+        self.source.user.login.eq_ignore_ascii_case(viewer)
+    }
+    /// The gateway doesn't serve `updatePullRequestBranch`, so no viewer can update a branch
+    /// through it.
+    async fn viewer_can_update_branch(&self) -> bool {
+        false
+    }
     /// GitHub answers by permission alone, even for a closed or merged PR.
     async fn viewer_can_close(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         self.viewer_can_change(ctx).await
@@ -410,6 +436,26 @@ impl PullRequest {
     }
     async fn is_in_merge_queue(&self) -> bool {
         false
+    }
+    async fn stack(&self) -> Option<PullRequestStack> {
+        None
+    }
+    async fn stack_entry(&self) -> Option<PullRequestStackEntry> {
+        None
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn timeline_items(
+        &self,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        item_types: Option<Vec<PullRequestTimelineItemsItemType>>,
+        last: Option<i32>,
+        since: Option<DateTime>,
+        skip: Option<i32>,
+    ) -> async_graphql::Result<PullRequestTimelineItemsConnection> {
+        let _ = (since, skip);
+        timeline_items(item_types, first, last, after, before)
     }
     async fn reaction_groups(&self) -> Option<Vec<ReactionGroup>> {
         no_reactions()
@@ -581,6 +627,7 @@ impl PullRequest {
         last: Option<i32>,
         after: Option<String>,
         before: Option<String>,
+        order_by: Option<super::query::IssueCommentOrder>,
     ) -> async_graphql::Result<IssueCommentConnection> {
         let session = ctx.data_unchecked::<Session>();
         // Forgejo serves a PR's conversation under `read:issue`. Without it the PR still reads, and
@@ -596,6 +643,18 @@ impl PullRequest {
             }
             Err(other) => return Err(error(other)),
         };
+        let mut comments = comments;
+        if let Some(order) = order_by {
+            // Forgejo sends comments oldest first; a comment never edited has no `updated_at`.
+            comments.sort_by(|a, b| {
+                let at =
+                    |c: &forgejo::Comment| c.updated_at.clone().unwrap_or(c.created_at.clone());
+                at(a).cmp(&at(b))
+            });
+            if order.direction == super::query::OrderDirection::Desc {
+                comments.reverse();
+            }
+        }
         let nodes = comments
             .into_iter()
             .map(|source| IssueComment {
@@ -744,6 +803,38 @@ impl Commit {
 }
 #[Object]
 impl Commit {
+    async fn id(&self) -> ID {
+        ID(node_id(
+            "Commit",
+            &format!("{}/{}", self.owner, self.repo),
+            &self.sha,
+        ))
+    }
+    /// A commit read without its metadata (a merge commit) reads it from Forgejo first.
+    async fn parents(
+        &self,
+        ctx: &Context<'_>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> async_graphql::Result<CommitConnection> {
+        let parents = match &self.source {
+            Some(source) => source.parents.clone(),
+            None => {
+                ctx.data_unchecked::<Session>()
+                    .git_commit(&self.owner, &self.repo, &self.sha)
+                    .await
+                    .map_err(error)?
+                    .parents
+            }
+        };
+        let nodes = parents
+            .into_iter()
+            .map(|parent| Commit::head(&self.owner, &self.repo, &parent.sha))
+            .collect();
+        Ok(page(nodes, first, last, after, before)?.into())
+    }
     pub(super) async fn oid(&self) -> GitObjectId {
         GitObjectId(self.sha.clone())
     }

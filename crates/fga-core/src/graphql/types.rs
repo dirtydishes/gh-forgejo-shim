@@ -143,10 +143,25 @@ impl Organization {
     }
 }
 #[derive(Clone, SimpleObject)]
+#[graphql(complex)]
 pub struct Team {
     pub name: String,
     pub slug: String,
     pub organization: Organization,
+}
+#[async_graphql::ComplexObject]
+impl Team {
+    async fn combined_slug(&self) -> String {
+        format!("{}/{}", self.organization.login, self.slug)
+    }
+    /// Forgejo teams have no avatar.
+    async fn avatar_url(
+        &self,
+        #[graphql(default_with = "Some(400)")] size: Option<i32>,
+    ) -> Option<Uri> {
+        let _ = size;
+        None
+    }
 }
 #[derive(Clone, Union)]
 pub enum RequestedReviewer {
@@ -288,6 +303,11 @@ impl PullRequestReview {
             .then(|| self.source.submitted_at.clone().map(DateTime))
             .flatten()
     }
+    /// Forgejo reports no time a review's body was edited: its `updated_at` also moves when the
+    /// review is dismissed or its code comments change.
+    async fn last_edited_at(&self) -> Option<DateTime> {
+        None
+    }
     /// Forgejo's `submitted_at` is the review's creation time (`services/convert/pull_review.go:35`).
     async fn created_at(&self) -> DateTime {
         DateTime(
@@ -395,6 +415,14 @@ impl IssueComment {
     async fn includes_created_edit(&self) -> bool {
         false
     }
+    /// Forgejo moves a comment's `updated_at` only when its body changes.
+    async fn last_edited_at(&self) -> Option<DateTime> {
+        self.source
+            .updated_at
+            .clone()
+            .filter(|updated| *updated != self.source.created_at)
+            .map(DateTime)
+    }
     async fn is_minimized(&self) -> bool {
         false
     }
@@ -434,7 +462,15 @@ pub enum PullRequestMergeMethod {
     Squash,
 }
 #[derive(Clone, SimpleObject)]
+#[graphql(complex)]
 pub struct Ref {
+    #[graphql(skip)]
+    pub owner: String,
+    #[graphql(skip)]
+    pub repo: String,
+    /// The commit the ref names, when the reader already knows it.
+    #[graphql(skip)]
+    pub oid: Option<String>,
     pub name: String,
     pub branch_protection_rule: Option<BranchProtectionRule>,
 }
@@ -442,6 +478,70 @@ pub struct Ref {
 pub struct BranchProtectionRule {
     pub requires_strict_status_checks: bool,
     pub required_approving_review_count: Option<i32>,
+}
+#[async_graphql::ComplexObject]
+impl Ref {
+    async fn id(&self) -> ID {
+        ID(node_id(
+            "Ref",
+            &format!("{}/{}", self.owner, self.repo),
+            &self.name,
+        ))
+    }
+    /// This ref against `headRef`, as GitHub compares a pull request's base with its head. A
+    /// pull request's own ref, `refs/pull/N/head`, reads as that pull request's head commit.
+    /// Null when either side isn't a commit of the repository.
+    async fn compare(
+        &self,
+        ctx: &Context<'_>,
+        head_ref: String,
+    ) -> async_graphql::Result<Option<Comparison>> {
+        let session = ctx.data_unchecked::<Session>();
+        let pull = head_ref
+            .strip_prefix("refs/pull/")
+            .and_then(|rest| rest.strip_suffix("/head"))
+            .map(str::parse::<i32>);
+        let head = match pull {
+            Some(Ok(number)) => match session.pull_head(&self.owner, &self.repo, number).await {
+                Ok(sha) => sha,
+                Err(forgejo::Error::NotFound) => return Ok(None),
+                Err(e) => return Err(error(e)),
+            },
+            Some(Err(_)) => return Ok(None),
+            None => head_ref
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&head_ref)
+                .to_string(),
+        };
+        let base = self.oid.clone().unwrap_or_else(|| self.name.clone());
+        // Forgejo counts the commits in its second ref and not its first, so the base's own
+        // commits are the head compared back to the base.
+        match session.compare(&self.owner, &self.repo, &head, &base).await {
+            Ok(behind) => Ok(Some(Comparison {
+                behind_by: i32::try_from(behind.total_commits).unwrap_or(i32::MAX),
+            })),
+            Err(forgejo::Error::NotFound) => Ok(None),
+            Err(e) => Err(error(e)),
+        }
+    }
+}
+#[derive(SimpleObject)]
+pub struct Comparison {
+    /// The base's commits that the head lacks.
+    pub behind_by: i32,
+}
+/// Forgejo has no stacked pull requests, so `PullRequest.stack` and `stackEntry` are always null.
+#[derive(SimpleObject)]
+pub struct PullRequestStack {
+    pub id: ID,
+    pub number: i32,
+    pub size: i32,
+    pub base_ref_name: String,
+}
+#[derive(SimpleObject)]
+pub struct PullRequestStackEntry {
+    pub id: ID,
+    pub position: i32,
 }
 #[derive(SimpleObject)]
 #[graphql(complex)]

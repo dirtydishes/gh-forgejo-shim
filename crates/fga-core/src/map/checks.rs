@@ -58,6 +58,8 @@ pub enum Check {
         workflow: String,
         job: String,
         event: String,
+        /// The run's number in its repository, from the job's link (`/actions/runs/{n}/…`).
+        run: i64,
         details_url: Url,
         status: CheckStatusState,
         conclusion: Option<CheckConclusionState>,
@@ -188,13 +190,17 @@ pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) 
                     return None;
                 }
                 let url = target.as_ref()?;
-                if !url.path().to_lowercase().starts_with(&runs) || url.origin() != public.origin()
-                {
+                let path = url.path().to_lowercase();
+                let rest = path.strip_prefix(&runs)?;
+                if url.origin() != public.origin() {
                     return None;
                 }
-                Some((workflow, job, event, url.clone()))
+                // Forgejo links a job as `runs/{run number}/jobs/{job index}`
+                // (`routers/web/repo/actions/view.go`), and a run as `runs/{run number}`.
+                let run = rest.split('/').next()?.parse::<i64>().ok()?;
+                Some((workflow, job, event, run, url.clone()))
             });
-            if let Some((workflow, job, event, details_url)) = action {
+            if let Some((workflow, job, event, run, details_url)) = action {
                 // The descriptions carry what the commit state drops
                 // (`services/actions/commit_status.go:88-110,153-163`).
                 let description = source.description.as_deref().unwrap_or("");
@@ -231,6 +237,7 @@ pub fn checks(statuses: &[CommitStatus], owner: &str, repo: &str, public: &Url) 
                     workflow: workflow.into(),
                     job: job.into(),
                     event: event.into(),
+                    run,
                     details_url,
                     status,
                     conclusion,
