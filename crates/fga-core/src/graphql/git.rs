@@ -137,6 +137,7 @@ pub(super) async fn object(
                 repo: repo.into(),
                 sha: commit.sha.clone(),
                 source: Some(commit.into()),
+                parent: false,
             })))),
             Err(forgejo::Error::NotFound) => Ok(None),
             Err(e) => Err(error(e)),

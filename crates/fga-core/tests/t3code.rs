@@ -555,3 +555,21 @@ async fn a_request_counts_only_a_few_distinct_pairs() {
     assert_eq!(counted[6], Some(2), "a repeated pair reads the memo");
     assert_eq!(*hits.lock().unwrap(), limit);
 }
+
+/// A parent serves no statuses: one selection would read them once per distinct parent.
+#[tokio::test]
+async fn a_parents_statuses_are_not_read() {
+    let query = "{repository(owner:\"e2e\",name:\"oracle\"){pullRequest(number:1){commits(last:1){nodes{commit{parents(first:5){nodes{oid statusCheckRollup{state}}}}}}}}}";
+    let missed = Arc::new(Mutex::new(Vec::new()));
+    let response = respond(query, missed.clone()).await;
+    let parent = &response.data.clone().into_json().unwrap()["repository"]["pullRequest"]["commits"]
+        ["nodes"][0]["commit"]["parents"]["nodes"][0];
+    assert_eq!(parent["oid"], PARENT);
+    assert_eq!(parent["statusCheckRollup"], Value::Null);
+    assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+    assert!(
+        missed.lock().unwrap().is_empty(),
+        "{:?}",
+        missed.lock().unwrap()
+    );
+}
