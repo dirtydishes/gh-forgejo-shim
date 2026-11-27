@@ -1,0 +1,1 @@
+mutation UnresolveReviewThread($threadId:ID!){unresolveReviewThread(input:{threadId:$threadId}){thread{isResolved}}}

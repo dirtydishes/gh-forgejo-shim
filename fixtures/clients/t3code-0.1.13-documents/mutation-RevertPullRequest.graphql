@@ -1,0 +1,1 @@
+mutation RevertPullRequest($pullRequestId:ID!){revertPullRequest(input:{pullRequestId:$pullRequestId}){revertPullRequest{id}}}

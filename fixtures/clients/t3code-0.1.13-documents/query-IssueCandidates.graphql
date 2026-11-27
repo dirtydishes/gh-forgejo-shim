@@ -1,0 +1,1 @@
+query IssueCandidates($owner:String!$name:String!){repository(owner:$owner name:$name){labels(first:100){pageInfo{hasNextPage}nodes{name color description}}assignableUsers(first:100){pageInfo{hasNextPage}nodes{login name avatarUrl}}}}

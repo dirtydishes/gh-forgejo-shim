@@ -1,0 +1,1 @@
+query IssueCommentScope($owner:String!$name:String!$number:Int!$commentId:ID!){repository(owner:$owner name:$name){issue(number:$number){id}}node(id:$commentId){__typename...on IssueComment{issue{id}}}}

@@ -1,0 +1,1 @@
+query IssueTemplates($owner:String!$name:String!){repository(owner:$owner name:$name){templateDirectory:object(expression:"HEAD:.github/ISSUE_TEMPLATE"){__typename...on Tree{entries{name object{__typename...on Blob{text isTruncated}}}}}issueTemplates{filename name about title body assignees(first:25){nodes{login}}labels(first:50){nodes{name}}}}}

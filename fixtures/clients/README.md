@@ -14,6 +14,7 @@ what GitHub answered, so tests can hold the shim to the same calls.
 | `claude-code-cli-forgejo-requests.log` | Claude Code CLI 2.1.314 | The Forgejo host's access log for that fake token: Claude's own REST lookups, refused with 401 |
 | `claude-desktop-4.4212.jsonl` | Claude desktop 4.4212, running Claude Code 2.1.309 | The same flow from the desktop app: no token for the Forgejo host, then the fake one |
 | `claude-desktop-4.4212-forgejo-requests.log` | the same | The Forgejo host's access log for it |
+| `t3code-0.1.13-documents/` | T3 Code 0.1.13-nightly.20261125 | Every GraphQL document its GitHub driver defines, which it sends straight to `https://<host>/api/graphql` (below) |
 
 `scripts/e2e/replay.py` replays every distinct call in CI's gateway e2e job, against a Forgejo
 seeded like the GitHub twin: through the gh wrapper the shim installs, and through plain gh and the
@@ -54,6 +55,12 @@ argv.
 | `mergeability.graphql` | Head and base IDs, state, `isDraft`, `mergeable`, `mergeStateStatus` |
 | `timeline.graphql` | The PR pane: summary, commits, comments, reviews and review threads, behind five `@include` flags |
 | `batch-1.graphql`, `batch-8.graphql` | The PR card and checks: one `pN:` alias per PR, one PR while polling a thread and up to eight at startup. The records hold the counts between |
+
+T3 Code doesn't run `gh` for these, so no wrapper sees them. `scripts/capture/t3code-documents.mjs`
+reads them out of the app's server bundle, one file per operation, named
+`<query|mutation>-<operation>.graphql`. A `-batch-N` file is the same operation as T3 Code aliases
+it for N pull requests at once (`_0_`, `_1_`, …), at the most it puts in one document: 25
+summaries, watch fingerprints, stats or stack lookups, and 50 head-branch lookups.
 
 ## Placeholders
 

@@ -28,9 +28,10 @@ use async_graphql::{ServerError, ServerResult, Variables};
 use async_graphql_value::{ConstValue, Name, Value};
 
 /// The most steps one document may cost. The costliest document the repo holds from a real
-/// client, gh's `pr list` with every `--json` field, costs 885; `graphql::tests` checks every one
-/// stays under a quarter of this. Validation's errors grow at most a few per step.
-pub const MAX_COST: usize = 5_000;
+/// client, T3 Code's summaries of 25 pull requests in one document, costs 4,000; gh's costliest,
+/// `pr list` with every `--json` field, costs 885. `graphql::tests` checks every one stays under
+/// a quarter of this. Validation's errors grow at most a few per step.
+pub const MAX_COST: usize = 20_000;
 
 /// The deepest the document's text may nest brackets, braces and parentheses, in all. gh's
 /// documents reach 13. Parsing and checking an object value takes about 7 KB of stack a level

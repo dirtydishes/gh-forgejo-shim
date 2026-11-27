@@ -1,0 +1,1 @@
+query RepositoryAuthors($owner:String!$name:String!$query:String){repository(owner:$owner name:$name){mentionableUsers(first:50 query:$query){pageInfo{hasNextPage}nodes{login name avatarUrl}}}}

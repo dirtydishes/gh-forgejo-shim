@@ -1,0 +1,1 @@
+mutation AddReaction($subjectId:ID!$content:ReactionContent!){addReaction(input:{subjectId:$subjectId content:$content}){reaction{content}}}

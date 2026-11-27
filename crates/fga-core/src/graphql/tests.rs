@@ -69,6 +69,9 @@ fn refused_by_a_limit(errors: &[ServerError]) -> bool {
     })
 }
 
+/// T3 Code's GraphQL documents, as its build renders them (`fixtures/clients/README.md`).
+const T3_DOCUMENTS: &str = "fixtures/clients/t3code-0.1.13-documents";
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -84,6 +87,7 @@ fn documents() -> Vec<(String, String)> {
         "fixtures/gh-pr-read",
         "fixtures/gh-every-field",
         "crates/fga-core/tests/fixtures/chatgpt",
+        T3_DOCUMENTS,
     ] {
         let mut paths: Vec<PathBuf> = std::fs::read_dir(root().join(dir))
             .expect("fixture directory")
@@ -186,11 +190,14 @@ async fn every_captured_document_is_within_the_limits() {
         }
     }
     // Documents that name fields the gateway doesn't serve fail validation before any limit:
-    // gh's `repo view` with every field (47 `Repository` fields, from `archivedAt` on), and
-    // `pr create`/`pr edit`'s read-back (`PullRequest.assignedActors` and `Bot.id`). Any other
-    // document that stops validating fails here.
+    // gh's `repo view` with every field (47 `Repository` fields, from `archivedAt` on),
+    // `pr create`/`pr edit`'s read-back (`PullRequest.assignedActors` and `Bot.id`), and T3
+    // Code's documents in `T3_UNSERVED`. Any other document that stops validating fails here.
+    let (t3, others): (Vec<String>, Vec<String>) = invalid
+        .into_iter()
+        .partition(|source| source.starts_with(T3_DOCUMENTS));
     assert_eq!(
-        invalid,
+        others,
         [
             "fixtures/gh-every-field/repo-view-all.graphql",
             "fixtures/oracle/writes/base.requests.json#0",
@@ -198,10 +205,66 @@ async fn every_captured_document_is_within_the_limits() {
             "fixtures/oracle/writes/edit.requests.json#0",
         ]
     );
+    let t3: Vec<&str> = t3
+        .iter()
+        .map(|source| &source[T3_DOCUMENTS.len() + 1..])
+        .collect();
+    assert_eq!(t3, T3_UNSERVED);
 }
 
-/// The report's document: one issue body under 1,000 aliases. Each field costs one, so
-/// `repository` and `issue` add two to the aliases.
+/// T3 Code's documents that name fields or mutations the gateway doesn't serve yet: review
+/// threads and their comments, reactions, issue detail and statuses, commit stats, branch
+/// updates and deletes, and the merge message. T3 Code reads each in its own request.
+const T3_UNSERVED: &[&str] = &[
+    "mutation-AddReaction.graphql",
+    "mutation-AddReviewThreadReply.graphql",
+    "mutation-DeletePullRequestBranch.graphql",
+    "mutation-RemoveReaction.graphql",
+    "mutation-ResolveReviewThread.graphql",
+    "mutation-RevertPullRequest.graphql",
+    "mutation-SetFileViewed.graphql",
+    "mutation-SetIssueStatus.graphql",
+    "mutation-UnresolveReviewThread.graphql",
+    "mutation-UpdateIssueComment.graphql",
+    "mutation-UpdatePullRequestBranch.graphql",
+    "mutation-UpdateReviewComment.graphql",
+    "query-ActorAvatars.graphql",
+    "query-IssueCandidates.graphql",
+    "query-IssueCollections.graphql",
+    "query-IssueCommentScope.graphql",
+    "query-IssueComments.graphql",
+    "query-IssueDetail.graphql",
+    "query-IssueSearchWithStatus.graphql",
+    "query-IssueStatuses.graphql",
+    "query-IssueTemplates.graphql",
+    "query-PullRequestActionState.graphql",
+    "query-PullRequestActivity.graphql",
+    "query-PullRequestCheckContexts.graphql",
+    "query-PullRequestCommitStats.graphql",
+    "query-PullRequestCore.graphql",
+    "query-PullRequestList.graphql",
+    "query-PullRequestMergeMessage.graphql",
+    "query-PullRequestSearch.graphql",
+    "query-PullRequestSourceBranch.graphql",
+    "query-PullRequestStackMembership-batch-25.graphql",
+    "query-PullRequestStackMembership.graphql",
+    "query-PullRequestSubject.graphql",
+    "query-PullRequestSummary-batch-25.graphql",
+    "query-PullRequestSummary.graphql",
+    "query-PullRequestWatchFingerprint-batch-25.graphql",
+    "query-PullRequestWatchFingerprint.graphql",
+    "query-RepositoryAuthors.graphql",
+    "query-ReviewDismissals.graphql",
+    "query-ReviewThreadComments.graphql",
+    "query-ReviewThreadPages.graphql",
+    "query-ReviewThreads.graphql",
+    "query-ReviewerCandidates.graphql",
+    "query-ViewerPermissions.graphql",
+];
+
+/// The report's document: one issue body under many aliases. Each field costs one, so
+/// `repository` and `issue` add two to the aliases. Under the limit, the output budget still
+/// stops its response at `MAX_OUTPUT_BYTES`.
 #[tokio::test]
 async fn a_field_repeated_under_many_aliases_is_refused() {
     let aliases = |count: usize| {
@@ -212,9 +275,9 @@ async fn a_field_repeated_under_many_aliases_is_refused() {
         )
     };
 
-    let errors = validate(builder(), &aliases(1000))
+    let errors = validate(builder(), &aliases(2 * MAX_COMPLEXITY))
         .await
-        .expect_err("1,000 aliases");
+        .expect_err("twice the limit");
     assert_eq!(errors[0].message, "Query is too complex.");
     assert!(
         validate(builder(), &aliases(MAX_COMPLEXITY - 2))

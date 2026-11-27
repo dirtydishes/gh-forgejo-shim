@@ -1,0 +1,1 @@
+query PullRequestMergeMessage($owner:String!$name:String!$number:Int!$method:PullRequestMergeMethod!){repository(owner:$owner name:$name){pullRequest(number:$number){isMergeQueueEnabled headRefOid viewerMergeBodyText(mergeType:$method)}}}

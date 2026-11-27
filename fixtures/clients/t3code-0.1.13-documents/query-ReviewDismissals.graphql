@@ -1,0 +1,1 @@
+query ReviewDismissals($owner:String!$name:String!$number:Int!$after:String){repository(owner:$owner name:$name){pullRequest(number:$number){timelineItems(itemTypes:[REVIEW_DISMISSED_EVENT]first:100 after:$after){pageInfo{hasNextPage endCursor}nodes{__typename...on ReviewDismissedEvent{dismissalMessage review{id}}}}}}}

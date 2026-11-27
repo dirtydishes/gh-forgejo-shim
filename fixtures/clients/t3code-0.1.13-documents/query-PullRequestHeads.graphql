@@ -1,0 +1,1 @@
+query PullRequestHeads($owner:String!$name:String!$head:String!$after:String){repository(owner:$owner name:$name){pullRequests(first:100 after:$after states:[OPEN]headRefName:$head){pageInfo{hasNextPage endCursor}nodes{number headRefOid isCrossRepository headRepositoryOwner{__typename login}}}}}

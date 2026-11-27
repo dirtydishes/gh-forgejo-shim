@@ -1,0 +1,1 @@
+mutation SetIssueStatus($issueId:ID!$statusId:ID!){setIssueStatus(input:{issueId:$issueId statusId:$statusId}){clientMutationId}}

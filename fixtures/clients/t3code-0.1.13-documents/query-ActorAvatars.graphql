@@ -1,0 +1,1 @@
+query ActorAvatars($ids:[ID!]!){nodes(ids:$ids){__typename...on User{login avatarUrl}...on Bot{login avatarUrl}}}

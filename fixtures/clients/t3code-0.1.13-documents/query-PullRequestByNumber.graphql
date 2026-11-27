@@ -1,0 +1,1 @@
+query PullRequestByNumber($owner:String!$name:String!$number:Int!){repository(owner:$owner name:$name){pullRequest(number:$number){...PullRequestNode}}}fragment PullRequestNode on PullRequest{number title url baseRefName headRefName headRefOid state isDraft mergedAt closedAt updatedAt isCrossRepository headRepository{name nameWithOwner}headRepositoryOwner{__typename login}}

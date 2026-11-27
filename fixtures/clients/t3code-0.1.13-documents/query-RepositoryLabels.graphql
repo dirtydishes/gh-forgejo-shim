@@ -1,0 +1,1 @@
+query RepositoryLabels($owner:String!$name:String!$query:String){repository(owner:$owner name:$name){labels(first:100 query:$query orderBy:{field:NAME direction:ASC}){pageInfo{hasNextPage}nodes{name color}}}}

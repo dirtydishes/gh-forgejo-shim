@@ -1,0 +1,1 @@
+mutation ReopenPullRequest($pullRequestId:ID!){reopenPullRequest(input:{pullRequestId:$pullRequestId}){pullRequest{...PullRequestActionSummary}}}fragment PullRequestActionSummary on PullRequest{number title url headRefName baseRefName state isDraft updatedAt mergedAt closedAt headRefOid author{__typename login avatarUrl...on User{name}}autoMergeRequest{mergeMethod}}

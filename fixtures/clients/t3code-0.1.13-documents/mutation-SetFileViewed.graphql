@@ -1,0 +1,1 @@
+mutation SetFileViewed($pullRequestId:ID!$path:String!$viewed:Boolean!){markFileAsViewed(input:{pullRequestId:$pullRequestId path:$path})@include(if:$viewed){clientMutationId}unmarkFileAsViewed(input:{pullRequestId:$pullRequestId path:$path})@skip(if:$viewed){clientMutationId}}
