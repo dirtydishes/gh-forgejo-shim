@@ -460,7 +460,7 @@ returns GitHub's empty or null value, never an error.
 | `Repository.autoMergeAllowed` | true: Forgejo has no switch for it, and anyone who may merge can schedule a merge |
 | `Team.combinedSlug`, `avatarUrl` | `org/team`; null, as Forgejo teams have no avatar |
 | `PullRequest.stack`, `stackEntry` | null: Forgejo has no stacked pull requests |
-| `timelineItems(itemTypes:)` | merge queue events only, and always none, since Forgejo has no merge queue. Any other kind, or no `itemTypes`, is an error rather than an empty timeline the pull request may not have |
+| `timelineItems(itemTypes:)` | merge queue events only, and always none, since Forgejo has no merge queue. Any other kind, or no `itemTypes` (absent or empty), is an error rather than an empty timeline the pull request may not have |
 
 **REST.** Each route reads everything from Forgejo, then pages it as GitHub does: `per_page` (30
 unless asked, at most 100), `page`, and a `Link` header when there is more than one page, which

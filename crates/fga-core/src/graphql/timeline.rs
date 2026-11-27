@@ -92,7 +92,7 @@ pub struct PullRequestTimelineItemsConnection {
 }
 
 /// Merge queue events, the only kinds the gateway serves: always none. Any other kind, or none
-/// named, is an error rather than an empty timeline the pull request may not have.
+/// named (no list, or an empty one), is an error rather than an empty timeline the pull request may not have.
 pub(super) fn timeline_items(
     item_types: Option<Vec<PullRequestTimelineItemsItemType>>,
     first: Option<i32>,
@@ -102,12 +102,13 @@ pub(super) fn timeline_items(
 ) -> async_graphql::Result<PullRequestTimelineItemsConnection> {
     use PullRequestTimelineItemsItemType as Kind;
     let queue_only = item_types.as_ref().is_some_and(|kinds| {
-        kinds.iter().all(|kind| {
-            matches!(
-                kind,
-                Kind::AddedToMergeQueueEvent | Kind::RemovedFromMergeQueueEvent
-            )
-        })
+        !kinds.is_empty()
+            && kinds.iter().all(|kind| {
+                matches!(
+                    kind,
+                    Kind::AddedToMergeQueueEvent | Kind::RemovedFromMergeQueueEvent
+                )
+            })
     });
     if !queue_only {
         return Err(
@@ -163,5 +164,7 @@ mod tests {
             .is_err()
         );
         assert!(items(None).is_err());
+        // GitHub reads an empty list as every kind.
+        assert!(items(Some(Vec::new())).is_err());
     }
 }
