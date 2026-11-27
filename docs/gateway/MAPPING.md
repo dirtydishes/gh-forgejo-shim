@@ -452,7 +452,7 @@ returns GitHub's empty or null value, never an error.
 | `Blob.text` | the file's text, at most 1 MiB, with `isTruncated` past that. Null for a binary blob (one with a NUL byte or that isn't UTF-8) and when Forgejo sent no content |
 | `Ref.compare(headRef:)` `behindBy` | only a pull request's `baseRef` against its own `refs/pull/N/head`: the base branch's commits the head lacks, counted by Forgejo's `commits?sha={base}&not={head}` (`X-Total-Count`) without listing them. Any other ref, or another pull request's, is null: a comparison the client chose would let one document make Forgejo walk any history, once per alias |
 | `PullRequest.headRef` | the head branch, while `headRepository` would show it (an open PR whose branch tip is the PR's head); else null |
-| `Commit.parents` | the commit's parents from Forgejo; a commit read without them (a merge commit) reads them from `git/commits` |
+| `Commit.parents` | the parents Forgejo lists with a pull request's commits, or with `Repository.object`'s. A commit read without them (a merge commit, or a parent itself) is an error, not another read: nested `parents` would otherwise cost one request per commit of history |
 | `comments(orderBy: {field: UPDATED_AT})` | by `updated_at` as a time, not as text (Forgejo writes the server's own offset, which moves with daylight saving), falling back to `created_at` |
 | `IssueComment.lastEditedAt` | `updated_at` when it differs from `created_at`, else null |
 | `PullRequestReview.lastEditedAt` | null: Forgejo's review `updated_at` also moves on a dismissal or a change to its code comments |

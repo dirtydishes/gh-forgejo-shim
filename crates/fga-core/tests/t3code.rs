@@ -149,9 +149,30 @@ async fn run(query: &str) -> Value {
 
 async fn execute(name: &str, query: &str, state: &'static str, variables: Value) -> Value {
     let missed = Arc::new(Mutex::new(Vec::new()));
+    let response = respond_with(query, state, variables, missed.clone()).await;
+    assert!(
+        response.errors.is_empty(),
+        "{name}: {:?}; missed {:?}",
+        response.errors,
+        missed.lock().unwrap()
+    );
+    serde_json::to_value(response.data).unwrap()
+}
+
+/// The response to a document of the test's own, errors and all.
+async fn respond(query: &str, missed: Arc<Mutex<Vec<String>>>) -> async_graphql::Response {
+    respond_with(query, "pending", json!({}), missed).await
+}
+
+async fn respond_with(
+    query: &str,
+    state: &'static str,
+    variables: Value,
+    missed: Arc<Mutex<Vec<String>>>,
+) -> async_graphql::Response {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let app = forge(state, missed.clone());
+    let app = forge(state, missed);
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let session = Forgejo::new(base.parse().unwrap())
         .unwrap()
@@ -167,13 +188,7 @@ async fn execute(name: &str, query: &str, state: &'static str, variables: Value)
         )
         .await;
     server.abort();
-    assert!(
-        response.errors.is_empty(),
-        "{name}: {:?}; missed {:?}",
-        response.errors,
-        missed.lock().unwrap()
-    );
-    serde_json::to_value(response.data).unwrap()
+    response
 }
 
 fn pull() -> Value {
@@ -404,4 +419,23 @@ async fn only_the_pull_requests_own_ref_compares() {
             "{head}"
         );
     }
+}
+
+/// A parent's own parents aren't read: nested `parents` would cost a request per commit of
+/// history. The fake forge serves no single commit, so a read would show in `missed`.
+#[tokio::test]
+async fn a_parents_parents_are_not_read() {
+    let query = "{repository(owner:\"e2e\",name:\"oracle\"){pullRequest(number:1){commits(last:1){nodes{commit{parents(first:1){totalCount nodes{oid parents{totalCount}}}}}}}}}";
+    let missed = Arc::new(Mutex::new(Vec::new()));
+    let response = respond(query, missed.clone()).await;
+    let commit = &response.data.clone().into_json().unwrap()["repository"]["pullRequest"]["commits"]
+        ["nodes"][0]["commit"];
+    assert_eq!(commit["parents"]["totalCount"], 1);
+    assert_eq!(commit["parents"]["nodes"][0]["parents"], Value::Null);
+    assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+    assert!(
+        missed.lock().unwrap().is_empty(),
+        "{:?}",
+        missed.lock().unwrap()
+    );
 }
