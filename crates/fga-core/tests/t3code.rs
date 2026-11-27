@@ -30,8 +30,10 @@ const BASE: &str = "2222222222222222222222222222222222222222";
 const PARENT: &str = "3333333333333333333333333333333333333333";
 
 /// A fake Forgejo with one open PR, `feat` into `main`, whose head runs one Actions job (run 7,
-/// `state`) and carries one plain status. Requests to routes it lacks are kept in `missed`.
+/// `state`) and carries one plain status, and PR 2, whose base branch is gone. Requests to routes
+/// it lacks are kept in `missed`, and so is each commit count, as `counted`.
 fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
+    let counts = missed.clone();
     let repo = || json!({"name":"oracle","full_name":"e2e/oracle","owner":user("e2e"),"id":1});
     Router::new()
         .route("/api/v1/user", get(|| async { Json(user("e2e")) }))
@@ -57,6 +59,18 @@ fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
             }),
         )
         .route(
+            // Forgejo sends no base commit once the base branch is deleted.
+            "/api/v1/repos/e2e/oracle/pulls/2",
+            get(move || async move {
+                Json(json!({"number":2,"title":"T","body":"","state":"closed","merged":true,"draft":false,
+                    "html_url":"https://forge.test/e2e/oracle/pulls/2","mergeable":false,
+                    "created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-02T00:00:00Z",
+                    "head":{"ref":"feat","label":"feat","sha":HEAD,"repo":repo()},
+                    "base":{"ref":"gone","label":"gone","sha":"","repo":repo()},
+                    "user":user("e2e"),"merged_at":"2026-11-02T00:00:00Z","labels":[],"requested_reviewers":[]}))
+            }),
+        )
+        .route(
             "/api/v1/repos/e2e/oracle/git/refs/pull/1/head",
             get(|| async { Json(json!([{"ref":"refs/pull/1/head","object":{"sha":HEAD}}])) }),
         )
@@ -76,8 +90,9 @@ fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
         .route(
             // Two base commits the head lacks, counted in `X-Total-Count`; a listing of one.
             "/api/v1/repos/e2e/oracle/commits",
-            get(|RawQuery(query): RawQuery| async move {
+            get(move |RawQuery(query): RawQuery| async move {
                 let query = query.unwrap_or_default();
+                counts.lock().unwrap().push("counted".into());
                 let counted = query.contains(&format!("sha={BASE}"))
                     && query.contains(&format!("not={HEAD}"))
                     && query.contains("limit=1")
@@ -438,4 +453,38 @@ async fn a_parents_parents_are_not_read() {
         "{:?}",
         missed.lock().unwrap()
     );
+}
+
+/// Aliases asking the same count share one request.
+#[tokio::test]
+async fn one_count_serves_every_alias() {
+    let compares: Vec<String> = (0..3)
+        .map(|i| format!("c{i}:compare(headRef:\"refs/pull/1/head\"){{behindBy}}"))
+        .collect();
+    let query = format!(
+        "{{repository(owner:\"e2e\",name:\"oracle\"){{pullRequest(number:1){{baseRef{{{}}}}}}}}}",
+        compares.join(" ")
+    );
+    let missed = Arc::new(Mutex::new(Vec::new()));
+    let response = respond(&query, missed.clone()).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let base = &response.data.clone().into_json().unwrap()["repository"]["pullRequest"]["baseRef"];
+    assert_eq!(base["c2"]["behindBy"], 2);
+    assert_eq!(*missed.lock().unwrap(), ["counted"]);
+}
+
+/// With its base branch gone, a pull request has no base commit to count from: Forgejo would
+/// count from the default branch instead, so the comparison is null and nothing is counted.
+#[tokio::test]
+async fn a_deleted_base_compares_as_null() {
+    let query = "{repository(owner:\"e2e\",name:\"oracle\"){pullRequest(number:2){baseRef{compare(headRef:\"refs/pull/2/head\"){behindBy}}}}}";
+    let missed = Arc::new(Mutex::new(Vec::new()));
+    let response = respond(query, missed.clone()).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.clone().into_json().unwrap()["repository"]["pullRequest"]["baseRef"]["compare"],
+        Value::Null
+    );
+    let asked = missed.lock().unwrap();
+    assert!(!asked.iter().any(|path| path == "counted"), "{asked:?}");
 }
