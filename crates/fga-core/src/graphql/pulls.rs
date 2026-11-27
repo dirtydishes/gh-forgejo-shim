@@ -814,26 +814,23 @@ impl Commit {
             &self.sha,
         ))
     }
-    /// A commit read without its metadata (a merge commit) reads it from Forgejo first.
+    /// The parents Forgejo listed with the commit, as a pull request's commits and
+    /// `Repository.object` read it. A commit read without them (a merge commit, or a parent) is an
+    /// error rather than a read of its own: each parent's parents would cost another request, so
+    /// nesting `parents` would walk the history one request per commit.
     async fn parents(
         &self,
-        ctx: &Context<'_>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
     ) -> async_graphql::Result<CommitConnection> {
-        let parents = match &self.source {
-            Some(source) => source.parents.clone(),
-            None => {
-                ctx.data_unchecked::<Session>()
-                    .git_commit(&self.owner, &self.repo, &self.sha)
-                    .await
-                    .map_err(error)?
-                    .parents
-            }
+        let Some(source) = &self.source else {
+            return Err("parents are served only for a pull request's commits".into());
         };
-        let nodes = parents
+        let nodes = source
+            .parents
+            .clone()
             .into_iter()
             .map(|parent| Commit::head(&self.owner, &self.repo, &parent.sha))
             .collect();
