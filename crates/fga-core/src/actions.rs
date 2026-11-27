@@ -312,6 +312,31 @@ mod tests {
             state: "active",
         };
         let created = "2026-11-03T00:00:00Z";
+        let source = |event: &str, prettyref: &str| Run {
+            id: 5,
+            workflow_id: "ci.yml".into(),
+            index_in_repo: 1,
+            title: "t".into(),
+            prettyref: prettyref.into(),
+            commit_sha: "abc".into(),
+            status: "success".into(),
+            event: event.into(),
+            html_url: "https://forge.test/o/r/actions/runs/1".into(),
+            created: created.into(),
+            updated: "2026-11-03T00:00:09Z".into(),
+            started: None,
+            need_approval: false,
+            approved_by: 0,
+        };
+        // Forgejo labels a pull request's run `#N`, and a push to a branch named `#9` the same.
+        assert_eq!(
+            run(&source("pull_request", "#9"), &workflow).unwrap()["pull_requests"],
+            json!([{"number": 9}])
+        );
+        assert_eq!(
+            run(&source("push", "#9"), &workflow).unwrap()["pull_requests"],
+            json!([])
+        );
         let mapped = |status: &str, started: Option<&str>| {
             let source = Run {
                 id: 5,
