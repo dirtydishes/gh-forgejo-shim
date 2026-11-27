@@ -1,0 +1,1 @@
+query PullRequestCommitStats($ids:[ID!]!){nodes(ids:$ids){__typename...on Commit{oid additions deletions}}}

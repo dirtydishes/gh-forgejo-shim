@@ -1,0 +1,1 @@
+query PullRequestPreview($owner:String!$name:String!$number:Int!){repository(owner:$owner name:$name){pullRequest(number:$number){number title url state isDraft createdAt author{__typename login avatarUrl...on User{name}}}}}

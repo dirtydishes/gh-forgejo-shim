@@ -1,0 +1,1 @@
+mutation UpdatePullRequest($pullRequestId:ID!$title:String$body:String$maintainerCanModify:Boolean){updatePullRequest(input:{pullRequestId:$pullRequestId title:$title body:$body maintainerCanModify:$maintainerCanModify}){pullRequest{id}}}

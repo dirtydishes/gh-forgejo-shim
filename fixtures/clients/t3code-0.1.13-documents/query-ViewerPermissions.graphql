@@ -1,0 +1,1 @@
+query ViewerPermissions($owner:String!$name:String!$number:Int!){repository(owner:$owner name:$name){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$number){viewerCanUpdate viewerDidAuthor headRepository{viewerPermission}}}}

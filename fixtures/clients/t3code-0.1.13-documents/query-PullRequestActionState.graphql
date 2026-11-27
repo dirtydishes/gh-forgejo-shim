@@ -1,0 +1,1 @@
+query PullRequestActionState($owner:String!$name:String!$number:Int!$headRef:String!){repository(owner:$owner name:$name){pullRequest(number:$number){id headRefOid isMergeQueueEnabled mergeStateStatus baseRef{compare(headRef:$headRef){behindBy}}}}}

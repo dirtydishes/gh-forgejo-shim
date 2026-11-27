@@ -1,0 +1,1 @@
+query LabelCandidates($owner:String!$name:String!$number:Int!){repository(owner:$owner name:$name){labels(first:100 orderBy:{field:NAME direction:ASC}){pageInfo{hasNextPage}nodes{name color description}}pullRequest(number:$number){labels(first:100){nodes{name}}}}}

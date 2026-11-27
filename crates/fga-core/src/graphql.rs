@@ -31,9 +31,11 @@ pub type GithubSchema = Schema<Query, Mutation, EmptySubscription>;
 
 /// The most fields one document may select, counting each alias and each use of a fragment. A
 /// document that repeats a large field under many aliases builds a response many times the size
-/// of what it reads from Forgejo. The largest real document the repo holds selects 221 (gh's `pr
-/// list` with every `--json` field); `graphql::tests` checks every one stays under half of this.
-pub const MAX_COMPLEXITY: usize = 500;
+/// of what it reads from Forgejo. The largest real document the repo holds selects 1,000: T3
+/// Code's lookup of 50 head branches in one document, each under its own alias. gh's largest,
+/// `pr list` with every `--json` field, selects 221. `graphql::tests` checks every one stays
+/// under half of this.
+pub const MAX_COMPLEXITY: usize = 2_000;
 
 /// The deepest one document may nest. gh's documents and the standard introspection query reach
 /// 13.
