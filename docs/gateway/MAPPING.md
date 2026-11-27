@@ -70,7 +70,8 @@ Forgejo has commit statuses only. Reads return the state in the field **`status`
   - `name` ← job, `checkSuite.workflowRun.workflow.name` ← workflow, `.event` ← event.
   - `workflowRun.runNumber` ← `{n}`, the run's number in the repository, which Forgejo's run links
     use. `workflow.id` is an ID for the workflow's name, all a status names it by, so every run of
-    one workflow shares it. T3 Code reads both to drop a cancelled check a later run replaced.
+    one workflow shares it. Two workflow files with the same `name:` share it too, as a status
+    can't tell them apart. T3 Code reads both to drop a cancelled check a later run replaced.
   - `detailsUrl` ← `target_url`. Forgejo returns it **relative** (`/o/r/actions/runs/5/jobs/1`), so prefix the forge's public web base. `startedAt` ← `created_at`, `completedAt` ← `updated_at` when terminal.
   - `status`/`conclusion`:
 

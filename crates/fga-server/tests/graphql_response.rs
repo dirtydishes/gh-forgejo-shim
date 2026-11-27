@@ -96,9 +96,10 @@ async fn object_keys_are_written_sorted() {
 }
 
 #[tokio::test]
-async fn the_reports_aliased_document_is_refused() {
+async fn a_document_past_the_field_limit_is_refused() {
     let addr = gateway().await;
-    // The report's 1,000 aliases, and more: past the field limit.
+    // The report's document, one body under many aliases, at twice the field limit. Under the
+    // limit, the output budget stops it (`fga-core/tests/output_budget.rs`).
     let count = 2 * fga_core::graphql::MAX_COMPLEXITY;
     let fields: Vec<String> = (0..count).map(|i| format!("a{i}:body")).collect();
     let query = format!(
