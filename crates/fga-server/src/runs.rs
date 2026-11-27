@@ -143,8 +143,10 @@ async fn list(
     }
     let mut upstream = Vec::new();
     let mut public = Vec::new();
-    // Set for a status no run the gateway reports has, which lists none.
-    let mut none = false;
+    // `action_required`: the runs Forgejo holds for a maintainer's approval, a fork pull
+    // request's (`need_approval` and not yet approved). Forgejo blocks such a run until then, so
+    // only blocked runs are read, and filtered here.
+    let mut approval = false;
     if let Some(branch) = q.branch {
         upstream.push(("ref", format!("refs/heads/{branch}")));
         public.push(("branch", branch));
@@ -164,14 +166,9 @@ async fn list(
             "failure" => &["failure"],
             "cancelled" => &["cancelled"],
             "skipped" => &["skipped"],
-            // GitHub's other statuses and conclusions, which no run the gateway reports has:
-            // it reports a Forgejo run awaiting approval, or any waiting run, as `queued`. T3
-            // Code asks for `action_required` runs on every read of a pull request's checks, and
-            // counts a refusal as checks it couldn't read.
-            "action_required" | "neutral" | "pending" | "requested" | "stale"
-            | "startup_failure" | "timed_out" | "waiting" => {
-                none = true;
-                &[]
+            "action_required" => {
+                approval = true;
+                &["blocked"]
             }
             _ => return invalid(),
         };
@@ -181,20 +178,31 @@ async fn list(
     if let Some(exclude) = q.exclude_pull_requests {
         public.push(("exclude_pull_requests", exclude.to_string()));
     }
-    // A repository's own run list answers after one read of the repository, which keeps a
-    // missing or unreadable one a 404; a workflow's still reads the workflows, so an unknown one
-    // stays a 404 too.
-    if none && workflow.is_none() {
-        if let Err(error) = session.repository(owner, repo).await {
-            return rest_error(error);
-        }
-        return (
-            links(host, owner, repo, &["runs"], (page, limit), 0, &public),
-            Json(json!({"total_count":0,"workflow_runs":[]})),
-        )
-            .into_response();
-    }
     let result = async {
+        // T3 Code asks for runs awaiting approval on every read of a pull request's checks.
+        // Almost always there are none, and then the workflow files go unread.
+        let start = (page - 1).saturating_mul(limit);
+        let awaiting = if approval && workflow.is_none() {
+            let runs = awaiting_approval(session, owner, repo, &upstream, start, limit).await?;
+            if runs.workflow_runs.is_empty() {
+                return Ok((
+                    links(
+                        host,
+                        owner,
+                        repo,
+                        &["runs"],
+                        (page, limit),
+                        runs.total_count,
+                        &public,
+                    ),
+                    Json(json!({"total_count":runs.total_count,"workflow_runs":[]})),
+                )
+                    .into_response());
+            }
+            Some(runs)
+        } else {
+            None
+        };
         let workflows = session.workflows(owner, repo).await?;
         let mut resource = vec!["runs"];
         if let Some(selector) = workflow {
@@ -204,22 +212,17 @@ async fn list(
             upstream.push(("workflow_id", file.to_owned()));
             resource = vec!["workflows", selector, "runs"];
         }
-        if none {
-            return Ok((
-                links(host, owner, repo, &resource, (page, limit), 0, &public),
-                Json(json!({"total_count":0,"workflow_runs":[]})),
-            )
-                .into_response());
-        }
-        let runs = session
-            .action_runs(
-                owner,
-                repo,
-                &upstream,
-                (page - 1).saturating_mul(limit),
-                limit,
-            )
-            .await?;
+        let runs = match awaiting {
+            Some(runs) => runs,
+            None if approval => {
+                awaiting_approval(session, owner, repo, &upstream, start, limit).await?
+            }
+            None => {
+                session
+                    .action_runs(owner, repo, &upstream, start, limit)
+                    .await?
+            }
+        };
         // A run of a workflow that exists only on its own branch is named from there, so it never
         // fails the page.
         let named = futures_util::future::join_all(
@@ -248,6 +251,31 @@ async fn list(
     }
     .await;
     result.unwrap_or_else(rest_error)
+}
+
+/// The `limit` blocked runs from `start` that wait for a maintainer's approval, out of every one
+/// that does. Forgejo can't filter on approval, so every blocked run is read and filtered here;
+/// blocked runs are few.
+async fn awaiting_approval(
+    session: &Session,
+    owner: &str,
+    repo: &str,
+    upstream: &[(&str, String)],
+    start: usize,
+    limit: usize,
+) -> Result<actions::RunList, fga_core::forgejo::Error> {
+    let blocked = session
+        .action_runs(owner, repo, upstream, 0, usize::MAX)
+        .await?;
+    let waiting: Vec<actions::Run> = blocked
+        .workflow_runs
+        .into_iter()
+        .filter(|run| run.need_approval && run.approved_by == 0)
+        .collect();
+    Ok(actions::RunList {
+        total_count: waiting.len() as u64,
+        workflow_runs: waiting.into_iter().skip(start).take(limit).collect(),
+    })
 }
 
 #[derive(Default, Deserialize)]
