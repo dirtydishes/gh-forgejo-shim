@@ -649,11 +649,11 @@ impl PullRequest {
         };
         let mut comments = comments;
         if let Some(order) = order_by {
-            // Forgejo sends comments oldest first; a comment never edited has no `updated_at`.
-            comments.sort_by(|a, b| {
-                let at =
-                    |c: &forgejo::Comment| c.updated_at.clone().unwrap_or(c.created_at.clone());
-                at(a).cmp(&at(b))
+            // Forgejo sends comments oldest first, in the server's own time zone, whose offset
+            // moves with daylight saving; a comment never edited has no `updated_at`.
+            comments.sort_by_cached_key(|c| {
+                let at = c.updated_at.as_deref().unwrap_or(&c.created_at);
+                time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
             });
             if order.direction == super::query::OrderDirection::Desc {
                 comments.reverse();
