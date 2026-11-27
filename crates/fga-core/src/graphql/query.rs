@@ -335,7 +335,7 @@ impl Repository {
         Some(Ref {
             owner: self.source.owner.login.clone(),
             repo: self.source.name.clone(),
-            oid: None,
+            pull: None,
             name: self.source.default_branch.clone(),
             branch_protection_rule: None,
         })

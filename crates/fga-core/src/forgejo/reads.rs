@@ -155,6 +155,35 @@ impl Session {
         .await
     }
 
+    /// How many commits `base` has that `head` lacks: Forgejo counts `commits?sha={base}&not={head}`
+    /// in its `X-Total-Count`, without listing them, as a comparison would. 404 when either isn't
+    /// a commit of the repository.
+    pub async fn commits_missing_from(
+        &self,
+        owner: &str,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<u64, Error> {
+        let reply = super::ok(
+            self.send::<()>(
+                reqwest::Method::GET,
+                &["repos", owner, repo, "commits"],
+                &[
+                    ("sha", base.to_owned()),
+                    ("not", head.to_owned()),
+                    ("limit", "1".into()),
+                    ("stat", "false".into()),
+                    ("verification", "false".into()),
+                    ("files", "false".into()),
+                ],
+                None,
+            )
+            .await?,
+        )?;
+        reply.total.ok_or(Error::Upstream)
+    }
+
     /// One commit by SHA or ref; 404 when there is none.
     pub async fn git_commit(&self, owner: &str, repo: &str, rev: &str) -> Result<GitCommit, Error> {
         self.get(

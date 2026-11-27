@@ -2,7 +2,11 @@
 //! values. T3 Code decodes each answer strictly, so a field it reads that comes back null where
 //! it expects a value fails the read as surely as an unknown field.
 use axum::{
-    Json, Router, extract::Request, http::StatusCode, response::IntoResponse, routing::get,
+    Json, Router,
+    extract::{RawQuery, Request},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
 };
 use fga_core::forgejo::Forgejo;
 use serde_json::{Value, json};
@@ -70,9 +74,19 @@ fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
             }),
         )
         .route(
-            // Two base commits the head lacks.
-            &format!("/api/v1/repos/e2e/oracle/compare/{HEAD}...{BASE}"),
-            get(|| async { Json(json!({"total_commits":2,"commits":[],"files":[]})) }),
+            // Two base commits the head lacks, counted in `X-Total-Count`; a listing of one.
+            "/api/v1/repos/e2e/oracle/commits",
+            get(|RawQuery(query): RawQuery| async move {
+                let query = query.unwrap_or_default();
+                let counted = query.contains(&format!("sha={BASE}"))
+                    && query.contains(&format!("not={HEAD}"))
+                    && query.contains("limit=1")
+                    && query.contains("files=false");
+                if !counted {
+                    return (StatusCode::NOT_FOUND, Json(json!({"message":query}))).into_response();
+                }
+                ([("x-total-count", "2")], Json(json!([]))).into_response()
+            }),
         )
         .route("/api/v1/repos/e2e/oracle/branch_protections", get(|| async { Json(json!([])) }))
         .route(
@@ -123,6 +137,15 @@ fn forge(state: &'static str, missed: Arc<Mutex<Vec<String>>>) -> Router {
 /// Runs `name` with T3 Code's variables for a Forgejo host, as it sends them, against a forge
 /// whose job is in `state`.
 async fn read(name: &str, state: &'static str, variables: Value) -> Value {
+    execute(name, &document(name), state, variables).await
+}
+
+/// Runs a document of the test's own against the forge.
+async fn run(query: &str) -> Value {
+    execute("document", query, "pending", json!({})).await
+}
+
+async fn execute(name: &str, query: &str, state: &'static str, variables: Value) -> Value {
     let missed = Arc::new(Mutex::new(Vec::new()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -135,7 +158,7 @@ async fn read(name: &str, state: &'static str, variables: Value) -> Value {
         .unwrap();
     let response = fga_core::graphql::schema()
         .execute(
-            async_graphql::Request::new(document(name))
+            async_graphql::Request::new(query)
                 .variables(async_graphql::Variables::from_json(variables))
                 .data(session)
                 .data("https://forge.test".parse::<url::Url>().unwrap()),
@@ -352,4 +375,28 @@ async fn the_branch_compare_reads_behind_by() {
     let pr = &data["repository"]["pullRequest"];
     assert_eq!(pr["isMergeQueueEnabled"], false);
     assert_eq!(pr["baseRef"]["compare"]["behindBy"], 2);
+}
+
+/// Only a pull request's own ref compares against its base: a ref the client chooses would let
+/// one document make Forgejo walk any history, once per alias. The fake forge answers no other
+/// count, so a request for one would fail the read.
+#[tokio::test]
+async fn only_the_pull_requests_own_ref_compares() {
+    let document = |head: &str| {
+        format!(
+            "{{repository(owner:\"e2e\",name:\"oracle\"){{pullRequest(number:1){{baseRef{{compare(headRef:\"{head}\"){{behindBy}}}}}}}}}}"
+        )
+    };
+    for (head, expected) in [
+        ("refs/pull/1/head", json!({"behindBy":2})),
+        ("refs/pull/2/head", Value::Null),
+        ("refs/heads/feat", Value::Null),
+        (HEAD, Value::Null),
+    ] {
+        let data = run(&document(head)).await;
+        assert_eq!(
+            data["repository"]["pullRequest"]["baseRef"]["compare"], expected,
+            "{head}"
+        );
+    }
 }
